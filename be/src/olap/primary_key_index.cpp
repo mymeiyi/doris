@@ -29,6 +29,8 @@
 #include "olap/rowset/segment_v2/bloom_filter_index_writer.h"
 #include "olap/rowset/segment_v2/encoding_info.h"
 #include "olap/types.h"
+#include "vec/data_types/data_type.h"
+#include "vec/data_types/data_type_factory.hpp"
 
 namespace doris {
 
@@ -111,6 +113,46 @@ Status PrimaryKeyIndexReader::parse_bf(io::FileReaderSPtr file_reader,
     RETURN_IF_ERROR(bf_iter->read_bloom_filter(0, &_bf));
     _bf_parsed = true;
 
+    return Status::OK();
+}
+
+Status PrimaryKeyIndexReader::seek_at_or_after(Slice& key_without_seq, bool exact_match,
+                                               Slice& sought_key_without_seq,
+                                               Slice& sought_key_sequence_id,
+                                               uint32_t& sout_key_row_id) const {
+    if (!check_present(key_without_seq)) {
+        return Status::Error<ErrorCode::KEY_NOT_FOUND>("Can't find key in the segment");
+    }
+    std::unique_ptr<segment_v2::IndexedColumnIterator> index_iterator;
+    RETURN_IF_ERROR(new_iterator(&index_iterator));
+    auto st = index_iterator->seek_at_or_after(&key_without_seq, &exact_match);
+    if (!st.ok() && !st.is<ErrorCode::ENTRY_NOT_FOUND>()) {
+        return st;
+    }
+    if (st.is<ErrorCode::ENTRY_NOT_FOUND>() || (_seq_col_length == 0 && !exact_match)) {
+        return Status::Error<ErrorCode::KEY_NOT_FOUND>("Can't find key in the segment");
+    }
+    sout_key_row_id = index_iterator->get_current_ordinal();
+    if (_seq_col_length > 0) {
+        size_t num_to_read = 1;
+        auto index_type =
+                vectorized::DataTypeFactory::instance().create_data_type(type_info()->type(), 1, 0);
+        auto index_column = index_type->create_column();
+        size_t num_read = num_to_read;
+        RETURN_IF_ERROR(index_iterator->next_batch(&num_read, index_column));
+        DCHECK(num_to_read == num_read);
+
+        Slice sought_key =
+                Slice(index_column->get_data_at(0).data, index_column->get_data_at(0).size);
+        sought_key_without_seq =
+                Slice(sought_key.get_data(), sought_key.get_size() - _seq_col_length);
+        // compare key
+        if (key_without_seq.compare(sought_key_without_seq) != 0) {
+            return Status::Error<ErrorCode::KEY_NOT_FOUND>("Can't find key in the segment");
+        }
+        sought_key_sequence_id = Slice(
+                sought_key.get_data() + sought_key_without_seq.get_size() + 1, _seq_col_length - 1);
+    }
     return Status::OK();
 }
 

@@ -90,7 +90,8 @@ private:
 
 class PrimaryKeyIndexReader {
 public:
-    PrimaryKeyIndexReader() : _index_parsed(false), _bf_parsed(false) {}
+    PrimaryKeyIndexReader(size_t seq_col_length)
+            : _seq_col_length(seq_col_length), _index_parsed(false), _bf_parsed(false) {}
 
     Status parse_index(io::FileReaderSPtr file_reader,
                        const segment_v2::PrimaryKeyIndexMetaPB& meta);
@@ -109,7 +110,7 @@ public:
     }
 
     // verify whether exist in BloomFilter
-    bool check_present(const Slice& key) {
+    bool check_present(const Slice& key) const {
         DCHECK(_bf_parsed);
         return _bf->test_bytes(key.data, key.size);
     }
@@ -129,7 +130,11 @@ public:
         return _index_reader->get_memory_size();
     }
 
+    Status seek_at_or_after(Slice& key_without_seq, bool exact_match, uint32_t& row_id,
+                            Slice& sought_key_without_seq, Slice& sought_key_sequence_id) const;
+
 private:
+    size_t _seq_col_length;
     bool _index_parsed;
     bool _bf_parsed;
     std::unique_ptr<segment_v2::IndexedColumnReader> _index_reader;

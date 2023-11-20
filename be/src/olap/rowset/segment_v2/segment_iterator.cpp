@@ -1308,8 +1308,20 @@ Status SegmentIterator::_lookup_ordinal_from_pk_index(const RowCursor& key, bool
         return Status::OK();
     }
     bool exact_match = false;
+    Slice sought_key_without_seq;
+    Slice sought_key_sequence_id;
+    // const std::string index_key2 = index_key;
+    Status status = pk_index_reader->seek_at_or_after(
+            index_key, exact_match, rowid, sought_key_without_seq, sought_key_sequence_id);
+    if (UNLIKELY(!status.ok())) {
+        *rowid = num_rows();
+        if (status.is<ENTRY_NOT_FOUND>()) {
+            return Status::OK();
+        }
+        return status;
+    }
 
-    std::unique_ptr<segment_v2::IndexedColumnIterator> index_iterator;
+    /*std::unique_ptr<segment_v2::IndexedColumnIterator> index_iterator;
     RETURN_IF_ERROR(pk_index_reader->new_iterator(&index_iterator));
 
     Status status = index_iterator->seek_at_or_after(&index_key, &exact_match);
@@ -1320,7 +1332,7 @@ Status SegmentIterator::_lookup_ordinal_from_pk_index(const RowCursor& key, bool
         }
         return status;
     }
-    *rowid = index_iterator->get_current_ordinal();
+    *rowid = index_iterator->get_current_ordinal();*/
 
     // The sequence column needs to be removed from primary key index when comparing key
     bool has_seq_col = _segment->_tablet_schema->has_sequence_col();
@@ -1329,7 +1341,7 @@ Status SegmentIterator::_lookup_ordinal_from_pk_index(const RowCursor& key, bool
                 _segment->_tablet_schema->column(_segment->_tablet_schema->sequence_col_idx())
                         .length() +
                 1;
-        auto index_type = vectorized::DataTypeFactory::instance().create_data_type(
+        /*auto index_type = vectorized::DataTypeFactory::instance().create_data_type(
                 _segment->_pk_index_reader->type_info()->type(), 1, 0);
         auto index_column = index_type->create_column();
         size_t num_to_read = 1;
@@ -1340,12 +1352,12 @@ Status SegmentIterator::_lookup_ordinal_from_pk_index(const RowCursor& key, bool
         Slice sought_key =
                 Slice(index_column->get_data_at(0).data, index_column->get_data_at(0).size);
         Slice sought_key_without_seq =
-                Slice(sought_key.get_data(), sought_key.get_size() - seq_col_length);
+                Slice(sought_key.get_data(), sought_key.get_size() - seq_col_length);*/
 
         // compare key
-        if (Slice(index_key).compare(sought_key_without_seq) == 0) {
+        /*if (Slice(index_key).compare(sought_key_without_seq) == 0) {
             exact_match = true;
-        }
+        }*/
     }
 
     // find the key in primary key index, and the is_include is false, so move
