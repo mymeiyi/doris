@@ -457,11 +457,13 @@ public class StmtExecutor {
                     // try to fall back to legacy planner
                     LOG.debug("nereids cannot process statement\n" + originStmt.originStmt
                             + "\n because of " + e.getMessage(), e);
-                    /*if (e instanceof NereidsException
-                            && !context.getSessionVariable().enableFallbackToOriginalPlanner) {
+                    boolean isInsertIntoCommand = parsedStmt != null && parsedStmt instanceof LogicalPlanAdapter
+                            && ((LogicalPlanAdapter) parsedStmt).getLogicalPlan() instanceof InsertIntoTableCommand;
+                    if (e instanceof NereidsException
+                            && !context.getSessionVariable().enableFallbackToOriginalPlanner && !isInsertIntoCommand) {
                         LOG.warn("Analyze failed. {}", context.getQueryIdentifier(), e);
                         throw ((NereidsException) e).getException();
-                    }*/
+                    }
                     LOG.debug("fall back to legacy planner on statement:\n{}", originStmt.originStmt);
                     parsedStmt = null;
                     planner = null;
