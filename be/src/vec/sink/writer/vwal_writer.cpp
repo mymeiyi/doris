@@ -104,8 +104,10 @@ Status VWalWriter::append_block(vectorized::Block* input_block, int64_t num_rows
             write_wal(block_convertor, tablet_finder, block, _state, num_rows, filter_rows));
 #ifndef BE_TEST
     auto* future_block = assert_cast<FutureBlock*>(input_block);
-    std::unique_lock<std::mutex> l(*(future_block->lock));
-    future_block->set_result(Status::OK(), num_rows, num_rows - filter_rows);
+    {
+        std::unique_lock<std::mutex> l(*(future_block->lock));
+        future_block->set_result(Status::OK(), num_rows, num_rows - filter_rows);
+    }
     future_block->cv->notify_all();
 #endif
     return Status::OK();
