@@ -1143,6 +1143,10 @@ public class NativeInsertStmt extends InsertStmt {
                         }
                     }
                 }
+                // Does not support: insert into tbl values();
+                if (selectStmt.getValueList().getFirstRow().isEmpty() && CollectionUtils.isEmpty(targetColumnNames)) {
+                    return;
+                }
             } else {
                 SelectList selectList = selectStmt.getSelectList();
                 if (selectList != null) {
