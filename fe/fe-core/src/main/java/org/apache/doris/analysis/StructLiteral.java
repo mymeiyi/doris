@@ -74,7 +74,7 @@ public class StructLiteral extends LiteralExpr {
     @Override
     public String getStringValue() {
         List<String> list = new ArrayList<>(children.size());
-        children.forEach(v -> list.add(v.getStringValue()));
+        children.forEach(v -> list.add(v.getStringValue().isEmpty() ? "''" : v.getStringValue()));
         return "{" + StringUtils.join(list, ", ") + "}";
     }
 
