@@ -451,11 +451,11 @@ public class StmtExecutor {
                     // try to fall back to legacy planner
                     LOG.debug("nereids cannot process statement\n" + originStmt.originStmt
                             + "\n because of " + e.getMessage(), e);
-                    if (e instanceof NereidsException
+                    /*if (e instanceof NereidsException
                             && !context.getSessionVariable().enableFallbackToOriginalPlanner) {
                         LOG.warn("Analyze failed. {}", context.getQueryIdentifier(), e);
                         throw ((NereidsException) e).getException();
-                    }
+                    }*/
                     LOG.debug("fall back to legacy planner on statement:\n{}", originStmt.originStmt);
                     parsedStmt = null;
                     planner = null;
