@@ -164,8 +164,8 @@ public class MapLiteral extends LiteralExpr {
         if (expr instanceof NullLiteral) {
             return "null";
         }
-        if (expr instanceof StringLiteral && expr.getStringValue().equals("null")) {
-            return "\"null\"";
+        if (expr instanceof StringLiteral) {
+            return "\"" + expr.getStringValue() + "\"";
         }
         return expr.getStringValue();
     }
