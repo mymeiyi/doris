@@ -168,8 +168,9 @@ int HttpStreamAction::on_header(HttpRequest* req) {
     ctx->load_src_type = TLoadSourceType::RAW;
 
     Status st = Status::OK();
-    if (iequal(req->header(HTTP_GROUP_COMMIT), "true") ||
-        config::wait_internal_group_commit_finish) {
+    ctx->two_phase_commit = req->header(HTTP_TWO_PHASE_COMMIT) == "true";
+    if (!ctx->two_phase_commit && (iequal(req->header(HTTP_GROUP_COMMIT), "true") ||
+                                   config::wait_internal_group_commit_finish)) {
         ctx->group_commit = load_size_smaller_than_wal_limit(req);
         if (!ctx->group_commit) {
             LOG(WARNING) << "The data size for this http load("
@@ -180,8 +181,6 @@ int HttpStreamAction::on_header(HttpRequest* req) {
             st = Status::InternalError("Http load size too large.");
         }
     }
-
-    ctx->two_phase_commit = req->header(HTTP_TWO_PHASE_COMMIT) == "true";
 
     LOG(INFO) << "new income streaming load request." << ctx->brief()
               << " sql : " << req->header(HTTP_SQL);
