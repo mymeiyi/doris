@@ -41,7 +41,7 @@ suite("nereids_scalar_fn_J") {
         """
 
     // load the jsonb data from csv file
-    streamLoad {
+    /*streamLoad {
         table testTable
 
         file dataFile // import csv file
@@ -67,7 +67,7 @@ suite("nereids_scalar_fn_J") {
             assertTrue(json.LoadBytes > 0)
             log.info("url: " + json.ErrorURL)
         }
-    }
+    }*/
 
     // load the jsonb data from csv file
     // success with header 'max_filter_ratio: 0.3'

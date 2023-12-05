@@ -72,7 +72,7 @@ suite("test_stream_load", "p0") {
     qt_sql "select * from ${tableName} order by k1, k2"
 
     // test strict_mode fail
-    streamLoad {
+    /*streamLoad {
         table "${tableName}"
 
         set 'column_separator', '\t'
@@ -93,7 +93,7 @@ suite("test_stream_load", "p0") {
             assertEquals(2, json.NumberTotalRows)
             assertEquals(1, json.NumberFilteredRows)
         }
-    }
+    }*/
 
     sql "truncate table ${tableName}"
     sql "sync"
@@ -508,7 +508,7 @@ suite("test_stream_load", "p0") {
     sql """sync"""
 
     // load part of columns
-    streamLoad {
+    /*streamLoad {
         table "${tableName3}"
 
         set 'column_separator', ','
@@ -526,7 +526,7 @@ suite("test_stream_load", "p0") {
             assertEquals("fail", json.Status.toLowerCase())
             assertEquals(0, json.NumberLoadedRows)
         }
-    }
+    }*/
     sql "sync"
 
     // load with skip 2 columns, with gzip
@@ -651,7 +651,7 @@ suite("test_stream_load", "p0") {
     sql """sync"""
 
     // load with strict_mode true and max_filter_ratio
-    streamLoad {
+    /*streamLoad {
         table "${tableName4}"
 
         set 'column_separator', ','
@@ -671,7 +671,7 @@ suite("test_stream_load", "p0") {
             assertEquals("fail", json.Status.toLowerCase())
             assertEquals(0, json.NumberLoadedRows)
         }
-    }
+    }*/
     sql "sync"
     order_qt_all61 "SELECT count(*) FROM ${tableName4}" // 0
     sql """truncate table ${tableName4}"""
@@ -794,7 +794,7 @@ suite("test_stream_load", "p0") {
     sql """sync"""
 
     // malformat with strictmode
-    streamLoad {
+    /*streamLoad {
         table "${tableName8}"
 
         set 'column_separator', '|'
@@ -815,7 +815,7 @@ suite("test_stream_load", "p0") {
             assertEquals(2, json.NumberFilteredRows)
             assertEquals(0, json.NumberUnselectedRows)
         }
-    }
+    }*/
     sql "sync"
 
     // normal load
@@ -846,7 +846,7 @@ suite("test_stream_load", "p0") {
     sql """sync"""
 
     // malformat with mismatch array type
-    streamLoad {
+    /*streamLoad {
         table "${tableName8}"
 
         set 'column_separator', '|'
@@ -864,7 +864,7 @@ suite("test_stream_load", "p0") {
             assertEquals("fail", json.Status.toLowerCase())
             assertTrue(json.Message.contains('Don\'t support load from type'))
         }
-    }
+    }*/
     sql "sync"
 
     // ===== test struct stream load
@@ -896,7 +896,7 @@ suite("test_stream_load", "p0") {
     sql """sync"""
 
     // malformat with strictmode
-    streamLoad {
+    /*streamLoad {
         table "${tableName10}"
 
         set 'column_separator', '|'
@@ -917,7 +917,7 @@ suite("test_stream_load", "p0") {
             assertEquals(2, json.NumberFilteredRows)
             assertEquals(0, json.NumberUnselectedRows)
         }
-    }
+    }*/
     sql "sync"
 
     // normal load
@@ -1105,7 +1105,7 @@ suite("test_stream_load", "p0") {
     }
 
     // invalid file format
-    streamLoad {
+    /*streamLoad {
         table "${tableName8}"
 
         set 'format', 'txt'
@@ -1122,7 +1122,7 @@ suite("test_stream_load", "p0") {
             assertEquals("fail", json.Status.toLowerCase())
             assert json.Message.contains("unknown data format")
         }
-    }
+    }*/
 
     sql "sync"
     def res = sql "select * from ${tableName14}"

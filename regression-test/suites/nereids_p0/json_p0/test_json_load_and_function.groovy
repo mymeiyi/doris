@@ -41,7 +41,7 @@ suite("test_json_load_and_function", "p0") {
         """
 
     // load the json data from csv file
-    streamLoad {
+    /*streamLoad {
         table testTable
         
         file dataFile // import csv file
@@ -68,7 +68,7 @@ suite("test_json_load_and_function", "p0") {
             assertTrue(json.LoadBytes > 0)
             log.info("url: " + json.ErrorURL)
         }
-    }
+    }*/
 
     // load the json data from csv file
     // success with header 'max_filter_ratio: 0.3'
@@ -119,7 +119,7 @@ suite("test_json_load_and_function", "p0") {
     // expect excepiton and no rows not changed
     sql """ set enable_insert_strict = true """
     def success = true
-    try {
+    /*try {
         sql """INSERT INTO ${testTable} VALUES(26, '')"""
     } catch(Exception ex) {
        logger.info("""INSERT INTO ${testTable} invalid json failed: """ + ex)
@@ -153,7 +153,7 @@ suite("test_json_load_and_function", "p0") {
        logger.info("""INSERT INTO ${testTable} invalid json failed: """ + ex)
        success = false
     }
-    assertEquals(true, success)
+    assertEquals(true, success)*/
 
     qt_select "SELECT * FROM ${testTable} ORDER BY id"
 

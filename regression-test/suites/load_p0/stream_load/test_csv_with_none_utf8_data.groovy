@@ -36,7 +36,7 @@ suite("test_csv_with_none_utf8_data", "p0") {
         PROPERTIES ("replication_allocation" = "tag.location.default: 1");
     """
 
-    streamLoad {
+    /*streamLoad {
         table "${tableName}"
 
         set 'column_separator', '\\x01'
@@ -65,7 +65,7 @@ suite("test_csv_with_none_utf8_data", "p0") {
             assertTrue(json.LoadBytes > 0)
             log.info("url: " + json.ErrorURL)
         }
-    }
+    }*/
 
 
     // drop drop

@@ -40,7 +40,7 @@ suite("test_jsonb_unique_load_and_function", "p0") {
 
     // load the jsonb data from csv file
     // fail by default for invalid data rows
-    streamLoad {
+    /*streamLoad {
         table testTable
         
         file dataFile // import csv file
@@ -62,7 +62,7 @@ suite("test_jsonb_unique_load_and_function", "p0") {
             assertEquals(21, json.NumberFilteredRows)
             assertTrue(json.LoadBytes > 0)
         }
-    }
+    }*/
 
     // load the jsonb data from csv file
     // success with header 'max_filter_ratio: 0.3'

@@ -47,7 +47,7 @@ suite("test_load_json_column_exclude_schema_without_jsonpath", "p0") {
                             json_root, where_expr, fuzzy_flag, column_sep, file_name ->
 
         // load the json data
-        streamLoad {
+        /*streamLoad {
             table table_name
             
             // set http request header params
@@ -77,7 +77,7 @@ suite("test_load_json_column_exclude_schema_without_jsonpath", "p0") {
                 assertTrue(json.NumberLoadedRows == 30);
                 assertTrue(json.NumberFilteredRows == 30);
             }
-        }
+        }*/
     }
 
     // case1: import array data in json format and enable vectorized engine

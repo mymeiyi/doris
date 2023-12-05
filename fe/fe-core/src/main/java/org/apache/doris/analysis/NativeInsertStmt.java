@@ -1138,7 +1138,7 @@ public class NativeInsertStmt extends InsertStmt {
             if (selectStmt.getValueList() != null) {
                 for (List<Expr> row : selectStmt.getValueList().getRows()) {
                     for (Expr expr : row) {
-                        if (!expr.isLiteralOrCastExpr()) {
+                        if (!(expr instanceof LiteralExpr)) {
                             return;
                         }
                     }
@@ -1153,7 +1153,7 @@ public class NativeInsertStmt extends InsertStmt {
                     List<SelectListItem> items = selectList.getItems();
                     if (items != null) {
                         for (SelectListItem item : items) {
-                            if (item.getExpr() != null && !item.getExpr().isLiteralOrCastExpr()) {
+                            if (item.getExpr() != null && !(item.getExpr() instanceof LiteralExpr)) {
                                 return;
                             }
                         }

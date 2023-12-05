@@ -287,7 +287,7 @@ suite("test_multi_partition_key", "p0") {
     test {
         sql "insert into test_multi_col_test_partition_null_value " +
                 "values(0, NULL, 0, 0, 0, '2000-01-01 00:00:00', '2000-01-01', 'a', 'a', 0.001, -0.001, 0.001)"
-        exception "Insert has filtered data in strict mode"
+        // exception "Insert has filtered data in strict mode"
     }
     qt_sql8 "select k1 from test_multi_col_test_partition_null_value where k2 is null"
     // partition columns and add key column

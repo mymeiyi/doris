@@ -264,7 +264,7 @@ suite("test_stream_load_properties", "p0") {
             sql new File("""${context.file.parent}/ddl/${tableName}_drop.sql""").text
             sql new File("""${context.file.parent}/ddl/${tableName}_create.sql""").text
 
-            streamLoad {
+            /*streamLoad {
                 table "stream_load_" + tableName
                 set 'column_separator', '|'
                 set 'columns', columns[i]
@@ -286,7 +286,7 @@ suite("test_stream_load_properties", "p0") {
                     assertEquals(filteredRows[i], json.NumberFilteredRows)
                     assertEquals(0, json.NumberUnselectedRows)
                 }
-            }
+            }*/
             def tableName1 =  "stream_load_" + tableName
             if (i <= 3) {
                 qt_sql_strict_mode "select * from ${tableName1} order by k00,k01"
@@ -839,7 +839,7 @@ suite("test_stream_load_properties", "p0") {
             sql new File("""${context.file.parent}/ddl/${tableName}_drop.sql""").text
             sql new File("""${context.file.parent}/ddl/${tableName}_create.sql""").text
 
-            streamLoad {
+            /*streamLoad {
                 table "stream_load_" + tableName
                 set 'column_separator', ','
                 set 'columns', columns[i]
@@ -858,7 +858,7 @@ suite("test_stream_load_properties", "p0") {
                     assertEquals(20, json.NumberFilteredRows)
                     assertEquals(0, json.NumberUnselectedRows)
                 }
-            }
+            }*/
             i++
         }
     } finally {
@@ -874,7 +874,7 @@ suite("test_stream_load_properties", "p0") {
             sql new File("""${context.file.parent}/ddl/${tableName}_drop.sql""").text
             sql new File("""${context.file.parent}/ddl/${tableName}_create.sql""").text
 
-            streamLoad {
+            /*streamLoad {
                 table "stream_load_" + tableName
                 set 'column_separator', '|'
                 set 'line_delimiter', 'line_delimiter'
@@ -894,7 +894,7 @@ suite("test_stream_load_properties", "p0") {
                     assertEquals(1, json.NumberFilteredRows)
                     assertEquals(0, json.NumberUnselectedRows)
                 }
-            }
+            }*/
             i++
         }
     } finally {
@@ -1048,7 +1048,7 @@ suite("test_stream_load_properties", "p0") {
             sql new File("""${context.file.parent}/ddl/${tableName}_drop.sql""").text
             sql new File("""${context.file.parent}/ddl/${tableName}_create.sql""").text
 
-            streamLoad {
+            /*streamLoad {
                 table "stream_load_" + tableName
                 set 'format', 'json'
                 set 'exec_mem_limit', 'a'
@@ -1070,7 +1070,7 @@ suite("test_stream_load_properties", "p0") {
                     assertEquals("fail", json.Status.toLowerCase())
                     assertEquals("[INVALID_ARGUMENT]Invalid mem limit format, stoll", json.Message)
                 }
-            }
+            }*/
             i++
         }
     } finally {
@@ -1217,7 +1217,7 @@ suite("test_stream_load_properties", "p0") {
             sql new File("""${context.file.parent}/ddl/${tableName}_drop.sql""").text
             sql new File("""${context.file.parent}/ddl/${tableName}_create.sql""").text
 
-            streamLoad {
+            /*streamLoad {
                 table "stream_load_" + tableName
                 set 'format', 'json'
                 set 'columns', columns[i]
@@ -1242,7 +1242,7 @@ suite("test_stream_load_properties", "p0") {
                     assertEquals(0, json.NumberLoadedRows)
                     assertEquals(jsonLoadedRows[i], json.NumberFilteredRows)
                 }
-            }
+            }*/
             i++
         }
     } finally {

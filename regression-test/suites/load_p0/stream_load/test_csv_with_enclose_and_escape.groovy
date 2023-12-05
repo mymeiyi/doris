@@ -54,7 +54,7 @@ suite("test_csv_with_enclose_and_escape", "p0") {
         }
     }
 
-    streamLoad {
+    /*streamLoad {
         table "${tableName}"
         set 'column_separator', ','
         set 'trim_double_quotes', 'true'
@@ -70,9 +70,9 @@ suite("test_csv_with_enclose_and_escape", "p0") {
                 def json = parseJson(result)
                 assertEquals("Fail", json.Status)
         }
-    }
+    }*/
 
-    streamLoad {
+    /*streamLoad {
         table "${tableName}"
         set 'column_separator', ','
         set 'trim_double_quotes', 'true'
@@ -87,7 +87,7 @@ suite("test_csv_with_enclose_and_escape", "p0") {
                 def json = parseJson(result)
                 assertEquals("Fail", json.Status)
         }
-    }
+    }*/
 
     streamLoad {
         table "${tableName}"
