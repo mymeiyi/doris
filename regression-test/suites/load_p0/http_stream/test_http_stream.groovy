@@ -621,6 +621,7 @@ suite("test_http_stream", "p0") {
                     """
             time 10000
             file 'test_http_stream_column_separator.csv'
+            unset 'label'
             check { result, exception, startTime, endTime ->
                 if (exception != null) {
                     throw exception
