@@ -171,19 +171,23 @@ int HttpStreamAction::on_header(HttpRequest* req) {
     ctx->two_phase_commit = req->header(HTTP_TWO_PHASE_COMMIT) == "true";
     if (!ctx->two_phase_commit && (iequal(req->header(HTTP_GROUP_COMMIT), "true") ||
                                    config::wait_internal_group_commit_finish)) {
-        ctx->group_commit = load_size_smaller_than_wal_limit(req);
-        if (!ctx->group_commit) {
-            LOG(WARNING) << "The data size for this http load("
-                         << std::stol(req->header(HttpHeaders::CONTENT_LENGTH))
-                         << " Bytes) exceeds the WAL (Write-Ahead Log) limit ("
-                         << config::wal_max_disk_size * 0.8
-                         << " Bytes). Please set this load to \"group commit\"=false.";
-            st = Status::InternalError("Http load size too large.");
+        if (config::wait_internal_group_commit_finish) {
+            ctx->group_commit = true;
+        } else {
+            ctx->group_commit = load_size_smaller_than_wal_limit(req);
+            if (!ctx->group_commit) {
+                LOG(WARNING) << "The data size for this http load("
+                             << req->header(HttpHeaders::CONTENT_LENGTH)
+                             << " Bytes) exceeds the WAL (Write-Ahead Log) limit ("
+                             << config::wal_max_disk_size * 0.8
+                             << " Bytes). Please set this load to \"group commit\"=false.";
+                st = Status::InternalError("Http load size too large.");
+            }
         }
     }
 
     LOG(INFO) << "new income streaming load request." << ctx->brief()
-              << " sql : " << req->header(HTTP_SQL);
+              << " sql : " << req->header(HTTP_SQL) << ", group_commit=" << ctx->group_commit;
     if (st.ok()) {
         st = _on_header(req, ctx);
     }

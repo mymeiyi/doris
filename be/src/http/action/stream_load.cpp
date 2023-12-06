@@ -197,14 +197,18 @@ int StreamLoadAction::on_header(HttpRequest* req) {
         if (iequal(req->header(HTTP_GROUP_COMMIT), "true") && !ctx->label.empty()) {
             st = Status::InternalError("label and group_commit can't be set at the same time");
         }
-        ctx->group_commit = load_size_smaller_than_wal_limit(req);
-        if (!ctx->group_commit) {
-            LOG(WARNING) << "The data size for this stream load("
-                         << std::stol(req->header(HttpHeaders::CONTENT_LENGTH))
-                         << " Bytes) exceeds the WAL (Write-Ahead Log) limit ("
-                         << config::wal_max_disk_size * 0.8
-                         << " Bytes). Please set this load to \"group commit\"=false.";
-            st = Status::InternalError("Stream load size too large.");
+        if (config::wait_internal_group_commit_finish) {
+            ctx->group_commit = true;
+        } else {
+            ctx->group_commit = load_size_smaller_than_wal_limit(req);
+            if (!ctx->group_commit) {
+                LOG(WARNING) << "The data size for this stream load("
+                             << req->header(HttpHeaders::CONTENT_LENGTH)
+                             << " Bytes) exceeds the WAL (Write-Ahead Log) limit ("
+                             << config::wal_max_disk_size * 0.8
+                             << " Bytes). Please set this load to \"group commit\"=false.";
+                st = Status::InternalError("Stream load size too large.");
+            }
         }
     }
     if (!ctx->group_commit && ctx->label.empty()) {
@@ -212,7 +216,7 @@ int StreamLoadAction::on_header(HttpRequest* req) {
     }
 
     LOG(INFO) << "new income streaming load request." << ctx->brief() << ", db=" << ctx->db
-              << ", tbl=" << ctx->table;
+              << ", tbl=" << ctx->table << ", group_commit=" << ctx->group_commit;
 
     if (st.ok()) {
         st = _on_header(req, ctx);
