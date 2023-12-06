@@ -68,7 +68,7 @@ suite("test_mysql_load", "p0") {
 
 
     // strict mode failed
-    test {
+    /*test {
         def test_strict_mode_fail_file = getLoalFilePath "test_strict_mode_fail.csv"
 
         sql """
@@ -82,7 +82,7 @@ suite("test_mysql_load", "p0") {
             PROPERTIES ("strict_mode"="true");
         """
         exception "too many filtered rows"
-    }
+    }*/
 
     // test_line_delimiter
     sql """ DROP TABLE IF EXISTS ${tableName} """

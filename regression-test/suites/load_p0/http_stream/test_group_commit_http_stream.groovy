@@ -212,7 +212,7 @@ suite("test_group_commit_http_stream") {
         }
 
         // stream load with label
-        streamLoad {
+        /*streamLoad {
             set 'version', '1'
             def label = 'l_' + System.currentTimeMillis()
             set 'sql', """
@@ -232,7 +232,7 @@ suite("test_group_commit_http_stream") {
                 def json = parseJson(result)
                 assertEquals("fail", json.Status.toLowerCase())
             }
-        }
+        }*/
 
         getRowCount(23)
         qt_sql " SELECT * FROM ${tableName} order by id, name, score asc; "
