@@ -20,7 +20,6 @@ package org.apache.doris.nereids.trees.plans.commands.insert;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.TableIf;
-import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.util.DebugUtil;
@@ -64,10 +63,6 @@ public class OlapGroupCommitInsertExecutor extends OlapInsertExecutor {
                 && (tableSink.child() instanceof OneRowRelation || tableSink.child() instanceof LogicalUnion));
     }
 
-    public long getTxnId() {
-        return txnId;
-    }
-
     @Override
     public void beginTransaction() {
     }
@@ -96,25 +91,8 @@ public class OlapGroupCommitInsertExecutor extends OlapInsertExecutor {
 
     @Override
     protected void afterExec(StmtExecutor executor) {
-        // {'label':'my_label1', 'status':'prepare', 'txnId':'123'}
-        // {'label':'my_label1', 'status':'aborted', 'txnId':'123' 'err':'error messages'}
-        StringBuilder sb = new StringBuilder();
-        sb.append("{'label':'").append(coordinator.getLabel()).append("', 'status':'").append(txnStatus.name());
-        sb.append("', 'txnId':'").append(coordinator.getTxnId()).append("'");
-        if (table.getType() == TableType.MATERIALIZED_VIEW) {
-            sb.append("', 'rows':'").append(loadedRows).append("'");
-        }
-        if (!Strings.isNullOrEmpty(errMsg)) {
-            sb.append(", 'err':'").append(errMsg).append("'");
-        }
-        sb.append("}");
-
-        ctx.getState().setOk(loadedRows, filteredRows, sb.toString());
-        // set insert result in connection context,
-        // so that user can use `show insert result` to get info of the last insert operation.
-        ctx.setOrUpdateInsertResult(txnId, labelName, database.getFullName(), table.getName(),
-                txnStatus, loadedRows, filteredRows);
-        // update it, so that user can get loaded rows in fe.audit.log
-        ctx.updateReturnRows((int) loadedRows);
+        labelName = coordinator.getLabel();
+        txnId = coordinator.getTxnId();
+        setReturnInfo();
     }
 }
