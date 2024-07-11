@@ -43,15 +43,37 @@ Status GroupCommitBlockSinkLocalState::open(RuntimeState* state) {
     auto& p = _parent->cast<GroupCommitBlockSinkOperatorX>();
     _table_id = p._table_id;
     _group_commit_mode = p._group_commit_mode;
+
     _vpartition = std::make_unique<doris::VOlapTablePartitionParam>(p._schema, p._partition);
+    _tablet_finder =
+            std::make_unique<vectorized::OlapTabletFinder>(_vpartition.get(), p._find_tablet_mode);
     RETURN_IF_ERROR(_vpartition->init());
-    _state = state;
+    /*_profile = state->obj_pool()->add(new RuntimeProfile(_parent->get_name() + name_suffix()));
+    _profile->set_metadata(_parent->node_id());
+    _profile->set_is_sink(true);*/
     // profile must add to state's object pool
     SCOPED_CONSUME_MEM_TRACKER(_mem_tracker.get());
 
     _block_convertor = std::make_unique<vectorized::OlapTableBlockConvertor>(p._output_tuple_desc);
     _block_convertor->init_autoinc_info(p._schema->db_id(), p._schema->table_id(),
                                         _state->batch_size());
+    _add_partition_request_timer =
+            ADD_CHILD_TIMER(_profile, "AddPartitionRequestTime", "SendDataTime");
+    _output_row_desc = std::make_unique<RowDescriptor>(p._output_tuple_desc, false);
+
+    _row_distribution.init({.state = _state,
+                            .block_convertor = _block_convertor.get(),
+                            .tablet_finder = _tablet_finder.get(),
+                            .vpartition = _vpartition.get(),
+                            .add_partition_request_timer = _add_partition_request_timer,
+                            .txn_id = 0,
+                            .pool = state->obj_pool(),
+                            .location = p._location.get(),
+                            .vec_output_expr_ctxs = &(p._output_vexpr_ctxs),
+                            .schema = p._schema,
+                            .caller = this,
+                            .create_partition_callback = nullptr});
+    RETURN_IF_ERROR(_row_distribution.open(_output_row_desc.get()));
 
     _output_vexpr_ctxs.resize(p._output_vexpr_ctxs.size());
     for (size_t i = 0; i < _output_vexpr_ctxs.size(); i++) {
@@ -256,6 +278,16 @@ Status GroupCommitBlockSinkOperatorX::init(const TDataSink& t_sink) {
     _max_filter_ratio = table_sink.max_filter_ratio;
     // From the thrift expressions create the real exprs.
     RETURN_IF_ERROR(vectorized::VExpr::create_expr_trees(_t_output_expr, _output_vexpr_ctxs));
+
+    _find_tablet_mode = vectorized::OlapTabletFinder::FindTabletMode::FIND_TABLET_EVERY_ROW;
+    if (table_sink.partition.distributed_columns.empty()) {
+        if (table_sink.__isset.load_to_single_tablet && table_sink.load_to_single_tablet) {
+            _find_tablet_mode = vectorized::OlapTabletFinder::FindTabletMode::FIND_TABLET_EVERY_SINK;
+        } else {
+            _find_tablet_mode = vectorized::OlapTabletFinder::FindTabletMode::FIND_TABLET_EVERY_BATCH;
+        }
+    }
+    _location = std::make_unique<OlapTableLocationParam>(table_sink.location);
     return Status::OK();
 }
 
@@ -325,7 +357,15 @@ Status GroupCommitBlockSinkOperatorX::sink(RuntimeState* state, vectorized::Bloc
 
     std::shared_ptr<vectorized::Block> block;
     bool has_filtered_rows = false;
-    RETURN_IF_ERROR(local_state._block_convertor->validate_and_convert_block(
+    int64_t filtered_rows = 0;
+    _number_input_rows += rows;
+    // _row_distribution_watch.start();
+    RETURN_IF_ERROR(local_state._row_distribution.generate_rows_distribution(
+            *input_block, block, filtered_rows, has_filtered_rows, _row_part_tablet_ids,
+            _number_input_rows));
+    // _row_distribution_watch.stop();
+
+    /*RETURN_IF_ERROR(local_state._block_convertor->validate_and_convert_block(
             state, input_block, block, local_state._output_vexpr_ctxs, rows, has_filtered_rows));
     local_state._has_filtered_rows = false;
     if (!local_state._vpartition->is_auto_partition()) {
@@ -357,7 +397,7 @@ Status GroupCommitBlockSinkOperatorX::sink(RuntimeState* state, vectorized::Bloc
                 state->update_num_rows_load_total(-1);
             }
         }
-    }
+    }*/
 
     if (local_state._block_convertor->num_filtered_rows() > 0 || local_state._has_filtered_rows) {
         auto cloneBlock = block->clone_without_columns();

@@ -18,6 +18,10 @@
 #pragma once
 
 #include "exec/tablet_info.h"
+#include "vec/sink/vrow_distribution.h"
+#include "vec/sink/vtablet_block_convertor.h"
+#include "vec/sink/vtablet_finder.h"
+#include "vec/sink/writer/async_result_writer.h"
 #include "operator.h"
 #include "runtime/group_commit_mgr.h"
 
@@ -61,16 +65,22 @@ private:
 
     vectorized::VExprContextSPtrs _output_vexpr_ctxs;
 
-    std::unique_ptr<vectorized::OlapTableBlockConvertor> _block_convertor;
+    std::unique_ptr<vectorized::OlapTableBlockConvertor> _block_convertor = nullptr;
+    std::unique_ptr<VOlapTablePartitionParam> _vpartition = nullptr;
+    std::unique_ptr<vectorized::OlapTabletFinder> _tablet_finder = nullptr;
+    vectorized::VRowDistribution _row_distribution;
 
     std::shared_ptr<LoadBlockQueue> _load_block_queue = nullptr;
     // used to calculate if meet the max filter ratio
     std::vector<std::shared_ptr<vectorized::Block>> _blocks;
     bool _is_block_appended = false;
     // used for find_partition
-    std::unique_ptr<VOlapTablePartitionParam> _vpartition = nullptr;
+
+    // RuntimeProfile* _profile = nullptr;
+    RuntimeProfile::Counter* _add_partition_request_timer = nullptr;
+    std::unique_ptr<RowDescriptor> _output_row_desc = nullptr;
     // reuse for find_tablet.
-    std::vector<VOlapTablePartition*> _partitions;
+    // std::vector<VOlapTablePartition*> _partitions;
     bool _has_filtered_rows = false;
     size_t _estimated_wal_bytes = 0;
     TGroupCommitMode::type _group_commit_mode;
@@ -119,7 +129,11 @@ private:
     double _max_filter_ratio = 0.0;
 
     TOlapTablePartitionParam _partition;
+    vectorized::OlapTabletFinder::FindTabletMode _find_tablet_mode;
+    std::unique_ptr<OlapTableLocationParam> _location = nullptr;
     TGroupCommitMode::type _group_commit_mode;
+    int64_t _number_input_rows = 0;
+    std::vector<vectorized::RowPartTabletIds> _row_part_tablet_ids;
 };
 
 } // namespace doris::pipeline
