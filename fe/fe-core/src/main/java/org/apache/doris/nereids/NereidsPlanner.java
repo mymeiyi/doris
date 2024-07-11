@@ -222,7 +222,9 @@ public class NereidsPlanner extends Planner {
                 }
 
                 // rule-based optimize
-                rewrite(showRewriteProcess(explainLevel, showPlanProcess));
+                if (!ConnectContext.get().isGroupCommit()) {
+                    rewrite(showRewriteProcess(explainLevel, showPlanProcess));
+                }
                 if (statementContext.getConnectContext().getExecutor() != null) {
                     statementContext.getConnectContext().getExecutor().getSummaryProfile().setNereidsRewriteTime();
                 }

@@ -25,8 +25,10 @@ import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.plans.PlanType;
 import org.apache.doris.nereids.trees.plans.visitor.PlanVisitor;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.GroupCommitExecutor;
 import org.apache.doris.qe.PointQueryExecutor;
 import org.apache.doris.qe.PreparedStatementContext;
+import org.apache.doris.qe.ShortCircuitInsertContext;
 import org.apache.doris.qe.ShortCircuitQueryContext;
 import org.apache.doris.qe.StmtExecutor;
 
@@ -71,11 +73,14 @@ public class ExecuteCommand extends Command {
         executor.setParsedStmt(planAdapter);
         // If it's not a short circuit query or schema version is different(indicates schema changed),
         // need to do reanalyze and plan
-        boolean needAnalyze = !executor.getContext().getStatementContext().isShortCircuitQuery()
+        boolean needAnalyzeQuery = !executor.getContext().getStatementContext().isShortCircuitQuery()
                 || (preparedStmtCtx.shortCircuitQueryContext.isPresent()
-                    && preparedStmtCtx.shortCircuitQueryContext.get().tbl.getBaseSchemaVersion()
+                && preparedStmtCtx.shortCircuitQueryContext.get().tbl.getBaseSchemaVersion()
                 != preparedStmtCtx.shortCircuitQueryContext.get().schemaVersion);
-        if (needAnalyze) {
+        boolean canReuseInsert = preparedStmtCtx.shortCircuitInsertContext.isPresent() &&
+                preparedStmtCtx.shortCircuitInsertContext.get().tbl.getBaseSchemaVersion()
+                        == preparedStmtCtx.shortCircuitInsertContext.get().schemaVersion;
+        if (needAnalyzeQuery) {
             // execute real statement
             preparedStmtCtx.shortCircuitQueryContext = Optional.empty();
             statementContext.setShortCircuitQueryContext(null);
@@ -86,9 +91,21 @@ public class ExecuteCommand extends Command {
                         new ShortCircuitQueryContext(executor.planner(), (Queriable) executor.getParsedStmt()));
                 statementContext.setShortCircuitQueryContext(preparedStmtCtx.shortCircuitQueryContext.get());
             }
+            /*if (ctx.isGroupCommit()) {
+                // cache short-circuit plan
+                preparedStmtCtx.shortCircuitInsertContext = Optional.of(
+                        new ShortCircuitInsertContext(executor.planner(), (Queriable) executor.getParsedStmt()));
+                statementContext.shortCircuitInsertContext = preparedStmtCtx.shortCircuitInsertContext.get();
+            }*/
             return;
         }
-        PointQueryExecutor.directExecuteShortCircuitQuery(executor, preparedStmtCtx, statementContext);
+        if (preparedStmtCtx.shortCircuitQueryContext.isPresent()) {
+            PointQueryExecutor.directExecuteShortCircuitQuery(executor, preparedStmtCtx, statementContext);
+        } /*else if (preparedStmtCtx.shortCircuitInsertContext.isPresent()) {
+            GroupCommitExecutor.execute(executor, preparedStmtCtx, statementContext);
+        }*/ else {
+            executor.execute();
+        }
     }
 
     /**

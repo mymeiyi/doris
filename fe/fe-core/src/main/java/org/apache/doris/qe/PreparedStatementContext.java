@@ -28,6 +28,7 @@ public class PreparedStatementContext {
     StatementContext statementContext;
     public String stmtString;
     public Optional<ShortCircuitQueryContext> shortCircuitQueryContext = Optional.empty();
+    public Optional<ShortCircuitInsertContext> shortCircuitInsertContext = Optional.empty();
 
     // Timestamp in millisecond last command starts at
     protected volatile long startTime;

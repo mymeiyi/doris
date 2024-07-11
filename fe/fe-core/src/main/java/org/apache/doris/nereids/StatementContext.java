@@ -44,6 +44,7 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.OriginStatement;
 import org.apache.doris.qe.SessionVariable;
+import org.apache.doris.qe.ShortCircuitInsertContext;
 import org.apache.doris.qe.ShortCircuitQueryContext;
 import org.apache.doris.qe.cache.CacheAnalyzer;
 import org.apache.doris.statistics.Statistics;
@@ -163,6 +164,8 @@ public class StatementContext implements Closeable {
     private boolean isShortCircuitQuery;
 
     private ShortCircuitQueryContext shortCircuitQueryContext;
+
+    public ShortCircuitInsertContext shortCircuitInsertContext;
 
     private FormatOptions formatOptions = FormatOptions.getDefault();
 
