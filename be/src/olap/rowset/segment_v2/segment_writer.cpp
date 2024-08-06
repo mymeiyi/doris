@@ -971,6 +971,9 @@ int64_t SegmentWriter::max_row_to_add(size_t row_avg_size_in_bytes) {
 std::string SegmentWriter::_full_encode_keys(
         const std::vector<vectorized::IOlapColumnDataAccessor*>& key_columns, size_t pos,
         bool null_first) {
+    LOG(INFO) << "sout: _key_index_size=" << _key_index_size.size()
+              << ", _num_sort_key_columns=" << _num_sort_key_columns
+              << ", key_columns.size()=" << key_columns.size();
     assert(_key_index_size.size() == _num_sort_key_columns);
     assert(key_columns.size() == _num_sort_key_columns &&
            _key_coders.size() == _num_sort_key_columns);
