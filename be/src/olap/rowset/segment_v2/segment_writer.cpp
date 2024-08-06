@@ -127,6 +127,8 @@ SegmentWriter::SegmentWriter(io::FileWriter* file_writer, uint32_t segment_id,
             for (auto cid : _tablet_schema->cluster_key_idxes()) {
                 const auto& column = _tablet_schema->column(cid);
                 _key_coders.push_back(get_key_coder(column.type()));
+                LOG(INFO) << "sout: key coder for cid=" << cid
+                          << ", is null=" << (get_key_coder(column.type()) == nullptr);
                 _key_index_size.push_back(column.index_length());
             }
         }
@@ -935,6 +937,8 @@ Status SegmentWriter::append_block(const vectorized::Block* block, size_t row_po
                     }
                 }
             }
+            LOG(INFO) << "sout: _key_coders_size=" << _key_coders.size()
+                      << ", key_columns.size()=" << key_columns.size();
             RETURN_IF_ERROR(_generate_short_key_index(key_columns, num_rows, short_key_pos));
         } else {
             LOG(WARNING) << "The segment does not need primary or short key index"
@@ -1000,7 +1004,8 @@ std::string SegmentWriter::_full_encode_keys(
             continue;
         }
         encoded_keys.push_back(KEY_NORMAL_MARKER);
-        DCHECK(key_coders[cid] != nullptr);
+        DCHECK(key_coders[cid] != nullptr)
+                << ", cid=" << cid << ", key_coders.size()=" << key_coders.size();
         key_coders[cid]->full_encode_ascending(field, &encoded_keys);
         ++cid;
     }
