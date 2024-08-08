@@ -516,4 +516,8 @@ public class TransactionEntry {
     private Set<Long> getTableIds() {
         return subTransactionStates.stream().map(s -> s.getTable().getId()).collect(Collectors.toSet());
     }
+
+    public List<Long> getSubTxnIds() {
+        return subTransactionStates.stream().map(SubTransactionState::getSubTransactionId).collect(Collectors.toList());
+    }
 }
