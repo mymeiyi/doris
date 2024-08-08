@@ -315,6 +315,8 @@ Status OlapScanLocalState::_init_scanners(std::list<vectorized::VScannerSPtr>* s
         std::from_chars(scan_range->version.data(),
                         scan_range->version.data() + scan_range->version.size(), version);
         tablets.emplace_back(std::move(tablet), version);
+        LOG(INFO) << "sout: tablet: " << scan_range->tablet_id
+                  << ", version: " << scan_range->version;
     }
     int64_t duration_ns = 0;
     if (config::is_cloud_mode()) {
