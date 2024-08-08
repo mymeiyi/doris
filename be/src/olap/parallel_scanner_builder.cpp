@@ -42,7 +42,8 @@ Status ParallelScannerBuilder::build_scanners(std::list<VScannerSPtr>& scanners)
 Status ParallelScannerBuilder::_build_scanners_by_rowid(std::list<VScannerSPtr>& scanners) {
     DCHECK_GE(_rows_per_scanner, _min_rows_per_scanner);
 
-    for (auto&& [tablet, version] : _tablets) {
+    // TODO
+    for (auto&& [tablet, version, sub_txn_ids] : _tablets) {
         DCHECK(_all_rowsets.contains(tablet->tablet_id()));
         auto& rowsets = _all_rowsets[tablet->tablet_id()];
 
