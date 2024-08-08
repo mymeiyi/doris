@@ -1270,6 +1270,7 @@ Status BaseTablet::update_delete_bitmap(const BaseTabletSPtr& self, TabletTxnInf
     {
         std::shared_lock meta_rlock(self->_meta_lock);
         specified_rowsets = self->get_rowset_by_ids(&rowset_ids_to_add);
+        // txn load need update cur rowset ids
     }
     auto t3 = watch.get_elapse_time_us();
 

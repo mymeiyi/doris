@@ -188,13 +188,13 @@ public class TransactionEntry {
             throw new AnalysisException(
                     "Transaction insert can not insert into values and insert into select at the same time");
         }
-        if (Config.isCloudMode()) {
+        /*if (Config.isCloudMode()) {
             OlapTable olapTable = (OlapTable) table;
             if (olapTable.getKeysType() == KeysType.UNIQUE_KEYS && olapTable.getEnableUniqueKeyMergeOnWrite()) {
                 throw new UserException(
                         "Transaction load is not supported for merge on write unique keys table in cloud mode");
             }
-        }
+        }*/
         DatabaseIf database = table.getDatabase();
         if (!isTransactionBegan) {
             long timeoutSecond = ConnectContext.get().getExecTimeout();

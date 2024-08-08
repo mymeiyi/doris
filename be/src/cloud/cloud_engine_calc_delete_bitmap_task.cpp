@@ -152,6 +152,7 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
                _ms_cumulative_compaction_cnt > tablet->cumulative_compaction_cnt() ||
                _ms_cumulative_point > tablet->cumulative_layer_point();
     };
+    // todo
     if (_version != max_version + 1 || should_sync_rowsets_produced_by_compaction()) {
         auto sync_st = tablet->sync_rowsets();
         if (sync_st.is<ErrorCode::INVALID_TABLET_STATE>()) [[unlikely]] {
@@ -171,6 +172,7 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
     }
     auto sync_rowset_time_us = MonotonicMicros() - t2;
     max_version = tablet->max_version_unlocked();
+    // TODO for txn load, the version plus n
     if (_version != max_version + 1) {
         LOG(WARNING) << "version not continuous, current max version=" << max_version
                      << ", request_version=" << _version << " tablet_id=" << _tablet_id;
@@ -197,6 +199,7 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
     }
 
     int64_t t3 = MonotonicMicros();
+    // todo
     rowset->set_version(Version(_version, _version));
     TabletTxnInfo txn_info;
     txn_info.rowset = rowset;

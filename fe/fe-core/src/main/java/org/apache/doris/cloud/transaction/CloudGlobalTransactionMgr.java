@@ -918,8 +918,35 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             throw new TransactionCommitFailedException(
                     "disable_load_job is set to true, all load jobs are not allowed");
         }
+        if (!(db instanceof Database)) {
+            throw new UserException("invalid database type: " + db.getClass().getName());
+        }
+        List<Long> tableIdList = subTransactionStates.stream().map(s -> s.getTable().getId()).distinct()
+                .collect(Collectors.toList());
+        List<Table> tableList = ((Database) db).getTablesOnIdOrderOrThrowException(tableIdList);
+        if (!MetaLockUtils.tryCommitLockTables(tableList, timeoutMillis, TimeUnit.MILLISECONDS)) {
+            // DELETE_BITMAP_LOCK_ERR will be retried on be
+            throw new UserException(InternalErrorCode.DELETE_BITMAP_LOCK_ERR,
+                    "get table cloud commit lock timeout, tableList=(" + StringUtils.join(tableList, ",") + ")");
+        }
+        try {
+            commitTransaction(db, tableList, transactionId, subTransactionStates);
+        } finally {
+            MetaLockUtils.commitUnlockTables(tableList);
+        }
+        return true;
+    }
+
+    private void commitTransaction(DatabaseIf db, List<Table> tableList, long transactionId,
+            List<SubTransactionState> subTransactionStates) throws UserException {
         LOG.info("try to commit transaction, txnId: {}, subTxnStates: {}", transactionId, subTransactionStates);
         cleanSubTransactions(transactionId);
+
+        List<OlapTable> mowTableList = getMowTableList(tableList);
+        if (!mowTableList.isEmpty()) {
+            calcDeleteBitmapForMow(db.getId(), mowTableList, transactionId, subTransactionStates);
+        }
+
         CommitTxnRequest.Builder builder = CommitTxnRequest.newBuilder();
         builder.setDbId(db.getId())
                 .setTxnId(transactionId)
@@ -934,15 +961,38 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                             getBaseTabletsFromTables(Lists.newArrayList(subTransactionState.getTable()),
                                     subTransactionState.getTabletCommitInfos().stream()
                                             .map(c -> new TabletCommitInfo(c.getTabletId(), c.getBackendId()))
-                                            .collect(Collectors.toList())))
-                    .build());
+                                            .collect(Collectors.toList()))).build());
         }
 
         final CommitTxnRequest commitTxnRequest = builder.build();
         commitTxn(commitTxnRequest, transactionId, false, db.getId(),
-                subTransactionStates.stream().map(SubTransactionState::getTable)
-                        .collect(Collectors.toList()));
-        return true;
+                subTransactionStates.stream().map(SubTransactionState::getTable).collect(Collectors.toList()));
+    }
+
+    private void calcDeleteBitmapForMow(long dbId, List<OlapTable> tableList, long transactionId,
+            List<SubTransactionState> subTransactionStates) throws UserException {
+        /*Map<Long, Map<Long, List<Long>>> backendToPartitionTablets = Maps.newHashMap();
+        Map<Long, Partition> partitions = Maps.newHashMap();
+        Map<Long, Set<Long>> tableToPartitions = Maps.newHashMap();
+        Map<Long, List<Long>> tableToTabletList = Maps.newHashMap();
+        Map<Long, TabletMeta> tabletToTabletMeta = Maps.newHashMap();
+        getPartitionInfo(tableList, tabletCommitInfos, tableToPartitions, partitions, backendToPartitionTablets,
+                tableToTabletList, tabletToTabletMeta);
+        if (backendToPartitionTablets.isEmpty()) {
+            throw new UserException("The partition info is empty, table may be dropped, txnid=" + transactionId);
+        }
+
+        Map<Long, Long> baseCompactionCnts = Maps.newHashMap();
+        Map<Long, Long> cumulativeCompactionCnts = Maps.newHashMap();
+        Map<Long, Long> cumulativePoints = Maps.newHashMap();
+        getDeleteBitmapUpdateLock(tableToPartitions, transactionId, tableToTabletList, tabletToTabletMeta,
+                baseCompactionCnts, cumulativeCompactionCnts, cumulativePoints);
+        Map<Long, Long> partitionVersions = getPartitionVersions(partitions);
+
+        Map<Long, List<TCalcDeleteBitmapPartitionInfo>> backendToPartitionInfos = getCalcDeleteBitmapInfo(
+                backendToPartitionTablets, partitionVersions, baseCompactionCnts, cumulativeCompactionCnts,
+                cumulativePoints);
+        sendCalcDeleteBitmaptask(dbId, transactionId, backendToPartitionInfos);*/
     }
 
     @Override
