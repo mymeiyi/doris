@@ -21,6 +21,7 @@
 #include "cloud/cloud_tablet_hotspot.h"
 #include "cloud/config.h"
 #include "olap/rowset/beta_rowset.h"
+#include "olap/storage_engine.h"
 #include "pipeline/exec/olap_scan_operator.h"
 #include "vec/exec/scan/new_olap_scanner.h"
 
@@ -177,6 +178,19 @@ Status ParallelScannerBuilder::_load() {
         {
             std::shared_lock read_lock(tablet->get_header_lock());
             RETURN_IF_ERROR(tablet->capture_consistent_rowsets_unlocked({0, version}, &rowsets));
+        }
+        std::vector<int64_t> sub_txn_ids;
+        {
+            auto& engine = ExecEnv::GetInstance()->storage_engine().to_local();
+            auto local_tablet = std::static_pointer_cast<Tablet>(tablet);
+            for (const auto& sub_txn_id : sub_txn_ids) {
+                auto rowset = engine.txn_manager()->get_tablet_rowset(
+                        tablet_id, local_tablet->tablet_uid(), tablet->partition_id(), sub_txn_id);
+                LOG(INFO) << "sout: sub_txn_id=" << sub_txn_id << ", tablet=" << tablet_id
+                          << ", partition_id=" << tablet->partition_id()
+                          << ", tablet_uid=" << local_tablet->tablet_uid()
+                          << ", rowset=" << (rowset == nullptr);
+            }
         }
 
         bool enable_segment_cache = _state->query_options().__isset.enable_segment_cache

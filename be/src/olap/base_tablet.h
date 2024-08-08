@@ -43,6 +43,7 @@ class RowIdConversion;
 struct TabletWithVersion {
     BaseTabletSPtr tablet;
     int64_t version;
+    std::vector<int64_t> sub_txn_ids;
 };
 
 enum class CompactionStage { NOT_SCHEDULED, PENDING, EXECUTING };
