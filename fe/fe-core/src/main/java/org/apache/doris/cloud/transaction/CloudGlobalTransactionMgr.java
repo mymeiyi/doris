@@ -942,10 +942,10 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         LOG.info("try to commit transaction, txnId: {}, subTxnStates: {}", transactionId, subTransactionStates);
         cleanSubTransactions(transactionId);
 
-        List<OlapTable> mowTableList = getMowTableList(tableList);
+        /*List<OlapTable> mowTableList = getMowTableList(tableList);
         if (!mowTableList.isEmpty()) {
             calcDeleteBitmapForMow(db.getId(), mowTableList, transactionId, subTransactionStates);
-        }
+        }*/
 
         CommitTxnRequest.Builder builder = CommitTxnRequest.newBuilder();
         builder.setDbId(db.getId())
@@ -970,7 +970,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
     }
 
     private void calcDeleteBitmapForMow(long dbId, List<OlapTable> tableList, long transactionId,
-            List<SubTransactionState> subTransactionStates) throws UserException {
+            List<SubTransactionState> subTransactionStates, int a) throws UserException {
         /*Map<Long, Map<Long, List<Long>>> backendToPartitionTablets = Maps.newHashMap();
         Map<Long, Partition> partitions = Maps.newHashMap();
         Map<Long, Set<Long>> tableToPartitions = Maps.newHashMap();
