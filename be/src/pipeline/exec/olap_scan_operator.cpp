@@ -314,7 +314,7 @@ Status OlapScanLocalState::_init_scanners(std::list<vectorized::VScannerSPtr>* s
         int64_t version = 0;
         std::from_chars(scan_range->version.data(),
                         scan_range->version.data() + scan_range->version.size(), version);
-        std::vector<int64_t> sub_txn_ids;
+        std::vector<int64_t> sub_txn_ids = scan_range->sub_txn_ids;
         tablets.emplace_back(std::move(tablet), version, sub_txn_ids);
         LOG(INFO) << "sout: tablet: " << scan_range->tablet_id
                   << ", version: " << scan_range->version
