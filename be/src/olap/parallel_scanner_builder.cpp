@@ -180,7 +180,7 @@ Status ParallelScannerBuilder::_load() {
             std::shared_lock read_lock(tablet->get_header_lock());
             RETURN_IF_ERROR(tablet->capture_consistent_rowsets_unlocked({0, version}, &rowsets));
         }
-        {
+        if (!config::is_cloud_mode()) {
             auto& engine = ExecEnv::GetInstance()->storage_engine().to_local();
             auto local_tablet = std::static_pointer_cast<Tablet>(tablet);
             LOG(INFO) << "sout: sub txn id size=" << sub_txn_ids.size();
