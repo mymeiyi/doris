@@ -30,6 +30,7 @@ namespace doris::io {
 
 Status RemoteFileSystem::upload(const Path& local_file, const Path& dest_file) {
     auto dest_path = absolute_path(dest_file);
+    LOG(INFO) << "sout: dest_path: " << dest_path;
     FILESYSTEM_M(upload_impl(local_file, dest_path));
 }
 

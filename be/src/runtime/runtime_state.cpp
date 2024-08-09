@@ -441,6 +441,9 @@ std::string RuntimeState::get_error_log_file_path() {
                 _exec_env->load_path_mgr()->get_load_error_absolute_path(_error_log_file_path);
         // upload error log file to s3
         Status st = _s3_error_fs->upload(error_log_absolute_path, _s3_error_log_file_path);
+        LOG(INFO) << "sout: _error_log_file_path=" << _error_log_file_path
+                  << ", error_log_absolute_path=" << error_log_absolute_path
+                  << ", _s3_error_log_file_path=" << _s3_error_log_file_path;
         if (st.ok()) {
             // remove local error log file
             std::filesystem::remove(error_log_absolute_path);
