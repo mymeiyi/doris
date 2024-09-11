@@ -137,6 +137,7 @@ Status SegmentFlusher::_add_rows(std::unique_ptr<segment_v2::VerticalSegmentWrit
 
 Status SegmentFlusher::_create_segment_writer(std::unique_ptr<segment_v2::SegmentWriter>& writer,
                                               int32_t segment_id, bool no_compression) {
+    LOG(INFO) << "sout: SegmentFlusher::_create_segment_writer";
     io::FileWriterPtr segment_file_writer;
     RETURN_IF_ERROR(_context.file_writer_creator->create(segment_id, segment_file_writer));
 
@@ -308,6 +309,7 @@ Status SegmentFlusher::_flush_segment_writer(std::unique_ptr<segment_v2::Segment
 
 Status SegmentFlusher::create_writer(std::unique_ptr<SegmentFlusher::Writer>& writer,
                                      uint32_t segment_id) {
+    LOG(INFO) << "sout: SegmentFlusher::create_writer";
     std::unique_ptr<segment_v2::SegmentWriter> segment_writer;
     RETURN_IF_ERROR(_create_segment_writer(segment_writer, segment_id));
     DCHECK(segment_writer != nullptr);

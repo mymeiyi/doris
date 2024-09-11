@@ -445,6 +445,7 @@ void MemTable::_aggregate() {
                 }
             }
             _stat.merged_rows++;
+            LOG(INFO) << "sout: update memtable merged_rows=" << _stat.merged_rows;
             _aggregate_two_row_in_block(mutable_block, _row_in_blocks[i], prev_row);
         } else {
             prev_row = _row_in_blocks[i];
@@ -520,13 +521,20 @@ Status MemTable::_to_block(std::unique_ptr<vectorized::Block>* res) {
             return Status::InternalError(
                     "Partial update for mow with cluster keys is not supported");
         }
+        /*LOG(INFO) << "sout: call _sort_by_cluster_keys, tablet_id=" << tablet_id()
+                  << ", block\n=" << _input_mutable_block.dump_data(0);*/
         RETURN_IF_ERROR(_sort_by_cluster_keys());
+    } else {
+        /*LOG(INFO) << "sout: skip call _sort_by_cluster_keys, tablet_id=" << tablet_id()
+                  << ", block\n=" << _input_mutable_block.dump_data(0);*/
     }
     g_memtable_input_block_allocated_size << -_input_mutable_block.allocated_bytes();
     _input_mutable_block.clear();
     // After to block, all data in arena is saved in the block
     _arena.reset();
     *res = vectorized::Block::create_unique(_output_mutable_block.to_block());
+    /*LOG(INFO) << "sout: after _sort_by_cluster_keys, tablet_id=" << tablet_id()
+              << ", block\n=" << (*res)->dump_data(0);*/
     return Status::OK();
 }
 

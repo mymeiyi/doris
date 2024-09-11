@@ -1258,6 +1258,7 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
             List<Index> indexes = restoredIdx.getId() == localTbl.getBaseIndexId()
                                     ? localTbl.getCopiedIndexes() : null;
             List<Integer> clusterKeyIndexes = null;
+            // TODO
             if (indexMeta.getIndexId() == localTbl.getBaseIndexId() || localTbl.isShadowIndex(indexMeta.getIndexId())) {
                 clusterKeyIndexes = OlapTable.getClusterKeyIndexes(indexMeta.getSchema());
             }

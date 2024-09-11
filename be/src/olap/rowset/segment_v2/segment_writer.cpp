@@ -117,6 +117,7 @@ SegmentWriter::SegmentWriter(io::FileWriter* file_writer, uint32_t segment_id,
         }
         // encode the rowid into the primary key index
         if (_is_mow_with_cluster_key()) {
+            LOG(INFO) << "sout: segment_writer";
             const auto* type_info = get_scalar_type_info<FieldType::OLAP_FIELD_TYPE_UNSIGNED_INT>();
             _rowid_coder = get_key_coder(type_info->type());
             // primary keys
@@ -275,7 +276,13 @@ Status SegmentWriter::init(const std::vector<uint32_t>& col_ids, bool has_key) {
     DCHECK(_column_ids.empty());
     _has_key = has_key;
     _column_writers.reserve(_tablet_schema->columns().size());
+    // it's the index of column in tablet schema
     _column_ids.insert(_column_ids.end(), col_ids.begin(), col_ids.end());
+    std::stringstream ss;
+    for (const auto& item : _column_ids) {
+        ss << " " << item;
+    }
+    LOG(INFO) << "sout: cids=" << ss.str();
     _olap_data_convertor = std::make_unique<vectorized::OlapBlockDataConvertor>();
     if (_opts.compression_type == UNKNOWN_COMPRESSION) {
         _opts.compression_type = _tablet_schema->compression_type();
@@ -707,6 +714,7 @@ Status SegmentWriter::append_block(const vectorized::Block* block, size_t row_po
         _opts.write_type == DataWriteType::TYPE_SCHEMA_CHANGE) {
         _serialize_block_to_row_column(*const_cast<vectorized::Block*>(block));
     }
+    LOG(INFO) << "sout: write block=\n" << block->dump_data(0);
 
     _olap_data_convertor->set_source_content(block, row_pos, num_rows);
 
@@ -754,9 +762,13 @@ Status SegmentWriter::append_block(const vectorized::Block* block, size_t row_po
                                                         seq_column, num_rows, true));
             // 2. generate short key index (use cluster key)
             key_columns.clear();
+            LOG(INFO) << "sout: column writer cnt=" << _column_writers.size()
+                      << ", ck cnt=" << _tablet_schema->cluster_key_idxes().size();
             for (const auto& cid : _tablet_schema->cluster_key_idxes()) {
                 // find cluster key index in tablet schema
                 auto cluster_key_index = _tablet_schema->field_index(cid);
+                LOG(INFO) << "sout: need cluster key column unique id=" << cid
+                          << ", in tablet meta index=" << cluster_key_index;
                 if (cluster_key_index == -1) {
                     return Status::InternalError(
                             "could not find cluster key column with unique_id=" +
@@ -765,6 +777,9 @@ Status SegmentWriter::append_block(const vectorized::Block* block, size_t row_po
                 bool found = false;
                 for (auto i = 0; i < _column_ids.size(); ++i) {
                     if (_column_ids[i] == cluster_key_index) {
+                        LOG(INFO) << "sout: need cluster key column unique id=" << cid
+                                  << ", in tablet meta index=" << cluster_key_index
+                                  << ", in column id index=" << i;
                         auto converted_result = _olap_data_convertor->convert_column_data(i);
                         if (!converted_result.first.ok()) {
                             return converted_result.first;

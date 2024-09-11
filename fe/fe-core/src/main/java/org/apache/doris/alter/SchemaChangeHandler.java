@@ -2133,7 +2133,7 @@ public class SchemaChangeHandler extends AlterHandler {
             } // end for alter clauses
 
             if (LOG.isDebugEnabled()) {
-                LOG.debug("table: {}({}), lightSchemaChange: {}, lightIndexChange: {},"
+                LOG.debug("sout: table: {}({}), lightSchemaChange: {}, lightIndexChange: {},"
                         + " buildIndexChange: {}, indexSchemaMap:{}",
                         olapTable.getName(), olapTable.getId(), lightSchemaChange,
                         lightIndexChange, buildIndexChange, indexSchemaMap);

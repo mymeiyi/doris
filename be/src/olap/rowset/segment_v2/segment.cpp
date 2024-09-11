@@ -88,6 +88,7 @@ Status Segment::open(io::FileSystemSPtr fs, const std::string& path, uint32_t se
                      RowsetId rowset_id, TabletSchemaSPtr tablet_schema,
                      const io::FileReaderOptions& reader_options, std::shared_ptr<Segment>* output,
                      InvertedIndexFileInfo idx_file_info) {
+    // LOG(INFO) << "sout: open segment, tablet schema columns=" << tablet_schema->num_columns();
     io::FileReaderSPtr file_reader;
     RETURN_IF_ERROR(fs->open_file(path, &file_reader, &reader_options));
     std::shared_ptr<Segment> segment(
@@ -198,6 +199,8 @@ Status Segment::new_iterator(SchemaSPtr schema, const StorageReadOptions& read_o
     // trying to prune the current segment by segment-level zone map
     for (auto& entry : read_options.col_id_to_predicates) {
         int32_t column_id = entry.first;
+        /*LOG(INFO) << "sout: try read column_id=" << column_id
+                  << ", column num=" << _tablet_schema->num_columns();*/
         // schema change
         if (_tablet_schema->num_columns() <= column_id) {
             continue;
