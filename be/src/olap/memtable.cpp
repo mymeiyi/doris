@@ -504,6 +504,7 @@ bool MemTable::need_agg() const {
 }
 
 Status MemTable::_to_block(std::unique_ptr<vectorized::Block>* res) {
+    LOG(INFO) << "sout: call memtable::_to_block, tablet_id=" << tablet_id();
     size_t same_keys_num = _sort();
     if (_keys_type == KeysType::DUP_KEYS || same_keys_num == 0) {
         if (_keys_type == KeysType::DUP_KEYS && _tablet_schema->num_key_columns() == 0) {
