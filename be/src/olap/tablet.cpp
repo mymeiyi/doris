@@ -934,6 +934,38 @@ Status Tablet::capture_rs_readers(const Version& spec_version, std::vector<RowSe
     return Status::OK();
 }
 
+Status Tablet::capture_sub_txn_rs_readers(int64_t version, const std::vector<int64_t>& sub_txn_ids,
+                                          std::vector<RowSetSplits>* rs_splits) {
+    LOG(INFO) << "capture_sub_txn_rs_readers for partition=" << partition_id()
+              << ", tablet_id=" << tablet_id() << ", version=" << version
+              << ", sub_txn_ids.size=" << sub_txn_ids.size();
+    for (int i = 0; i < sub_txn_ids.size(); ++i) {
+        auto sub_txn_id = sub_txn_ids[i];
+        auto rowset = _engine.txn_manager()->get_tablet_rowset(tablet_id(), tablet_uid(),
+                                                               partition_id(), sub_txn_id);
+        DCHECK(rowset != nullptr) << " rowset is nullptr for sub_txn_id=" << sub_txn_ids[i]
+                                  << ", partition_id=" << partition_id()
+                                  << ", tablet=" << tablet_id();
+        int64_t tmp_version = version + i + 1;
+        LOG(INFO) << "sub_txn_id=" << sub_txn_ids[i] << ", partition_id=" << partition_id()
+                  << ", tablet=" << tablet_id() << ", set tmp version=" << tmp_version;
+        rowset->set_version(Version(tmp_version, tmp_version));
+        if (rowset->rowset_meta()->has_delete_predicate()) {
+            rowset->rowset_meta()->mutable_delete_predicate()->set_version(tmp_version);
+        }
+        if (rowset != nullptr) {
+            RowsetReaderSharedPtr rs_reader;
+            auto res = rowset->create_reader(&rs_reader);
+            if (!res.ok()) {
+                return Status::Error<ErrorCode::CAPTURE_ROWSET_READER_ERROR>(
+                        "failed to create reader for rowset:{}", rowset->rowset_id().to_string());
+            }
+            rs_splits->emplace_back(std::move(rs_reader));
+        }
+    }
+    return Status::OK();
+}
+
 Versions Tablet::calc_missed_versions(int64_t spec_version, Versions existing_versions) const {
     DCHECK(spec_version > 0) << "invalid spec_version: " << spec_version;
 
