@@ -249,12 +249,12 @@ public class TransactionEntry {
                         "Transaction insert must be in the same database, expect db_id=" + this.database.getId());
             }
             // TODO for delete type, make sure there is no insert for the same table for mow
-            if (subTransactionType == SubTransactionType.DELETE && subTransactionStates.stream()
+            /*if (subTransactionType == SubTransactionType.DELETE && subTransactionStates.stream()
                     .anyMatch(s -> ((OlapTable) s.getTable()).getEnableUniqueKeyMergeOnWrite()
                             && s.getTable().getId() == table.getId()
                             && s.getSubTransactionType() == SubTransactionType.INSERT)) {
                 throw new AnalysisException("Can not delete because there is a insert operation for the same table");
-            }
+            }*/
             long subTxnId;
             if (Config.isCloudMode()) {
                 TUniqueId queryId = ConnectContext.get().queryId();
@@ -552,9 +552,9 @@ public class TransactionEntry {
                 continue;
             }
             // TODO mow will be supported
-            if (((OlapTable) subTransactionState.getTable()).getEnableUniqueKeyMergeOnWrite()) {
+            /*if (((OlapTable) subTransactionState.getTable()).getEnableUniqueKeyMergeOnWrite()) {
                 continue;
-            }
+            }*/
             for (TTabletCommitInfo tabletCommitInfo : subTransactionState.getTabletCommitInfos()) {
                 if (index.getTablet(tabletCommitInfo.getTabletId()) != null) {
                     subTxnIds.add(subTransactionState.getSubTransactionId());
@@ -575,9 +575,9 @@ public class TransactionEntry {
                 continue;
             }
             // TODO mow will be supported
-            if (((OlapTable) subTransactionState.getTable()).getEnableUniqueKeyMergeOnWrite()) {
+            /*if (((OlapTable) subTransactionState.getTable()).getEnableUniqueKeyMergeOnWrite()) {
                 continue;
-            }
+            }*/
             for (TTabletCommitInfo tabletCommitInfo : subTransactionState.getTabletCommitInfos()) {
                 if (tablet.getId() == tabletCommitInfo.getTabletId()) {
                     subTxnIds.add(subTransactionState.getSubTransactionId());
