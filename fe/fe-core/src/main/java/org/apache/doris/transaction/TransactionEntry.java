@@ -591,7 +591,8 @@ public class TransactionEntry {
         return subTxnIds;
     }
 
-    public List<Replica> getQueryableReplicas(long tabletId, List<Replica> replicas, List<Long> subTxnIds) {
+    public List<Replica> getQueryableReplicas(long tabletId, List<Replica> replicas, List<Long> subTxnIds)
+            throws UserException {
         List<Replica> queryableReplicas = new ArrayList<>(replicas);
         for (Long subTxnId : subTxnIds) {
             if (queryableReplicas.isEmpty()) {
@@ -602,7 +603,8 @@ public class TransactionEntry {
         return queryableReplicas;
     }
 
-    private List<Replica> getQueryableReplicas(long tabletId, List<Replica> replicas, long subTxnId) {
+    private List<Replica> getQueryableReplicas(long tabletId, List<Replica> replicas, long subTxnId)
+            throws UserException {
         List<Replica> queryableReplicas = new ArrayList<>();
         for (SubTransactionState subTransactionState : subTransactionStates) {
             if (subTxnId != subTransactionState.getSubTransactionId()) {
