@@ -3724,6 +3724,10 @@ public class SessionVariable implements Serializable, Writable {
         tResult.setSkipDeletePredicate(skipDeletePredicate);
 
         tResult.setSkipDeleteBitmap(skipDeleteBitmap);
+        if (ConnectContext.get().isTxnModel()) {
+            // TODO set to true only if the sub txn ids are not empty
+            tResult.setSkipDeleteBitmap(true);
+        }
 
         tResult.setPartitionedHashJoinRowsThreshold(partitionedHashJoinRowsThreshold);
         tResult.setPartitionedHashAggRowsThreshold(partitionedHashAggRowsThreshold);
