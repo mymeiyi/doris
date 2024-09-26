@@ -941,8 +941,8 @@ Status Tablet::capture_sub_txn_rs_readers(int64_t version, const std::vector<int
               << ", sub_txn_ids.size=" << sub_txn_ids.size();
     for (int i = 0; i < sub_txn_ids.size(); ++i) {
         auto sub_txn_id = sub_txn_ids[i];
-        auto rowset = _engine.txn_manager()->get_tablet_rowset(
-                tablet_id(), tablet_uid(), partition_id(), sub_txn_id);
+        auto rowset = _engine.txn_manager()->get_tablet_rowset(tablet_id(), tablet_uid(),
+                                                               partition_id(), sub_txn_id);
         DCHECK(rowset != nullptr) << " rowset is nullptr for sub_txn_id=" << sub_txn_ids[i]
                                   << ", partition_id=" << partition_id()
                                   << ", tablet=" << tablet_id();
@@ -958,8 +958,7 @@ Status Tablet::capture_sub_txn_rs_readers(int64_t version, const std::vector<int
             auto res = rowset->create_reader(&rs_reader);
             if (!res.ok()) {
                 return Status::Error<ErrorCode::CAPTURE_ROWSET_READER_ERROR>(
-                        "failed to create reader for rowset:{}",
-                        rowset->rowset_id().to_string());
+                        "failed to create reader for rowset:{}", rowset->rowset_id().to_string());
             }
             rs_splits->emplace_back(std::move(rs_reader));
         }

@@ -104,7 +104,8 @@ public:
                                       std::vector<RowSetSplits>* rs_splits,
                                       bool skip_missing_version) = 0;
 
-    virtual Status capture_sub_txn_rs_readers(int64_t version, const std::vector<int64_t>& sub_txn_ids,
+    virtual Status capture_sub_txn_rs_readers(int64_t version,
+                                              const std::vector<int64_t>& sub_txn_ids,
                                               std::vector<RowSetSplits>* rs_splits) = 0;
 
     virtual size_t tablet_footprint() = 0;

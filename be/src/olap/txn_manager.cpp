@@ -792,8 +792,7 @@ void TxnManager::get_all_related_tablets(std::set<TabletInfo>* tablet_infos) {
 }
 
 RowsetSharedPtr TxnManager::get_tablet_rowset(TTabletId tablet_id, TabletUid tablet_uid,
-                                              int64_t partition_id,
-                                              TTransactionId transaction_id) {
+                                              int64_t partition_id, TTransactionId transaction_id) {
     pair<int64_t, int64_t> key(partition_id, transaction_id);
     std::shared_lock txn_rdlock(_get_txn_map_lock(transaction_id));
     txn_tablet_map_t& txn_tablet_map = _get_txn_tablet_map(transaction_id);

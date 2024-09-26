@@ -138,8 +138,7 @@ Status CloudTablet::capture_sub_txn_rs_readers(int64_t version,
             auto res = rowset->create_reader(&rs_reader);
             if (!res.ok()) {
                 return Status::Error<ErrorCode::CAPTURE_ROWSET_READER_ERROR>(
-                        "failed to create reader for rowset:{}",
-                        rowset->rowset_id().to_string());
+                        "failed to create reader for rowset:{}", rowset->rowset_id().to_string());
             }
             rs_splits->emplace_back(std::move(rs_reader));
         }
