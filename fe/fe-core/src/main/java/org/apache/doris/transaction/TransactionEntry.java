@@ -248,13 +248,6 @@ public class TransactionEntry {
                 throw new AnalysisException(
                         "Transaction insert must be in the same database, expect db_id=" + this.database.getId());
             }
-            // TODO for delete type, make sure there is no insert for the same table for mow
-            if (subTransactionType == SubTransactionType.DELETE && subTransactionStates.stream()
-                    .anyMatch(s -> ((OlapTable) s.getTable()).getEnableUniqueKeyMergeOnWrite()
-                            && s.getTable().getId() == table.getId()
-                            && s.getSubTransactionType() == SubTransactionType.INSERT)) {
-                throw new AnalysisException("Can not delete because there is a insert operation for the same table");
-            }
             long subTxnId;
             if (Config.isCloudMode()) {
                 TUniqueId queryId = ConnectContext.get().queryId();
@@ -551,10 +544,6 @@ public class TransactionEntry {
             if (subTransactionState.getTable().getId() != tableId) {
                 continue;
             }
-            // TODO mow will be supported
-            if (((OlapTable) subTransactionState.getTable()).getEnableUniqueKeyMergeOnWrite()) {
-                continue;
-            }
             for (TTabletCommitInfo tabletCommitInfo : subTransactionState.getTabletCommitInfos()) {
                 if (index.getTablet(tabletCommitInfo.getTabletId()) != null) {
                     subTxnIds.add(subTransactionState.getSubTransactionId());
@@ -574,10 +563,6 @@ public class TransactionEntry {
             if (subTransactionState.getTable().getId() != tableId) {
                 continue;
             }
-            // TODO mow will be supported
-            if (((OlapTable) subTransactionState.getTable()).getEnableUniqueKeyMergeOnWrite()) {
-                continue;
-            }
             for (TTabletCommitInfo tabletCommitInfo : subTransactionState.getTabletCommitInfos()) {
                 if (tablet.getId() == tabletCommitInfo.getTabletId()) {
                     subTxnIds.add(subTransactionState.getSubTransactionId());
@@ -591,7 +576,8 @@ public class TransactionEntry {
         return subTxnIds;
     }
 
-    public List<Replica> getQueryableReplicas(long tabletId, List<Replica> replicas, List<Long> subTxnIds) {
+    public List<Replica> getQueryableReplicas(long tabletId, List<Replica> replicas, List<Long> subTxnIds)
+            throws UserException {
         List<Replica> queryableReplicas = new ArrayList<>(replicas);
         for (Long subTxnId : subTxnIds) {
             if (queryableReplicas.isEmpty()) {
@@ -602,7 +588,8 @@ public class TransactionEntry {
         return queryableReplicas;
     }
 
-    private List<Replica> getQueryableReplicas(long tabletId, List<Replica> replicas, long subTxnId) {
+    private List<Replica> getQueryableReplicas(long tabletId, List<Replica> replicas, long subTxnId)
+            throws UserException {
         List<Replica> queryableReplicas = new ArrayList<>();
         for (SubTransactionState subTransactionState : subTransactionStates) {
             if (subTxnId != subTransactionState.getSubTransactionId()) {

@@ -15,17 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// The cases is copied from https://github.com/trinodb/trino/tree/master
-// /testing/trino-product-tests/src/main/resources/sql-tests/testcases
-// and modified by Doris.
-
-import com.mysql.cj.jdbc.StatementImpl
-import java.sql.Connection
-import java.sql.DriverManager
-import java.sql.Statement
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
-
 suite("sub_txn_duplicate") {
     sql """ set enable_query_in_transaction_load = true """
     // case 1
