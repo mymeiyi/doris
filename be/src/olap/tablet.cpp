@@ -934,7 +934,7 @@ Status Tablet::capture_rs_readers(const Version& spec_version, std::vector<RowSe
     return Status::OK();
 }
 
-Status Tablet::capture_sub_txn_rowsets(int64_t version, const std::vector<int64_t>& sub_txn_ids,
+Status Tablet::capture_sub_txn_rowsets(const std::vector<int64_t>& sub_txn_ids,
                                        std::vector<RowsetSharedPtr>* rowsets) {
     for (int i = 0; i < sub_txn_ids.size(); ++i) {
         auto sub_txn_id = sub_txn_ids[i];

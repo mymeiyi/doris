@@ -108,8 +108,7 @@ Status CloudTablet::capture_rs_readers(const Version& spec_version,
     return capture_rs_readers_unlocked(version_path, rs_splits);
 }
 
-Status CloudTablet::capture_sub_txn_rowsets(int64_t version,
-                                            const std::vector<int64_t>& sub_txn_ids,
+Status CloudTablet::capture_sub_txn_rowsets(const std::vector<int64_t>& sub_txn_ids,
                                             std::vector<RowsetSharedPtr>* rowsets) {
     return _engine.meta_mgr().get_tmp_rowset(tablet_schema(), index_id(), tablet_id(), sub_txn_ids,
                                              *rowsets);

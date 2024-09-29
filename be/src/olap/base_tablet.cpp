@@ -134,7 +134,7 @@ Status BaseTablet::capture_sub_txn_rs_readers(int64_t version,
               << ", tablet_id=" << tablet_id() << ", version=" << version
               << ", sub_txn_ids.size=" << sub_txn_ids.size();
     std::vector<RowsetSharedPtr> rowsets;
-    RETURN_IF_ERROR(capture_sub_txn_rowsets(version, sub_txn_ids, &rowsets));
+    RETURN_IF_ERROR(capture_sub_txn_rowsets(sub_txn_ids, &rowsets));
     DCHECK(rowsets.size() == sub_txn_ids.size())
             << " sub_txn_id size=" << sub_txn_ids.size() << ", rowset size=" << rowsets.size()
             << ", partition_id=" << partition_id() << ", tablet=" << tablet_id();

@@ -248,6 +248,10 @@ public class TransactionEntry {
                 throw new AnalysisException(
                         "Transaction insert must be in the same database, expect db_id=" + this.database.getId());
             }
+            if (subTransactionStates.size() >= Config.max_sub_transactions_in_transaction_load) {
+                throw new UserException("Transaction load can not have more than "
+                        + Config.max_sub_transactions_in_transaction_load + " sub transactions");
+            }
             long subTxnId;
             if (Config.isCloudMode()) {
                 TUniqueId queryId = ConnectContext.get().queryId();
