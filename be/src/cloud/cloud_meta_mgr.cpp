@@ -795,6 +795,7 @@ Status CloudMetaMgr::update_tmp_rowset(const RowsetMeta& rs_meta) {
 Status CloudMetaMgr::get_tmp_rowset(TabletSchemaSPtr tablet_schema, int64_t index_id,
                                     int64_t tablet_id, const std::vector<int64_t>& txn_ids,
                                     std::vector<std::shared_ptr<Rowset>>& rowsets) {
+    // see CloudMetaMgr::sync_tablet_rowsets, GetRowsetRequest
     VLOG_DEBUG << "get tmp rowset, tablet_id: " << tablet_id
                << ", txn_ids size: " << txn_ids.size();
     GetTmpRowsetRequest req;

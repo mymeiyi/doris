@@ -108,42 +108,11 @@ Status CloudTablet::capture_rs_readers(const Version& spec_version,
     return capture_rs_readers_unlocked(version_path, rs_splits);
 }
 
-Status CloudTablet::capture_sub_txn_rs_readers(int64_t version,
-                                               const std::vector<int64_t>& sub_txn_ids,
-                                               std::vector<RowSetSplits>* rs_splits) {
-    LOG(INFO) << "capture_sub_txn_rs_readers for partition=" << partition_id()
-              << ", tablet_id=" << tablet_id() << ", version=" << version
-              << ", sub_txn_ids.size=" << sub_txn_ids.size();
-    std::vector<std::shared_ptr<Rowset>> rowsets;
-    RETURN_IF_ERROR(_engine.meta_mgr().get_tmp_rowset(tablet_schema(), index_id(), tablet_id(),
-                                                      sub_txn_ids, rowsets));
-    DCHECK(rowsets.size() == sub_txn_ids.size())
-            << " sub_txn_id size=" << sub_txn_ids.size() << ", rowset size=" << rowsets.size()
-            << ", partition_id=" << partition_id() << ", tablet=" << tablet_id();
-    for (int i = 0; i < rowsets.size(); ++i) {
-        auto& rowset = rowsets[i];
-        DCHECK(rowset != nullptr) << " rowset is nullptr for sub_txn_id=" << sub_txn_ids[i]
-                                  << ", partition_id=" << partition_id()
-                                  << ", tablet=" << tablet_id();
-        // see CloudMetaMgr::sync_tablet_rowsets, GetRowsetRequest
-        int64_t tmp_version = version + i + 1;
-        LOG(INFO) << "sub_txn_id=" << sub_txn_ids[i] << ", partition_id=" << partition_id()
-                  << ", tablet=" << tablet_id() << ", set tmp version=" << tmp_version;
-        rowset->set_version(Version(tmp_version, tmp_version));
-        if (rowset->rowset_meta()->has_delete_predicate()) {
-            rowset->rowset_meta()->mutable_delete_predicate()->set_version(tmp_version);
-        }
-        if (rowset != nullptr) {
-            RowsetReaderSharedPtr rs_reader;
-            auto res = rowset->create_reader(&rs_reader);
-            if (!res.ok()) {
-                return Status::Error<ErrorCode::CAPTURE_ROWSET_READER_ERROR>(
-                        "failed to create reader for rowset:{}", rowset->rowset_id().to_string());
-            }
-            rs_splits->emplace_back(std::move(rs_reader));
-        }
-    }
-    return Status::OK();
+Status CloudTablet::capture_sub_txn_rowsets(int64_t version,
+                                            const std::vector<int64_t>& sub_txn_ids,
+                                            std::vector<RowsetSharedPtr>* rowsets) {
+    return _engine.meta_mgr().get_tmp_rowset(tablet_schema(), index_id(), tablet_id(), sub_txn_ids,
+                                             *rowsets);
 }
 
 // There are only two tablet_states RUNNING and NOT_READY in cloud mode

@@ -204,7 +204,7 @@ public class TransactionEntry {
     }
 
     // Used for insert into select, return the sub_txn_id for this insert
-    public long beginTransaction(TableIf table, SubTransactionType subTransactionType) throws Exception {
+    public long beginTransaction(TableIf table) throws Exception {
         if (isInsertValuesTxnBegan()) {
             // FIXME: support mix usage of `insert into values` and `insert into select`
             throw new AnalysisException(
