@@ -662,6 +662,7 @@ Status VCollectIterator::Level1Iterator::init(bool get_data_by_ref) {
 
     // Only when there are multiple children that need to be merged
     if (_merge && _children.size() > 1) {
+        LOG(INFO) << "sout: merge=true, children.size()=" << _children.size();
         auto sequence_loc = -1;
         for (int loc = 0; loc < _reader->_return_columns.size(); loc++) {
             if (_reader->_return_columns[loc] == _reader->_sequence_col_idx) {

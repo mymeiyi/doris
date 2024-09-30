@@ -20,7 +20,7 @@ import org.codehaus.groovy.runtime.IOGroovyMethods
 suite("test_primary_key_simple_case") {
     def tableName = "primary_key_simple_case"
     onFinish {
-        try_sql("DROP TABLE IF EXISTS ${tableName}")
+        // try_sql("DROP TABLE IF EXISTS ${tableName}")
     }
 
     sql """ DROP TABLE IF EXISTS ${tableName} """
