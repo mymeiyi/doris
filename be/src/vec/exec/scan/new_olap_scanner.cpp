@@ -395,7 +395,9 @@ Status NewOlapScanner::_init_tablet_reader_params(
         !(_state->skip_delete_bitmap() || _state->query_mow_in_mor())) {
         _tablet_reader_params.delete_bitmap = &tablet->tablet_meta()->delete_bitmap();
     }
-    _tablet_reader_params.query_mow_in_mor = _state->query_mow_in_mor();
+    if (tablet->enable_unique_key_merge_on_write()) {
+        _tablet_reader_params.query_mow_in_mor = _state->query_mow_in_mor();
+    }
     /*LOG(INFO) << "sout: skip merge=" << _state->skip_storage_engine_merge()
               << ", query_id=" << print_id(_state->query_id())
               << ", tablet_id=" << tablet->tablet_id() << ", tablet=" << tablet;*/
