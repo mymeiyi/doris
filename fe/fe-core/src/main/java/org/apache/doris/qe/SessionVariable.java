@@ -3724,6 +3724,7 @@ public class SessionVariable implements Serializable, Writable {
         tResult.setSkipDeletePredicate(skipDeletePredicate);
 
         tResult.setSkipDeleteBitmap(skipDeleteBitmap);
+        tResult.setQueryMOwInMor(queryMowInMor);
         if (ConnectContext.get() != null && ConnectContext.get().isTxnModel()) {
             // TODO set to true only if the sub txn ids are not empty
             tResult.setQueryMOwInMor(true);
