@@ -229,6 +229,7 @@ bool OlapScanLocalState::_should_push_down_common_expr() {
 
 bool OlapScanLocalState::_storage_no_merge() {
     auto& p = _parent->cast<OlapScanOperatorX>();
+    // TODO
     return (p._olap_scan_node.keyType == TKeysType::DUP_KEYS ||
             (p._olap_scan_node.keyType == TKeysType::UNIQUE_KEYS &&
              p._olap_scan_node.__isset.enable_unique_key_merge_on_write &&
