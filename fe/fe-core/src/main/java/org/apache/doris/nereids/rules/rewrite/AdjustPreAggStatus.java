@@ -52,6 +52,7 @@ import org.apache.doris.nereids.trees.plans.logical.LogicalOlapScan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 import org.apache.doris.nereids.trees.plans.logical.LogicalRepeat;
 import org.apache.doris.nereids.util.ExpressionUtils;
+import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -397,7 +398,8 @@ public class AdjustPreAggStatus implements RewriteRuleFactory {
         long selectIndexId = olapScan.getSelectedIndexId();
         MaterializedIndexMeta meta = olapScan.getTable().getIndexMetaByIndexId(selectIndexId);
         if (meta.getKeysType() == KeysType.DUP_KEYS || (meta.getKeysType() == KeysType.UNIQUE_KEYS
-                && olapScan.getTable().getEnableUniqueKeyMergeOnWrite())) {
+                && olapScan.getTable().getEnableUniqueKeyMergeOnWrite() && (ConnectContext.get() == null
+                || !ConnectContext.get().getSessionVariable().queryMowInMor))) {
             return PreAggStatus.on();
         } else {
             return PreAggStatus.unset();
