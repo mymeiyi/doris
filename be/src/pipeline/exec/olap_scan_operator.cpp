@@ -164,6 +164,7 @@ Status OlapScanLocalState::_process_conjuncts(RuntimeState* state) {
 }
 
 bool OlapScanLocalState::_is_key_column(const std::string& key_name) {
+    // TODO
     auto& p = _parent->cast<OlapScanOperatorX>();
     // all column in dup_keys table or unique_keys with merge on write table olap scan node threat
     // as key column

@@ -353,6 +353,8 @@ Status NewOlapScanner::_init_tablet_reader_params(
 
     if (_tablet_reader_params.direct_mode) {
         _tablet_reader_params.return_columns = _return_columns;
+        LOG(INFO) << "sout: set return_columns 0="
+                  << read_columns_to_string(tablet_schema, _return_columns);
     } else {
         // we need to fetch all key columns to do the right aggregation on storage engine side.
         for (size_t i = 0; i < tablet_schema->num_key_columns(); ++i) {
@@ -380,6 +382,8 @@ Status NewOlapScanner::_init_tablet_reader_params(
                 _tablet_reader_params.return_columns.push_back(sequence_col_idx);
             }
         }
+        LOG(INFO) << "sout: set return_columns 1="
+                  << read_columns_to_string(tablet_schema, _tablet_reader_params.return_columns);
     }
 
     _tablet_reader_params.use_page_cache = _state->enable_page_cache();
@@ -388,6 +392,9 @@ Status NewOlapScanner::_init_tablet_reader_params(
         _tablet_reader_params.query_mow_in_mor = _state->query_mow_in_mor();
         if (!(_state->skip_delete_bitmap() || _state->query_mow_in_mor())) {
             _tablet_reader_params.delete_bitmap = &tablet->tablet_meta()->delete_bitmap();
+            LOG(INFO) << "sout: set delete bitmap, tablet=" << tablet->tablet_id();
+        } else {
+            LOG(INFO) << "sout: skip set delete bitmap, tablet=" << tablet->tablet_id();
         }
     }
 

@@ -85,12 +85,14 @@ void VCollectIterator::init(TabletReader* reader, bool ori_data_overlapping, boo
         _merge = true;
     }
     _is_reverse = is_reverse;
+    LOG(INFO) << "sout: _merge=" << _merge << ", tablet=" << reader->tablet()->tablet_id();
 
     // use topn_next opt only for DUP_KEYS and UNIQUE_KEYS with MOW
     if (_reader->_reader_context.read_orderby_key_limit > 0 &&
         (_reader->_tablet->keys_type() == KeysType::DUP_KEYS ||
          (_reader->_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
-          _reader->_tablet->enable_unique_key_merge_on_write()))) {
+          _reader->_tablet->enable_unique_key_merge_on_write()
+          /*&& !_reader->_reader_context.query_mow_in_mor*/))) {
         _topn_limit = _reader->_reader_context.read_orderby_key_limit;
     } else {
         _topn_limit = 0;
@@ -554,6 +556,7 @@ Status VCollectIterator::Level0Iterator::next(Block* block) {
     if (_ref.row_pos <= 0 && _ref.block != nullptr && UNLIKELY(_ref.block->rows() > 0)) {
         block->swap(*_ref.block);
         _ref.reset();
+        LOG(INFO) << "sout: l0 read block 0=\n" << block->dump_data(0);
         return Status::OK();
     } else {
         if (_rs_reader == nullptr) {
@@ -569,6 +572,7 @@ Status VCollectIterator::Level0Iterator::next(Block* block) {
         if (UNLIKELY(_reader->_reader_context.record_rowids)) {
             RETURN_IF_ERROR(_rs_reader->current_block_row_locations(&_block_row_locations));
         }
+        LOG(INFO) << "sout: l0 read block 1=\n" << block->dump_data(0);
         return Status::OK();
     }
 }
@@ -787,6 +791,7 @@ Status VCollectIterator::Level1Iterator::_merge_next(Block* block) {
     SCOPED_RAW_TIMER(&_reader->_stats.collect_iterator_merge_next_timer);
     int target_block_row = 0;
     auto target_columns = block->mutate_columns();
+    LOG(INFO) << "sout: block column size=" << target_columns.size();
     size_t column_count = target_columns.size();
     IteratorRowRef cur_row = _ref;
     IteratorRowRef pre_row_ref = _ref;
@@ -827,6 +832,7 @@ Status VCollectIterator::Level1Iterator::_merge_next(Block* block) {
                 _block_row_locations.resize(target_block_row);
             }
             block->set_columns(std::move(target_columns));
+            LOG(INFO) << "sout: l1 read block 0=\n" << block->dump_data(0);
             return res;
         }
 
@@ -844,6 +850,7 @@ Status VCollectIterator::Level1Iterator::_merge_next(Block* block) {
                 }
             }
             block->set_columns(std::move(target_columns));
+            LOG(INFO) << "sout: l1 read block 1=\n" << block->dump_data(0);
             return Status::OK();
         }
         if (continuous_row_in_block == 0) {

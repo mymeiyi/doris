@@ -122,6 +122,7 @@ Status VScanner::get_block(RuntimeState* state, Block* block, bool* eof) {
                     block->erase_tmp_columns();
                     break;
                 }
+                LOG(INFO) << "sout: get_block=\n" << block->dump_data(0);
                 _num_rows_read += block->rows();
                 _num_byte_read += block->allocated_bytes();
             }

@@ -168,6 +168,9 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
 
     if (_should_push_down_value_predicates()) {
         if (_read_context->value_predicates != nullptr) {
+            LOG(INFO) << "sout: push down value predicates, size="
+                      << _read_context->value_predicates->size()
+                      << ", tablet_id=" << _read_options.tablet_id;
             _read_options.column_predicates.insert(_read_options.column_predicates.end(),
                                                    _read_context->value_predicates->begin(),
                                                    _read_context->value_predicates->end());
@@ -369,7 +372,7 @@ Status BetaRowsetReader::next_block(vectorized::Block* block) {
             return runtime_state->cancel_reason();
         }
     } while (block->empty());
-
+    LOG(INFO) << "sout: BetaRowsetReader::next_block=\n" << block->dump_data(0);
     return Status::OK();
 }
 
@@ -395,7 +398,7 @@ Status BetaRowsetReader::next_block_view(vectorized::BlockView* block_view) {
             return runtime_state->cancel_reason();
         }
     } while (block_view->empty());
-
+    LOG(INFO) << "sout: BetaRowsetReader::next_block_view";
     return Status::OK();
 }
 
