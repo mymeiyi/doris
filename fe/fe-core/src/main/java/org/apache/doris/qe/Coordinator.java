@@ -791,7 +791,7 @@ public class Coordinator implements CoordInterface {
         if (!ConnectContext.get().isTxnModel()) {
             return;
         }
-        Map<OlapTable, List<Long>> tableToSubTxnIds = Maps.newHashMap();
+        Map<OlapTable, Pair<Long, List<Long>>> tableToScanRanges = Maps.newHashMap();
         for (ScanNode scanNode : scanNodes) {
             if (!(scanNode instanceof OlapScanNode)) {
                 continue;
@@ -801,27 +801,30 @@ public class Coordinator implements CoordInterface {
                 continue;
             }
             for (TScanRangeLocations scanRangeLocation : scanNode.getScanRangeLocations(0)) {
+                long version = Long.parseLong(scanRangeLocation.scan_range.palo_scan_range.getVersion());
                 List<Long> subTxnIds = scanRangeLocation.scan_range.palo_scan_range.getSubTxnIds();
                 if (subTxnIds.isEmpty()) {
                     continue;
                 }
-                if (tableToSubTxnIds.containsKey(olapTable)) {
-                    if (!tableToSubTxnIds.get(olapTable).equals(subTxnIds)) {
-                        LOG.warn("table={}, sub_txn_ids={} is not equal to previous added sub_txn_ids={}",
-                                olapTable.getId(), subTxnIds, tableToSubTxnIds.get(olapTable));
+                if (tableToScanRanges.containsKey(olapTable)) {
+                    if (version != tableToScanRanges.get(olapTable).first || !subTxnIds.equals(
+                            tableToScanRanges.get(olapTable).second)) {
+                        LOG.warn("table={}, version={}, sub_txn_ids={} is not equal to "
+                                        + "previous added version={}, sub_txn_ids={}", olapTable.getId(), version, subTxnIds,
+                                tableToScanRanges.get(olapTable).first, tableToScanRanges.get(olapTable).second);
                     }
                     continue;
                 }
-                tableToSubTxnIds.put(olapTable, subTxnIds);
+                tableToScanRanges.put(olapTable, Pair.of(version, subTxnIds));
             }
         }
-        if (tableToSubTxnIds.isEmpty()) {
+        if (tableToScanRanges.isEmpty()) {
             return;
         }
         // calculate mow delete bitmap
-        for (Entry<OlapTable, List<Long>> entry : tableToSubTxnIds.entrySet()) {
-            LOG.info("calculate mow delete bitmap for table={}, sub_txn_ids={}",
-                    entry.getKey().getId(), entry.getValue());
+        for (Entry<OlapTable, Pair<Long, List<Long>>> entry : tableToScanRanges.entrySet()) {
+            LOG.info("calculate mow delete bitmap for table={}, version={}, sub_txn_ids={}", entry.getKey().getId(),
+                    entry.getValue().first, entry.getValue().second);
         }
     }
 
