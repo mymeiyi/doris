@@ -22,6 +22,7 @@ import org.apache.doris.analysis.DescriptorTable;
 import org.apache.doris.analysis.StorageBackend;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.FsBroker;
+import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.MarkedCountDownLatch;
 import org.apache.doris.common.Pair;
@@ -782,7 +783,46 @@ public class Coordinator implements CoordInterface {
         }
 
         updateProfileIfPresent(profile -> profile.setAssignFragmentTime());
+        calculateMowDeleteBitmap();
         sendPipelineCtx();
+    }
+
+    private void calculateMowDeleteBitmap() {
+        if (!ConnectContext.get().isTxnModel()) {
+            return;
+        }
+        Map<OlapTable, List<Long>> tableToSubTxnIds = Maps.newHashMap();
+        for (ScanNode scanNode : scanNodes) {
+            if (!(scanNode instanceof OlapScanNode)) {
+                continue;
+            }
+            OlapTable olapTable = ((OlapScanNode) scanNode).getOlapTable();
+            if (!olapTable.isUniqKeyMergeOnWrite()) {
+                continue;
+            }
+            for (TScanRangeLocations scanRangeLocation : scanNode.getScanRangeLocations(0)) {
+                List<Long> subTxnIds = scanRangeLocation.scan_range.palo_scan_range.getSubTxnIds();
+                if (subTxnIds.isEmpty()) {
+                    continue;
+                }
+                if (tableToSubTxnIds.containsKey(olapTable)) {
+                    if (!tableToSubTxnIds.get(olapTable).equals(subTxnIds)) {
+                        LOG.warn("table={}, sub_txn_ids={} is not equal to previous added sub_txn_ids={}",
+                                olapTable.getId(), subTxnIds, tableToSubTxnIds.get(olapTable));
+                    }
+                    continue;
+                }
+                tableToSubTxnIds.put(olapTable, subTxnIds);
+            }
+        }
+        if (tableToSubTxnIds.isEmpty()) {
+            return;
+        }
+        // calculate mow delete bitmap
+        for (Entry<OlapTable, List<Long>> entry : tableToSubTxnIds.entrySet()) {
+            LOG.info("calculate mow delete bitmap for table={}, sub_txn_ids={}",
+                    entry.getKey().getId(), entry.getValue());
+        }
     }
 
     private void sendPipelineCtx() throws TException, RpcException, UserException {
