@@ -551,7 +551,8 @@ Status BaseTablet::calc_delete_bitmap(const BaseTabletSPtr& tablet, RowsetShared
             RETURN_IF_ERROR(token->submit(tablet, rowset, seg, specified_rowsets, end_version,
                                           delete_bitmap, rowset_writer, tablet_delete_bitmap));
         } else {
-            LOG(INFO) << "sout: calc_segment_delete_bitmap";
+            LOG(INFO) << "sout: calc_segment_delete_bitmap, tablet_delete_bitmap is null="
+                      << (tablet_delete_bitmap == nullptr);
             RETURN_IF_ERROR(tablet->calc_segment_delete_bitmap(
                     rowset, segment, specified_rowsets, delete_bitmap, end_version, rowset_writer,
                     tablet_delete_bitmap));
@@ -1482,7 +1483,8 @@ Status BaseTablet::update_delete_bitmap(const BaseTabletSPtr& self, TabletTxnInf
         auto token = self->calc_delete_bitmap_executor()->create_token();
         // set rowset_writer to nullptr to skip the alignment process
         RETURN_IF_ERROR(calc_delete_bitmap(self, rowset, segments, rowsets_skip_alignment,
-                                           delete_bitmap, cur_version - 1, token.get(), nullptr));
+                                           delete_bitmap, cur_version - 1, token.get(), nullptr,
+                                           tablet_delete_bitmap));
         RETURN_IF_ERROR(token->wait());
     }
 
@@ -1491,14 +1493,15 @@ Status BaseTablet::update_delete_bitmap(const BaseTabletSPtr& self, TabletTxnInf
     if (segments.size() <= 1) {
         LOG(INFO) << "sout: calc_delete_bitmap 1";
         RETURN_IF_ERROR(calc_delete_bitmap(self, rowset, segments, specified_rowsets, delete_bitmap,
-                                           cur_version - 1, nullptr, transient_rs_writer.get()));
+                                           cur_version - 1, nullptr, transient_rs_writer.get(),
+                                           tablet_delete_bitmap));
 
     } else {
         LOG(INFO) << "sout: calc_delete_bitmap 2";
         auto token = self->calc_delete_bitmap_executor()->create_token();
         RETURN_IF_ERROR(calc_delete_bitmap(self, rowset, segments, specified_rowsets, delete_bitmap,
                                            cur_version - 1, token.get(),
-                                           transient_rs_writer.get()));
+                                           transient_rs_writer.get(), tablet_delete_bitmap));
         RETURN_IF_ERROR(token->wait());
     }
 
