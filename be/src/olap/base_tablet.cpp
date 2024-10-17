@@ -676,6 +676,9 @@ Status BaseTablet::calc_segment_delete_bitmap(RowsetSharedPtr rowset,
             auto st = lookup_row_key(key, rowset_schema.get(), true, specified_rowsets, &loc,
                                      dummy_version.first - 1, segment_caches, &rowset_find);
             bool expected_st = st.ok() || st.is<KEY_NOT_FOUND>() || st.is<KEY_ALREADY_EXISTS>();
+            LOG(INFO) << "sout: lookup_row_key, rowset=" << loc.rowset_id
+                      << ", segment=" << loc.segment_id << ", row_id=" << loc.row_id
+                      << ", st=" << st;
             // It's a defensive DCHECK, we need to exclude some common errors to avoid core-dump
             // while stress test
             DCHECK(expected_st || st.is<MEM_LIMIT_EXCEEDED>())
@@ -705,6 +708,9 @@ Status BaseTablet::calc_segment_delete_bitmap(RowsetSharedPtr rowset,
                 //       of the including columns in the current row into a new row.
                 delete_bitmap->add({rowset_id, seg->id(), DeleteBitmap::TEMP_VERSION_COMMON},
                                    row_id);
+                LOG(INFO) << "sout: add delete bitmap, rowset=" << rowset_id
+                          << ", segment=" << seg->id() << ", row_id=" << row_id
+                          << ", version=" << DeleteBitmap::TEMP_VERSION_COMMON;
                 continue;
             }
             if (is_partial_update && rowset_writer != nullptr) {
@@ -754,6 +760,9 @@ Status BaseTablet::calc_segment_delete_bitmap(RowsetSharedPtr rowset,
             // when st = ok
             delete_bitmap->add({loc.rowset_id, loc.segment_id, DeleteBitmap::TEMP_VERSION_COMMON},
                                loc.row_id);
+            LOG(INFO) << "sout: add delete bitmap, rowset=" << loc.rowset_id
+                      << ", segment=" << loc.segment_id << ", row_id=" << loc.row_id
+                      << ", version=" << DeleteBitmap::TEMP_VERSION_COMMON;
         }
         remaining -= num_read;
     }
@@ -1401,6 +1410,7 @@ Status BaseTablet::update_delete_bitmap(const BaseTabletSPtr& self, TabletTxnInf
         for (auto non_visible_rowset : *non_visible_rowsets) {
             specified_rowsets.emplace_back(non_visible_rowset);
         }
+        LOG(INFO) << "sout: add non visible rowset size=" << non_visible_rowsets->size();
     }
     auto t3 = watch.get_elapse_time_us();
 
@@ -1443,6 +1453,7 @@ Status BaseTablet::update_delete_bitmap(const BaseTabletSPtr& self, TabletTxnInf
     });
 
     if (!rowsets_skip_alignment.empty()) {
+        LOG(INFO) << "sout: calc_delete_bitmap 0";
         auto token = self->calc_delete_bitmap_executor()->create_token();
         // set rowset_writer to nullptr to skip the alignment process
         RETURN_IF_ERROR(calc_delete_bitmap(self, rowset, segments, rowsets_skip_alignment,
@@ -1453,10 +1464,12 @@ Status BaseTablet::update_delete_bitmap(const BaseTabletSPtr& self, TabletTxnInf
     // When there is only one segment, it will be calculated in the current thread.
     // Otherwise, it will be submitted to the thread pool for calculation.
     if (segments.size() <= 1) {
+        LOG(INFO) << "sout: calc_delete_bitmap 1";
         RETURN_IF_ERROR(calc_delete_bitmap(self, rowset, segments, specified_rowsets, delete_bitmap,
                                            cur_version - 1, nullptr, transient_rs_writer.get()));
 
     } else {
+        LOG(INFO) << "sout: calc_delete_bitmap 2";
         auto token = self->calc_delete_bitmap_executor()->create_token();
         RETURN_IF_ERROR(calc_delete_bitmap(self, rowset, segments, specified_rowsets, delete_bitmap,
                                            cur_version - 1, token.get(),

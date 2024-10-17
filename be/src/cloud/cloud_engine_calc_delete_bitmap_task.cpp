@@ -197,7 +197,7 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
     } else {
         std::stringstream ss;
         for (const auto& sub_txn_id : _sub_txn_ids) {
-            ss << sub_txn_id << ",";
+            ss << sub_txn_id << ", ";
         }
         LOG(INFO) << "start calc delete bitmap for txn_id=" << _transaction_id << ", sub_txn_ids=["
                   << ss.str() << "], table_id=" << tablet->table_id()

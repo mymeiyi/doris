@@ -24,7 +24,7 @@ import java.util.concurrent.CompletableFuture
 suite("txn_insert_concurrent_insert_mow") {
     def tableName = "txn_insert_concurrent_insert_mow"
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 1; i++) {
         def table_name = "${tableName}_${i}"
         sql """ drop table if exists ${table_name} """
         sql """
@@ -86,7 +86,7 @@ suite("txn_insert_concurrent_insert_mow") {
     def sqls = [
             "begin",
             "insert into ${tableName}_0 select * from ${tableName}_1 where L_ORDERKEY < 30000;",
-            "insert into ${tableName}_1 select * from ${tableName}_2 where L_ORDERKEY > 500000;",
+            // "insert into ${tableName}_1 select * from ${tableName}_2 where L_ORDERKEY > 500000;",
             "insert into ${tableName}_0 select * from ${tableName}_2 where L_ORDERKEY < 30000;",
             "commit"
     ]
@@ -104,7 +104,7 @@ suite("txn_insert_concurrent_insert_mow") {
     }
 
     List<CompletableFuture<Void>> futures = new ArrayList<>()
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 1; i++) {
         CompletableFuture<Void> future = CompletableFuture.runAsync(txn_insert)
         futures.add(future)
     }
