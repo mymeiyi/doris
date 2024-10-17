@@ -156,7 +156,9 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
                _ms_cumulative_compaction_cnt > tablet->cumulative_compaction_cnt() ||
                _ms_cumulative_point > tablet->cumulative_layer_point();
     };
+    LOG(INFO) << "sout: _version=" << _version << ", max_version=" << max_version;
     if (_version != max_version + 1 || should_sync_rowsets_produced_by_compaction()) {
+        LOG(INFO) << "sout: sync_rowsets";
         auto sync_st = tablet->sync_rowsets();
         if (!sync_st.ok()) {
             LOG(WARNING) << "failed to sync rowsets. tablet_id=" << _tablet_id
@@ -204,6 +206,8 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
                   << ", partition_id=" << tablet->partition_id() << ", tablet_id=" << _tablet_id
                   << ", start_version=" << _version;
         std::vector<RowsetSharedPtr> non_visible_rowsets;
+        DeleteBitmapPtr tablet_delete_bitmap =
+                std::make_shared<DeleteBitmap>(tablet->tablet_meta()->delete_bitmap());
         for (int i = 0; i < _sub_txn_ids.size(); ++i) {
             int64_t sub_txn_id = _sub_txn_ids[i];
             int64_t version = _version + i;
@@ -211,7 +215,8 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
                       << ", sub_txn_id=" << sub_txn_id << ", table_id=" << tablet->table_id()
                       << ", partition_id=" << tablet->partition_id() << ", tablet_id=" << _tablet_id
                       << ", start_version=" << _version << ", cur_version=" << version;
-            status = _handle_rowset(tablet, version, sub_txn_id, &non_visible_rowsets);
+            status = _handle_rowset(tablet, version, sub_txn_id, &non_visible_rowsets,
+                                    tablet_delete_bitmap);
             if (!status.ok()) {
                 LOG(INFO) << "failed to calculate delete bitmap on tablet"
                           << ", table_id=" << tablet->table_id()
@@ -236,7 +241,8 @@ Status CloudTabletCalcDeleteBitmapTask::handle() const {
 
 Status CloudTabletCalcDeleteBitmapTask::_handle_rowset(
         std::shared_ptr<CloudTablet> tablet, int64_t version, int64_t sub_txn_id,
-        std::vector<RowsetSharedPtr>* non_visible_rowsets) const {
+        std::vector<RowsetSharedPtr>* non_visible_rowsets,
+        DeleteBitmapPtr tablet_delete_bitmap) const {
     int64_t transaction_id = sub_txn_id == -1 ? _transaction_id : sub_txn_id;
     std::string txn_str = "txn_id=" + std::to_string(_transaction_id) +
                           (sub_txn_id == -1 ? "" : ", sub_txn_id=" + std::to_string(sub_txn_id));
@@ -306,6 +312,16 @@ Status CloudTabletCalcDeleteBitmapTask::_handle_rowset(
               << ", res=" << status;
     if (non_visible_rowsets != nullptr) {
         non_visible_rowsets->push_back(rowset);
+        tablet_delete_bitmap->merge(*(txn_info.delete_bitmap));
+
+        auto dm = tablet_delete_bitmap->delete_bitmap;
+        for (auto it = dm.begin(); it != dm.end(); ++it) {
+            auto& key = it->first;
+            LOG(INFO) << "sout: print delete_bitmap after sub_txn_id" << sub_txn_id
+                      << ", rowset_id=" << std::get<0>(key)
+                      << ", segment_id=" << std::get<1>(key) << ", version=" << std::get<2>(key)
+                      << ", contains 0=" << it->second.contains(0);
+        }
     }
     return status;
 }
