@@ -312,16 +312,37 @@ Status CloudTabletCalcDeleteBitmapTask::_handle_rowset(
               << ", res=" << status;
     if (non_visible_rowsets != nullptr) {
         non_visible_rowsets->push_back(rowset);
-        tablet_delete_bitmap->merge(*(txn_info.delete_bitmap));
 
-        auto dm = tablet_delete_bitmap->delete_bitmap;
+        auto dm = txn_info.delete_bitmap->delete_bitmap;
         for (auto it = dm.begin(); it != dm.end(); ++it) {
             auto& key = it->first;
-            LOG(INFO) << "sout: print delete_bitmap after sub_txn_id" << sub_txn_id
-                      << ", rowset_id=" << std::get<0>(key)
-                      << ", segment_id=" << std::get<1>(key) << ", version=" << std::get<2>(key)
+            LOG(INFO) << "sout: print delete_bitmap after sub_txn_id=" << sub_txn_id
+                      << ", rowset_id=" << std::get<0>(key) << ", segment_id=" << std::get<1>(key)
+                      << ", version=" << std::get<2>(key)
                       << ", contains 0=" << it->second.contains(0);
         }
+        LOG(INFO) << "sout: ----";
+
+        dm = tablet->tablet_meta()->delete_bitmap().delete_bitmap;
+        for (auto it = dm.begin(); it != dm.end(); ++it) {
+            auto& key = it->first;
+            LOG(INFO) << "sout: print tablet delete_bitmap after sub_txn_id=" << sub_txn_id
+                      << ", rowset_id=" << std::get<0>(key) << ", segment_id=" << std::get<1>(key)
+                      << ", version=" << std::get<2>(key)
+                      << ", contains 0=" << it->second.contains(0);
+        }
+        LOG(INFO) << "sout: ----";
+
+        tablet_delete_bitmap->merge(*(txn_info.delete_bitmap));
+        dm = tablet_delete_bitmap->delete_bitmap;
+        for (auto it = dm.begin(); it != dm.end(); ++it) {
+            auto& key = it->first;
+            LOG(INFO) << "sout: print merged delete_bitmap after sub_txn_id=" << sub_txn_id
+                      << ", rowset_id=" << std::get<0>(key) << ", segment_id=" << std::get<1>(key)
+                      << ", version=" << std::get<2>(key)
+                      << ", contains 0=" << it->second.contains(0);
+        }
+        LOG(INFO) << "sout: ----";
     }
     return status;
 }
