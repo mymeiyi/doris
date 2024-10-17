@@ -1419,9 +1419,7 @@ Status BaseTablet::update_delete_bitmap(const BaseTabletSPtr& self, TabletTxnInf
         std::shared_lock meta_rlock(self->_meta_lock);
         specified_rowsets = self->get_rowset_by_ids(&rowset_ids_to_add);
     }
-    DeleteBitmapPtr tablet_delete_bitmap = nullptr;
     if (non_visible_rowsets != nullptr) {
-        tablet_delete_bitmap = std::make_shared<DeleteBitmap>(self->_tablet_meta->delete_bitmap());
         for (auto non_visible_rowset : *non_visible_rowsets) {
             specified_rowsets.emplace_back(non_visible_rowset);
         }
