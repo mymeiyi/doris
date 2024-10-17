@@ -547,9 +547,11 @@ Status BaseTablet::calc_delete_bitmap(const BaseTabletSPtr& tablet, RowsetShared
     for (const auto& segment : segments) {
         const auto& seg = segment;
         if (token != nullptr) {
+            LOG(INFO) << "sout: calc_segment_delete_bitmap";
             RETURN_IF_ERROR(token->submit(tablet, rowset, seg, specified_rowsets, end_version,
-                                          delete_bitmap, rowset_writer));
+                                          delete_bitmap, rowset_writer, tablet_delete_bitmap));
         } else {
+            LOG(INFO) << "sout: calc_segment_delete_bitmap";
             RETURN_IF_ERROR(tablet->calc_segment_delete_bitmap(
                     rowset, segment, specified_rowsets, delete_bitmap, end_version, rowset_writer,
                     tablet_delete_bitmap));
