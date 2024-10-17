@@ -680,9 +680,19 @@ Status BaseTablet::calc_segment_delete_bitmap(RowsetSharedPtr rowset,
             RowsetSharedPtr rowset_find;
             Status st = Status::OK();
             if (tablet_delete_bitmap == nullptr) {
+                LOG(INFO) << "sout: call lookup_row_key 0";
                 st = lookup_row_key(key, rowset_schema.get(), true, specified_rowsets, &loc,
                                     dummy_version.first - 1, segment_caches, &rowset_find);
             } else {
+                LOG(INFO) << "sout: call lookup_row_key 1";
+                auto dm = tablet_delete_bitmap->delete_bitmap;
+                for (auto it = dm.begin(); it != dm.end(); ++it) {
+                    auto& first = it->first;
+                    LOG(INFO) << "sout: print delete_bitmap, rowset_id=" << std::get<0>(first)
+                              << ", segment_id=" << std::get<1>(first)
+                              << ", version=" << std::get<2>(first)
+                              << ", contains 0=" << it->second.contains(0);
+                }
                 st = lookup_row_key(key, rowset_schema.get(), true, specified_rowsets, &loc,
                                     dummy_version.first - 1, segment_caches, &rowset_find, true,
                                     nullptr, tablet_delete_bitmap);
