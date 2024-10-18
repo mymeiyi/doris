@@ -168,6 +168,10 @@ void AgentServer::start_workers(StorageEngine& engine, ExecEnv* exec_env) {
     _workers[TTaskType::ALTER] = std::make_unique<TaskWorkerPool>(
             "ALTER_TABLE", config::alter_tablet_worker_count, [&engine](auto&& task) { return alter_tablet_callback(engine, task); });
 
+    _workers[TTaskType::CALCULATE_DELETE_BITMAP] = std::make_unique<TaskWorkerPool>(
+            "CALC_DBM_TASK", config::calc_delete_bitmap_worker_count,
+            [&engine](auto&& task) { return calc_delete_bitmap_callback(engine, task); });
+
     _workers[TTaskType::CLONE] = std::make_unique<TaskWorkerPool>(
             "CLONE", config::clone_worker_count, [&engine, &master_info = _master_info](auto&& task) { return clone_callback(engine, master_info, task); });
 
