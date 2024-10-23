@@ -180,8 +180,11 @@ Status ParallelScannerBuilder::_load() {
         if (!sub_txn_ids.empty()) {
             LOG(INFO) << "capture sub txn rs readers, size=" << sub_txn_ids.size()
                       << ", tablet_id=" << tablet_id << ", version=" << version;
-            RETURN_IF_ERROR(tablet->capture_sub_txn_rs_readers(version, sub_txn_ids,
-                                                               &read_source.rs_splits));
+            std::vector<std::shared_ptr<TabletTxnInfo>> tablet_txn_infos;
+            RETURN_IF_ERROR(tablet->capture_sub_txn_rs_readers(
+                    version, sub_txn_ids, &read_source.rs_splits, &tablet_txn_infos));
+            // calculate mow delete bitmap
+
         }
         if (!_state->skip_delete_predicate()) {
             read_source.fill_delete_predicates();
@@ -199,6 +202,9 @@ Status ParallelScannerBuilder::_load() {
             RETURN_IF_ERROR(SegmentLoader::instance()->load_segments(
                     std::dynamic_pointer_cast<BetaRowset>(rowset), &segment_cache_handle,
                     enable_segment_cache, false));
+            // TODO after reccalculate delete bitmap, is rowset meta updated?
+            LOG(INFO) << "sout: tablet=" << rowset->rowset_meta()->tablet_id()
+                      << ", rowset=" << rowset->rowset_id() << ", rows=" << rowset->num_rows();
             _total_rows += rowset->num_rows();
         }
     }

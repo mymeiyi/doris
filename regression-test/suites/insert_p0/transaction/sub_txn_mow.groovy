@@ -92,7 +92,7 @@ suite("sub_txn_mow") {
             )
             DISTRIBUTED BY HASH(`id`) BUCKETS 2
             PROPERTIES (
-                "enable_unique_key_merge_on_write" = "false",
+                "enable_unique_key_merge_on_write" = "true",
                 "replication_num" = "1"
             );
             """
