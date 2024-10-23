@@ -141,8 +141,8 @@ Status NewOlapScanner::init() {
     auto* local_state = static_cast<pipeline::OlapScanLocalState*>(_local_state);
     auto& tablet = _tablet_reader_params.tablet;
     auto& tablet_schema = _tablet_reader_params.tablet_schema;
-    LOG(INFO) << "sout: NewOlapScanner::init, table=" << tablet->table_id()
-              << ", tablet=" << tablet->tablet_id();
+    /*LOG(INFO) << "sout: NewOlapScanner::init, table=" << tablet->table_id()
+              << ", tablet=" << tablet->tablet_id();*/
     for (auto& ctx : local_state->_common_expr_ctxs_push_down) {
         VExprContextSPtr context;
         RETURN_IF_ERROR(ctx->clone(_state, context));
