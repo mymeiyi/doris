@@ -287,7 +287,6 @@ Status NewOlapScanner::init() {
                                 tablet_delete_bitmap->merge({std::get<0>(it->first),
                                                              std::get<1>(it->first), tmp_version},
                                                             it->second);
-                                auto& key = it->first;
                             }
                         }
                         LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
