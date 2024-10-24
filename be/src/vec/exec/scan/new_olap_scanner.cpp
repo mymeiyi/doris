@@ -308,9 +308,9 @@ Status NewOlapScanner::init() {
                                         {std::get<0>(it->first), std::get<1>(it->first),
                                          previous_tmp_version},
                                         {std::get<0>(it->first), UINT32_MAX, previous_tmp_version});
-                                tablet_delete_bitmap->merge({std::get<0>(it->first),
+                                /*tablet_delete_bitmap->merge({std::get<0>(it->first),
                                                              std::get<1>(it->first), tmp_version},
-                                                            it->second);
+                                                            it->second);*/
                             }
                         }
                         LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
