@@ -206,12 +206,15 @@ Status NewOlapScanner::init() {
                 ExecEnv::GetInstance()->storage_engine().to_cloud().tablet_hotspot().count(*tablet);
             }
 
-            LOG(INFO) << "sout: init reader, tablet_id=" << tablet->tablet_id()
-                      << ", version=" << _tablet_reader_params.version.second;
-            if (_tablet_reader_params.version.second > 1) {
+            if (_tablet_reader_params.version.second > 0) {
                 auto st = tablet->capture_rs_readers(_tablet_reader_params.version,
                                                      &read_source.rs_splits,
                                                      _state->skip_missing_version());
+                if (_tablet_reader_params.version.second == 1) {
+                    LOG(INFO) << "sout: after init reader, tablet_id=" << tablet->tablet_id()
+                              << ", version=" << _tablet_reader_params.version.second
+                              << ", size=" << read_source.rs_splits.size();
+                }
                 if (!st.ok()) {
                     LOG(WARNING) << "fail to init reader.res=" << st;
                     return st;
