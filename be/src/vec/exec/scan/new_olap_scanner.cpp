@@ -294,7 +294,10 @@ Status NewOlapScanner::init() {
                         // merge delete bitmap of sub txn rowsets
                         LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
                                   << ", sub_txn_num=" << _sub_txn_ids.size()
-                                  << ", before sub_txn_id=" << sub_txn_id << ", txn load info dm="
+                                  << ", before sub_txn_id=" << sub_txn_id
+                                  << ", tmp_version=" << tmp_version
+                                  << ", previous_tmp_version=" << previous_tmp_version
+                                  << ", txn load info dm="
                                   << print_delete_bitmap(tablet_txn_info->delete_bitmap)
                                   << ", merged tablet dm="
                                   << print_delete_bitmap(tablet_delete_bitmap);
