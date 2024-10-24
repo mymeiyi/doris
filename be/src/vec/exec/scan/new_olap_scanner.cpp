@@ -279,6 +279,8 @@ Status NewOlapScanner::init() {
                                 tablet, tablet_txn_info.get(), sub_txn_id, -1, visible_rowsets,
                                 non_visible_rowsets, tablet_delete_bitmap));
                         int64_t tmp_version = start_version + i + 1;
+                        int64_t previous_tmp_version = tablet_txn_info->tmp_version;
+                        tablet_txn_info->tmp_version = tmp_version;
                         // merge delete bitmap of sub txn rowsets
                         LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
                                   << ", sub_txn_num=" << _sub_txn_ids.size()
@@ -288,6 +290,9 @@ Status NewOlapScanner::init() {
                                   << print_delete_bitmap(tablet_delete_bitmap);
                         for (auto it = dm.begin(); it != dm.end(); ++it) {
                             if (std::get<1>(it->first) != DeleteBitmap::INVALID_SEGMENT_ID) {
+                                tablet_delete_bitmap->remove({std::get<0>(it->first),
+                                                              std::get<1>(it->first),
+                                                              previous_tmp_version});
                                 tablet_delete_bitmap->merge({std::get<0>(it->first),
                                                              std::get<1>(it->first), tmp_version},
                                                             it->second);

@@ -88,6 +88,8 @@ struct TabletTxnInfo {
     TxnPublishInfo publish_info;
 
     TxnState state {TxnState::PREPARED};
+    // for transaction load
+    int64_t tmp_version = -1;
     TabletTxnInfo() = default;
 
     TabletTxnInfo(PUniqueId load_id, RowsetSharedPtr rowset)
