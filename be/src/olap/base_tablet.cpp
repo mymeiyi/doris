@@ -542,7 +542,7 @@ Status BaseTablet::lookup_row_key(const Slice& encoded_key, TabletSchema* latest
             LOG(INFO) << "sout: lookup rowkey for rowset=" << rs->rowset_id()
                       << ", find rowset=" << loc.rowset_id << ", segment=" << loc.segment_id
                       << ", row=" << loc.row_id << ", st=" << s.to_string()
-                      << ", is already deleted="
+                      << ", version=" << version << ", is already deleted="
                       << tablet_delete_bitmap.contains_agg_without_cache(
                                  {loc.rowset_id, loc.segment_id, version}, loc.row_id);
             if (s.ok() && tablet_delete_bitmap.contains_agg_without_cache(
