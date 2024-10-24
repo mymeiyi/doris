@@ -1627,10 +1627,11 @@ Status BaseTablet::update_delete_bitmap2(const BaseTabletSPtr& self, TabletTxnIn
     _rowset_ids_difference(cur_rowset_ids, txn_info->rowset_ids, &rowset_ids_to_add,
                            &rowset_ids_to_del);
     LOG(INFO) << "sout: txn_info->rowset_ids=" << txn_info->rowset_ids.size()
-              << ", rowset_ids_to_add=" << rowset_ids_to_add.size();
-    for (const auto& to_del : rowset_ids_to_del) {
+              << ", rowset_ids_to_add=" << rowset_ids_to_add.size()
+              << ", rowset_ids_to_delete=" << rowset_ids_to_del.size();
+    /*for (const auto& to_del : rowset_ids_to_del) {
         delete_bitmap->remove({to_del, 0, 0}, {to_del, UINT32_MAX, INT64_MAX});
-    }
+    }*/
 
     std::vector<RowsetSharedPtr> specified_rowsets;
     for (auto& r : visible_rowsets) {
@@ -1747,7 +1748,7 @@ Status BaseTablet::update_delete_bitmap2(const BaseTabletSPtr& self, TabletTxnIn
               << ss.str() << " , total rows: " << total_rows
               << ", update delete_bitmap cost: " << watch.get_elapse_time_us() - t5 << "(us)";
     return Status::OK();
-}
+}/**/
 
 void BaseTablet::calc_compaction_output_rowset_delete_bitmap(
         const std::vector<RowsetSharedPtr>& input_rowsets, const RowIdConversion& rowid_conversion,
