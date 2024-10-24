@@ -1735,6 +1735,7 @@ Status BaseTablet::update_delete_bitmap2(const BaseTabletSPtr& self, TabletTxnIn
     /*RETURN_IF_ERROR(self->save_delete_bitmap(txn_info, txn_id, delete_bitmap,
                                              transient_rs_writer.get(), cur_rowset_ids,
                                              base_txn_id *//* lock_id *//*));*/
+    txn_info->rowset_ids = cur_rowset_ids;
     // save delete bitmap
     // for local: delete bitmap is keep in txn manager, do nothing?
     // for cloud: cache
