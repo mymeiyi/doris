@@ -1589,6 +1589,9 @@ Status BaseTablet::update_delete_bitmap2(const BaseTabletSPtr& self, TabletTxnIn
                                          const std::vector<RowsetSharedPtr>& non_visible_rowsets,
                                          DeleteBitmapPtr tablet_delete_bitmap) {
     SCOPED_BVAR_LATENCY(g_tablet_update_delete_bitmap_latency);
+    RowsetIdUnorderedSet cur_rowset_ids;
+    RowsetIdUnorderedSet rowset_ids_to_add;
+    RowsetIdUnorderedSet rowset_ids_to_del;
     RowsetSharedPtr rowset = txn_info->rowset;
     int64_t cur_version = rowset->start_version();
 
@@ -1612,33 +1615,32 @@ Status BaseTablet::update_delete_bitmap2(const BaseTabletSPtr& self, TabletTxnIn
     RETURN_IF_ERROR(std::dynamic_pointer_cast<BetaRowset>(rowset)->load_segments(&segments));
     auto t1 = watch.get_elapse_time_us();
 
-    /*RowsetIdUnorderedSet cur_rowset_ids;
-    RowsetIdUnorderedSet rowset_ids_to_add;
-    RowsetIdUnorderedSet rowset_ids_to_del;
-    {
-        std::shared_lock meta_rlock(self->_meta_lock);
-        // tablet is under alter process. The delete bitmap will be calculated after conversion.
-        if (self->tablet_state() == TABLET_NOTREADY) {
-            LOG(INFO) << "tablet is under alter process, update delete bitmap later, tablet_id="
-                      << self->tablet_id();
-            return Status::OK();
-        }
-        RETURN_IF_ERROR(self->get_all_rs_id_unlocked(next_visible_version - 1, &cur_rowset_ids));
+    for (const auto& r : visible_rowsets) {
+        cur_rowset_ids.emplace(r->rowset_id());
+    }
+    for (const auto& r : non_visible_rowsets) {
+        cur_rowset_ids.emplace(r->rowset_id());
     }
     auto t2 = watch.get_elapse_time_us();
 
+    // TODO where set txn_info->rowset_ids?
     _rowset_ids_difference(cur_rowset_ids, txn_info->rowset_ids, &rowset_ids_to_add,
                            &rowset_ids_to_del);
     for (const auto& to_del : rowset_ids_to_del) {
         delete_bitmap->remove({to_del, 0, 0}, {to_del, UINT32_MAX, INT64_MAX});
-    }*/
+    }
 
-    std::vector<RowsetSharedPtr> specified_rowsets(visible_rowsets);
-    // if (non_visible_rowsets != nullptr) {
-        for (auto non_visible_rowset : non_visible_rowsets) {
-            specified_rowsets.emplace_back(non_visible_rowset);
+    std::vector<RowsetSharedPtr> specified_rowsets;
+    for (auto& r : visible_rowsets) {
+        if (rowset_ids_to_add.find(r->rowset_id()) != rowset_ids_to_add.end()) {
+            specified_rowsets.emplace_back(r);
         }
-    //}
+    }
+    for (auto& r : non_visible_rowsets) {
+        if (rowset_ids_to_add.find(r->rowset_id()) != rowset_ids_to_add.end()) {
+            specified_rowsets.emplace_back(r);
+        }
+    }
     auto t3 = watch.get_elapse_time_us();
 
     // If a rowset is produced by compaction before the commit phase of the partial update load
@@ -1690,8 +1692,8 @@ Status BaseTablet::update_delete_bitmap2(const BaseTabletSPtr& self, TabletTxnIn
 
     std::stringstream ss;
     ss << "cost(us): (load segments: " << t1
-       /*<< ", get all rsid: " << t2 - t1
-       << ", get rowsets: " << t3 - t2*/
+       << ", get all rsid: " << t2 - t1
+       << ", get rowsets: " << t3 - t2
        << ", calc delete bitmap: " << watch.get_elapse_time_us() - t3 << ")";
 
     /*if (config::enable_merge_on_write_correctness_check && rowset->num_rows() != 0) {
@@ -1731,9 +1733,13 @@ Status BaseTablet::update_delete_bitmap2(const BaseTabletSPtr& self, TabletTxnIn
     /*RETURN_IF_ERROR(self->save_delete_bitmap(txn_info, txn_id, delete_bitmap,
                                              transient_rs_writer.get(), cur_rowset_ids,
                                              base_txn_id *//* lock_id *//*));*/
+    // save delete bitmap
+    // for local: delete bitmap is keep in txn manager, do nothing?
+    // for cloud: cache
+
     LOG(INFO) << "[Publish] construct delete bitmap tablet: " << self->tablet_id()
-              /*<< ", rowset_ids to add: " << rowset_ids_to_add.size()
-              << ", rowset_ids to del: " << rowset_ids_to_del.size()*/
+              << ", rowset_ids to add: " << rowset_ids_to_add.size()
+              << ", rowset_ids to del: " << rowset_ids_to_del.size()
               << ", cur version: " << cur_version << ", transaction_id: " << txn_id << ","
               << ss.str() << " , total rows: " << total_rows
               << ", update delete_bitmap cost: " << watch.get_elapse_time_us() - t5 << "(us)";
