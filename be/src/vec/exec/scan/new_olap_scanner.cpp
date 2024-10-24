@@ -206,6 +206,8 @@ Status NewOlapScanner::init() {
                 ExecEnv::GetInstance()->storage_engine().to_cloud().tablet_hotspot().count(*tablet);
             }
 
+            LOG(INFO) << "sout: init reader, tablet_id=" << tablet->tablet_id()
+                      << ", version=" << _tablet_reader_params.version.second;
             if (_tablet_reader_params.version.second > 1) {
                 auto st = tablet->capture_rs_readers(_tablet_reader_params.version,
                                                      &read_source.rs_splits,
