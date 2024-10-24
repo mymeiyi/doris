@@ -499,6 +499,11 @@ Status BaseTablet::lookup_row_key(const Slice& encoded_key, TabletSchema* latest
             Slice(encoded_key.get_data(), encoded_key.get_size() - seq_col_length - rowid_length);
     RowLocation loc;
 
+    for (size_t i = 0; i < specified_rowsets.size(); i++) {
+        auto& rs = specified_rowsets[i];
+        LOG(INFO) << "sout: i=" << i << ", rowset=" << rs->rowset_id();
+    }
+
     auto tablet_delete_bitmap =
             delete_bitmap == nullptr ? _tablet_meta->delete_bitmap() : *delete_bitmap;
     for (size_t i = 0; i < specified_rowsets.size(); i++) {
