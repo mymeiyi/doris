@@ -297,6 +297,7 @@ Status NewOlapScanner::init() {
                                   << ", before sub_txn_id=" << sub_txn_id
                                   << ", tmp_version=" << tmp_version
                                   << ", previous_tmp_version=" << previous_tmp_version
+                                  << ", txn info tmp version=" << tablet_txn_info->tmp_version
                                   << ", txn load info dm="
                                   << print_delete_bitmap(tablet_txn_info->delete_bitmap)
                                   << ", merged tablet dm="
