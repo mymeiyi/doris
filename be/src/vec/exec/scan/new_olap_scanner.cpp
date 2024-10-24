@@ -251,7 +251,8 @@ Status NewOlapScanner::init() {
                         auto sub_txn_id = _sub_txn_ids[i];
                         if (tablet_txn_info->rowset->rowset_meta()->has_delete_predicate()) {
                             LOG(INFO) << "sout: skip cal dm for tablet_id=" << tablet->tablet_id()
-                                      << ", i=" << i << ", sub_txn_id=" << sub_txn_id
+                                      << ", sub_txn_num=" << _sub_txn_ids.size() << ", i=" << i
+                                      << ", sub_txn_id=" << sub_txn_id
                                       << ", rowset_id=" << tablet_txn_info->rowset->rowset_id()
                                       << ", visible rowset size=" << visible_rowsets.size()
                                       << ", start version=" << start_version << ", is delete="
@@ -265,7 +266,9 @@ Status NewOlapScanner::init() {
                             non_visible_rowsets.push_back(rowset);
                         }
                         LOG(INFO) << "sout: cal dm for tablet_id=" << tablet->tablet_id()
-                                  << ", i=" << i << ", sub_txn_id=" << sub_txn_id
+                                  << ", i=" << i
+                                  << ", sub_txn_num=" << _sub_txn_ids.size()
+                                  << ", sub_txn_id=" << sub_txn_id
                                   << ", rowset_id=" << tablet_txn_info->rowset->rowset_id()
                                   << ", visible rowset size=" << visible_rowsets.size()
                                   << ", non visible rowset size=" << non_visible_rowsets.size()
@@ -278,6 +281,7 @@ Status NewOlapScanner::init() {
                         int64_t tmp_version = start_version + i + 1;
                         // merge delete bitmap of sub txn rowsets
                         LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
+                                  << ", sub_txn_num=" << _sub_txn_ids.size()
                                   << ", before sub_txn_id=" << sub_txn_id << ", txn load info dm="
                                   << print_delete_bitmap(tablet_txn_info->delete_bitmap)
                                   << ", merged tablet dm="
@@ -290,6 +294,7 @@ Status NewOlapScanner::init() {
                             }
                         }
                         LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
+                                  << ", sub_txn_num=" << _sub_txn_ids.size()
                                   << ", after sub_txn_id=" << sub_txn_id << ", txn load info dm="
                                   << print_delete_bitmap(tablet_txn_info->delete_bitmap)
                                   << ", merged tablet dm="
