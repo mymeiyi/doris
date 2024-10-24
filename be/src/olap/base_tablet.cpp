@@ -1634,14 +1634,14 @@ Status BaseTablet::update_delete_bitmap2(const BaseTabletSPtr& self, TabletTxnIn
 
     std::vector<RowsetSharedPtr> specified_rowsets;
     for (auto& r : visible_rowsets) {
-        if (rowset_ids_to_add.find(r->rowset_id()) != rowset_ids_to_add.end()) {
+        // if (rowset_ids_to_add.find(r->rowset_id()) != rowset_ids_to_add.end()) {
             specified_rowsets.emplace_back(r);
-        }
+        // }
     }
     for (auto& r : non_visible_rowsets) {
-        if (rowset_ids_to_add.find(r->rowset_id()) != rowset_ids_to_add.end()) {
+        // if (rowset_ids_to_add.find(r->rowset_id()) != rowset_ids_to_add.end()) {
             specified_rowsets.emplace_back(r);
-        }
+        // }
     }
     auto t3 = watch.get_elapse_time_us();
 
