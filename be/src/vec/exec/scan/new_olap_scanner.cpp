@@ -243,6 +243,8 @@ Status NewOlapScanner::init() {
                     for (auto i = 0; i < visible_rowset_num; ++i) {
                         auto rowset = read_source.rs_splits[i].rs_reader->rowset();
                         visible_rowsets.push_back(rowset);
+                        LOG(INFO) << "sout: visible rowset=" << rowset->rowset_id()
+                                  << ", version=" << rowset->version();
                     }
                     LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
                               << ", visible rowset size=" << visible_rowsets.size()
