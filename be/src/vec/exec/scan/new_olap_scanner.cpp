@@ -287,6 +287,14 @@ Status NewOlapScanner::init() {
                         if (previous_tmp_version != tmp_version) {
 
                         }
+                        for (auto it = dm.begin(); it != dm.end(); ++it) {
+                            if (std::get<1>(it->first) != DeleteBitmap::INVALID_SEGMENT_ID) {
+                                tablet_delete_bitmap->remove(
+                                        {std::get<0>(it->first), std::get<1>(it->first),
+                                         previous_tmp_version},
+                                        {std::get<0>(it->first), UINT32_MAX, previous_tmp_version});
+                            }
+                        }
                         RETURN_IF_ERROR(tablet->update_delete_bitmap2(
                                 tablet, tablet_txn_info.get(), sub_txn_id, -1, visible_rowsets,
                                 non_visible_rowsets, tablet_delete_bitmap));
@@ -304,13 +312,13 @@ Status NewOlapScanner::init() {
                                   << print_delete_bitmap(tablet_delete_bitmap);
                         for (auto it = dm.begin(); it != dm.end(); ++it) {
                             if (std::get<1>(it->first) != DeleteBitmap::INVALID_SEGMENT_ID) {
-                                tablet_delete_bitmap->remove(
+                                /*tablet_delete_bitmap->remove(
                                         {std::get<0>(it->first), std::get<1>(it->first),
                                          previous_tmp_version},
-                                        {std::get<0>(it->first), UINT32_MAX, previous_tmp_version});
-                                /*tablet_delete_bitmap->merge({std::get<0>(it->first),
+                                        {std::get<0>(it->first), UINT32_MAX, previous_tmp_version});*/
+                                tablet_delete_bitmap->merge({std::get<0>(it->first),
                                                              std::get<1>(it->first), tmp_version},
-                                                            it->second);*/
+                                                            it->second);
                             }
                         }
                         LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
