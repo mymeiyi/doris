@@ -1055,6 +1055,13 @@ Status SegmentWriter::finalize_columns_index(uint64_t* index_size) {
                 DCHECK(key.compare(last_key) > 0)
                         << "found duplicate key or key is not sorted! current key: " << key
                         << ", last key: " << last_key;
+                if (config::enable_segment_sort_correctness_check && !(key.compare(last_key) > 0)) {
+                    std::stringstream ss;
+                    ss << "found duplicate key or key is not sorted! current key: " << key
+                       << ", last key: " << last_key;
+                    LOG(WARNING) << ss.str();
+                    return Status::InternalError(ss.str());
+                }
                 RETURN_IF_ERROR(_primary_key_index_builder->add_item(key));
                 last_key = key;
             }
@@ -1275,6 +1282,13 @@ Status SegmentWriter::_generate_primary_key_index(
             DCHECK(key.compare(last_key) > 0)
                     << "found duplicate key or key is not sorted! current key: " << key
                     << ", last key: " << last_key;
+            if (config::enable_segment_sort_correctness_check && !(key.compare(last_key) > 0)) {
+                std::stringstream ss;
+                ss << "found duplicate key or key is not sorted! current key: " << key
+                   << ", last key: " << last_key;
+                LOG(WARNING) << ss.str();
+                return Status::InternalError(ss.str());
+            }
             RETURN_IF_ERROR(_primary_key_index_builder->add_item(key));
             last_key = std::move(key);
         }
@@ -1310,6 +1324,12 @@ Status SegmentWriter::_generate_short_key_index(
         std::string key = _encode_keys(key_columns, pos);
         DCHECK(key.compare(last_key) >= 0)
                 << "key is not sorted! current key: " << key << ", last key: " << last_key;
+        if (config::enable_segment_sort_correctness_check && !(key.compare(last_key) >= 0)) {
+            std::stringstream ss;
+            ss << "key is not sorted! current key: " << key << ", last key: " << last_key;
+            LOG(WARNING) << ss.str();
+            return Status::InternalError(ss.str());
+        }
         RETURN_IF_ERROR(_short_key_index_builder->add_item(key));
         last_key = std::move(key);
     }
