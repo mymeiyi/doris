@@ -381,6 +381,10 @@ Status SegmentIterator::_lazy_init() {
         _segment->_tablet_schema->cluster_key_uids().empty()) {
         RETURN_IF_ERROR(_get_row_ranges_by_keys());
     }
+    if (!_segment->_tablet_schema->cluster_key_uids().empty()) {
+        LOG(INFO) << "sout: SegmentIterator::_lazy_init, opt.key_range size="
+                  << _opts.key_ranges.size() << ", row bitmap empty=" << _row_bitmap.isEmpty();
+    }
     RETURN_IF_ERROR(_get_row_ranges_by_column_conditions());
     RETURN_IF_ERROR(_vec_init_lazy_materialization());
     // Remove rows that have been marked deleted
@@ -406,6 +410,8 @@ Status SegmentIterator::_lazy_init() {
 }
 
 Status SegmentIterator::_get_row_ranges_by_keys() {
+    LOG(INFO) << "sout: SegmentIterator::_get_row_ranges_by_keys, opt.key_range size="
+              << _opts.key_ranges.size() << ", row bitmap empty=" << _row_bitmap.isEmpty();
     DorisMetrics::instance()->segment_row_total->increment(num_rows());
 
     // fast path for empty segment or empty key ranges
@@ -2016,6 +2022,7 @@ void SegmentIterator::_clear_iterators() {
 Status SegmentIterator::_next_batch_internal(vectorized::Block* block) {
     bool is_mem_reuse = block->mem_reuse();
     DCHECK(is_mem_reuse);
+    LOG(INFO) << "sout: SegmentIterator::_next_batch_internal, _lazy_inited: " << _lazy_inited;
 
     SCOPED_RAW_TIMER(&_opts.stats->block_load_ns);
     if (UNLIKELY(!_lazy_inited)) {

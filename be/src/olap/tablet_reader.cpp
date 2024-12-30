@@ -169,6 +169,9 @@ Status TabletReader::_capture_rs_readers(const ReaderParams& read_params) {
     bool eof = false;
     bool is_lower_key_included = _keys_param.start_key_include;
     bool is_upper_key_included = _keys_param.end_key_include;
+    LOG(INFO) << "sout: start keys size=" << _keys_param.start_keys.size()
+              << ", low include=" << is_lower_key_included
+              << ", upper include=" << is_upper_key_included;
 
     for (int i = 0; i < _keys_param.start_keys.size(); ++i) {
         // lower bound
@@ -187,7 +190,8 @@ Status TabletReader::_capture_rs_readers(const ReaderParams& read_params) {
             if (compare_row_key(start_key, end_key) > 0) {
                 VLOG_NOTICE << "return EOF when lower key include="
                             << ", start_key=" << start_key.to_string()
-                            << ", end_key=" << end_key.to_string();
+                            << ", end_key=" << end_key.to_string()
+                            << ", tablet=" << read_params.tablet->tablet_id();
                 eof = true;
                 break;
             }
@@ -263,7 +267,19 @@ Status TabletReader::_capture_rs_readers(const ReaderParams& read_params) {
     _reader_context.output_columns = &read_params.output_columns;
     _reader_context.push_down_agg_type_opt = read_params.push_down_agg_type_opt;
     _reader_context.ttl_seconds = _tablet->ttl_seconds();
-
+    LOG(INFO) << "sout: read context, need_order=" << _reader_context.need_ordered_result
+              << ", is_direct_mode=" << _direct_mode << ", is_aggregation=" << _aggregation
+              << ", is_push_down_agg_type_opt=" << _reader_context.push_down_agg_type_opt
+              << ", is_read_orderby_key_columns="
+              << (_reader_context.read_orderby_key_columns != nullptr)
+              << ", is_predicates=" << _reader_context.predicates->size()
+              << ", is_value_predicates=" << _reader_context.value_predicates->size()
+              << ", is_filter_block_conjuncts=" << _reader_context.filter_block_conjuncts.size()
+              << ", is_remaining_conjunct_roots=" << _reader_context.remaining_conjunct_roots.size()
+              << ", is_common_expr_ctxs_push_down="
+              << _reader_context.common_expr_ctxs_push_down.size()
+              << ", is_output_columns=" << _reader_context.output_columns->size()
+              << ", tablet=" << read_params.tablet->tablet_id();
     return Status::OK();
 }
 
@@ -391,6 +407,8 @@ Status TabletReader::_init_return_columns(const ReaderParams& read_params) {
 
 Status TabletReader::_init_keys_param(const ReaderParams& read_params) {
     SCOPED_RAW_TIMER(&_stats.tablet_reader_init_keys_param_timer_ns);
+    LOG(INFO) << "sout: TabletReader::_init_keys_param, start key size="
+              << read_params.start_key.size();
     if (read_params.start_key.empty()) {
         return Status::OK();
     }

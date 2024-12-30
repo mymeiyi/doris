@@ -334,9 +334,16 @@ Status OlapScanLocalState::_init_scanners(std::list<vectorized::VScannerSPtr>* s
         _sync_rowset_timer->update(duration_ns);
     }
 
+    LOG(INFO) << "sout: enable_parallel_scan=" << enable_parallel_scan
+              << ", !_should_run_serial=" << !p._should_run_serial
+              << ", !has_cpu_limit=" << !has_cpu_limit
+              << ", _push_down_agg_type=" << p._push_down_agg_type
+              << ", _storage_no_merge=" << _storage_no_merge()
+              << ", is_preaggregation=" << p._olap_scan_node.is_preaggregation;
     if (enable_parallel_scan && !p._should_run_serial && !has_cpu_limit &&
         p._push_down_agg_type == TPushAggOp::NONE &&
         (_storage_no_merge() || p._olap_scan_node.is_preaggregation)) {
+        LOG(INFO) << "sout: cond range=" << _cond_ranges.size();
         std::vector<OlapScanRange*> key_ranges;
         for (auto& range : _cond_ranges) {
             if (range->begin_scan_range.size() == 1 &&
@@ -373,6 +380,8 @@ Status OlapScanLocalState::_init_scanners(std::list<vectorized::VScannerSPtr>* s
 
     int scanners_per_tablet = std::max(1, 64 / (int)_scan_ranges.size());
 
+    LOG(INFO) << "sout: scan range size=" << _scan_ranges.size()
+              << ", cond range=" << _cond_ranges.size();
     for (auto& scan_range : _scan_ranges) {
         auto tablet = DORIS_TRY(ExecEnv::get_tablet(scan_range->tablet_id));
         int64_t version = 0;
@@ -400,6 +409,7 @@ Status OlapScanLocalState::_init_scanners(std::list<vectorized::VScannerSPtr>* s
             }
 
             COUNTER_UPDATE(_key_range_counter, scanner_ranges.size());
+            LOG(INFO) << "sout: scan range=" << scanner_ranges.size();
             auto scanner = vectorized::NewOlapScanner::create_shared(
                     this, vectorized::NewOlapScanner::Params {
                                   state(),
@@ -500,6 +510,8 @@ inline std::string push_down_agg_to_string(const TPushAggOp::type& op) {
 }
 
 Status OlapScanLocalState::_build_key_ranges_and_filters() {
+    LOG(INFO) << "sout: before scan keys=" << _scan_keys.debug_string()
+              << ", push_down_agg_type=" << _parent->cast<OlapScanOperatorX>()._push_down_agg_type;
     auto& p = _parent->cast<OlapScanOperatorX>();
     if (p._push_down_agg_type == TPushAggOp::NONE ||
         p._push_down_agg_type == TPushAggOp::COUNT_ON_INDEX) {
@@ -509,6 +521,7 @@ Status OlapScanLocalState::_build_key_ranges_and_filters() {
 
         // 1. construct scan key except last olap engine short key
         _scan_keys.set_is_convertible(p.limit() == -1);
+        LOG(INFO) << "sout: column_names size=" << column_names.size();
 
         // we use `exact_range` to identify a key range is an exact range or not when we convert
         // it to `_scan_keys`. If `exact_range` is true, we can just discard it from `_olap_filters`.
@@ -522,6 +535,10 @@ Status OlapScanLocalState::_build_key_ranges_and_filters() {
                                    !_scan_keys.has_range_value() && !eos && !should_break;
              ++column_index) {
             auto iter = _colname_to_value_range.find(column_names[column_index]);
+            LOG(INFO) << "sout: column_index=" << column_index
+                      << ", find=" << (_colname_to_value_range.end() != iter)
+                      << ", max_pushdown_conditions_per_column="
+                      << p._max_pushdown_conditions_per_column;
             if (_colname_to_value_range.end() == iter) {
                 break;
             }
@@ -532,6 +549,10 @@ Status OlapScanLocalState::_build_key_ranges_and_filters() {
                         // because extend_scan_key method may change the first parameter.
                         // but the original range may be converted to olap filters, if it's not a exact_range.
                         auto temp_range = range;
+                        LOG(INFO) << "sout: range.get_fixed_value_size="
+                                  << range.get_fixed_value_size()
+                                  << ", _max_pushdown_conditions_per_column="
+                                  << p._max_pushdown_conditions_per_column;
                         if (range.get_fixed_value_size() <= p._max_pushdown_conditions_per_column) {
                             RETURN_IF_ERROR(
                                     _scan_keys.extend_scan_key(temp_range, p._max_scan_key_num,
@@ -539,6 +560,8 @@ Status OlapScanLocalState::_build_key_ranges_and_filters() {
                             if (exact_range) {
                                 _colname_to_value_range.erase(iter->first);
                             }
+                            LOG(INFO) << "sout: extend_scan_key, exact_range=" << exact_range
+                                      << ", eos=" << eos << ", should_break=" << should_break;
                         } else {
                             // if exceed max_pushdown_conditions_per_column, use whole_value_rang instead
                             // and will not erase from _colname_to_value_range, it must be not exact_range
@@ -546,6 +569,8 @@ Status OlapScanLocalState::_build_key_ranges_and_filters() {
                             RETURN_IF_ERROR(
                                     _scan_keys.extend_scan_key(temp_range, p._max_scan_key_num,
                                                                &exact_range, &eos, &should_break));
+                            LOG(INFO) << "sout: extend_scan_key, exact_range=" << exact_range
+                                      << ", eos=" << eos << ", should_break=" << should_break;
                         }
                         return Status::OK();
                     },
@@ -581,7 +606,7 @@ Status OlapScanLocalState::_build_key_ranges_and_filters() {
         _runtime_profile->add_info_string("KeyRanges", _scan_keys.debug_string());
         _runtime_profile->add_info_string("TabletIds", tablets_id_to_string(_scan_ranges));
     }
-    VLOG_CRITICAL << _scan_keys.debug_string();
+    LOG(INFO) << "sout: after scan keys=" << _scan_keys.debug_string();
 
     return Status::OK();
 }

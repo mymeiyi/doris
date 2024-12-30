@@ -98,6 +98,7 @@ bool BlockReader::_rowsets_mono_asc_disjoint(const ReaderParams& read_params) {
 }
 
 Status BlockReader::_init_collect_iter(const ReaderParams& read_params) {
+    LOG(INFO) << "sout: read_params, keys=" << read_params.start_key.size();
     auto res = _capture_rs_readers(read_params);
     if (!res.ok()) {
         LOG(WARNING) << "fail to init reader when _capture_rs_readers. res:" << res
@@ -199,6 +200,7 @@ Status BlockReader::_init_agg_state(const ReaderParams& read_params) {
 }
 
 Status BlockReader::init(const ReaderParams& read_params) {
+    // LOG(INFO) << "sout: BlockReader::init. tablet_id=" << read_params.tablet->tablet_id();
     RETURN_IF_ERROR(TabletReader::init(read_params));
 
     int32_t return_column_size = read_params.origin_return_columns->size();
@@ -218,6 +220,7 @@ Status BlockReader::init(const ReaderParams& read_params) {
         }
     }
 
+    LOG(INFO) << "sout: read_params, keys=" << read_params.start_key.size();
     auto status = _init_collect_iter(read_params);
     if (!status.ok()) [[unlikely]] {
         if (!config::is_cloud_mode()) {
@@ -228,6 +231,8 @@ Status BlockReader::init(const ReaderParams& read_params) {
 
     if (_direct_mode) {
         _next_block_func = &BlockReader::_direct_next_block;
+        LOG(INFO) << "sout: use _direct_next_block. tablet_id="
+                  << read_params.tablet->tablet_id();
         return Status::OK();
     }
 
@@ -239,8 +244,12 @@ Status BlockReader::init(const ReaderParams& read_params) {
         if (read_params.reader_type == ReaderType::READER_QUERY &&
             _reader_context.enable_unique_key_merge_on_write) {
             _next_block_func = &BlockReader::_direct_next_block;
+            LOG(INFO) << "sout: use _direct_next_block. tablet_id="
+                      << read_params.tablet->tablet_id();
         } else {
             _next_block_func = &BlockReader::_unique_key_next_block;
+            LOG(INFO) << "sout: use _unique_key_next_block. tablet_id="
+                      << read_params.tablet->tablet_id();
             if (_filter_delete) {
                 _delete_filter_column = ColumnUInt8::create();
             }

@@ -88,7 +88,8 @@ Status VerticalBlockReader::_get_segment_iterators(const ReaderParams& read_para
         // rowset will be inited and push to heap, other segment will be inited later when current
         // segment reached it's end.
         // Use this iterator_init_flag so we can load few segments in HeapMergeIterator to save memory
-        if (rs_split.rs_reader->rowset()->is_segments_overlapping()) {
+        if (rs_split.rs_reader->rowset()->is_segments_overlapping() ||
+            !read_params.key_group_cluster_key_idxes.empty()) {
             for (int i = 0; i < rs_split.rs_reader->rowset()->num_segments(); ++i) {
                 iterator_init_flag->push_back(true);
             }
@@ -217,6 +218,7 @@ Status VerticalBlockReader::init(const ReaderParams& read_params) {
 
 Status VerticalBlockReader::init(const ReaderParams& read_params,
                                  CompactionSampleInfo* sample_info) {
+    // LOG(INFO) << "sout: VerticalBlockReader::init. tablet_id=" << tablet()->tablet_id();
     StorageReadOptions opts;
     if (read_params.batch_size > 0) {
         _reader_context.batch_size = read_params.batch_size;

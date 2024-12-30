@@ -115,6 +115,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 // Full scan of an Olap table.
@@ -1541,6 +1542,26 @@ public class OlapScanNode extends ScanNode {
         List<TPrimitiveType> keyColumnTypes = new ArrayList<TPrimitiveType>();
         List<TColumn> columnsDesc = new ArrayList<TColumn>();
         olapTable.getColumnDesc(selectedIndexId, columnsDesc, keyColumnNames, keyColumnTypes);
+        if (olapTable.getSchemaByIndexId(selectedIndexId, true).stream().anyMatch(Column::isClusterKey)) {
+            keyColumnNames.clear();
+            keyColumnTypes.clear();
+            // for mow table with cluster keys, set cluster key as key column
+            Map<Integer, Column> clusterKeyUids = new TreeMap<>();
+            List<Column> columns = olapTable.getSchemaByIndexId(selectedIndexId, true);
+            for (Column column : columns) {
+                if (column.isClusterKey()) {
+                    clusterKeyUids.put(column.getClusterKeyId(), column);
+                }
+            }
+            for (Column col : clusterKeyUids.values()) {
+                if (keyColumnNames != null) {
+                    keyColumnNames.add(col.getName());
+                }
+                if (keyColumnTypes != null) {
+                    keyColumnTypes.add(col.getDataType().toThrift());
+                }
+            }
+        }
         List<TOlapTableIndex> indexDesc = Lists.newArrayList();
 
         // Add extra row id column
@@ -1565,10 +1586,6 @@ public class OlapScanNode extends ScanNode {
         }
 
         msg.node_type = TPlanNodeType.OLAP_SCAN_NODE;
-        if (olapTable.getBaseSchema().stream().anyMatch(Column::isClusterKey)) {
-            keyColumnNames.clear();
-            keyColumnTypes.clear();
-        }
         msg.olap_scan_node = new TOlapScanNode(desc.getId().asInt(), keyColumnNames, keyColumnTypes, isPreAggregation);
         msg.olap_scan_node.setColumnsDesc(columnsDesc);
         msg.olap_scan_node.setIndexesDesc(indexDesc);
