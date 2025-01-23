@@ -2392,6 +2392,9 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
             }
         }
     }
+    DCHECK(request->tablet_indexes_size() == response->base_compaction_cnts_size());
+    DCHECK(request->tablet_indexes_size() == response->cumulative_compaction_cnts_size());
+    DCHECK(request->tablet_indexes_size() == response->cumulative_points_size());
 
     read_stats_sw.pause();
     LOG(INFO) << fmt::format("tablet_idxes.size()={}, read tablet compaction cnts cost={} ms",
