@@ -2373,6 +2373,8 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
             }
 
             err = txn->batch_get(&stats_values, stats_keys);
+            TEST_SYNC_POINT_CALLBACK(
+                    "get_delete_bitmap_update_lock.get_compaction_cnts_inject_error", &err);
             if (err != TxnErrorCode::TXN_OK) {
                 msg = fmt::format("failed to batch get tablet stats, index={}, err={}", i, err);
                 code = cast_as<ErrCategory::READ>(err);
