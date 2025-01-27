@@ -2296,7 +2296,7 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
         LOG(INFO) << msg << ", cloud_unique_id=" << cloud_unique_id;
         return;
     }
-
+    auto table_id = request->table_id();
     bool first_retry = true;
     while (true) {
         response->Clear();
@@ -2308,7 +2308,6 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
             msg = "failed to init txn";
             return;
         }
-        auto table_id = request->table_id();
         std::string lock_key = meta_delete_bitmap_update_lock_key({instance_id, table_id, -1});
         std::string lock_val;
         DeleteBitmapUpdateLockPB lock_info;
@@ -2502,7 +2501,8 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
     // these steps can be done in different fdb txns
 
     StopWatch read_stats_sw;
-    err = txn_kv_->create_txn(&txn);
+    std::unique_ptr<Transaction> txn;
+    TxnErrorCode err = txn_kv_->create_txn(&txn);
     if (err != TxnErrorCode::TXN_OK) {
         code = cast_as<ErrCategory::CREATE>(err);
         msg = "failed to init txn";
@@ -2515,7 +2515,7 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
                 stats_tablet_key({instance_id, tablet_idx.table_id(), tablet_idx.index_id(),
                                   tablet_idx.partition_id(), tablet_idx.tablet_id()});
         std::string stats_val;
-        TxnErrorCode err = txn->get(stats_key, &stats_val);
+        err = txn->get(stats_key, &stats_val);
         TEST_SYNC_POINT_CALLBACK("get_delete_bitmap_update_lock.get_compaction_cnts_inject_error",
                                  &err);
         if (err == TxnErrorCode::TXN_TOO_OLD) {
