@@ -2316,6 +2316,9 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
                                                request->initiator(), lock_key, lock_info)) {
             return;
         }
+        LOG(INFO) << "xxx put lock_key 0=" << hex(lock_key) << " table_id=" << table_id
+                  << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
+                  << " initiators_size=" << lock_info.initiators_size();
     } else if (err == TxnErrorCode::TXN_OK) {
         if (!lock_info.ParseFromString(lock_val)) [[unlikely]] {
             code = MetaServiceCode::PROTOBUF_PARSE_ERR;
@@ -2360,6 +2363,9 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
                                                    request->initiator(), lock_key, lock_info)) {
                 return;
             }
+            LOG(INFO) << "xxx put lock_key 1=" << hex(lock_key) << " table_id=" << table_id
+                      << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
+                      << " initiators_size=" << lock_info.initiators_size();
         } else {
             if (request->lock_id() == COMPACTION_DELETE_BITMAP_LOCK_ID) {
                 if (!put_mow_tablet_compaction_key(code, msg, ss, txn, instance_id, table_id,
@@ -2424,6 +2430,9 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
                                                        request->initiator(), lock_key, lock_info)) {
                     return;
                 }
+                LOG(INFO) << "xxx put lock_key 2=" << hex(lock_key) << " table_id=" << table_id
+                          << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
+                          << " initiators_size=" << lock_info.initiators_size();
             }
         }
     }
