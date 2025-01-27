@@ -2438,9 +2438,11 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
     }
 
     err = txn->commit();
+    // if err is TXN_CONFLICT, and the lock id is -1, do a fast retry
     if (err != TxnErrorCode::TXN_OK) {
         code = cast_as<ErrCategory::COMMIT>(err);
-        ss << "failed to get_delete_bitmap_update_lock, err=" << err;
+        ss << "failed to get_delete_bitmap_update_lock, lock_id=" << request->lock_id()
+           << ", initiator=" << request->initiator() << ", err=" << err;
         msg = ss.str();
         return;
     }
