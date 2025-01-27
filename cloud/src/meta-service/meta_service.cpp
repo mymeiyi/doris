@@ -2474,9 +2474,10 @@ void MetaServiceImpl::get_delete_bitmap_update_lock(google::protobuf::RpcControl
         } else if (err == TxnErrorCode::TXN_CONFLICT && lock_key_not_found &&
             request->lock_id() == COMPACTION_DELETE_BITMAP_LOCK_ID &&
             config::delete_bitmap_enable_retry_txn_conflict && first_retry) {
-            ss << "fast retry to get_delete_bitmap_update_lock, lock_id=" << request->lock_id()
-               << ", initiator=" << request->initiator() << ", err=" << err;
             // if err is TXN_CONFLICT, and the lock id is -1, do a fast retry
+            LOG(INFO) << "fast retry to get_delete_bitmap_update_lock, lock_id="
+                      << request->lock_id() << ", initiator=" << request->initiator()
+                      << ", err=" << err;
             first_retry = false;
             continue;
         } else {
