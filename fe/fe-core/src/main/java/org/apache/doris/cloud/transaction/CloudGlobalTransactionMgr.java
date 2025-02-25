@@ -1267,7 +1267,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         } finally {
             stopWatch.stop();
             String detailMsg = "";
-            if (!commitCostTimeStatisticMap.containsKey(transactionId)) {
+            if (commitCostTimeStatisticMap.containsKey(transactionId)) {
                 StringBuilder sb = new StringBuilder();
                 CommitCostTimeStatistic statistic = commitCostTimeStatisticMap.get(transactionId);
                 sb.append("get commit lock cost ").append(statistic.getWaitCommitLockCostTimeMs())
@@ -1277,6 +1277,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                         .append(statistic.getCalculateDeleteBitmapCostTimeMs()).append(" ms, commit to ms cost ")
                         .append(statistic.getCommitToMsCostTimeMs()).append(" ms");
                 detailMsg = sb.toString();
+                commitCostTimeStatisticMap.remove(transactionId);
             }
             LOG.info(
                     "commit transaction {} cost {} ms, detail={}",
