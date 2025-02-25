@@ -926,8 +926,8 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                                 retryTime, e);
                     }
                     retryMsg = response.toString();
-                    // sleep random millis [20, 300] ms, avoid txn conflict
-                    int randomMillis = 20 + (int) (Math.random() * (300 - 20));
+                    // sleep random millis [20, 200] ms, avoid txn conflict
+                    int randomMillis = 20 + (int) (Math.random() * (200 - 20));
                     if (LOG.isDebugEnabled()) {
                         LOG.debug("randomMillis:{}", randomMillis);
                     }
