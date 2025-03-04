@@ -1126,8 +1126,8 @@ Status CompactionMixin::modify_rowsets() {
         // of incremental data later.
         // TODO(LiaoXin): check if there are duplicate keys
         std::size_t missed_rows_size = 0;
-        LOG(INFO) << "sout: calc_compaction_output_rowset_delete_bitmap, tablet_id=" << tablet.tablet_id()
-                  << ", start_version=" << 0
+        LOG(INFO) << "sout: calc_compaction_output_rowset_delete_bitmap, tablet_id="
+                  << tablet()->tablet_id() << ", start_version=" << 0
                   << ", end_version=" << (version.second + 1);
         tablet()->calc_compaction_output_rowset_delete_bitmap(
                 _input_rowsets, *_rowid_conversion, 0, version.second + 1, missed_rows.get(),
