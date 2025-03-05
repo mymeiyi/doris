@@ -1215,6 +1215,7 @@ void StorageEngine::start_delete_unused_rowset() {
               << due_to_use_count << " rowsets due to use count > 1, skipped "
               << due_to_not_delete_file << " rowsets due to don't need to delete file, skipped "
               << due_to_delayed_expired_ts << " rowsets due to delayed expired timestamp.";
+    // std::vector<std::string> version_to_delete;
     for (auto&& rs : unused_rowsets_copy) {
         VLOG_NOTICE << "start to remove rowset:" << rs->rowset_id()
                     << ", version:" << rs->version();
@@ -1223,11 +1224,14 @@ void StorageEngine::start_delete_unused_rowset() {
             tablet && tablet->enable_unique_key_merge_on_write()) {
             tablet->tablet_meta()->delete_bitmap().remove({rs->rowset_id(), 0, 0},
                                                           {rs->rowset_id(), UINT32_MAX, 0});
+            /*Version version(start_version, end_version);
+            version_to_delete.emplace_back(version.to_string());*/
         }
         Status status = rs->remove();
         unused_rowsets_counter << -1;
         VLOG_NOTICE << "remove rowset:" << rs->rowset_id() << " finished. status:" << status;
     }
+    // tablet->tablet_meta()->delete_bitmap().remove_stale_delete_bitmap_from_queue(version_to_delete);
     LOG(INFO) << "removed all collected unused rowsets";
 }
 

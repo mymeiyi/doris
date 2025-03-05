@@ -1047,6 +1047,7 @@ Status CloudCompactionMixin::update_delete_bitmap() {
     return Status::OK();
 }
 
+// pre rowsets version is lower than input start rowset
 void Compaction::agg_and_remove_old_version_delete_bitmap(
         std::vector<RowsetSharedPtr>& pre_rowsets,
         std::vector<std::tuple<int64_t, DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>&
@@ -1066,6 +1067,10 @@ void Compaction::agg_and_remove_old_version_delete_bitmap(
             auto d = _tablet->tablet_meta()->delete_bitmap().get_agg(
                     {rowset->rowset_id(), seg_id, pre_max_version});
             to_remove_vec.emplace_back(std::make_tuple(_tablet->tablet_id(), start, end));
+            LOG(INFO) << "sout: add dm to remove for tablet=" << _tablet->tablet_id()
+                      << ", version=" << rowset->version().to_string()
+                      << ", rowset=" << rowset->rowset_id() << ", seg=" << seg_id
+                      << ", start_version=0, end_version=" << pre_max_version;
             if (d->isEmpty()) {
                 continue;
             }
@@ -1121,10 +1126,22 @@ Status CompactionMixin::modify_rowsets() {
         // of incremental data later.
         // TODO(LiaoXin): check if there are duplicate keys
         std::size_t missed_rows_size = 0;
+        LOG(INFO) << "sout: calc_compaction_output_rowset_delete_bitmap, tablet_id="
+                  << tablet()->tablet_id() << ", start_version=" << 0
+                  << ", end_version=" << (version.second + 1);
         tablet()->calc_compaction_output_rowset_delete_bitmap(
                 _input_rowsets, *_rowid_conversion, 0, version.second + 1, missed_rows.get(),
                 location_map.get(), _tablet->tablet_meta()->delete_bitmap(),
                 &output_rowset_delete_bitmap);
+        LOG(INFO) << "sout: output_rowset_delete_bitmap: tablet=" << tablet()->tablet_id()
+                  << ", dm size=" << output_rowset_delete_bitmap.delete_bitmap.size();
+        for (const auto& item : output_rowset_delete_bitmap.delete_bitmap) {
+            LOG(INFO) << "sout: output_rowset_delete_bitmap: tablet=" << tablet()->tablet_id()
+                      << ", rowset=" << std::get<0>(item.first)
+                      << ", seg=" << std::get<1>(item.first)
+                      << ", version=" << std::get<2>(item.first)
+                      << ", cardinality=" << item.second.cardinality();
+        }
         if (missed_rows) {
             missed_rows_size = missed_rows->size();
             std::size_t merged_missed_rows_size = _stats.merged_rows;
@@ -1257,6 +1274,12 @@ Status CompactionMixin::modify_rowsets() {
             }
 
             tablet()->merge_delete_bitmap(output_rowset_delete_bitmap);
+            if (config::enable_delete_bitmap_merge_on_compaction &&
+                compaction_type() == ReaderType::READER_CUMULATIVE_COMPACTION &&
+                _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                _tablet->enable_unique_key_merge_on_write() && _input_rowsets.size() != 1) {
+                process_old_version_delete_bitmap();
+            }
             RETURN_IF_ERROR(tablet()->modify_rowsets(output_rowsets, _input_rowsets, true));
         }
     } else {
@@ -1269,13 +1292,6 @@ Status CompactionMixin::modify_rowsets() {
         _tablet->tablet_meta()->all_stale_rs_metas().size() >=
                 config::tablet_rowset_stale_sweep_threshold_size) {
         tablet()->delete_expired_stale_rowset();
-    }
-
-    if (config::enable_delete_bitmap_merge_on_compaction &&
-        compaction_type() == ReaderType::READER_CUMULATIVE_COMPACTION &&
-        _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
-        _tablet->enable_unique_key_merge_on_write() && _input_rowsets.size() != 1) {
-        process_old_version_delete_bitmap();
     }
 
     int64_t cur_max_version = 0;
@@ -1298,7 +1314,7 @@ Status CompactionMixin::modify_rowsets() {
 
 void CompactionMixin::process_old_version_delete_bitmap() {
     std::vector<RowsetSharedPtr> pre_rowsets {};
-    for (const auto& it : tablet()->rowset_map()) {
+    for (const auto& it : tablet()->rowset_map()) { // TODO should hold meta lock?
         if (it.first.second < _input_rowsets.front()->start_version()) {
             pre_rowsets.emplace_back(it.second);
         }
