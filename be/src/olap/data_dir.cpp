@@ -608,6 +608,7 @@ Status DataDir::load() {
         int seg_ids_size = delete_bitmap_pb.segment_ids_size();
         int seg_maps_size = delete_bitmap_pb.segment_delete_bitmaps_size();
         CHECK(rst_ids_size == seg_ids_size && seg_ids_size == seg_maps_size);
+        LOG(INFO) << "start load dm for tablet=" << tablet_id << ", dm size=" << rst_ids_size;
 
         for (size_t i = 0; i < rst_ids_size; ++i) {
             RowsetId rst_id;
@@ -621,11 +622,16 @@ Status DataDir::load() {
                     {rst_id, seg_id, version});
             // This version of delete bitmap already exists
             if (iter != tablet->tablet_meta()->delete_bitmap().delete_bitmap.end()) {
+                LOG(INFO) << "skip load dm for tablet=" << tablet_id
+                          << ", rowset=" << rst_id.to_string() << ", seg=" << seg_id
+                          << ", version=" << version;
                 continue;
             }
             auto bitmap = delete_bitmap_pb.segment_delete_bitmaps(i).data();
             tablet->tablet_meta()->delete_bitmap().delete_bitmap[{rst_id, seg_id, version}] =
                     roaring::Roaring::read(bitmap);
+            LOG(INFO) << "load dm for tablet=" << tablet_id << ", rowset=" << rst_id.to_string()
+                      << ", seg=" << seg_id << ", version=" << version;
         }
         return true;
     };

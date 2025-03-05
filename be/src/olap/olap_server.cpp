@@ -688,6 +688,11 @@ void StorageEngine::_compaction_tasks_producer_callback() {
 
             for (const auto& tablet : tablets_compaction) {
                 if (compaction_type == CompactionType::BASE_COMPACTION) {
+                    LOG(INFO) << "sout: tmp skip base compaction for tablet: "
+                              << tablet->tablet_id();
+                    continue;
+                }
+                if (compaction_type == CompactionType::BASE_COMPACTION) {
                     tablet->set_last_base_compaction_schedule_time(UnixMillis());
                 }
                 Status st = _submit_compaction_task(tablet, compaction_type, false);

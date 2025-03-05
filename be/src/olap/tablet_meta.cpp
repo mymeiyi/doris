@@ -779,11 +779,17 @@ void TabletMeta::to_meta_pb(TabletMetaPB* tablet_meta_pb) {
             stale_rs_ids.insert(rowset->rowset_id());
         }
         DeleteBitmapPB* delete_bitmap_pb = tablet_meta_pb->mutable_delete_bitmap();
-        for (auto& [id, bitmap] : delete_bitmap().snapshot().delete_bitmap) {
+        auto dm = delete_bitmap().snapshot().delete_bitmap;
+        std::stringstream ss;
+        std::stringstream stale_ss;
+        for (auto& [id, bitmap] : dm) {
             auto& [rowset_id, segment_id, ver] = id;
             if (stale_rs_ids.count(rowset_id) != 0) {
+                stale_ss << "[" << rowset_id.to_string() << ", " << segment_id << ": " << ver
+                         << "], ";
                 continue;
             }
+            ss << "[" << rowset_id.to_string() << ", " << segment_id << ": " << ver << "], ";
             delete_bitmap_pb->add_rowset_ids(rowset_id.to_string());
             delete_bitmap_pb->add_segment_ids(segment_id);
             delete_bitmap_pb->add_versions(ver);
@@ -791,6 +797,9 @@ void TabletMeta::to_meta_pb(TabletMetaPB* tablet_meta_pb) {
             bitmap.write(bitmap_data.data());
             *(delete_bitmap_pb->add_segment_delete_bitmaps()) = std::move(bitmap_data);
         }
+        LOG(INFO) << "save meta for tablet_id=" << tablet_id() << ", dm size=" << dm.size()
+                  << ", save dm size=" << delete_bitmap_pb->rowset_ids_size();
+                  // << ", dm str=" << ss.str() << ", stale dm str=" << stale_ss.str();
     }
     _binlog_config.to_pb(tablet_meta_pb->mutable_binlog_config());
     tablet_meta_pb->set_compaction_policy(compaction_policy());
@@ -1225,7 +1234,12 @@ void DeleteBitmap::add_to_remove_queue(
         const std::vector<std::tuple<int64_t, DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>&
                 vector) {
     std::shared_lock l(stale_delete_bitmap_lock);
+    // key: the [start_version, end_version] of input rowsets
+    // val: vector of [tablet_id, {rowset_id, seg_id, start_version}, {rowset_id, seg_id, end_version}]
+    // note that the end version is the end version of input rowsets
     _stale_delete_bitmap.emplace(version_str, vector);
+    LOG(INFO) << "sout: tablet_id=" << _tablet_id << ", add key=" << version_str
+              << ", stale dm size=" << _stale_delete_bitmap.size();
 }
 
 void DeleteBitmap::remove_stale_delete_bitmap_from_queue(const std::vector<std::string>& vector) {
@@ -1239,8 +1253,8 @@ void DeleteBitmap::remove_stale_delete_bitmap_from_queue(const std::vector<std::
     for (auto& version_str : vector) {
         auto it = _stale_delete_bitmap.find(version_str);
         if (it != _stale_delete_bitmap.end()) {
-            auto delete_bitmap_vector = it->second;
             for (auto& delete_bitmap_tuple : it->second) {
+                // {rowset_id, seg_id, start_version}
                 if (tablet_id < 0) {
                     tablet_id = std::get<0>(delete_bitmap_tuple);
                 }
