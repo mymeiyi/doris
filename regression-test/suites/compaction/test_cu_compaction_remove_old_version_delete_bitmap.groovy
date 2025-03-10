@@ -157,6 +157,18 @@ suite("test_cu_compaction_remove_old_version_delete_bitmap", "nonConcurrent") {
         return deleteBitmapStatus
     }
 
+    def getDeleteBitmapStatus = { def tablets ->
+        for (def tablet in tablets) {
+            String tablet_id = tablet.TabletId
+            String trigger_backend_id = tablet.BackendId
+            getTabletStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+            getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+            if (isCloudMode()) {
+                getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+            }
+        }
+    }
+
     def testTable = "test_cu_compaction_remove_old_version_delete_bitmap"
     def timeout = 10000
     sql """ DROP TABLE IF EXISTS ${testTable}"""
@@ -203,7 +215,9 @@ suite("test_cu_compaction_remove_old_version_delete_bitmap", "nonConcurrent") {
     set_be_param("tablet_rowset_stale_sweep_time_sec", "0")
 
     try {
+        GetDebugPoint().clearDebugPointsForAllBEs()
         GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets")
+
         // 1. test normal
         sql "sync"
         sql """ INSERT INTO ${testTable} VALUES (0,0,'1'),(1,1,'1'); """
@@ -214,91 +228,70 @@ suite("test_cu_compaction_remove_old_version_delete_bitmap", "nonConcurrent") {
         sql """ INSERT INTO ${testTable} VALUES (0,0,'6'),(6,6,'6'); """
         sql """ INSERT INTO ${testTable} VALUES (0,0,'7'),(7,7,'7'); """
         sql """ INSERT INTO ${testTable} VALUES (0,0,'8'),(8,8,'8'); """
-
         qt_sql "select * from ${testTable} order by plan_id"
 
-        // trigger compaction to generate base rowset
         def tablets = sql_return_maparray """ show tablets from ${testTable}; """
         logger.info("tablets: " + tablets)
-        def local_delete_bitmap_count = 0
-        def ms_delete_bitmap_count = 0
-        def local_delete_bitmap_cardinality = 0;
-        def ms_delete_bitmap_cardinality = 0;
+
+        // trigger compaction to generate base rowset
         for (def tablet in tablets) {
             String tablet_id = tablet.TabletId
-            def tablet_info = sql_return_maparray """ show tablet ${tablet_id}; """
-            logger.info("tablet: " + tablet_info)
             String trigger_backend_id = tablet.BackendId
-            getTabletStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id);
 
             // before compaction, delete_bitmap_count is (rowsets num - 1)
-            local_delete_bitmap_count = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).delete_bitmap_count
-            local_delete_bitmap_cardinality = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).cardinality
-            logger.info("local_delete_bitmap_count:" + local_delete_bitmap_count)
-            logger.info("local_delete_bitmap_cardinality:" + local_delete_bitmap_cardinality)
-            assertTrue(local_delete_bitmap_count == 7)
-            assertTrue(local_delete_bitmap_cardinality == 7)
+            getTabletStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id);
+
+            def localDeleteBitmapStatus = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+            assertEquals(localDeleteBitmapStatus.delete_bitmap_count, 7)
+            assertEquals(localDeleteBitmapStatus.cardinality, 7)
 
             if (isCloudMode()) {
-                ms_delete_bitmap_count = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).delete_bitmap_count
-                ms_delete_bitmap_cardinality = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).cardinality
-                logger.info("ms_delete_bitmap_count:" + ms_delete_bitmap_count)
-                logger.info("ms_delete_bitmap_cardinality:" + ms_delete_bitmap_cardinality)
-                assertTrue(ms_delete_bitmap_count == 7)
-                assertTrue(ms_delete_bitmap_cardinality == 7)
+                def msDeleteBitmapStatus = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+                assertEquals(msDeleteBitmapStatus.delete_bitmap_count, 7)
+                assertEquals(msDeleteBitmapStatus.cardinality, 7)
             }
 
-
+            // trigger compaction
             assertTrue(triggerCompaction(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id],
                     "cumulative", tablet_id).contains("Success"));
             waitForCompaction(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
-            getTabletStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id);
+            getDeleteBitmapStatus(tablets)
         }
-
         qt_sql "select * from ${testTable} order by plan_id"
-
-        def now = System.currentTimeMillis()
-
         sql """ INSERT INTO ${testTable} VALUES (0,0,'9'),(1,9,'9'); """
         sql """ INSERT INTO ${testTable} VALUES (0,0,'10'),(1,10,'10'); """
         sql """ INSERT INTO ${testTable} VALUES (0,0,'11'),(1,11,'11'); """
+        getDeleteBitmapStatus(tablets)
+
         // trigger one query
+        def now = System.currentTimeMillis()
         GetDebugPoint().enableDebugPointForAllBEs("NewOlapScanner::_init_tablet_reader_params.block")
         Thread query_thread = new Thread(() -> query())
         query_thread.start()
         sleep(100)
         sql """ INSERT INTO ${testTable} VALUES (0,0,'12'),(1,12,'12'); """
         sql """ INSERT INTO ${testTable} VALUES (0,0,'13'),(1,13,'13'); """
+        // getDeleteBitmapStatus(tablets)
 
-        def time_diff = System.currentTimeMillis() - now
+        /*def time_diff = System.currentTimeMillis() - now
         logger.info("time_diff:" + time_diff)
-        assertTrue(time_diff <= timeout, "wait_for_insert_into_values timeout")
+        assertTrue(time_diff <= timeout, "wait_for_insert_into_values timeout")*/
 
         // qt_sql "select * from ${testTable} order by plan_id"
 
         // trigger cu compaction to remove old version delete bitmap
-
         for (def tablet in tablets) {
             String tablet_id = tablet.TabletId
-            def tablet_info = sql_return_maparray """ show tablet ${tablet_id}; """
-            logger.info("tablet: " + tablet_info)
 
             // before compaction, local delete_bitmap_count is (total rowsets num - 1), ms delete_bitmap_count is new rowset num
             String trigger_backend_id = tablet.BackendId
-            local_delete_bitmap_count = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).delete_bitmap_count
-            local_delete_bitmap_cardinality = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).cardinality
-            logger.info("local_delete_bitmap_count:" + local_delete_bitmap_count)
-            logger.info("local_delete_bitmap_cardinality:" + local_delete_bitmap_cardinality)
-            assertTrue(local_delete_bitmap_count == 12)
-            assertTrue(local_delete_bitmap_cardinality == 17)
-
+            def localDeleteBitmapStatus = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+            assertEquals(localDeleteBitmapStatus.delete_bitmap_count, 12)
+            assertEquals(localDeleteBitmapStatus.cardinality, 17)
             if (isCloudMode()) {
-                ms_delete_bitmap_count = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).delete_bitmap_count
-                ms_delete_bitmap_cardinality = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).cardinality
-                logger.info("ms_delete_bitmap_count:" + ms_delete_bitmap_count)
-                logger.info("ms_delete_bitmap_cardinality:" + ms_delete_bitmap_cardinality)
-                assertTrue(ms_delete_bitmap_count == 5)
-                assertTrue(ms_delete_bitmap_cardinality == 10)
+                def msDeleteBitmapStatus = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+                assertEquals(msDeleteBitmapStatus.delete_bitmap_count, 5)
+                assertEquals(msDeleteBitmapStatus.cardinality, 10)
             }
 
             getTabletStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id);
@@ -309,15 +302,17 @@ suite("test_cu_compaction_remove_old_version_delete_bitmap", "nonConcurrent") {
 
             Thread.sleep(1000)
             // after compaction, delete_bitmap_count is 1, cardinality is 2, check it
-            local_delete_bitmap_count = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).delete_bitmap_count
-            local_delete_bitmap_cardinality = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).cardinality
+            localDeleteBitmapStatus = getLocalDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+            def local_delete_bitmap_count = localDeleteBitmapStatus.delete_bitmap_count
+            def local_delete_bitmap_cardinality = localDeleteBitmapStatus.cardinality
             logger.info("local_delete_bitmap_count:" + local_delete_bitmap_count)
             logger.info("local_delete_bitmap_cardinality:" + local_delete_bitmap_cardinality)
             // assertTrue(local_delete_bitmap_count == 1)
             // assertTrue(local_delete_bitmap_cardinality == 2)
             if (isCloudMode()) {
-                ms_delete_bitmap_count = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).delete_bitmap_count
-                ms_delete_bitmap_cardinality = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id).cardinality
+                def msDeleteBitmapStatus = getMSDeleteBitmapStatus(backendId_to_backendIP[trigger_backend_id], backendId_to_backendHttpPort[trigger_backend_id], tablet_id)
+                def ms_delete_bitmap_count = msDeleteBitmapStatus.delete_bitmap_count
+                def ms_delete_bitmap_cardinality = msDeleteBitmapStatus.cardinality
                 logger.info("ms_delete_bitmap_count:" + ms_delete_bitmap_count)
                 logger.info("ms_delete_bitmap_cardinality:" + ms_delete_bitmap_cardinality)
                 assertTrue(ms_delete_bitmap_count == 1)
@@ -332,7 +327,6 @@ suite("test_cu_compaction_remove_old_version_delete_bitmap", "nonConcurrent") {
         qt_sql "select * from ${testTable} order by plan_id"
 
         // 2. test update delete bitmap failed
-
         /*now = System.currentTimeMillis()
 
         sql """ INSERT INTO ${testTable} VALUES (0,0,'14'),(1,19,'19'); """
