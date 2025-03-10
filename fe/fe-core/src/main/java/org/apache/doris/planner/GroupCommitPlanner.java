@@ -72,10 +72,13 @@ import org.apache.logging.log4j.Logger;
 import org.apache.thrift.TException;
 import org.apache.thrift.TSerializer;
 
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -329,5 +332,35 @@ public class GroupCommitPlanner {
                 txnStatus, loadedRows, (int) filteredRows);
         // update it, so that user can get loaded rows in fe.audit.log
         ctx.updateReturnRows((int) loadedRows);
+    }
+
+    public static void removeBeDebugPoint() {
+        try {
+            for (Entry<Long, Backend> entry : Env.getCurrentSystemInfo().getAllBackendsByAllCluster().entrySet()) {
+                Backend backend = entry.getValue();
+                if (!backend.isAlive()) {
+                    continue;
+                }
+                String host = backend.getHost();
+                int port = backend.getBePort();
+
+                String urlStr = String.format(
+                        "http://%s:%d/api/debug_point/remove/GroupCommitTable.get_first_block_load_queue.can_not_get_a_block_queue",
+                        host, port);
+                URL url = new URL(urlStr);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                try {
+                    conn.setRequestMethod("POST");
+                    int responseCode = conn.getResponseCode();
+                    LOG.warn("remove debug point for backend {}:{}, response code: {}", host, port, responseCode);
+                } catch (Exception e) {
+                    LOG.warn("failed to remove debug point for backend {}:{}", host, port, e);
+                } finally {
+                    conn.disconnect();
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn("failed to remove debug point for backends", e);
+        }
     }
 }

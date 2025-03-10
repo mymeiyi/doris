@@ -262,6 +262,13 @@ Status GroupCommitTable::get_first_block_load_queue(
     DCHECK(table_id == _table_id);
     std::unique_lock l(_lock);
     auto try_to_get_matched_queue = [&]() -> Status {
+        DBUG_EXECUTE_IF("GroupCommitTable.get_first_block_load_queue.can_not_get_a_block_queue", {
+            if (dp->param<int64_t>("table_id", -1) == table_id) {
+                LOG(INFO) << "debug promise set: can not get a block queue for table=" << table_id;
+                return Status::InternalError<false>("can not get a block queue for table_id: " +
+                                                    std::to_string(table_id));
+            }
+        };);
         for (const auto& [_, inner_block_queue] : _load_block_queues) {
             if (inner_block_queue->contain_load_id(load_id)) {
                 load_block_queue = inner_block_queue;

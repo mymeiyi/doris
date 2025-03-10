@@ -2448,23 +2448,33 @@ public class StmtExecutor {
                 PGroupCommitInsertResponse response = groupCommitPlanner.executeGroupCommitInsert(context, rows);
                 TStatusCode code = TStatusCode.findByValue(response.getStatus().getStatusCode());
                 ProtocolStringList errorMsgsList = response.getStatus().getErrorMsgsList();
-                if (code == TStatusCode.DATA_QUALITY_ERROR && !errorMsgsList.isEmpty() && errorMsgsList.get(0)
-                        .contains("schema version not match")) {
+                boolean schemaVersionNotMatch = code == TStatusCode.DATA_QUALITY_ERROR && !errorMsgsList.isEmpty()
+                        && errorMsgsList.get(0).contains("schema version not match");
+                boolean canNotGetBlockQueue = code != TStatusCode.OK && !errorMsgsList.isEmpty() && errorMsgsList.get(0)
+                        .contains("can not get a block queue");
+                if (schemaVersionNotMatch || canNotGetBlockQueue) {
                     LOG.info("group commit insert failed. stmt: {}, query_id: {}, db_id: {}, table_id: {}"
                                     + ", schema version: {}, backend_id: {}, status: {}, retry: {}",
                             insertStmt.getOrigStmt().originStmt, DebugUtil.printId(context.queryId()), dbId, tableId,
                             nativeInsertStmt.getBaseSchemaVersion(), groupCommitPlanner.getBackendId(),
                             response.getStatus(), i);
                     if (i < maxRetry) {
-                        List<TableIf> tables = Lists.newArrayList(insertStmt.getTargetTable());
-                        tables.sort((Comparator.comparing(TableIf::getId)));
-                        MetaLockUtils.readLockTables(tables);
-                        try {
-                            insertStmt.reset();
-                            analyzer = new Analyzer(context.getEnv(), context);
-                            analyzeAndGenerateQueryPlan(context.getSessionVariable().toThrift());
-                        } finally {
-                            MetaLockUtils.readUnlockTables(tables);
+                        if (schemaVersionNotMatch) {
+                            List<TableIf> tables = Lists.newArrayList(insertStmt.getTargetTable());
+                            tables.sort((Comparator.comparing(TableIf::getId)));
+                            MetaLockUtils.readLockTables(tables);
+                            try {
+                                insertStmt.reset();
+                                analyzer = new Analyzer(context.getEnv(), context);
+                                analyzeAndGenerateQueryPlan(context.getSessionVariable().toThrift());
+                            } finally {
+                                MetaLockUtils.readUnlockTables(tables);
+                            }
+                        }
+                        long debugTableId = DebugPointUtil.getDebugParamOrDefault("GroupCommitInsert.retry", 0);
+                        if (debugTableId == tableId) {
+                            // Thread.sleep(10000);
+                            GroupCommitPlanner.removeBeDebugPoint();
                         }
                         continue;
                     } else {
