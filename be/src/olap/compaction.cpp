@@ -1173,8 +1173,8 @@ Status CompactionMixin::modify_rowsets() {
 
             LOG(INFO) << "sout: cumulative compaction: the merged rows(" << _stats.merged_rows
                       << "), filtered rows(" << _stats.filtered_rows
-                      << ") is not equal to missed rows(" << missed_rows_size
-                      << ") in rowid conversion, tablet_id: " << _tablet->tablet_id();
+                      << "), missed rows(" << missed_rows_size
+                      << "), tablet_id: " << _tablet->tablet_id();
             if (_tablet->tablet_state() == TABLET_RUNNING &&
                 merged_missed_rows_size != missed_rows_size && need_to_check_missed_rows) {
                 std::stringstream ss;
