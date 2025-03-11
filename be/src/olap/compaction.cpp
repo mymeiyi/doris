@@ -1057,11 +1057,11 @@ void Compaction::agg_and_remove_old_version_delete_bitmap(
     auto pre_max_version = _output_rowset->version().second;
     new_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_meta()->tablet_id());
     for (auto& rowset : pre_rowsets) {
+        // TODO segment num > 0 but total_disk_size == 0 ?
         if (rowset->rowset_meta()->total_disk_size() == 0) {
             continue;
         }
         for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
-            rowset->rowset_id().to_string();
             DeleteBitmap::BitmapKey start {rowset->rowset_id(), seg_id, 0};
             DeleteBitmap::BitmapKey end {rowset->rowset_id(), seg_id, pre_max_version};
             auto d = _tablet->tablet_meta()->delete_bitmap().get_agg(
@@ -1324,26 +1324,26 @@ void CompactionMixin::process_old_version_delete_bitmap() {
             pre_rowsets.emplace_back(it.second);
         }
     }
+    if (pre_rowsets.empty()) {
+        return;
+    }
     std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
-    if (!pre_rowsets.empty()) {
-        std::vector<std::tuple<int64_t, DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>
-                to_remove_vec;
-        DeleteBitmapPtr new_delete_bitmap = nullptr;
-        agg_and_remove_old_version_delete_bitmap(pre_rowsets, to_remove_vec, new_delete_bitmap);
-        if (!new_delete_bitmap->empty()) {
-            // store agg delete bitmap
-            Version version(_input_rowsets.front()->start_version(),
-                            _input_rowsets.back()->end_version());
-            for (auto it = new_delete_bitmap->delete_bitmap.begin();
-                 it != new_delete_bitmap->delete_bitmap.end(); it++) {
-                _tablet->tablet_meta()->delete_bitmap().set(it->first, it->second);
-            }
-            _tablet->tablet_meta()->delete_bitmap().add_to_remove_queue(version.to_string(),
-                                                                        to_remove_vec);
-            DBUG_EXECUTE_IF("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets", {
-                static_cast<Tablet*>(_tablet.get())->delete_expired_stale_rowset();
-            });
+    std::vector<std::tuple<int64_t, DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>
+            to_remove_vec;
+    DeleteBitmapPtr new_delete_bitmap = nullptr;
+    agg_and_remove_old_version_delete_bitmap(pre_rowsets, to_remove_vec, new_delete_bitmap);
+    if (!new_delete_bitmap->empty()) {
+        // store agg delete bitmap
+        Version version(_input_rowsets.front()->start_version(),
+                        _input_rowsets.back()->end_version());
+        for (auto it = new_delete_bitmap->delete_bitmap.begin();
+             it != new_delete_bitmap->delete_bitmap.end(); it++) {
+            _tablet->tablet_meta()->delete_bitmap().set(it->first, it->second);
         }
+        _tablet->tablet_meta()->delete_bitmap().add_to_remove_queue(version.to_string(),
+                                                                    to_remove_vec);
+        DBUG_EXECUTE_IF("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets",
+                        { static_cast<Tablet*>(_tablet.get())->delete_expired_stale_rowset(); });
     }
 }
 
