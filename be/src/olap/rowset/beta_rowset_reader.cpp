@@ -158,7 +158,8 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
         for (uint32_t seg_id = 0; seg_id < rowset()->num_segments(); ++seg_id) {
             LOG(INFO) << "sout: start get_agg for tablet=" << _read_options.tablet_id
                       << ", rowset=" << rowset_id << ", seg=" << seg_id
-                      << ", end_version=" << _read_context->version.second;
+                      << ", version=" << rowset()->version()
+                      << ", agg end_version=" << _read_context->version.second;
             auto d = _read_context->delete_bitmap->get_agg(
                     {rowset_id, seg_id, _read_context->version.second});
             if (d->isEmpty()) {
