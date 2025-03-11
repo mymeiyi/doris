@@ -156,6 +156,10 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
         SCOPED_RAW_TIMER(&_stats->delete_bitmap_get_agg_ns);
         RowsetId rowset_id = rowset()->rowset_id();
         for (uint32_t seg_id = 0; seg_id < rowset()->num_segments(); ++seg_id) {
+            LOG(INFO) << "sout: start get_agg for tablet=" << _read_options.tablet_id
+                      << ", rowset=" << rowset_id << ", seg=" << seg_id
+                      << ", version=" << rowset()->version()
+                      << ", agg end_version=" << _read_context->version.second;
             auto d = _read_context->delete_bitmap->get_agg(
                     {rowset_id, seg_id, _read_context->version.second});
             if (d->isEmpty()) {

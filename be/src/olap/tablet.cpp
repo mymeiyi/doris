@@ -831,6 +831,8 @@ void Tablet::delete_expired_stale_rowset() {
         while (to_delete_iter != stale_version_path_map.end()) {
             std::vector<TimestampedVersionSharedPtr>& to_delete_version =
                     to_delete_iter->second->timestamped_versions();
+            LOG(INFO) << "sout: delete_expired_stale_rowset for tablet=" << tablet_id()
+                      << ", to_delete_version size=" << to_delete_version.size();
             int64_t start_version = -1;
             int64_t end_version = -1;
             for (auto& timestampedVersion : to_delete_version) {
@@ -842,7 +844,7 @@ void Tablet::delete_expired_stale_rowset() {
                         _engine.add_unused_rowset(it->second);
                     }
                     _stale_rs_version_map.erase(it);
-                    VLOG_NOTICE << "delete stale rowset tablet=" << tablet_id() << " version["
+                    LOG(INFO) << "delete stale rowset tablet=" << tablet_id() << " version["
                                 << timestampedVersion->version().first << ","
                                 << timestampedVersion->version().second
                                 << "] move to unused_rowset success " << std::fixed
@@ -861,6 +863,8 @@ void Tablet::delete_expired_stale_rowset() {
             }
             Version version(start_version, end_version);
             version_to_delete.emplace_back(version.to_string());
+            LOG(INFO) << "sout: delete stale dm. tablet=" << tablet_id()
+                      << ", version=" << version.to_string();
             to_delete_iter++;
         }
         _tablet_meta->delete_bitmap().remove_stale_delete_bitmap_from_queue(version_to_delete);

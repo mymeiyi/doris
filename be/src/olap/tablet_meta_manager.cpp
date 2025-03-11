@@ -235,7 +235,8 @@ void TabletMetaManager::decode_delete_bitmap_key(std::string_view enc_key, TTabl
 
 Status TabletMetaManager::save_delete_bitmap(DataDir* store, TTabletId tablet_id,
                                              DeleteBitmapPtr delete_bitmap, int64_t version) {
-    VLOG_NOTICE << "save delete bitmap, tablet_id:" << tablet_id << ", version: " << version;
+    LOG(INFO) << "save delete bitmap, tablet_id:" << tablet_id << ", version: " << version
+              << ", dm size=" << delete_bitmap->delete_bitmap.size();
     if (delete_bitmap->delete_bitmap.empty()) {
         return Status::OK();
     }
@@ -290,9 +291,9 @@ Status TabletMetaManager::remove_old_version_delete_bitmap(DataDir* store, TTabl
         remove_keys.emplace_back(key);
         return true;
     };
-    LOG(INFO) << "remove old version delete bitmap, tablet_id: " << tablet_id
-              << " version: " << version << ", removed keys size: " << remove_keys.size();
     RETURN_IF_ERROR(meta->iterate(META_COLUMN_FAMILY_INDEX, begin_key, get_remove_keys_func));
+    LOG(INFO) << "sout: remove old version delete bitmap, tablet_id: " << tablet_id
+              << " version: " << version << ", removed keys size: " << remove_keys.size();
     return meta->remove(META_COLUMN_FAMILY_INDEX, remove_keys);
 }
 

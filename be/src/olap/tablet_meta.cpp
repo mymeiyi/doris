@@ -779,11 +779,17 @@ void TabletMeta::to_meta_pb(TabletMetaPB* tablet_meta_pb) {
             stale_rs_ids.insert(rowset->rowset_id());
         }
         DeleteBitmapPB* delete_bitmap_pb = tablet_meta_pb->mutable_delete_bitmap();
-        for (auto& [id, bitmap] : delete_bitmap().snapshot().delete_bitmap) {
+        auto dm = delete_bitmap().snapshot().delete_bitmap;
+        std::stringstream ss;
+        std::stringstream stale_ss;
+        for (auto& [id, bitmap] : dm) {
             auto& [rowset_id, segment_id, ver] = id;
             if (stale_rs_ids.count(rowset_id) != 0) {
+                stale_ss << "[" << rowset_id.to_string() << ", " << segment_id << ": " << ver
+                         << "], ";
                 continue;
             }
+            ss << "[" << rowset_id.to_string() << ", " << segment_id << ": " << ver << "], ";
             delete_bitmap_pb->add_rowset_ids(rowset_id.to_string());
             delete_bitmap_pb->add_segment_ids(segment_id);
             delete_bitmap_pb->add_versions(ver);
@@ -791,6 +797,9 @@ void TabletMeta::to_meta_pb(TabletMetaPB* tablet_meta_pb) {
             bitmap.write(bitmap_data.data());
             *(delete_bitmap_pb->add_segment_delete_bitmaps()) = std::move(bitmap_data);
         }
+        LOG(INFO) << "save meta for tablet_id=" << tablet_id() << ", dm size=" << dm.size()
+                  << ", save dm size=" << delete_bitmap_pb->rowset_ids_size();
+                  // << ", dm str=" << ss.str() << ", stale dm str=" << stale_ss.str();
     }
     _binlog_config.to_pb(tablet_meta_pb->mutable_binlog_config());
     tablet_meta_pb->set_compaction_policy(compaction_policy());
@@ -1225,11 +1234,19 @@ void DeleteBitmap::add_to_remove_queue(
         const std::vector<std::tuple<int64_t, DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>&
                 vector) {
     std::shared_lock l(stale_delete_bitmap_lock);
+    // key: the [start_version, end_version] of input rowsets
+    // val: vector of [tablet_id, {rowset_id, seg_id, start_version}, {rowset_id, seg_id, end_version}]
+    // note that the end version is the end version of input rowsets
     _stale_delete_bitmap.emplace(version_str, vector);
+    LOG(INFO) << "sout: add_to_remove_queue. tablet_id=" << _tablet_id << ", key=" << version_str
+              << ". queue size=" << _stale_delete_bitmap.size();
 }
 
 void DeleteBitmap::remove_stale_delete_bitmap_from_queue(const std::vector<std::string>& vector) {
     if (!config::enable_delete_bitmap_merge_on_compaction) {
+        return;
+    }
+    if (true) {
         return;
     }
     std::shared_lock l(stale_delete_bitmap_lock);
@@ -1239,13 +1256,21 @@ void DeleteBitmap::remove_stale_delete_bitmap_from_queue(const std::vector<std::
     for (auto& version_str : vector) {
         auto it = _stale_delete_bitmap.find(version_str);
         if (it != _stale_delete_bitmap.end()) {
-            auto delete_bitmap_vector = it->second;
+            LOG(INFO) << "sout: start remove_stale_delete_bitmap_from_queue. tablet_id="
+                      << _tablet_id << ", key=" << version_str
+                      << ", stale dm size=" << it->second.size();
             for (auto& delete_bitmap_tuple : it->second) {
+                // {rowset_id, seg_id, start_version}
                 if (tablet_id < 0) {
                     tablet_id = std::get<0>(delete_bitmap_tuple);
                 }
                 auto start_bmk = std::get<1>(delete_bitmap_tuple);
                 auto end_bmk = std::get<2>(delete_bitmap_tuple);
+                LOG(INFO) << "sout: now remove stale dm, tablet_id=" << tablet_id
+                          << ", rowset=" << std::get<0>(start_bmk).to_string()
+                          << ", seg_id=" << std::get<1>(start_bmk)
+                          << ", start_version=" << std::get<2>(start_bmk)
+                          << ", end_version=" << std::get<2>(end_bmk);
                 // the key range of to be removed is [start_bmk,end_bmk),
                 // due to the different definitions of the right boundary,
                 // so use end_bmk as right boundary when removing local delete bitmap,
@@ -1327,6 +1352,9 @@ std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg(const BitmapKey& bmk) co
             }
         }
         size_t charge = val->bitmap.getSizeInBytes() + sizeof(AggCache::Value);
+        LOG(INFO) << "sout: add agg cache for tablet=" << _tablet_id
+                  << ", rowset=" << std::get<0>(bmk).to_string() << ", segment=" << std::get<1>(bmk)
+                  << ", version=" << std::get<2>(bmk);
         handle = _agg_cache->repr()->insert(key, val, charge, charge, CachePriority::NORMAL);
     }
 
