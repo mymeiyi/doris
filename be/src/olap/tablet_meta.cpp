@@ -1246,6 +1246,9 @@ void DeleteBitmap::remove_stale_delete_bitmap_from_queue(const std::vector<std::
     if (!config::enable_delete_bitmap_merge_on_compaction) {
         return;
     }
+    if (true) {
+        return;
+    }
     std::shared_lock l(stale_delete_bitmap_lock);
     //<rowset_id, start_version, end_version>
     std::vector<std::tuple<std::string, uint64_t, uint64_t>> to_delete;
