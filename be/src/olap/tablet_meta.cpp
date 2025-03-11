@@ -1341,6 +1341,9 @@ std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg(const BitmapKey& bmk) co
             }
         }
         size_t charge = val->bitmap.getSizeInBytes() + sizeof(AggCache::Value);
+        LOG(INFO) << "sout: add agg cache for tablet=" << _tablet_id << ", key=" << key_str
+                  << ", rowset=" << std::get<0>(bmk).to_string() << ", segment=" << std::get<1>(bmk)
+                  << ", version=" << std::get<2>(bmk);
         handle = _agg_cache->repr()->insert(key, val, charge, charge, CachePriority::NORMAL);
     }
 
