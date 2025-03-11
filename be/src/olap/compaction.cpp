@@ -1314,6 +1314,7 @@ Status CompactionMixin::modify_rowsets() {
         if (!st.ok()) {
             LOG(WARNING) << "failed to remove old version delete bitmap, st: " << st;
         }
+        LOG(INFO) << "sout: finish compaction for tablet=" << _tablet->tablet_id() << " --------- ";
     }
 
     return Status::OK();

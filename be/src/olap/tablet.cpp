@@ -831,7 +831,7 @@ void Tablet::delete_expired_stale_rowset() {
         while (to_delete_iter != stale_version_path_map.end()) {
             std::vector<TimestampedVersionSharedPtr>& to_delete_version =
                     to_delete_iter->second->timestamped_versions();
-            LOG(INFO) << "sout: tablet=" << tablet_id()
+            LOG(INFO) << "sout: delete_expired_stale_rowset for tablet=" << tablet_id()
                       << ", to_delete_version size=" << to_delete_version.size();
             int64_t start_version = -1;
             int64_t end_version = -1;
