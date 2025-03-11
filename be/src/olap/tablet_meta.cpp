@@ -1238,7 +1238,7 @@ void DeleteBitmap::add_to_remove_queue(
     // val: vector of [tablet_id, {rowset_id, seg_id, start_version}, {rowset_id, seg_id, end_version}]
     // note that the end version is the end version of input rowsets
     _stale_delete_bitmap.emplace(version_str, vector);
-    LOG(INFO) << "sout: tablet_id=" << _tablet_id << ", add key=" << version_str
+    LOG(INFO) << "sout: add_to_remove_queue. tablet_id=" << _tablet_id << ", key=" << version_str
               << ", stale dm size=" << _stale_delete_bitmap.size();
 }
 
@@ -1253,6 +1253,8 @@ void DeleteBitmap::remove_stale_delete_bitmap_from_queue(const std::vector<std::
     for (auto& version_str : vector) {
         auto it = _stale_delete_bitmap.find(version_str);
         if (it != _stale_delete_bitmap.end()) {
+            LOG(INFO) << "sout: remove_stale_delete_bitmap_from_queue. tablet_id=" << _tablet_id
+                      << ", key=" << version_str << ", stale dm size=" << it->second.size();
             for (auto& delete_bitmap_tuple : it->second) {
                 // {rowset_id, seg_id, start_version}
                 if (tablet_id < 0) {
@@ -1260,6 +1262,11 @@ void DeleteBitmap::remove_stale_delete_bitmap_from_queue(const std::vector<std::
                 }
                 auto start_bmk = std::get<1>(delete_bitmap_tuple);
                 auto end_bmk = std::get<2>(delete_bitmap_tuple);
+                LOG(INFO) << "sout: remove stale dm, tablet_id=" << tablet_id
+                          << ", rowset=" << std::get<0>(start_bmk).to_string()
+                          << ", seg_id=" << std::get<1>(start_bmk)
+                          << ", start_version=" << std::get<2>(start_bmk)
+                          << ", end_version=" << std::get<2>(end_bmk);
                 // the key range of to be removed is [start_bmk,end_bmk),
                 // due to the different definitions of the right boundary,
                 // so use end_bmk as right boundary when removing local delete bitmap,
