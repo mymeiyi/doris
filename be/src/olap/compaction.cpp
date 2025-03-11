@@ -1066,7 +1066,8 @@ void Compaction::agg_and_remove_old_version_delete_bitmap(
             DeleteBitmap::BitmapKey end {rowset->rowset_id(), seg_id, pre_max_version};
             LOG(INFO) << "sout: start get_agg for tablet=" << _tablet->tablet_id()
                       << ", rowset=" << rowset->rowset_id() << ", seg=" << seg_id
-                      << ", start_version=0, end_version=" << pre_max_version;
+                      << ", version=" << rowset->version()
+                      << ", agg end_version=" << pre_max_version;
             auto d = _tablet->tablet_meta()->delete_bitmap().get_agg(
                     {rowset->rowset_id(), seg_id, pre_max_version});
             to_remove_vec.emplace_back(std::make_tuple(_tablet->tablet_id(), start, end));
