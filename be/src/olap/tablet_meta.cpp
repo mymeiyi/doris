@@ -1341,7 +1341,18 @@ std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg(const BitmapKey& bmk) co
         val = new AggCache::Value();
         {
             std::shared_lock l(lock);
-            DeleteBitmap::BitmapKey start {std::get<0>(bmk), std::get<1>(bmk), 0};
+            Version start_version = 0;
+            auto it0 = _rowset_cache_version.find(std::get<0>(bmk));
+            if (it0 != _rowset_cache_version.end()) {
+                auto it1 = it0->second.find(std::get<1>(bmk));
+                if (it1 != it0->second.end()) {
+                    start_version = it1->second + 1;
+                    LOG(INFO) << "sout: start agg for tablet=" << _tablet_id
+                              << ", rowset=" << std::get<0>(bmk).to_string()
+                              << ", segment=" << std::get<1>(bmk) << ", version=" << start_version;
+                }
+            }
+            DeleteBitmap::BitmapKey start {std::get<0>(bmk), std::get<1>(bmk), start_version};
             for (auto it = delete_bitmap.lower_bound(start); it != delete_bitmap.end(); ++it) {
                 auto& [k, bm] = *it;
                 if (std::get<0>(k) != std::get<0>(bmk) || std::get<1>(k) != std::get<1>(bmk) ||
@@ -1356,6 +1367,13 @@ std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg(const BitmapKey& bmk) co
                   << ", rowset=" << std::get<0>(bmk).to_string() << ", segment=" << std::get<1>(bmk)
                   << ", version=" << std::get<2>(bmk);
         handle = _agg_cache->repr()->insert(key, val, charge, charge, CachePriority::NORMAL);
+        // this version is already agged
+        std::shared_lock l(lock);
+        _rowset_cache_version[std::get<0>(bmk)][std::get<1>(bmk)] = std::get<2>(bmk);
+        LOG(INFO) << "sout: add rowset cache version for tablet=" << _tablet_id
+                  << ", rowset=" << std::get<0>(bmk).to_string() << ", segment=" << std::get<1>(bmk)
+                  << ", version=" << std::get<2>(bmk)
+                  << ". totol size=" << _rowset_cache_version.size();
     }
 
     // It is natural for the cache to reclaim the underlying memory

@@ -590,6 +590,7 @@ public:
 private:
     mutable std::shared_ptr<AggCache> _agg_cache;
     int64_t _tablet_id;
+    mutable std::map<RowsetId, std::map<SegmentId, Version>> _rowset_cache_version;
     // <version, <tablet_id, BitmapKeyStart, BitmapKeyEnd>>
     std::map<std::string,
              std::vector<std::tuple<int64_t, DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>>
