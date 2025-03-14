@@ -862,6 +862,7 @@ void Tablet::delete_expired_stale_rowset() {
                     }
                     LOG(INFO) << "sout: agg for table_id=" << tablet_id()
                               << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
+                              << ", compaction start_version=" << start_version
                               << ", end_version=" << end_version
                               << ", delete_bitmap=" << d->cardinality();
                     DeleteBitmap::BitmapKey end_key {rowset->rowset_id(), seg_id, end_version};
@@ -908,6 +909,7 @@ void Tablet::delete_expired_stale_rowset() {
                     tablet_meta()->delete_bitmap().remove(start, end);
                     LOG(INFO) << "sout: remove delete bitmap for tablet_id=" << tablet_id()
                               << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
+                              << ", compaction start_version=" << start_version
                               << ", end_version=" << end_version;
                 }
             }
