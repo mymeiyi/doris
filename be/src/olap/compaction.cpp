@@ -1313,10 +1313,11 @@ void CompactionMixin::process_old_version_delete_bitmap() {
             // store agg delete bitmap
             Version version(_input_rowsets.front()->start_version(),
                             _input_rowsets.back()->end_version());
-            for (auto it = new_delete_bitmap->delete_bitmap.begin();
+            _tablet->tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
+            /*for (auto it = new_delete_bitmap->delete_bitmap.begin();
                  it != new_delete_bitmap->delete_bitmap.end(); it++) {
                 _tablet->tablet_meta()->delete_bitmap().set(it->first, it->second);
-            }
+            }*/
             _tablet->tablet_meta()->delete_bitmap().add_to_remove_queue(version.to_string(),
                                                                         to_remove_vec);
             DBUG_EXECUTE_IF("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets", {
