@@ -122,10 +122,12 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
             auto& [rowset_id, segment_id, version] = id;
             if (rowset_id.to_string() != pre_rowset_id || segment_id != pre_segment_id) {
                 // add previous result
-                rapidjson::Value cumu_key;
-                cumu_key.SetString(key.data(), cast_set<uint32_t>(key.length()),
-                                   root.GetAllocator());
-                dm_arr.AddMember(cumu_key, version_dm_arr, dm_arr.GetAllocator());
+                if (!key.empty()) {
+                    rapidjson::Value cumu_key;
+                    cumu_key.SetString(key.data(), cast_set<uint32_t>(key.length()),
+                                       root.GetAllocator());
+                    dm_arr.AddMember(cumu_key, version_dm_arr, dm_arr.GetAllocator());
+                }
 
                 // version_dm_arr.Clear();
 
