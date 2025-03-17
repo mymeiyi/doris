@@ -901,8 +901,8 @@ void Tablet::delete_expired_stale_rowset() {
             to_delete_iter++;
 
             // should remove delete bitmap for
-            for (const auto& it2 : rowset_map()) {
-                auto& rowset = it2.second;
+            for (const auto& rowset : pre_rowsets) {
+                // auto& rowset = it2.second;
                 for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
                     DeleteBitmap::BitmapKey start {rowset->rowset_id(), seg_id, 0};
                     DeleteBitmap::BitmapKey end {rowset->rowset_id(), seg_id, end_version};
