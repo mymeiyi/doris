@@ -116,8 +116,8 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
         std::string pre_rowset_id = "";
         int64_t pre_segment_id = 0;
         std::string_view key = "";
-        rapidjson::Document version_dm_arr;
-        version_dm_arr.SetArray();
+        std::vector<std::string> version_vector;
+
         for (auto& [id, bitmap] : dm.delete_bitmap) {
             auto& [rowset_id, segment_id, version] = id;
             if (rowset_id.to_string() != pre_rowset_id || segment_id != pre_segment_id) {
@@ -126,7 +126,16 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
                     rapidjson::Value cumu_key;
                     cumu_key.SetString(key.data(), cast_set<uint32_t>(key.length()),
                                        root.GetAllocator());
+                    rapidjson::Document version_dm_arr;
+                    version_dm_arr.SetArray();
+                    for (const auto& str : version_vector) {
+                        rapidjson::Value value;
+                        value.SetString(str.c_str(), cast_set<uint32_t>(str.length()),
+                                        version_dm_arr.GetAllocator());
+                        version_dm_arr.PushBack(value, version_dm_arr.GetAllocator());
+                    }
                     dm_arr.AddMember(cumu_key, version_dm_arr, dm_arr.GetAllocator());
+                    version_vector.clear();
                 }
 
                 // version_dm_arr.Clear();
@@ -136,15 +145,13 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
                 pre_rowset_id = rowset_id.to_string();
                 pre_segment_id = segment_id;
             }
+            // add last result
 
             std::stringstream ss;
             ss << "version: " << version << ", cardinality: " << bitmap.cardinality()
                << ", size: " << bitmap.getSizeInBytes();
             std::string str = ss.str();
-            rapidjson::Value value;
-            value.SetString(str.c_str(), cast_set<uint32_t>(str.length()),
-                            version_dm_arr.GetAllocator());
-            version_dm_arr.PushBack(value, version_dm_arr.GetAllocator());
+            version_vector.push_back(ss.str());
         }
         root.AddMember("delete_bitmap", dm_arr, root.GetAllocator());
     }

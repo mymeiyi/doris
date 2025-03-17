@@ -855,6 +855,7 @@ void Tablet::delete_expired_stale_rowset() {
             std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
             for (auto& rowset : pre_rowsets) {
                 for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
+                    // TODO can agg from start_version
                     auto d = tablet_meta()->delete_bitmap().get_agg(
                             {rowset->rowset_id(), seg_id, end_version});
                     if (d->isEmpty()) {
@@ -911,7 +912,8 @@ void Tablet::delete_expired_stale_rowset() {
                     tablet_meta()->delete_bitmap().remove(start, end);
                     LOG(INFO) << "sout: remove delete bitmap for tablet_id=" << tablet_id()
                               << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
-                              << ", compaction start_version=" << start_version
+                              << ", rowset_version=" << rowset->version().to_string()
+                              << ". compaction start_version=" << start_version
                               << ", end_version=" << end_version;
                 }
             }
