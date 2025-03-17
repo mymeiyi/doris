@@ -869,6 +869,7 @@ void Tablet::delete_expired_stale_rowset() {
                     new_delete_bitmap->set(end_key, *d);
                 }
             }
+            tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
 
             for (auto& timestampedVersion : to_delete_version) {
                 auto it = _stale_rs_version_map.find(timestampedVersion->version());
