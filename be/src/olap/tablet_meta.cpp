@@ -936,12 +936,8 @@ void TabletMeta::delete_stale_rs_meta_by_version(const Version& version) {
                 // remove rowset delete bitmap
                 delete_bitmap().remove({(*it)->rowset_id(), 0, 0},
                                        {(*it)->rowset_id(), UINT32_MAX, 0});
-<<<<<<< HEAD
                 rowset_cache_version_size =
                         delete_bitmap().remove_rowset_cache_version((*it)->rowset_id());
-=======
-                delete_bitmap().remove_rowset_cache_version((*it)->rowset_id());
->>>>>>> 074db1969e7 (fix)
             }
             it = _stale_rs_metas.erase(it);
         } else {
@@ -1346,12 +1342,8 @@ std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg(const BitmapKey& bmk) co
     //        of cache entries in some cases?
     if (val == nullptr) { // Renew if needed, put a new Value to cache
         val = new AggCache::Value();
-<<<<<<< HEAD
         Version start_version =
                 config::enable_mow_get_agg_by_cache ? _get_rowset_cache_version(bmk) : 0;
-=======
-        Version start_version = _get_rowset_cache_version(bmk);
->>>>>>> 074db1969e7 (fix)
         if (start_version > 0) {
             Cache::Handle* handle2 = _agg_cache->repr()->lookup(
                     agg_cache_key(_tablet_id, {std::get<0>(bmk), std::get<1>(bmk), start_version}));
@@ -1383,7 +1375,6 @@ std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg(const BitmapKey& bmk) co
         }
         size_t charge = val->bitmap.getSizeInBytes() + sizeof(AggCache::Value);
         handle = _agg_cache->repr()->insert(key, val, charge, charge, CachePriority::NORMAL);
-<<<<<<< HEAD
         if (config::enable_mow_get_agg_by_cache && !val->bitmap.isEmpty()) {
             std::lock_guard l(_rowset_cache_version_lock);
             // this version is already agg
@@ -1393,14 +1384,6 @@ std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg(const BitmapKey& bmk) co
                        << ", rowset=" << std::get<0>(bmk).to_string()
                        << ", segment=" << std::get<1>(bmk);
         }
-=======
-        // this version is already agged
-        std::lock_guard l(_rowset_cache_version_lock);
-        _rowset_cache_version[std::get<0>(bmk)][std::get<1>(bmk)] = std::get<2>(bmk);
-        VLOG_DEBUG << "set agg cache version=" << std::get<2>(bmk) << " for tablet=" << _tablet_id
-                   << ", rowset=" << std::get<0>(bmk).to_string()
-                   << ", segment=" << std::get<1>(bmk);
->>>>>>> 074db1969e7 (fix)
     }
 
     // It is natural for the cache to reclaim the underlying memory
