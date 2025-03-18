@@ -855,6 +855,8 @@ void Tablet::delete_expired_stale_rowset() {
                 }
             }
             std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
+            std::vector<std::tuple<DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>
+                    remove_delete_bitmap_key_ranges;
             for (auto& rowset : pre_rowsets) {
                 for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
                     // TODO can agg from start_version
@@ -869,21 +871,26 @@ void Tablet::delete_expired_stale_rowset() {
                               << ". compaction start_version=" << start_version
                               << ", end_version=" << end_version
                               << ", delete_bitmap=" << d->cardinality();
+                    DeleteBitmap::BitmapKey start_key {rowset->rowset_id(), seg_id, start_version};
                     DeleteBitmap::BitmapKey end_key {rowset->rowset_id(), seg_id, end_version};
                     new_delete_bitmap->set(end_key, *d);
+                    remove_delete_bitmap_key_ranges.emplace_back(start_key, end_key);
                 }
             }
             // TODO tmp remove
             tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
             // tablet_delete_bitmap_snapshot.merge(*new_delete_bitmap);
+            std::vector<RowsetId> remove_rowset_ids;
 
             for (auto& timestampedVersion : to_delete_version) {
                 auto it = _stale_rs_version_map.find(timestampedVersion->version());
                 if (it != _stale_rs_version_map.end()) {
                     it->second->clear_cache();
                     // delete rowset
+                    // TODO when is_local is false
                     if (it->second->is_local()) {
                         _engine.add_unused_rowset(it->second);
+                        remove_rowset_ids.emplace_back(it->second->rowset_id());
                     }
                     _stale_rs_version_map.erase(it);
                     VLOG_NOTICE << "delete stale rowset tablet=" << tablet_id() << " version["
@@ -907,15 +914,19 @@ void Tablet::delete_expired_stale_rowset() {
             version_to_delete.emplace_back(version.to_string());
             to_delete_iter++;
 
+            // add remove delete bitmap
+            _engine.add_unused_delete_bitmap_key_ranges(tablet_id(), remove_rowset_ids,
+                                                        remove_delete_bitmap_key_ranges);
+
             // should remove delete bitmap for
-            for (const auto& rowset : pre_rowsets) {
+            /*for (const auto& rowset : pre_rowsets) {
                 // auto& rowset = it2.second;
                 for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
                     DeleteBitmap::BitmapKey start {rowset->rowset_id(), seg_id, start_version};
                     DeleteBitmap::BitmapKey end {rowset->rowset_id(), seg_id, end_version};
                     // TODO tmp remove
                     tablet_meta()->delete_bitmap().remove(start, end);
-                    tablet_delete_bitmap_snapshot.remove(start, end);
+                    // tablet_delete_bitmap_snapshot.remove(start, end);
                     LOG(INFO) << "sout: remove delete bitmap for tablet_id=" << tablet_id()
                               << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
                               << ", rowset_version=" << rowset->version().to_string()
@@ -925,7 +936,7 @@ void Tablet::delete_expired_stale_rowset() {
                     // TODO check the merged delete bitmap
                     // tablet_meta()->delete_bitmap().get_agg_without_cache(start, end);
                 }
-            }
+            }*/
         }
         _tablet_meta->delete_bitmap().remove_stale_delete_bitmap_from_queue(version_to_delete);
 
