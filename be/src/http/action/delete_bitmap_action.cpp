@@ -145,10 +145,12 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
             }
             // add last result
 
-            std::stringstream ss;
+            std::string str = fmt::format("version: {}, cardinality: {}, size: {}", version,
+                                          bitmap.cardinality(), bitmap.getSizeInBytes());
+            /*std::stringstream ss;
             ss << "version: " << version << ", cardinality: " << bitmap.cardinality()
                << ", size: " << bitmap.getSizeInBytes();
-            std::string str = ss.str();
+            std::string str = ss.str();*/
             version_vector.push_back(str);
             LOG(INFO) << "sout: push str=" << str;
         }
