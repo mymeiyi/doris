@@ -1212,7 +1212,7 @@ void StorageEngine::start_delete_unused_rowset() {
             }
         }
         // check remove delete bitmaps
-        for (auto it = _unused_delete_bitmap.begin(); it != _unused_delete_bitmap.end(); ++it) {
+        for (auto it = _unused_delete_bitmap.begin(); it != _unused_delete_bitmap.end();) {
             auto tablet_id = std::get<0>(*it);
             auto tablet = _tablet_manager->get_tablet(tablet_id);
             if (tablet == nullptr) {
@@ -1223,6 +1223,7 @@ void StorageEngine::start_delete_unused_rowset() {
             auto& key_ranges = std::get<2>(*it);
             for (const auto& rowset_id : rowset_ids) {
                 if (_unused_rowsets.find(rowset_id) != _unused_rowsets.end()) {
+                    ++it;
                     continue;
                 }
             }
