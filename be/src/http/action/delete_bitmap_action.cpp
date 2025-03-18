@@ -149,7 +149,8 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
             ss << "version: " << version << ", cardinality: " << bitmap.cardinality()
                << ", size: " << bitmap.getSizeInBytes();
             std::string str = ss.str();
-            version_vector.push_back(ss.str());
+            version_vector.push_back(str);
+            LOG(INFO) << "sout: push str=" << str;
         }
         root.AddMember("delete_bitmap", dm_arr, root.GetAllocator());
     }
