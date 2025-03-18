@@ -1221,11 +1221,16 @@ void StorageEngine::start_delete_unused_rowset() {
             }
             auto& rowset_ids = std::get<1>(*it);
             auto& key_ranges = std::get<2>(*it);
+            bool find_unused_rowset = false;
             for (const auto& rowset_id : rowset_ids) {
                 if (_unused_rowsets.find(rowset_id) != _unused_rowsets.end()) {
-                    ++it;
-                    continue;
+                    find_unused_rowset = true;
+                    break;
                 }
+            }
+            if (find_unused_rowset) {
+                ++it;
+                continue;
             }
             tablet->tablet_meta()->delete_bitmap().remove(key_ranges);
             {
