@@ -131,7 +131,7 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
                     for (const auto& str : version_vector) {
                         rapidjson::Value value;
                         value.SetString(str.c_str(), cast_set<uint32_t>(str.length()),
-                                        version_dm_arr.GetAllocator());
+                                        root.GetAllocator());
                         version_dm_arr.PushBack(value, root.GetAllocator());
                     }
                     dm_arr.AddMember(cumu_key, version_dm_arr, root.GetAllocator());
@@ -145,7 +145,7 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
             }
             // add last result
 
-            std::string str = fmt::format("version: {}, cardinality: {}, size: {}", version,
+            std::string str = fmt::format("v: {}, c: {}, s: {}", version,
                                           bitmap.cardinality(), bitmap.getSizeInBytes());
             /*std::stringstream ss;
             ss << "version: " << version << ", cardinality: " << bitmap.cardinality()
