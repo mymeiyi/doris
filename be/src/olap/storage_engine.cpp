@@ -1216,7 +1216,7 @@ void StorageEngine::start_delete_unused_rowset() {
             auto tablet_id = std::get<0>(*it);
             auto tablet = _tablet_manager->get_tablet(tablet_id);
             if (tablet == nullptr) {
-                _unused_delete_bitmap.erase(it);
+                it = _unused_delete_bitmap.erase(it);
                 continue;
             }
             auto& rowset_ids = std::get<1>(*it);
@@ -1232,7 +1232,7 @@ void StorageEngine::start_delete_unused_rowset() {
                 std::shared_lock rlock(tablet->get_header_lock());
                 tablet->save_meta();
             }
-            _unused_delete_bitmap.erase(it);
+            it = _unused_delete_bitmap.erase(it);
         }
     }
     LOG(INFO) << "collected " << unused_rowsets_copy.size() << " unused rowsets to remove, skipped "
