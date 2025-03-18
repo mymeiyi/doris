@@ -845,6 +845,8 @@ void Tablet::delete_expired_stale_rowset() {
             LOG(INFO) << "sout: tablet=" << tablet_id() << ", start_version=" << start_version
                       << ", end_version=" << end_version;
             // do agg for pre rowsets
+            [[maybe_unused]] DeleteBitmap tablet_delete_bitmap_snapshot =
+                    tablet_meta()->delete_bitmap().snapshot();
             DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
             std::vector<RowsetSharedPtr> pre_rowsets {};
             for (const auto& it2 : rowset_map()) {
@@ -871,7 +873,9 @@ void Tablet::delete_expired_stale_rowset() {
                     new_delete_bitmap->set(end_key, *d);
                 }
             }
+            // TODO tmp remove
             tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
+            // tablet_delete_bitmap_snapshot.merge(*new_delete_bitmap);
 
             for (auto& timestampedVersion : to_delete_version) {
                 auto it = _stale_rs_version_map.find(timestampedVersion->version());
@@ -907,14 +911,19 @@ void Tablet::delete_expired_stale_rowset() {
             for (const auto& rowset : pre_rowsets) {
                 // auto& rowset = it2.second;
                 for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
-                    DeleteBitmap::BitmapKey start {rowset->rowset_id(), seg_id, 0};
+                    DeleteBitmap::BitmapKey start {rowset->rowset_id(), seg_id, start_version};
                     DeleteBitmap::BitmapKey end {rowset->rowset_id(), seg_id, end_version};
+                    // TODO tmp remove
                     tablet_meta()->delete_bitmap().remove(start, end);
+                    tablet_delete_bitmap_snapshot.remove(start, end);
                     LOG(INFO) << "sout: remove delete bitmap for tablet_id=" << tablet_id()
                               << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
                               << ", rowset_version=" << rowset->version().to_string()
                               << ". compaction start_version=" << start_version
                               << ", end_version=" << end_version;
+
+                    // TODO check the merged delete bitmap
+                    // tablet_meta()->delete_bitmap().get_agg_without_cache(start, end);
                 }
             }
         }
