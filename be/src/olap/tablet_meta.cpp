@@ -1438,6 +1438,22 @@ std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg_without_cache(const Bitm
     return bitmap;
 }
 
+std::shared_ptr<roaring::Roaring> DeleteBitmap::get_agg(const BitmapKey& bmk,
+                                                        const int64_t start_version) const {
+    std::shared_ptr<roaring::Roaring> bitmap = std::make_shared<roaring::Roaring>();
+    std::shared_lock l(lock);
+    DeleteBitmap::BitmapKey start {std::get<0>(bmk), std::get<1>(bmk), start_version};
+    for (auto it = delete_bitmap.lower_bound(start); it != delete_bitmap.end(); ++it) {
+        auto& [k, bm] = *it;
+        if (std::get<0>(k) != std::get<0>(bmk) || std::get<1>(k) != std::get<1>(bmk) ||
+            std::get<2>(k) > std::get<2>(bmk)) {
+            break;
+        }
+        *bitmap |= bm;
+    }
+    return bitmap;
+}
+
 std::atomic<DeleteBitmap::AggCachePolicy*> DeleteBitmap::AggCache::s_repr {nullptr};
 
 std::string tablet_state_name(TabletState state) {

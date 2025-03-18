@@ -546,6 +546,8 @@ public:
      */
     std::shared_ptr<roaring::Roaring> get_agg(const BitmapKey& bmk) const;
     std::shared_ptr<roaring::Roaring> get_agg_without_cache(const BitmapKey& bmk) const;
+    std::shared_ptr<roaring::Roaring> get_agg(const BitmapKey& bmk,
+                                              const int64_t start_version) const;
 
     void remove_sentinel_marks();
 

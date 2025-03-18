@@ -132,13 +132,11 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
                         rapidjson::Value value;
                         value.SetString(str.c_str(), cast_set<uint32_t>(str.length()),
                                         version_dm_arr.GetAllocator());
-                        version_dm_arr.PushBack(value, version_dm_arr.GetAllocator());
+                        version_dm_arr.PushBack(value, root.GetAllocator());
                     }
-                    dm_arr.AddMember(cumu_key, version_dm_arr, dm_arr.GetAllocator());
+                    dm_arr.AddMember(cumu_key, version_dm_arr, root.GetAllocator());
                     version_vector.clear();
                 }
-
-                // version_dm_arr.Clear();
 
                 key = "rowset: " + rowset_id.to_string() +
                       ", segment: " + std::to_string(segment_id);

@@ -857,7 +857,7 @@ void Tablet::delete_expired_stale_rowset() {
                 for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
                     // TODO can agg from start_version
                     auto d = tablet_meta()->delete_bitmap().get_agg(
-                            {rowset->rowset_id(), seg_id, end_version});
+                            {rowset->rowset_id(), seg_id, end_version}, start_version);
                     if (d->isEmpty()) {
                         continue;
                     }
