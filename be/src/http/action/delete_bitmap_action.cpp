@@ -111,18 +111,19 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
     root.AddMember("cardinality", cardinality, root.GetAllocator());
     root.AddMember("size", size, root.GetAllocator());
     if (verbose) {
+        std::string pre_rowset_id = "";
+        int64_t pre_segment_id = -1;
+        std::vector<std::string> version_vector;
         rapidjson::Document dm_arr;
         dm_arr.SetObject();
-        std::string pre_rowset_id = "";
-        int64_t pre_segment_id = 0;
-        std::string_view key = "";
-        std::vector<std::string> version_vector;
 
         for (auto& [id, bitmap] : dm.delete_bitmap) {
             auto& [rowset_id, segment_id, version] = id;
             if (rowset_id.to_string() != pre_rowset_id || segment_id != pre_segment_id) {
                 // add previous result
-                if (!key.empty()) {
+                if (!pre_rowset_id.empty()) {
+                    std::string key = "rowset: " + pre_rowset_id +
+                                      ", segment: " + std::to_string(pre_segment_id);
                     rapidjson::Value cumu_key;
                     cumu_key.SetString(key.data(), cast_set<uint32_t>(key.length()),
                                        root.GetAllocator());
@@ -138,22 +139,32 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
                     version_vector.clear();
                 }
 
-                key = "rowset: " + rowset_id.to_string() +
-                      ", segment: " + std::to_string(segment_id);
                 pre_rowset_id = rowset_id.to_string();
                 pre_segment_id = segment_id;
             }
-            // add last result
-
             std::string str = fmt::format("v: {}, c: {}, s: {}", version,
                                           bitmap.cardinality(), bitmap.getSizeInBytes());
-            /*std::stringstream ss;
-            ss << "version: " << version << ", cardinality: " << bitmap.cardinality()
-               << ", size: " << bitmap.getSizeInBytes();
-            std::string str = ss.str();*/
             version_vector.push_back(str);
-            LOG(INFO) << "sout: push str=" << str;
         }
+        // add last result
+        if (!version_vector.empty()) {
+            std::string key =
+                    "rowset: " + pre_rowset_id + ", segment: " + std::to_string(pre_segment_id);
+            rapidjson::Value cumu_key;
+            cumu_key.SetString(key.data(), cast_set<uint32_t>(key.length()),
+                               root.GetAllocator());
+            rapidjson::Document version_dm_arr;
+            version_dm_arr.SetArray();
+            for (const auto& str : version_vector) {
+                rapidjson::Value value;
+                value.SetString(str.c_str(), cast_set<uint32_t>(str.length()),
+                                root.GetAllocator());
+                version_dm_arr.PushBack(value, root.GetAllocator());
+            }
+            dm_arr.AddMember(cumu_key, version_dm_arr, root.GetAllocator());
+            version_vector.clear();
+        }
+
         root.AddMember("delete_bitmap", dm_arr, root.GetAllocator());
     }
 
