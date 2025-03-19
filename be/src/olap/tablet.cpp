@@ -915,8 +915,6 @@ void Tablet::delete_expired_stale_rowset() {
                                                         remove_delete_bitmap_key_ranges);
         }
         _tablet_meta->delete_bitmap().remove_stale_delete_bitmap_from_queue(version_to_delete);
-        DBUG_EXECUTE_IF("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset",
-                        { _engine.start_delete_unused_rowset(); });
 
         bool reconstructed = _reconstruct_version_tracker_if_necessary();
 
@@ -932,6 +930,8 @@ void Tablet::delete_expired_stale_rowset() {
         save_meta();
     }
 #endif
+    DBUG_EXECUTE_IF("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset",
+                    { _engine.start_delete_unused_rowset(); });
 }
 
 Status Tablet::capture_consistent_versions_unlocked(const Version& spec_version,
