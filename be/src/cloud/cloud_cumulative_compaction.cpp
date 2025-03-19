@@ -377,6 +377,8 @@ Status CloudCumulativeCompaction::modify_rowsets() {
         _tablet->enable_unique_key_merge_on_write() && _input_rowsets.size() != 1) {
         RETURN_IF_ERROR(process_old_version_delete_bitmap());
     }
+    DBUG_EXECUTE_IF("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset",
+                    { static_cast<CloudTablet*>(_tablet.get())->delete_expired_stale_rowsets(); });
     return Status::OK();
 }
 
