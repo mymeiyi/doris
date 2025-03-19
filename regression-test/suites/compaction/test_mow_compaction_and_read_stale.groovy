@@ -188,6 +188,7 @@ suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
     logger.info("tablets: " + tablets)
     assertEquals(1, tablets.size())
     def tablet = tablets[0]
+    String tablet_id = tablet.TabletId
 
     GetDebugPoint().clearDebugPointsForAllBEs()
     get_be_param("compaction_promotion_version_count")
@@ -222,8 +223,10 @@ suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
 
         // trigger and block one query
         GetDebugPoint().enableDebugPointForAllBEs("NewOlapScanner::_init_tablet_reader_params.block")
-        GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets")
+        GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
         GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")
+        GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
+                [tablet_id:"${tablet_id}", start_version: 7, end_version: 11]);
         Thread query_thread = new Thread(() -> query())
         query_thread.start()
         sleep(100)
