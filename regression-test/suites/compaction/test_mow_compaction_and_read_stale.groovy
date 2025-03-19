@@ -265,6 +265,8 @@ suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
         sql """ INSERT INTO ${testTable} VALUES (5,99); """
         sql "sync"
         // trigger compaction
+        GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
+                [tablet_id:"${tablet_id}", start_version: 12, end_version: 16]);
         getTabletStatus(tablet)
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)

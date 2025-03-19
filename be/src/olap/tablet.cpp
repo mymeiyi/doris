@@ -710,6 +710,55 @@ void Tablet::_delete_stale_rowset_by_version(const Version& version) {
     VLOG_NOTICE << "delete stale rowset. tablet=" << tablet_id() << ", version=" << version;
 }
 
+void Tablet::_agg_delete_bitmap_for_stale_rowsets(
+        const std::vector<TimestampedVersionSharedPtr>& to_delete_version,
+        DeleteBitmapKeyRanges& remove_delete_bitmap_key_ranges) {
+    int64_t start_version = -1;
+    int64_t end_version = -1;
+    for (auto& timestampedVersion : to_delete_version) {
+        auto it = _stale_rs_version_map.find(timestampedVersion->version());
+        if (it != _stale_rs_version_map.end()) {
+            if (start_version < 0) {
+                start_version = timestampedVersion->version().first;
+            }
+            end_version = timestampedVersion->version().second;
+        }
+    }
+    LOG(INFO) << "sout: tablet=" << tablet_id() << ", start_version=" << start_version
+              << ", end_version=" << end_version;
+    // do agg for pre rowsets
+    DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
+    std::vector<RowsetSharedPtr> pre_rowsets {};
+    for (const auto& it2 : rowset_map()) {
+        if (it2.first.second < start_version) {
+            pre_rowsets.emplace_back(it2.second);
+        }
+    }
+    std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
+
+    for (auto& rowset : pre_rowsets) {
+        for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
+            auto d = tablet_meta()->delete_bitmap().get_agg(
+                    {rowset->rowset_id(), seg_id, end_version}, start_version);
+            if (d->isEmpty()) {
+                continue;
+            }
+            LOG(INFO) << "sout: agg for table_id=" << tablet_id()
+                      << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
+                      << ", rowset_version=" << rowset->version().to_string()
+                      << ". compaction start_version=" << start_version
+                      << ", end_version=" << end_version
+                      << ", delete_bitmap=" << d->cardinality();
+            DeleteBitmap::BitmapKey start_key {rowset->rowset_id(), seg_id, start_version};
+            DeleteBitmap::BitmapKey end_key {rowset->rowset_id(), seg_id, end_version};
+            new_delete_bitmap->set(end_key, *d);
+            remove_delete_bitmap_key_ranges.emplace_back(start_key, end_key);
+        }
+    }
+    // TODO tmp remove
+    tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
+}
+
 void Tablet::delete_expired_stale_rowset() {
     int64_t now = UnixSeconds();
     // hold write lock while processing stable rowset
@@ -831,9 +880,10 @@ void Tablet::delete_expired_stale_rowset() {
         while (to_delete_iter != stale_version_path_map.end()) {
             std::vector<TimestampedVersionSharedPtr>& to_delete_version =
                     to_delete_iter->second->timestamped_versions();
-            int64_t start_version = -1;
-            int64_t end_version = -1;
-            for (auto& timestampedVersion : to_delete_version) {
+            DeleteBitmapKeyRanges remove_delete_bitmap_key_ranges;
+            _agg_delete_bitmap_for_stale_rowsets(to_delete_version,
+                                                 remove_delete_bitmap_key_ranges);
+            /*for (auto& timestampedVersion : to_delete_version) {
                 auto it = _stale_rs_version_map.find(timestampedVersion->version());
                 if (it != _stale_rs_version_map.end()) {
                     if (start_version < 0) {
@@ -875,9 +925,11 @@ void Tablet::delete_expired_stale_rowset() {
                 }
             }
             // TODO tmp remove
-            tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
+            tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);*/
 
             std::vector<RowsetId> remove_rowset_ids;
+            int64_t start_version = -1;
+            int64_t end_version = -1;
             for (auto& timestampedVersion : to_delete_version) {
                 auto it = _stale_rs_version_map.find(timestampedVersion->version());
                 if (it != _stale_rs_version_map.end()) {
