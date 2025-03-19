@@ -883,9 +883,9 @@ void Tablet::delete_expired_stale_rowset() {
                 if (it != _stale_rs_version_map.end()) {
                     it->second->clear_cache();
                     // delete rowset
-                    // TODO when is_local is false
                     if (it->second->is_local()) {
                         _engine.add_unused_rowset(it->second);
+                        // mow does not support cold data in object storage
                         remove_rowset_ids.emplace_back(it->second->rowset_id());
                     }
                     _stale_rs_version_map.erase(it);
