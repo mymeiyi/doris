@@ -408,6 +408,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
             int64_t end_version = -1;
             // delete stale versions in version graph
             auto version_path = _timestamped_version_tracker.fetch_and_delete_path_by_id(path_id);
+            // TODO should do agg here
             for (auto& v_ts : version_path->timestamped_versions()) {
                 auto rs_it = _stale_rs_version_map.find(v_ts->version());
                 if (rs_it != _stale_rs_version_map.end()) {
