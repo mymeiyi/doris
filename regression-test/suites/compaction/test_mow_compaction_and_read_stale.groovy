@@ -123,9 +123,8 @@ suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
     def testTableDDL = """
         create table ${testTable}
             (
-            `plan_id` bigint(20) NOT NULL,
-            `target_id` int(20) NOT NULL,
-            `target_name` varchar(255) NOT NULL
+            `k` bigint(20) NOT NULL,
+            `v` int(20) NOT NULL
             )
             ENGINE=OLAP
             UNIQUE KEY(`plan_id`)

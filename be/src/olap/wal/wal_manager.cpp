@@ -139,6 +139,8 @@ Status WalManager::_init_wal_dirs_info() {
         bool is_percent = true;
         int64_t wal_disk_limit = ParseUtil::parse_mem_spec(config::group_commit_wal_max_disk_limit,
                                                            -1, available_bytes, &is_percent);
+        LOG(INFO) << "sout: wal_dir=" << wal_dir << ", available_bytes=" << available_bytes
+                  << ", wal_disk_limit=" << wal_disk_limit << ", is_percent=" << is_percent;
         if (wal_disk_limit < 0) {
             return Status::InternalError(
                     "group_commit_wal_max_disk_limit config is wrong, please check your config!");
