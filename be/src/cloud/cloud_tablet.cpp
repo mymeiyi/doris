@@ -553,14 +553,14 @@ void CloudTablet::recycle_cached_data(const std::vector<RowsetSharedPtr>& rowset
 
 void CloudTablet::_recycle_cached_data(
         const std::vector<std::pair<RowsetSharedPtr, DeleteBitmapKeyRanges>>& rowsets) {
-    for (auto it = rowsets.begin(); it != rowsets.end(); ++it) {
+    /*for (auto it = rowsets.begin(); it != rowsets.end(); ++it) {
         auto& [rs, key_range] = *it;
         // rowsets and tablet._rs_version_map each hold a rowset shared_ptr, so at this point, the reference count of the shared_ptr is at least 2.
         if (rs.use_count() > 2) {
             LOG(WARNING) << "sout 1: Rowset " << rs->rowset_id().to_string() << " has " << rs.use_count()
                          << " references. File Cache won't be recycled when query is using it.";
         }
-    }
+    }*/
     for (const auto& [rs, key_range] : rowsets) {
         // rowsets and tablet._rs_version_map each hold a rowset shared_ptr, so at this point, the reference count of the shared_ptr is at least 2.
         // TODO
