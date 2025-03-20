@@ -447,7 +447,7 @@ void CloudTablet::_agg_delete_bitmap_for_stale_rowsets(
                           << ", version=" << stale_version.to_string()
                           << ". add a delete bitmap to remove for rowset="
                           << rowset->rowset_id().to_string() << ", [" << stale_version.second << ", "
-                          << )stale_version.second + 1) << ")";
+                          << (stale_version.second + 1) << ")";
             }
         }
     }
