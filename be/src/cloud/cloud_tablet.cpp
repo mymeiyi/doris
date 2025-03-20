@@ -434,7 +434,7 @@ void CloudTablet::_agg_delete_bitmap_for_stale_rowsets(
                     continue;
                 }
                 DeleteBitmap::BitmapKey remove_start {rowset->rowset_id(), seg_id,
-                                                      stale_version.first};
+                                                      stale_version.second};
                 DeleteBitmap::BitmapKey remove_end {rowset->rowset_id(), seg_id,
                                                     stale_version.second + 1};
                 if (remove_delete_bitmap_key_ranges.find(stale_rowset_id) ==
@@ -446,8 +446,8 @@ void CloudTablet::_agg_delete_bitmap_for_stale_rowsets(
                 LOG(INFO) << "sout: when remove stale rowset=" << stale_rowset_id.to_string()
                           << ", version=" << stale_version.to_string()
                           << ". add a delete bitmap to remove for rowset="
-                          << rowset->rowset_id().to_string() << ", [" << stale_version.first << ", "
-                          << stale_version.second << ")";
+                          << rowset->rowset_id().to_string() << ", [" << stale_version.second << ", "
+                          << )stale_version.second + 1) << ")";
             }
         }
     }
@@ -549,6 +549,9 @@ void CloudTablet::_recycle_cached_data(
                          << " references. File Cache won't be recycled when query is using it.";
             return;
         }
+        LOG(INFO) << "sout: recycle rowset, tablet_id=" << tablet_id()
+                  << " rowset_id=" << rs->rowset_id().to_string()
+                  << ", key range size=" << key_range.size();
         if (!key_range.empty()) {
             _tablet_meta->delete_bitmap().remove(key_range);
         }
