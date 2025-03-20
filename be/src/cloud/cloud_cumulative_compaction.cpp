@@ -416,6 +416,8 @@ Status CloudCumulativeCompaction::process_old_version_delete_bitmap() {
             _tablet->tablet_meta()->delete_bitmap().add_to_remove_queue(version.to_string(),
                                                                         to_remove_vec);
             DBUG_EXECUTE_IF("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets", {
+                LOG(INFO) << "sout: delete_expired_stale_rowsets for tablet="
+                          << _tablet->tablet_id();
                 static_cast<CloudTablet*>(_tablet.get())->delete_expired_stale_rowsets();
             });
         }

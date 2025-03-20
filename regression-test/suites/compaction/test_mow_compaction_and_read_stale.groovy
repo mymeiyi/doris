@@ -262,14 +262,26 @@ suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
         sql """ INSERT INTO ${testTable} VALUES (2,99); """
         sql """ INSERT INTO ${testTable} VALUES (3,99); """
         sql """ INSERT INTO ${testTable} VALUES (4,99); """
-        sql """ INSERT INTO ${testTable} VALUES (5,99); """
+        sql """ INSERT INTO ${testTable} VALUES (5,100); """
         sql "sync"
+        order_qt_sql4 "select * from ${testTable}"
         // trigger compaction
         GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
                 [tablet_id:"${tablet_id}", start_version: 12, end_version: 16]);
         getTabletStatus(tablet)
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)
+        boolean is_compaction_finished = false
+        for (int i =0 ; i < 100; i++) {
+            def tablet_status = getTabletStatus(tablet)
+            if (tablet_status["rowsets"].size() == 4) {
+                is_compaction_finished = true
+                break
+            }
+            sleep(500)
+        }
+        assertTrue(is_compaction_finished, "compaction is not finished")
+        // check delete bitmap count
         boolean is_local_dm_deleted = false
         for (int i = 0; i < 100; i++) {
             local_dm_status = getLocalDeleteBitmapStatus(tablet)
