@@ -478,7 +478,6 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
             std::map<RowsetId, DeleteBitmapKeyRanges> remove_delete_bitmap_key_ranges;
             _agg_delete_bitmap_for_stale_rowsets(version_path->timestamped_versions(),
                                                  remove_delete_bitmap_key_ranges);
-            std::vector<RowsetId> remove_rowset_ids;
             int64_t start_version = -1;
             int64_t end_version = -1;
             // TODO should do agg here
@@ -544,7 +543,7 @@ void CloudTablet::_recycle_cached_data(
         const std::vector<std::pair<RowsetSharedPtr, DeleteBitmapKeyRanges>>& rowsets) {
     for (const auto& [rs, key_range] : rowsets) {
         // rowsets and tablet._rs_version_map each hold a rowset shared_ptr, so at this point, the reference count of the shared_ptr is at least 2.
-        if (rs.use_count() > 2) {
+        if (rs.use_count() > 3) {
             LOG(WARNING) << "Rowset " << rs->rowset_id().to_string() << " has " << rs.use_count()
                          << " references. File Cache won't be recycled when query is using it.";
             return;
