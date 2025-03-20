@@ -443,6 +443,11 @@ void CloudTablet::_agg_delete_bitmap_for_stale_rowsets(
                 }
                 remove_delete_bitmap_key_ranges[stale_rowset_id].emplace_back(remove_start,
                                                                               remove_end);
+                LOG(INFO) << "sout: when remove stale rowset=" << stale_rowset_id.to_string()
+                          << ", version=" << stale_version.to_string()
+                          << ". add a delete bitmap to remove for rowset="
+                          << rowset->rowset_id().to_string() << ", [" << stale_version.first << ", "
+                          << stale_version.second << ")";
             }
         }
     }
