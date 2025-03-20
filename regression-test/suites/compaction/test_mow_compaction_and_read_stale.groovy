@@ -292,6 +292,7 @@ suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
             sleep(500)
         }
         assertTrue(is_local_dm_deleted, "delete bitmap of compaction2 stale rowsets are not deleted")
+        order_qt_sql5 "select * from ${testTable}"
     } finally {
         reset_be_param("compaction_promotion_version_count")
         reset_be_param("tablet_rowset_stale_sweep_time_sec")
