@@ -221,6 +221,12 @@ private:
 
     Status sync_if_not_running();
 
+    using DeleteBitmapKeyRanges =
+            std::vector<std::tuple<DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>;
+    void _agg_delete_bitmap_for_stale_rowsets(
+            const std::vector<TimestampedVersionSharedPtr>& to_delete_version,
+            DeleteBitmapKeyRanges& remove_delete_bitmap_key_ranges);
+
     CloudStorageEngine& _engine;
 
     // this mutex MUST ONLY be used when sync meta
