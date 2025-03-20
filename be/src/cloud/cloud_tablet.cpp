@@ -387,9 +387,11 @@ void CloudTablet::delete_rowsets(const std::vector<RowsetSharedPtr>& to_delete,
 
 void CloudTablet::_agg_delete_bitmap_for_stale_rowsets(
         const std::vector<TimestampedVersionSharedPtr>& to_delete_version,
-        DeleteBitmapKeyRanges& remove_delete_bitmap_key_ranges) {
+        std::map<RowsetId, DeleteBitmapKeyRanges>& remove_delete_bitmap_key_ranges) {
     int64_t start_version = -1;
     int64_t end_version = -1;
+    // remove the end_version
+    std::map<RowsetId, Version> to_remove;
     for (auto& timestampedVersion : to_delete_version) {
         auto it = _stale_rs_version_map.find(timestampedVersion->version());
         if (it != _stale_rs_version_map.end()) {
@@ -397,6 +399,7 @@ void CloudTablet::_agg_delete_bitmap_for_stale_rowsets(
                 start_version = timestampedVersion->version().first;
             }
             end_version = timestampedVersion->version().second;
+            to_remove.emplace(it->second->rowset_id(), timestampedVersion->version());
         }
     }
     LOG(INFO) << "sout: tablet=" << tablet_id() << ", start_version=" << start_version
@@ -424,17 +427,30 @@ void CloudTablet::_agg_delete_bitmap_for_stale_rowsets(
                       << ". compaction start_version=" << start_version
                       << ", end_version=" << end_version
                       << ", delete_bitmap=" << d->cardinality();
-            DeleteBitmap::BitmapKey start_key {rowset->rowset_id(), seg_id, start_version};
             DeleteBitmap::BitmapKey end_key {rowset->rowset_id(), seg_id, end_version};
             new_delete_bitmap->set(end_key, *d);
-            remove_delete_bitmap_key_ranges.emplace_back(start_key, end_key);
+            for (const auto& [stale_rowset_id, stale_version] : to_remove) {
+                if (stale_version.second == end_version) {
+                    continue;
+                }
+                DeleteBitmap::BitmapKey remove_start {rowset->rowset_id(), seg_id,
+                                                      stale_version.first};
+                DeleteBitmap::BitmapKey remove_end {rowset->rowset_id(), seg_id,
+                                                    stale_version.second + 1};
+                if (remove_delete_bitmap_key_ranges.find(stale_rowset_id) ==
+                    remove_delete_bitmap_key_ranges.end()) {
+                    remove_delete_bitmap_key_ranges[stale_rowset_id] = {};
+                }
+                remove_delete_bitmap_key_ranges[stale_rowset_id].emplace_back(remove_start,
+                                                                              remove_end);
+            }
         }
     }
     tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
 }
 
 uint64_t CloudTablet::delete_expired_stale_rowsets() {
-    std::vector<RowsetSharedPtr> expired_rowsets;
+    std::vector<std::pair<RowsetSharedPtr, DeleteBitmapKeyRanges>> expired_rowsets;
     // ATTN: trick, Use stale_rowsets to temporarily increase the reference count of the rowset shared pointer in _stale_rs_version_map so that in the recycle_cached_data function, it checks if the reference count is 2.
     std::vector<RowsetSharedPtr> stale_rowsets;
     int64_t expired_stale_sweep_endtime =
@@ -454,7 +470,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
         for (int64_t path_id : path_ids) {
             // delete stale versions in version graph
             auto version_path = _timestamped_version_tracker.fetch_and_delete_path_by_id(path_id);
-            DeleteBitmapKeyRanges remove_delete_bitmap_key_ranges;
+            std::map<RowsetId, DeleteBitmapKeyRanges> remove_delete_bitmap_key_ranges;
             _agg_delete_bitmap_for_stale_rowsets(version_path->timestamped_versions(),
                                                  remove_delete_bitmap_key_ranges);
             std::vector<RowsetId> remove_rowset_ids;
@@ -464,7 +480,9 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
             for (auto& v_ts : version_path->timestamped_versions()) {
                 auto rs_it = _stale_rs_version_map.find(v_ts->version());
                 if (rs_it != _stale_rs_version_map.end()) {
-                    expired_rowsets.push_back(rs_it->second);
+                    expired_rowsets.push_back(std::make_pair(
+                            rs_it->second,
+                            remove_delete_bitmap_key_ranges[rs_it->second->rowset_id()]));
                     stale_rowsets.push_back(rs_it->second);
                     LOG(INFO) << "erase stale rowset, tablet_id=" << tablet_id()
                               << " rowset_id=" << rs_it->second->rowset_id().to_string()
@@ -489,7 +507,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
         _reconstruct_version_tracker_if_necessary();
     }
     _tablet_meta->delete_bitmap().remove_stale_delete_bitmap_from_queue(version_to_delete);
-    recycle_cached_data(expired_rowsets);
+    _recycle_cached_data(expired_rowsets);
     return expired_rowsets.size();
 }
 
@@ -512,6 +530,22 @@ void CloudTablet::recycle_cached_data(const std::vector<RowsetSharedPtr>& rowset
             LOG(WARNING) << "Rowset " << rs->rowset_id().to_string() << " has " << rs.use_count()
                          << " references. File Cache won't be recycled when query is using it.";
             return;
+        }
+        rs->clear_cache();
+    }
+}
+
+void CloudTablet::_recycle_cached_data(
+        const std::vector<std::pair<RowsetSharedPtr, DeleteBitmapKeyRanges>>& rowsets) {
+    for (const auto& [rs, key_range] : rowsets) {
+        // rowsets and tablet._rs_version_map each hold a rowset shared_ptr, so at this point, the reference count of the shared_ptr is at least 2.
+        if (rs.use_count() > 2) {
+            LOG(WARNING) << "Rowset " << rs->rowset_id().to_string() << " has " << rs.use_count()
+                         << " references. File Cache won't be recycled when query is using it.";
+            return;
+        }
+        if (!key_range.empty()) {
+            _tablet_meta->delete_bitmap().remove(key_range);
         }
         rs->clear_cache();
     }
