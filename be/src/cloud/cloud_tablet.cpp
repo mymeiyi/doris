@@ -563,7 +563,8 @@ void CloudTablet::_recycle_cached_data(
     }
     for (const auto& [rs, key_range] : rowsets) {
         // rowsets and tablet._rs_version_map each hold a rowset shared_ptr, so at this point, the reference count of the shared_ptr is at least 2.
-        if (rs.use_count() > 2) {
+        // TODO
+        if (rs.use_count() > 3) {
             LOG(WARNING) << "sout: Rowset " << rs->rowset_id().to_string() << " has " << rs.use_count()
                          << " references. File Cache won't be recycled when query is using it.";
             return;
@@ -575,6 +576,13 @@ void CloudTablet::_recycle_cached_data(
             _tablet_meta->delete_bitmap().remove(key_range);
         }
         rs->clear_cache();
+    }
+    // <rowset_id, start_version, end_version>, note that the end_version is included
+    std::vector<std::tuple<std::string, uint64_t, uint64_t>> to_delete;
+    auto st = _engine.meta_mgr().remove_old_version_delete_bitmap(tablet_id(), to_delete);
+    if (!st.ok()) {
+        LOG(WARNING) << "failed to remove_old_version_delete_bitmap for tablet=" << tablet_id()
+                     << ", st=" << st;
     }
 }
 
