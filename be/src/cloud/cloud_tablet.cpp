@@ -490,14 +490,20 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
                     expired_rowsets.push_back(std::make_pair(
                             rs_it->second,
                             remove_delete_bitmap_key_ranges[rs_it->second->rowset_id()]));
-                    LOG(INFO) << "sout: after make_pair, use count=" << rs_it->second.use_count()
+                    LOG(INFO) << "sout 1: after make_pair, use count=" << rs_it->second.use_count()
                               << ", rowset_id=" << rs_it->second->rowset_id().to_string()
                               << ", version=" << v_ts->version().to_string();
                     stale_rowsets.push_back(rs_it->second);
+                    LOG(INFO) << "sout 2: after make_pair, use count=" << rs_it->second.use_count()
+                              << ", rowset_id=" << rs_it->second->rowset_id().to_string()
+                              << ", version=" << v_ts->version().to_string();
                     LOG(INFO) << "erase stale rowset, tablet_id=" << tablet_id()
                               << " rowset_id=" << rs_it->second->rowset_id().to_string()
                               << " version=" << rs_it->first.to_string();
                     _stale_rs_version_map.erase(rs_it);
+                    LOG(INFO) << "sout 3: after make_pair, use count=" << rs_it->second.use_count()
+                              << ", rowset_id=" << rs_it->second->rowset_id().to_string()
+                              << ", version=" << v_ts->version().to_string();
                 } else {
                     LOG(WARNING) << "cannot find stale rowset " << v_ts->version() << " in tablet "
                                  << tablet_id();
