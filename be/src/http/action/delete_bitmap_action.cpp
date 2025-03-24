@@ -67,7 +67,7 @@ DeleteBitmapAction::DeleteBitmapAction(DeleteBitmapActionType ctype, ExecEnv* ex
           _engine(engine),
           _delete_bitmap_action_type(ctype) {}
 
-static Status _check_param(HttpRequest* req, uint64_t* tablet_id) {
+static Status _check_param(HttpRequest* req, uint64_t* tablet_id, bool* verbose) {
     const auto& req_tablet_id = req->param(TABLET_ID_KEY);
     if (req_tablet_id.empty()) {
         return Status::InternalError("tablet id is empty!");
@@ -77,17 +77,18 @@ static Status _check_param(HttpRequest* req, uint64_t* tablet_id) {
     } catch (const std::exception& e) {
         return Status::InternalError("convert tablet_id failed, {}", e.what());
     }
+    if (*tablet_id == 0) {
+        return Status::InternalError("check param failed: invalid tablet_id");
+    }
+    *verbose = iequal(req->param("verbose"), "true");
     return Status::OK();
 }
 
 Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* req,
                                                                   std::string* json_result) {
     uint64_t tablet_id = 0;
-    // check & retrieve tablet_id from req if it contains
-    RETURN_NOT_OK_STATUS_WITH_WARN(_check_param(req, &tablet_id), "check param failed");
-    if (tablet_id == 0) {
-        return Status::InternalError("check param failed: missing tablet_id");
-    }
+    bool verbose = false;
+    RETURN_NOT_OK_STATUS_WITH_WARN(_check_param(req, &tablet_id, &verbose), "check param failed");
 
     BaseTabletSPtr tablet = nullptr;
     if (config::is_cloud_mode()) {
@@ -98,17 +99,60 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
     if (tablet == nullptr) {
         return Status::NotFound("Tablet not found. tablet_id={}", tablet_id);
     }
-    auto count = tablet->tablet_meta()->delete_bitmap().get_delete_bitmap_count();
-    auto cardinality = tablet->tablet_meta()->delete_bitmap().cardinality();
-    auto size = tablet->tablet_meta()->delete_bitmap().get_size();
-    LOG(INFO) << "show_local_delete_bitmap_count,tablet_id=" << tablet_id << ",count=" << count
-              << ",cardinality=" << cardinality << ",size=" << size;
-
+    auto dm = tablet->tablet_meta()->delete_bitmap().snapshot();
+    auto count = dm.get_delete_bitmap_count();
+    auto cardinality = dm.cardinality();
+    auto size = dm.get_size();
+    LOG(INFO) << "show_local_delete_bitmap_count for tablet_id=" << tablet_id << ", count=" << count
+              << ", cardinality=" << cardinality << ", size=" << size;
     rapidjson::Document root;
     root.SetObject();
     root.AddMember("delete_bitmap_count", count, root.GetAllocator());
     root.AddMember("cardinality", cardinality, root.GetAllocator());
     root.AddMember("size", size, root.GetAllocator());
+    if (verbose) {
+        std::string pre_rowset_id = "";
+        int64_t pre_segment_id = -1;
+        std::vector<std::string> version_vector;
+        rapidjson::Document dm_arr;
+        dm_arr.SetObject();
+
+        auto add_rowset_delete_bitmap_info = [&]() {
+            std::string key =
+                    "rowset: " + pre_rowset_id + ", segment: " + std::to_string(pre_segment_id);
+            rapidjson::Value key_value;
+            key_value.SetString(key.data(), cast_set<uint32_t>(key.length()), root.GetAllocator());
+            rapidjson::Document version_arr;
+            version_arr.SetArray();
+            for (const auto& str : version_vector) {
+                rapidjson::Value value;
+                value.SetString(str.c_str(), cast_set<uint32_t>(str.length()), root.GetAllocator());
+                version_arr.PushBack(value, root.GetAllocator());
+            }
+            dm_arr.AddMember(key_value, version_arr, root.GetAllocator());
+            version_vector.clear();
+        };
+
+        for (auto& [id, bitmap] : dm.delete_bitmap) {
+            auto& [rowset_id, segment_id, version] = id;
+            if (rowset_id.to_string() != pre_rowset_id || segment_id != pre_segment_id) {
+                // add previous result
+                if (!pre_rowset_id.empty()) {
+                    add_rowset_delete_bitmap_info();
+                }
+                pre_rowset_id = rowset_id.to_string();
+                pre_segment_id = segment_id;
+            }
+            std::string str = fmt::format("v: {}, c: {}, s: {}", version, bitmap.cardinality(),
+                                          bitmap.getSizeInBytes());
+            version_vector.push_back(str);
+        }
+        // add last result
+        if (!version_vector.empty()) {
+            add_rowset_delete_bitmap_info();
+        }
+        root.AddMember("delete_bitmap", dm_arr, root.GetAllocator());
+    }
 
     // to json string
     rapidjson::StringBuffer strbuf;
@@ -122,11 +166,9 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
 Status DeleteBitmapAction::_handle_show_ms_delete_bitmap_count(HttpRequest* req,
                                                                std::string* json_result) {
     uint64_t tablet_id = 0;
-    // check & retrieve tablet_id from req if it contains
-    RETURN_NOT_OK_STATUS_WITH_WARN(_check_param(req, &tablet_id), "check param failed");
-    if (tablet_id == 0) {
-        return Status::InternalError("check param failed: missing tablet_id");
-    }
+    bool verbose = false;
+    RETURN_NOT_OK_STATUS_WITH_WARN(_check_param(req, &tablet_id, &verbose), "check param failed");
+
     TabletMetaSharedPtr tablet_meta;
     auto st = _engine.to_cloud().meta_mgr().get_tablet_meta(tablet_id, &tablet_meta);
     if (!st.ok()) {
