@@ -218,7 +218,11 @@ public:
 
     void build_tablet_report_info(TTabletInfo* tablet_info);
 
+    using DeleteBitmapKeyRanges =
+            std::vector<std::tuple<DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>;
     static void recycle_cached_data(const std::vector<RowsetSharedPtr>& rowsets);
+    void _recycle_cached_data(
+            const std::vector<std::pair<RowsetSharedPtr, DeleteBitmapKeyRanges>>& rowsets);
 
     // check that if the delete bitmap in delete bitmap cache has the same cardinality with the expected_delete_bitmap's
     Status check_delete_bitmap_cache(int64_t txn_id, DeleteBitmap* expected_delete_bitmap) override;
@@ -228,6 +232,10 @@ private:
     void update_base_size(const Rowset& rs);
 
     Status sync_if_not_running();
+
+    void _agg_delete_bitmap_for_stale_rowsets(
+            const std::vector<TimestampedVersionSharedPtr>& to_delete_version,
+            std::map<RowsetId, DeleteBitmapKeyRanges>& remove_delete_bitmap_key_ranges);
 
     CloudStorageEngine& _engine;
 

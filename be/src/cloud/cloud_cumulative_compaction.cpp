@@ -297,6 +297,21 @@ Status CloudCumulativeCompaction::modify_rowsets() {
                 .tag("number_output_delete_bitmap",
                      output_rowset_delete_bitmap->delete_bitmap.size());
         compaction_job->set_delete_bitmap_lock_initiator(initiator);
+        std::vector<RowsetSharedPtr> pre_rowsets {};
+        for (const auto& it2 : static_cast<CloudTablet*>(_tablet.get())->rowset_map()) {
+            if (it2.first.second < _output_rowset->start_version()) {
+                pre_rowsets.emplace_back(it2.second);
+            }
+        }
+        std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
+        std::vector<std::tuple<DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>
+                remove_delete_bitmap_key_ranges;
+        DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
+        _tablet->agg_delete_bitmap_for_compaction(
+                _output_rowset->start_version(), _output_rowset->end_version(), pre_rowsets,
+                remove_delete_bitmap_key_ranges, new_delete_bitmap);
+        // update delete bitmap; remove some delete bitmap keys
+
     }
 
     DBUG_EXECUTE_IF("CumulativeCompaction.modify_rowsets.trigger_abort_job_failed", {
@@ -377,6 +392,10 @@ Status CloudCumulativeCompaction::modify_rowsets() {
         _tablet->enable_unique_key_merge_on_write() && _input_rowsets.size() != 1) {
         RETURN_IF_ERROR(process_old_version_delete_bitmap());
     }
+    DBUG_EXECUTE_IF("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset", {
+        LOG(INFO) << "sout: delete_expired_stale_rowsets for tablet=" << _tablet->tablet_id();
+        static_cast<CloudTablet*>(_tablet.get())->delete_expired_stale_rowsets();
+    });
     return Status::OK();
 }
 
