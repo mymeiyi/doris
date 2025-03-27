@@ -549,6 +549,11 @@ message TabletCompactionJobPB {
     optional int64 segment_size_input_rowsets = 28;
     optional int64 index_size_output_rowsets = 29;
     optional int64 segment_size_output_rowsets = 30;
+    // delete delete bitmap for pre rowsets because it's agged when compaction
+    repeated string pre_rowset_ids = 31;
+    repeated uint32 pre_segment_ids = 32;
+    repeated int64 pre_start_versions = 33;
+    repeated int64 pre_end_versions = 34;
 }
 
 message TabletSchemaChangeJobPB {
@@ -1422,6 +1427,11 @@ message UpdateDeleteBitmapRequest {
     // to determine whether this is in an explicit txn and whether it's the first sub txn
     optional bool is_explicit_txn = 12;
     optional int64 txn_id = 13;
+    // compaction agg delete bitmap of pre rowsets
+    repeated string pre_rowset_ids = 14;
+    repeated uint32 pre_segment_ids = 15;
+    repeated int64 pre_versions = 16;
+    repeated bytes pre_segment_delete_bitmaps = 17;
 }
 
 message UpdateDeleteBitmapResponse {
