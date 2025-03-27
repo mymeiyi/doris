@@ -1041,6 +1041,15 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
     INSTANCE_LOG(INFO) << "put rowset meta, tablet_id=" << tablet_id
                        << " rowset_key=" << hex(rowset_key);
 
+    // remove pre rowset delete bitmap
+    for (const auto& pre_rowset_id : compaction.pre_segment_ids()) {
+        auto delete_bitmap_start =
+                meta_delete_bitmap_key({instance_id, tablet_id, pre_rowset_id, start, 0});
+        auto delete_bitmap_end =
+                meta_delete_bitmap_key({instance_id, tablet_id, pre_rowset_id, end, 0});
+        txn->remove(delete_bitmap_start, delete_bitmap_end);
+    }
+
     //==========================================================================
     //                      Remove compaction job
     //==========================================================================
