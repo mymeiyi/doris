@@ -921,7 +921,7 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
         const std::vector<RowsetSharedPtr>& input_rowsets, const RowsetSharedPtr& output_rowset,
         const RowIdConversion& rowid_conversion, ReaderType compaction_type, int64_t merged_rows,
         int64_t filtered_rows, int64_t initiator, DeleteBitmapPtr& output_rowset_delete_bitmap,
-        bool allow_delete_in_cumu_compaction) {
+        bool allow_delete_in_cumu_compaction, std::vector<RowsetId>& pre_rowset_ids) {
     output_rowset_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
     std::unique_ptr<RowLocationSet> missed_rows;
     if ((config::enable_missing_rows_correctness_check ||
@@ -997,9 +997,29 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
         }
     }
 
+    DeleteBitmapPtr new_delete_bitmap = nullptr;
+    if (compaction_type == ReaderType::READER_CUMULATIVE_COMPACTION) {
+        // agg delete bitmap for pre rowsets
+        std::vector<RowsetSharedPtr> pre_rowsets {};
+        for (const auto& it2 : rowset_map()) {
+            if (it2.first.second < output_rowset->start_version()) {
+                pre_rowsets.emplace_back(it2.second);
+                pre_rowset_ids.emplace_back(it2.second->rowset_id());
+            }
+        }
+        std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
+        /*std::vector<std::tuple<DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>
+                remove_delete_bitmap_key_ranges;*/
+        // std::vector<std::pair<RowsetId, uint32_t>>& remove_ranges,
+        new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
+        agg_delete_bitmap_for_compaction(output_rowset->start_version(),
+                                         output_rowset->end_version(), pre_rowsets,
+                                         new_delete_bitmap);
+    }
+
     // 3. store delete bitmap
-    auto st = _engine.meta_mgr().update_delete_bitmap(*this, -1, initiator,
-                                                      output_rowset_delete_bitmap.get());
+    auto st = _engine.meta_mgr().update_delete_bitmap(
+            *this, -1, initiator, output_rowset_delete_bitmap.get(), -1, false, new_delete_bitmap);
     int64_t t6 = MonotonicMicros();
     LOG(INFO) << "calc_delete_bitmap_for_compaction, tablet_id=" << tablet_id()
               << ", get lock cost " << (t2 - t1) << " us, sync rowsets cost " << (t3 - t2)

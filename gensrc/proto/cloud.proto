@@ -551,9 +551,9 @@ message TabletCompactionJobPB {
     optional int64 segment_size_output_rowsets = 30;
     // delete delete bitmap for pre rowsets because it's agged when compaction
     repeated string pre_rowset_ids = 31;
-    repeated uint32 pre_segment_ids = 32;
-    repeated int64 pre_start_versions = 33;
-    repeated int64 pre_end_versions = 34;
+    // repeated uint32 pre_segment_ids = 32;
+    // repeated int64 pre_start_versions = 33;
+    // repeated int64 pre_end_versions = 34;
 }
 
 message TabletSchemaChangeJobPB {

@@ -190,7 +190,8 @@ public:
                                              ReaderType compaction_type, int64_t merged_rows,
                                              int64_t filtered_rows, int64_t initiator,
                                              DeleteBitmapPtr& output_rowset_delete_bitmap,
-                                             bool allow_delete_in_cumu_compaction);
+                                             bool allow_delete_in_cumu_compaction,
+                                             std::vector<RowsetId>& pre_rowset_ids);
 
     // Find the missed versions until the spec_version.
     //

@@ -202,7 +202,8 @@ public:
             std::vector<std::tuple<DeleteBitmap::BitmapKey, DeleteBitmap::BitmapKey>>;
     void agg_delete_bitmap_for_compaction(int64_t start_version, int64_t end_version,
                                           const std::vector<RowsetSharedPtr>& pre_rowsets,
-                                          DeleteBitmapKeyRanges& remove_delete_bitmap_key_ranges,
+                                          // std::vector<std::pair<RowsetId, uint32_t>>& remove_ranges,
+                                          // DeleteBitmapKeyRanges& remove_delete_bitmap_key_ranges,
                                           DeleteBitmapPtr& new_delete_bitmap);
 
     static const signed char* get_delete_sign_column_data(const vectorized::Block& block,

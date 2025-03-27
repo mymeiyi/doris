@@ -346,17 +346,10 @@ bool BaseTablet::_reconstruct_version_tracker_if_necessary() {
 void BaseTablet::agg_delete_bitmap_for_compaction(
         int64_t start_version, int64_t end_version,
         const std::vector<RowsetSharedPtr>& pre_rowsets,
-        DeleteBitmapKeyRanges& remove_delete_bitmap_key_ranges,
+        // std::vector<std::pair<RowsetId, uint32_t>>& remove_ranges,
+        // DeleteBitmapKeyRanges& remove_delete_bitmap_key_ranges,
         DeleteBitmapPtr& new_delete_bitmap) {
-    // do agg for pre rowsets
-    /*std::vector<RowsetSharedPtr> pre_rowsets {};
-    for (const auto& it2 : rowset_map()) {
-        if (it2.first.second < start_version) {
-            pre_rowsets.emplace_back(it2.second);
-        }
-    }
-    std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);*/
-
+    // std::vector<std::pair<RowsetId, uint32_t>> remove_ranges;
     for (auto& rowset : pre_rowsets) {
         for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
             auto d = tablet_meta()->delete_bitmap().get_agg(
@@ -369,10 +362,11 @@ void BaseTablet::agg_delete_bitmap_for_compaction(
                        << ", rowset_version=" << rowset->version().to_string()
                        << ". compaction start_version=" << start_version
                        << ", end_version=" << end_version << ", delete_bitmap=" << d->cardinality();
-            DeleteBitmap::BitmapKey start_key {rowset->rowset_id(), seg_id, start_version};
+            remove_ranges.emplace_back(rowset->rowset_id(), seg_id);
+            // DeleteBitmap::BitmapKey start_key {rowset->rowset_id(), seg_id, start_version};
             DeleteBitmap::BitmapKey end_key {rowset->rowset_id(), seg_id, end_version};
             new_delete_bitmap->set(end_key, *d);
-            remove_delete_bitmap_key_ranges.emplace_back(start_key, end_key);
+            // remove_delete_bitmap_key_ranges.emplace_back(start_key, end_key);
         }
     }
 }
