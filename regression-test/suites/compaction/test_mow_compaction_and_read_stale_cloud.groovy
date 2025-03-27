@@ -235,6 +235,7 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         getTabletStatus(tablet)
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)
+        getTabletStatus(tablet)
         order_qt_sql2 "select * from ${testTable}"
 
         // write some data

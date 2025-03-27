@@ -1224,7 +1224,7 @@ Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t loc
             bitmap.runOptimize();
             std::string bitmap_data(bitmap.getSizeInBytes(), '\0');
             bitmap.write(bitmap_data.data());
-            *(req.add_segment_delete_bitmaps()) = std::move(bitmap_data);
+            *(req.add_pre_segment_delete_bitmaps()) = std::move(bitmap_data);
         }
     }
     DBUG_EXECUTE_IF("CloudMetaMgr::test_update_big_delete_bitmap", {
