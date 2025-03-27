@@ -362,7 +362,7 @@ void BaseTablet::agg_delete_bitmap_for_compaction(
                        << ", rowset_version=" << rowset->version().to_string()
                        << ". compaction start_version=" << start_version
                        << ", end_version=" << end_version << ", delete_bitmap=" << d->cardinality();
-            remove_ranges.emplace_back(rowset->rowset_id(), seg_id);
+            // remove_ranges.emplace_back(rowset->rowset_id(), seg_id);
             // DeleteBitmap::BitmapKey start_key {rowset->rowset_id(), seg_id, start_version};
             DeleteBitmap::BitmapKey end_key {rowset->rowset_id(), seg_id, end_version};
             new_delete_bitmap->set(end_key, *d);
