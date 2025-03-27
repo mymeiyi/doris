@@ -2098,7 +2098,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                    << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
                    << " key_size: " << key.size() << " value_size: " << val.size();
     }
-    for (size_t i = 0; i < request->rowset_ids_size(); ++i) {
+    for (size_t i = 0; i < request->pre_rowset_ids_size(); ++i) {
         MetaDeleteBitmapInfo key_info {instance_id, tablet_id, request->pre_rowset_ids(i),
                                        request->pre_versions(i), request->pre_segment_ids(i)};
         std::string key;
