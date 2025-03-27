@@ -235,7 +235,10 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         getTabletStatus(tablet)
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)
-        getTabletStatus(tablet)
+        def tablet_status = getTabletStatus(tablet)
+        assertEquals(2, tablet_status["rowsets"].size())
+        def ms_dm = getMsDeleteBitmapStatus(tablet)
+        assertEquals(0, ms_dm["delete_bitmap_count"])
         order_qt_sql2 "select * from ${testTable}"
 
         // write some data
@@ -246,6 +249,10 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         sql """ INSERT INTO ${testTable} VALUES (5,99); """
         sql """ sync """
         order_qt_sql3 "select * from ${testTable}"
+        tablet_status = getTabletStatus(tablet)
+        assertEquals(7, tablet_status["rowsets"].size())
+        ms_dm = getMsDeleteBitmapStatus(tablet)
+        assertEquals(5, ms_dm["delete_bitmap_count"])
 
         // trigger and block one query
         GetDebugPoint().enableDebugPointForAllBEs("NewOlapScanner::_init_tablet_reader_params.block")
@@ -258,15 +265,19 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         sleep(100)
 
         // trigger compaction
-        getTabletStatus(tablet)
+        // getTabletStatus(tablet)
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)
         // check ms delete bitmap count
-
+        tablet_status = getTabletStatus(tablet)
+        assertEquals(3, tablet_status["rowsets"].size())
+        ms_dm = getMsDeleteBitmapStatus(tablet)
+        assertEquals(1, ms_dm["delete_bitmap_count"])
+        assertEquals(5, ms_dm["cardinality"])
         // wait for stale rowsets are deleted
         boolean is_stale_rowsets_deleted = false
         for (int i= 0; i < 100; i++) {
-            def tablet_status = getTabletStatus(tablet)
+            tablet_status = getTabletStatus(tablet)
             if (tablet_status["stale_rowsets"].size() == 0) {
                 is_stale_rowsets_deleted = true
                 break
@@ -293,6 +304,9 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         sql """ INSERT INTO ${testTable} VALUES (5,100); """
         sql "sync"
         order_qt_sql4 "select * from ${testTable}"
+        logger.info("order_qt_sql4 finished")
+        getTabletStatus(tablet)
+        getMsDeleteBitmapStatus(tablet)
         // trigger compaction
         GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
                 [tablet_id:"${tablet_id}", start_version: 12, end_version: 16]);
@@ -301,7 +315,7 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         waitForCompaction(tablet)
         boolean is_compaction_finished = false
         for (int i =0 ; i < 100; i++) {
-            def tablet_status = getTabletStatus(tablet)
+            tablet_status = getTabletStatus(tablet)
             if (tablet_status["rowsets"].size() == 4) {
                 is_compaction_finished = true
                 break
@@ -309,6 +323,11 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
             sleep(500)
         }
         assertTrue(is_compaction_finished, "compaction is not finished")
+        logger.info("compaction3 finished")
+        // check ms delete bitmap count
+        ms_dm = getMsDeleteBitmapStatus(tablet)
+        assertEquals(2, ms_dm["delete_bitmap_count"])
+        assertEquals(10, ms_dm["cardinality"])
         // check delete bitmap count
         boolean is_local_dm_deleted = false
         for (int i = 0; i < 100; i++) {
