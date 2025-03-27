@@ -18,11 +18,11 @@
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.codehaus.groovy.runtime.IOGroovyMethods
 
-suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
-    if (isCloudMode()) {
+suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
+    if (!isCloudMode()) {
         return
     }
-    def testTable = "test_mow_compaction_and_read_stale"
+    def testTable = "test_mow_compaction_and_read_stale_cloud"
     def backendId_to_backendIP = [:]
     def backendId_to_backendHttpPort = [:]
     def backendId_to_params = [string: [:]]
@@ -158,6 +158,28 @@ suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
         return deleteBitmapStatus
     }
 
+    def getMsDeleteBitmapStatus = { tablet ->
+        String tablet_id = tablet.TabletId
+        String trigger_backend_id = tablet.BackendId
+        def be_host = backendId_to_backendIP[trigger_backend_id]
+        def be_http_port = backendId_to_backendHttpPort[trigger_backend_id]
+        boolean running = true
+        StringBuilder sb = new StringBuilder();
+        sb.append("curl -X GET http://${be_host}:${be_http_port}")
+        sb.append("/api/delete_bitmap/count_ms?verbose=true&tablet_id=")
+        sb.append(tablet_id)
+
+        String command = sb.toString()
+        logger.info(command)
+        def process = command.execute()
+        def code = process.waitFor()
+        def out = process.getText()
+        logger.info("Get ms delete bitmap count status:  =" + code + ", out=" + out)
+        assertEquals(code, 0)
+        def deleteBitmapStatus = parseJson(out.trim())
+        return deleteBitmapStatus
+    }
+
     AtomicBoolean query_result = new AtomicBoolean(true)
     def query = {
         logger.info("query start")
@@ -238,6 +260,8 @@ suite("test_mow_compaction_and_read_stale", "nonConcurrent") {
         getTabletStatus(tablet)
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)
+        // check ms delete bitmap count
+
         // wait for stale rowsets are deleted
         boolean is_stale_rowsets_deleted = false
         for (int i= 0; i < 100; i++) {
