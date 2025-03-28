@@ -385,8 +385,77 @@ void CloudTablet::delete_rowsets(const std::vector<RowsetSharedPtr>& to_delete,
     _tablet_meta->modify_rs_metas({}, rs_metas, false);
 }
 
+void CloudTablet::_agg_delete_bitmap_for_stale_rowsets(
+        const std::vector<TimestampedVersionSharedPtr>& to_delete_version,
+        std::map<RowsetId, DeleteBitmapKeyRanges>& remove_delete_bitmap_key_ranges) {
+    int64_t start_version = -1;
+    int64_t end_version = -1;
+    // remove the end_version
+    std::map<RowsetId, Version> to_remove;
+    for (auto& timestampedVersion : to_delete_version) {
+        auto it = _stale_rs_version_map.find(timestampedVersion->version());
+        if (it != _stale_rs_version_map.end()) {
+            if (start_version < 0) {
+                start_version = timestampedVersion->version().first;
+            }
+            end_version = timestampedVersion->version().second;
+            to_remove.emplace(it->second->rowset_id(), timestampedVersion->version());
+        }
+    }
+    LOG(INFO) << "sout: tablet=" << tablet_id() << ", start_version=" << start_version
+              << ", end_version=" << end_version;
+    // do agg for pre rowsets
+    DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
+    std::vector<RowsetSharedPtr> pre_rowsets {};
+    for (const auto& it2 : rowset_map()) {
+        if (it2.first.second < start_version) {
+            pre_rowsets.emplace_back(it2.second);
+        }
+    }
+    std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
+
+    for (auto& rowset : pre_rowsets) {
+        for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
+            auto d = tablet_meta()->delete_bitmap().get_agg(
+                    {rowset->rowset_id(), seg_id, end_version}, start_version);
+            if (d->isEmpty()) {
+                continue;
+            }
+            LOG(INFO) << "sout: agg for table_id=" << tablet_id()
+                      << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
+                      << ", rowset_version=" << rowset->version().to_string()
+                      << ". compaction start_version=" << start_version
+                      << ", end_version=" << end_version
+                      << ", delete_bitmap=" << d->cardinality();
+            DeleteBitmap::BitmapKey end_key {rowset->rowset_id(), seg_id, end_version};
+            new_delete_bitmap->set(end_key, *d);
+            for (const auto& [stale_rowset_id, stale_version] : to_remove) {
+                if (stale_version.second == end_version) {
+                    continue;
+                }
+                DeleteBitmap::BitmapKey remove_start {rowset->rowset_id(), seg_id,
+                                                      stale_version.second};
+                DeleteBitmap::BitmapKey remove_end {rowset->rowset_id(), seg_id,
+                                                    stale_version.second + 1};
+                if (remove_delete_bitmap_key_ranges.find(stale_rowset_id) ==
+                    remove_delete_bitmap_key_ranges.end()) {
+                    remove_delete_bitmap_key_ranges[stale_rowset_id] = {};
+                }
+                remove_delete_bitmap_key_ranges[stale_rowset_id].emplace_back(remove_start,
+                                                                              remove_end);
+                LOG(INFO) << "sout: when remove stale rowset=" << stale_rowset_id.to_string()
+                          << ", version=" << stale_version.to_string()
+                          << ". add a delete bitmap to remove for rowset="
+                          << rowset->rowset_id().to_string() << ", [" << stale_version.second << ", "
+                          << (stale_version.second + 1) << ")";
+            }
+        }
+    }
+    tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
+}
+
 uint64_t CloudTablet::delete_expired_stale_rowsets() {
-    std::vector<RowsetSharedPtr> expired_rowsets;
+    std::vector<std::pair<RowsetSharedPtr, DeleteBitmapKeyRanges>> expired_rowsets;
     // ATTN: trick, Use stale_rowsets to temporarily increase the reference count of the rowset shared pointer in _stale_rs_version_map so that in the recycle_cached_data function, it checks if the reference count is 2.
     std::vector<RowsetSharedPtr> stale_rowsets;
     int64_t expired_stale_sweep_endtime =
@@ -404,19 +473,37 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
         }
 
         for (int64_t path_id : path_ids) {
-            int64_t start_version = -1;
-            int64_t end_version = -1;
             // delete stale versions in version graph
             auto version_path = _timestamped_version_tracker.fetch_and_delete_path_by_id(path_id);
+            std::map<RowsetId, DeleteBitmapKeyRanges> remove_delete_bitmap_key_ranges;
+            _agg_delete_bitmap_for_stale_rowsets(version_path->timestamped_versions(),
+                                                 remove_delete_bitmap_key_ranges);
+            int64_t start_version = -1;
+            int64_t end_version = -1;
+            // TODO should do agg here
             for (auto& v_ts : version_path->timestamped_versions()) {
                 auto rs_it = _stale_rs_version_map.find(v_ts->version());
                 if (rs_it != _stale_rs_version_map.end()) {
-                    expired_rowsets.push_back(rs_it->second);
+                    LOG(INFO) << "sout: before make_pair, use count=" << rs_it->second.use_count()
+                              << ", rowset_id=" << rs_it->second->rowset_id().to_string()
+                              << ", version=" << v_ts->version().to_string();
+                    expired_rowsets.push_back(std::make_pair(
+                            rs_it->second,
+                            remove_delete_bitmap_key_ranges[rs_it->second->rowset_id()]));
+                    LOG(INFO) << "sout 1: after make_pair, use count=" << rs_it->second.use_count()
+                              << ", rowset_id=" << rs_it->second->rowset_id().to_string()
+                              << ", version=" << v_ts->version().to_string();
                     stale_rowsets.push_back(rs_it->second);
+                    LOG(INFO) << "sout 2: after make_pair, use count=" << rs_it->second.use_count()
+                              << ", rowset_id=" << rs_it->second->rowset_id().to_string()
+                              << ", version=" << v_ts->version().to_string();
                     LOG(INFO) << "erase stale rowset, tablet_id=" << tablet_id()
                               << " rowset_id=" << rs_it->second->rowset_id().to_string()
                               << " version=" << rs_it->first.to_string();
                     _stale_rs_version_map.erase(rs_it);
+                    LOG(INFO) << "sout 3: after make_pair, use count=" << rs_it->second.use_count()
+                              << ", rowset_id=" << rs_it->second->rowset_id().to_string()
+                              << ", version=" << v_ts->version().to_string();
                 } else {
                     LOG(WARNING) << "cannot find stale rowset " << v_ts->version() << " in tablet "
                                  << tablet_id();
@@ -436,7 +523,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
         _reconstruct_version_tracker_if_necessary();
     }
     _tablet_meta->delete_bitmap().remove_stale_delete_bitmap_from_queue(version_to_delete);
-    recycle_cached_data(expired_rowsets);
+    _recycle_cached_data(expired_rowsets);
     return expired_rowsets.size();
 }
 
@@ -461,6 +548,41 @@ void CloudTablet::recycle_cached_data(const std::vector<RowsetSharedPtr>& rowset
             return;
         }
         rs->clear_cache();
+    }
+}
+
+void CloudTablet::_recycle_cached_data(
+        const std::vector<std::pair<RowsetSharedPtr, DeleteBitmapKeyRanges>>& rowsets) {
+    /*for (auto it = rowsets.begin(); it != rowsets.end(); ++it) {
+        auto& [rs, key_range] = *it;
+        // rowsets and tablet._rs_version_map each hold a rowset shared_ptr, so at this point, the reference count of the shared_ptr is at least 2.
+        if (rs.use_count() > 2) {
+            LOG(WARNING) << "sout 1: Rowset " << rs->rowset_id().to_string() << " has " << rs.use_count()
+                         << " references. File Cache won't be recycled when query is using it.";
+        }
+    }*/
+    for (const auto& [rs, key_range] : rowsets) {
+        // rowsets and tablet._rs_version_map each hold a rowset shared_ptr, so at this point, the reference count of the shared_ptr is at least 2.
+        // TODO
+        if (rs.use_count() > 3) {
+            LOG(WARNING) << "sout: Rowset " << rs->rowset_id().to_string() << " has " << rs.use_count()
+                         << " references. File Cache won't be recycled when query is using it.";
+            return;
+        }
+        LOG(INFO) << "sout: recycle rowset, tablet_id=" << tablet_id()
+                  << " rowset_id=" << rs->rowset_id().to_string()
+                  << ", key range size=" << key_range.size();
+        if (!key_range.empty()) {
+            _tablet_meta->delete_bitmap().remove(key_range);
+        }
+        rs->clear_cache();
+    }
+    // <rowset_id, start_version, end_version>, note that the end_version is included
+    std::vector<std::tuple<std::string, uint64_t, uint64_t>> to_delete;
+    auto st = _engine.meta_mgr().remove_old_version_delete_bitmap(tablet_id(), to_delete);
+    if (!st.ok()) {
+        LOG(WARNING) << "failed to remove_old_version_delete_bitmap for tablet=" << tablet_id()
+                     << ", st=" << st;
     }
 }
 
@@ -799,7 +921,8 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
         const std::vector<RowsetSharedPtr>& input_rowsets, const RowsetSharedPtr& output_rowset,
         const RowIdConversion& rowid_conversion, ReaderType compaction_type, int64_t merged_rows,
         int64_t filtered_rows, int64_t initiator, DeleteBitmapPtr& output_rowset_delete_bitmap,
-        bool allow_delete_in_cumu_compaction) {
+        bool allow_delete_in_cumu_compaction, DeleteBitmapPtr& pre_rowsets_delete_bitmap,
+        std::vector<RowsetId>& pre_rowset_ids) {
     output_rowset_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
     std::unique_ptr<RowLocationSet> missed_rows;
     if ((config::enable_missing_rows_correctness_check ||
@@ -875,15 +998,31 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
         }
     }
 
-    // 3. store delete bitmap
-    auto st = _engine.meta_mgr().update_delete_bitmap(*this, -1, initiator,
-                                                      output_rowset_delete_bitmap.get());
+    if (compaction_type == ReaderType::READER_CUMULATIVE_COMPACTION) {
+        // agg delete bitmap for pre rowsets
+        std::vector<RowsetSharedPtr> pre_rowsets {};
+        for (const auto& it2 : rowset_map()) {
+            if (it2.first.second < output_rowset->start_version()) {
+                pre_rowsets.emplace_back(it2.second);
+                pre_rowset_ids.emplace_back(it2.second->rowset_id());
+            }
+        }
+        std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
+        pre_rowsets_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
+        agg_delete_bitmap_for_compaction(output_rowset->start_version(),
+                                         output_rowset->end_version(), pre_rowsets,
+                                         pre_rowsets_delete_bitmap);
+    }
     int64_t t6 = MonotonicMicros();
+    // 3. store delete bitmap
+    auto st = _engine.meta_mgr().update_delete_bitmap(
+            *this, -1, initiator, output_rowset_delete_bitmap.get(), -1, false, pre_rowsets_delete_bitmap);
+    int64_t t7 = MonotonicMicros();
     LOG(INFO) << "calc_delete_bitmap_for_compaction, tablet_id=" << tablet_id()
               << ", get lock cost " << (t2 - t1) << " us, sync rowsets cost " << (t3 - t2)
               << " us, calc delete bitmap cost " << (t4 - t3) << " us, check rowid conversion cost "
-              << (t5 - t4) << " us, store delete bitmap cost " << (t6 - t5)
-              << " us, st=" << st.to_string();
+              << (t5 - t4) << "us, agg delete bitmap for pre rowsets cost " << (t6 - t5)
+              << " us, store delete bitmap cost " << (t7 - t6) << " us, st=" << st.to_string();
     return st;
 }
 

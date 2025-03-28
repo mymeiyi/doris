@@ -198,6 +198,10 @@ public:
                                            int64_t txn_id, const RowsetIdUnorderedSet& rowset_ids,
                                            std::vector<RowsetSharedPtr>* rowsets = nullptr);
 
+    void agg_delete_bitmap_for_compaction(int64_t start_version, int64_t end_version,
+                                          const std::vector<RowsetSharedPtr>& pre_rowsets,
+                                          DeleteBitmapPtr& new_delete_bitmap);
+
     static const signed char* get_delete_sign_column_data(const vectorized::Block& block,
                                                           size_t rows_at_least = 0);
 

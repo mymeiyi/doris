@@ -1853,15 +1853,16 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             LOG.info("getTxnRequest:{}", getTxnRequest);
             getTxnResponse = MetaServiceProxy
                     .getInstance().getTxn(getTxnRequest);
-            LOG.info("getTxnRequest: {}", getTxnResponse);
+            LOG.info("getTxnResponse: {}", getTxnResponse);
         } catch (RpcException e) {
             LOG.info("getTransactionState exception: {}", e.getMessage());
             return null;
         }
 
-        if (getTxnResponse.getStatus().getCode() != MetaServiceCode.OK || !getTxnResponse.hasTxnInfo()) {
-            LOG.info("getTransactionState exception: {}, {}", getTxnResponse.getStatus().getCode(),
-                    getTxnResponse.getStatus().getMsg());
+        if (getTxnResponse == null || getTxnResponse.getStatus().getCode() != MetaServiceCode.OK
+                || !getTxnResponse.hasTxnInfo()) {
+            LOG.info("getTransactionState exception: {}",
+                    getTxnResponse == null ? "response is null" : getTxnResponse.getStatus());
             return null;
         }
         return TxnUtil.transactionStateFromPb(getTxnResponse.getTxnInfo());
