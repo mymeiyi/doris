@@ -70,41 +70,24 @@ DeleteBitmapAction::DeleteBitmapAction(DeleteBitmapActionType ctype, ExecEnv* ex
 static Status _check_param(HttpRequest* req, uint64_t* tablet_id, bool* verbose) {
     const auto& req_tablet_id = req->param(TABLET_ID_KEY);
     if (req_tablet_id.empty()) {
-        return Status::InternalError("tablet id is empty!");
+        return Status::InternalError<false>("tablet id is empty!");
     }
     try {
         *tablet_id = std::stoull(req_tablet_id);
     } catch (const std::exception& e) {
-        return Status::InternalError("convert tablet_id failed, {}", e.what());
+        return Status::InternalError<false>("convert tablet_id failed, {}", e.what());
     }
     if (*tablet_id == 0) {
-        return Status::InternalError("check param failed: invalid tablet_id");
+        return Status::InternalError<false>("check param failed: invalid tablet_id");
     }
     *verbose = iequal(req->param("verbose"), "true");
     return Status::OK();
 }
 
-Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* req,
-                                                                  std::string* json_result) {
-    uint64_t tablet_id = 0;
-    bool verbose = false;
-    RETURN_NOT_OK_STATUS_WITH_WARN(_check_param(req, &tablet_id, &verbose), "check param failed");
-
-    BaseTabletSPtr tablet = nullptr;
-    if (config::is_cloud_mode()) {
-        tablet = DORIS_TRY(_engine.to_cloud().tablet_mgr().get_tablet(tablet_id));
-    } else {
-        tablet = _engine.to_local().tablet_manager()->get_tablet(tablet_id);
-    }
-    if (tablet == nullptr) {
-        return Status::NotFound("Tablet not found. tablet_id={}", tablet_id);
-    }
-    auto dm = tablet->tablet_meta()->delete_bitmap().snapshot();
+static void _show_delete_bitmap(DeleteBitmap& dm, bool verbose, std::string* json_result) {
     auto count = dm.get_delete_bitmap_count();
     auto cardinality = dm.cardinality();
     auto size = dm.get_size();
-    LOG(INFO) << "show_local_delete_bitmap_count for tablet_id=" << tablet_id << ", count=" << count
-              << ", cardinality=" << cardinality << ", size=" << size;
     rapidjson::Document root;
     root.SetObject();
     root.AddMember("delete_bitmap_count", count, root.GetAllocator());
@@ -159,7 +142,25 @@ Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* r
     rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(strbuf);
     root.Accept(writer);
     *json_result = std::string(strbuf.GetString());
+}
 
+Status DeleteBitmapAction::_handle_show_local_delete_bitmap_count(HttpRequest* req,
+                                                                  std::string* json_result) {
+    uint64_t tablet_id = 0;
+    bool verbose = false;
+    RETURN_NOT_OK_STATUS_WITH_WARN(_check_param(req, &tablet_id, &verbose), "check param failed");
+
+    BaseTabletSPtr tablet = nullptr;
+    if (config::is_cloud_mode()) {
+        tablet = DORIS_TRY(_engine.to_cloud().tablet_mgr().get_tablet(tablet_id));
+    } else {
+        tablet = _engine.to_local().tablet_manager()->get_tablet(tablet_id);
+    }
+    if (tablet == nullptr) {
+        return Status::NotFound("Tablet not found. tablet_id={}", tablet_id);
+    }
+    auto dm = tablet->tablet_meta()->delete_bitmap().snapshot();
+    _show_delete_bitmap(dm, verbose, json_result);
     return Status::OK();
 }
 
@@ -172,7 +173,7 @@ Status DeleteBitmapAction::_handle_show_ms_delete_bitmap_count(HttpRequest* req,
     TabletMetaSharedPtr tablet_meta;
     auto st = _engine.to_cloud().meta_mgr().get_tablet_meta(tablet_id, &tablet_meta);
     if (!st.ok()) {
-        LOG(WARNING) << "failed to get_tablet_meta tablet=" << tablet_id
+        LOG(WARNING) << "failed to get_tablet_meta for tablet=" << tablet_id
                      << ", st=" << st.to_string();
         return st;
     }
@@ -186,24 +187,8 @@ Status DeleteBitmapAction::_handle_show_ms_delete_bitmap_count(HttpRequest* req,
         LOG(WARNING) << "failed to sync tablet=" << tablet_id << ", st=" << st;
         return st;
     }
-    auto count = tablet->tablet_meta()->delete_bitmap().get_delete_bitmap_count();
-    auto cardinality = tablet->tablet_meta()->delete_bitmap().cardinality();
-    auto size = tablet->tablet_meta()->delete_bitmap().get_size();
-    LOG(INFO) << "show_ms_delete_bitmap_count,tablet_id=" << tablet_id << ",count=" << count
-              << ",cardinality=" << cardinality << ",size=" << size;
-
-    rapidjson::Document root;
-    root.SetObject();
-    root.AddMember("delete_bitmap_count", count, root.GetAllocator());
-    root.AddMember("cardinality", cardinality, root.GetAllocator());
-    root.AddMember("size", size, root.GetAllocator());
-
-    // to json string
-    rapidjson::StringBuffer strbuf;
-    rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(strbuf);
-    root.Accept(writer);
-    *json_result = std::string(strbuf.GetString());
-
+    auto dm = tablet->tablet_meta()->delete_bitmap().snapshot();
+    _show_delete_bitmap(dm, verbose, json_result);
     return Status::OK();
 }
 
