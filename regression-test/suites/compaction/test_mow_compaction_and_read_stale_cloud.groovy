@@ -268,12 +268,19 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         // getTabletStatus(tablet)
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)
-        // check ms delete bitmap count
+        logger.info("compaction2 finished")
+        // check rowset count
         tablet_status = getTabletStatus(tablet)
         assertEquals(3, tablet_status["rowsets"].size())
+        // check ms delete bitmap count
         ms_dm = getMsDeleteBitmapStatus(tablet)
         assertEquals(1, ms_dm["delete_bitmap_count"])
         assertEquals(5, ms_dm["cardinality"])
+        // check local delete bitmap count
+        def local_dm = getLocalDeleteBitmapStatus(tablet)
+        assertEquals(5, local_dm["delete_bitmap_count"])
+        assertEquals(9, local_dm["cardinality"])
+
         // wait for stale rowsets are deleted
         boolean is_stale_rowsets_deleted = false
         for (int i= 0; i < 100; i++) {
