@@ -754,7 +754,12 @@ void DataDir::_perform_rowset_gc(const std::string& tablet_schema_hash_path) {
             [&rowsets_in_version_map](auto& rs) { rowsets_in_version_map.insert(rs->rowset_id()); },
             true);
 
-    auto reclaim_rowset_file = [](const std::string& path) {
+    auto reclaim_rowset_file = [&tablet](const RowsetId& rowset_id, const std::string& path) {
+        if (tablet && tablet->enable_unique_key_merge_on_write()) {
+            tablet->tablet_meta()->delete_bitmap().remove({rowset_id, 0, 0},
+                                                          {rowset_id, UINT32_MAX, 0});
+            tablet->tablet_meta()->delete_bitmap().remove_rowset_cache_version(rowset_id);
+        }
         auto st = io::global_local_filesystem()->delete_file(path);
         if (!st.ok()) [[unlikely]] {
             LOG(WARNING) << "[path gc] failed to delete garbage rowset file: " << st;
@@ -779,7 +784,7 @@ void DataDir::_perform_rowset_gc(const std::string& tablet_schema_hash_path) {
 
         if (auto it = checked_rowsets.find(rowset_id); it != checked_rowsets.end()) {
             if (it->second) { // Is checked garbage rowset
-                reclaim_rowset_file(tablet_schema_hash_path + '/' + filename);
+                reclaim_rowset_file(rowset_id, tablet_schema_hash_path + '/' + filename);
             }
             continue;
         }
@@ -790,12 +795,13 @@ void DataDir::_perform_rowset_gc(const std::string& tablet_schema_hash_path) {
                 std::this_thread::sleep_for(
                         std::chrono::milliseconds(config::path_gc_check_step_interval_ms));
             }
-            reclaim_rowset_file(tablet_schema_hash_path + '/' + filename);
+            reclaim_rowset_file(rowset_id, tablet_schema_hash_path + '/' + filename);
             checked_rowsets.emplace(rowset_id, true);
         } else {
             checked_rowsets.emplace(rowset_id, false);
         }
     }
+    // TODO save_meta
 }
 
 void DataDir::perform_path_gc() {

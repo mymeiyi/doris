@@ -951,6 +951,9 @@ void StorageEngine::_clean_unused_rowset_metas() {
                     data_dir->get_meta(), rowset_meta->tablet_uid(), rowset_meta->rowset_id()));
             TabletSharedPtr tablet = _tablet_manager->get_tablet(rowset_meta->tablet_id());
             if (tablet && tablet->tablet_meta()->enable_unique_key_merge_on_write()) {
+                tablet->tablet_meta()->delete_bitmap().remove(
+                        {rowset_meta->rowset_id(), 0, 0},
+                        {rowset_meta->rowset_id(), UINT32_MAX, 0});
                 tablet->tablet_meta()->delete_bitmap().remove_rowset_cache_version(
                         rowset_meta->rowset_id());
             }
@@ -959,6 +962,7 @@ void StorageEngine::_clean_unused_rowset_metas() {
                   << " invalid rowset meta from dir: " << data_dir->path();
         invalid_rowset_metas.clear();
     }
+    // TODO save_meta
 }
 
 void StorageEngine::_clean_unused_binlog_metas() {
