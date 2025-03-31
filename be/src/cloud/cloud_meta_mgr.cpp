@@ -482,6 +482,7 @@ Status CloudMetaMgr::get_tablet_meta(int64_t tablet_id, TabletMetaSharedPtr* tab
 }
 
 Status CloudMetaMgr::sync_tablet_rowsets(CloudTablet* tablet, const SyncOptions& options) {
+    LOG(INFO) << "sout: sync_tablet_rowsets for tablet=" << tablet->tablet_id();
     using namespace std::chrono;
 
     TEST_SYNC_POINT_RETURN_WITH_VALUE("CloudMetaMgr::sync_tablet_rowsets", Status::OK(), tablet);
@@ -747,6 +748,9 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
                                                std::ranges::range auto&& rs_metas,
                                                const TabletStatsPB& stats, const TabletIndexPB& idx,
                                                DeleteBitmap* delete_bitmap, bool full_sync) {
+    LOG(INFO) << "sout: sync_tablet_delete_bitmap for tablet_id=" << tablet->tablet_id()
+              << ", rs_meta size=" << rs_metas.size() << ", old_max_version=" << old_max_version
+              << ", full_sync=" << full_sync;
     if (rs_metas.empty()) {
         return Status::OK();
     }
@@ -853,10 +857,10 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
                   << ", delete_bitmaps.size()=" << delete_bitmaps.size() << ", latency=" << latency
                   << "us";
     } else {
-        LOG_EVERY_N(INFO, 100) << "finish get_delete_bitmap rpc. rowset_ids.size()="
-                               << rowset_ids.size()
-                               << ", delete_bitmaps.size()=" << delete_bitmaps.size()
-                               << ", latency=" << latency << "us";
+        LOG(INFO) << "finish get_delete_bitmap rpc. rowset_ids.size()=" << rowset_ids.size()
+                  << ", delete_bitmaps.size()=" << delete_bitmaps.size() << ", latency=" << latency
+                  << "us"
+                  << ", new_max_version=" << new_max_version;
     }
     return Status::OK();
 }

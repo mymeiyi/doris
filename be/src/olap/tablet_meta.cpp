@@ -859,6 +859,8 @@ void TabletMeta::add_rowsets_unchecked(const std::vector<RowsetSharedPtr>& to_ad
 
 void TabletMeta::delete_rs_meta_by_version(const Version& version,
                                            std::vector<RowsetMetaSharedPtr>* deleted_rs_metas) {
+    LOG(INFO) << "sout: delete_rs_meta_by_version: tablet=" << tablet_id()
+              << " version=" << version.to_string();
     size_t rowset_cache_version_size = 0;
     auto it = _rs_metas.begin();
     while (it != _rs_metas.end()) {

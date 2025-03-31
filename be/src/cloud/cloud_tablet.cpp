@@ -163,6 +163,9 @@ Status CloudTablet::sync_rowsets(const SyncOptions& options) {
         }
     }
 
+    LOG(INFO) << "sout: call sync_tablet_rowsets 1 for tablet=" << tablet_id()
+              << ", because query_version(" << options.query_version << ") > _max_version("
+              << _max_version << ")";
     auto st = _engine.meta_mgr().sync_tablet_rowsets(this, options);
     if (st.is<ErrorCode::NOT_FOUND>()) {
         clear_cache();
@@ -215,6 +218,8 @@ Status CloudTablet::sync_if_not_running() {
         _max_version = -1;
     }
 
+    LOG(INFO) << "sout: call sync_tablet_rowsets 2 for tablet=" << tablet_id()
+              << ", sync_if_not_running";
     st = _engine.meta_mgr().sync_tablet_rowsets(this);
     if (st.is<ErrorCode::NOT_FOUND>()) {
         clear_cache();
@@ -371,6 +376,11 @@ void CloudTablet::delete_rowsets(const std::vector<RowsetSharedPtr>& to_delete,
     if (to_delete.empty()) {
         return;
     }
+    std::stringstream ss;
+    for (const auto& td : to_delete) {
+        ss << td->rowset_id().to_string() << ", ";
+    }
+    LOG(INFO) << "sout: delete_rowsets for tablet=" << tablet_id() << ", rowset=" << ss.str();
     std::vector<RowsetMetaSharedPtr> rs_metas;
     rs_metas.reserve(to_delete.size());
     for (auto&& rs : to_delete) {
@@ -819,6 +829,8 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     }
 
     // 1. calc delete bitmap for historical data
+    LOG(INFO) << "sout: call sync_tablet_rowsets 3 for tablet=" << tablet_id()
+              << ", calc_delete_bitmap_for_compaction";
     RETURN_IF_ERROR(_engine.meta_mgr().sync_tablet_rowsets(this));
     Version version = max_version();
     std::size_t missed_rows_size = 0;
@@ -874,6 +886,8 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     RETURN_IF_ERROR(_engine.meta_mgr().get_delete_bitmap_update_lock(
             *this, COMPACTION_DELETE_BITMAP_LOCK_ID, initiator));
     int64_t t2 = MonotonicMicros();
+    LOG(INFO) << "sout: call sync_tablet_rowsets 4 for tablet=" << tablet_id()
+              << ", calc_delete_bitmap_for_compaction again";
     RETURN_IF_ERROR(_engine.meta_mgr().sync_tablet_rowsets(this));
     int64_t t3 = MonotonicMicros();
 
