@@ -340,6 +340,7 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         for (int i = 0; i < 100; i++) {
             local_dm_status = getLocalDeleteBitmapStatus(tablet)
             if (local_dm_status["delete_bitmap_count"] == 2) {
+                assertEquals(10, local_dm_status["cardinality"])
                 is_local_dm_deleted = true
                 break
             }
