@@ -455,7 +455,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
     uint64_t remove_size = expired_rowsets.size();
     expired_rowsets.clear();
     stale_rowsets.clear();
-    _remove_pre_rowset_delete_bitmaps();
+    remove_pre_rowset_delete_bitmaps();
     return remove_size;
 }
 
