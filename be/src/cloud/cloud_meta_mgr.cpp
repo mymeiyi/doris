@@ -1190,8 +1190,7 @@ Status CloudMetaMgr::update_tablet_schema(int64_t tablet_id, const TabletSchema&
 
 Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t lock_id,
                                           int64_t initiator, DeleteBitmap* delete_bitmap,
-                                          int64_t txn_id, bool is_explicit_txn,
-                                          DeleteBitmapPtr pre_rowset_delete_bitmap) {
+                                          int64_t txn_id, bool is_explicit_txn) {
     VLOG_DEBUG << "update_delete_bitmap , tablet_id: " << tablet.tablet_id();
     UpdateDeleteBitmapRequest req;
     UpdateDeleteBitmapResponse res;
@@ -1215,7 +1214,7 @@ Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t loc
         bitmap.write(bitmap_data.data());
         *(req.add_segment_delete_bitmaps()) = std::move(bitmap_data);
     }
-    if (pre_rowset_delete_bitmap != nullptr) {
+    /*if (pre_rowset_delete_bitmap != nullptr) {
         for (auto& [key, bitmap] : pre_rowset_delete_bitmap->delete_bitmap) {
             req.add_pre_rowset_ids(std::get<0>(key).to_string());
             req.add_pre_segment_ids(std::get<1>(key));
@@ -1226,7 +1225,7 @@ Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t loc
             bitmap.write(bitmap_data.data());
             *(req.add_pre_segment_delete_bitmaps()) = std::move(bitmap_data);
         }
-    }
+    }*/
     DBUG_EXECUTE_IF("CloudMetaMgr::test_update_big_delete_bitmap", {
         LOG(INFO) << "test_update_big_delete_bitmap for tablet " << tablet.tablet_id();
         auto count = dp->param<int>("count", 30000);

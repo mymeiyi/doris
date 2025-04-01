@@ -184,12 +184,13 @@ public:
     Status save_delete_bitmap_to_ms(int64_t cur_version, int64_t txn_id,
                                     DeleteBitmapPtr delete_bitmap, int64_t lock_id);
 
-    Status calc_delete_bitmap_for_compaction(
-            const std::vector<RowsetSharedPtr>& input_rowsets, const RowsetSharedPtr& output_rowset,
-            const RowIdConversion& rowid_conversion, ReaderType compaction_type,
-            int64_t merged_rows, int64_t filtered_rows, int64_t initiator,
-            DeleteBitmapPtr& output_rowset_delete_bitmap, bool allow_delete_in_cumu_compaction,
-            DeleteBitmapPtr& pre_rowsets_delete_bitmap, std::vector<RowsetId>& pre_rowset_ids);
+    Status calc_delete_bitmap_for_compaction(const std::vector<RowsetSharedPtr>& input_rowsets,
+                                             const RowsetSharedPtr& output_rowset,
+                                             const RowIdConversion& rowid_conversion,
+                                             ReaderType compaction_type, int64_t merged_rows,
+                                             int64_t filtered_rows, int64_t initiator,
+                                             DeleteBitmapPtr& output_rowset_delete_bitmap,
+                                             bool allow_delete_in_cumu_compaction);
 
     // Find the missed versions until the spec_version.
     //
