@@ -852,23 +852,6 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
         location_map->clear();
     }
 
-    // agg delete bitmap for pre rowsets
-    if (compaction_type == ReaderType::READER_CUMULATIVE_COMPACTION) {
-        // agg delete bitmap for pre rowsets
-        std::vector<RowsetSharedPtr> pre_rowsets {};
-        for (const auto& it2 : rowset_map()) {
-            if (it2.first.second < output_rowset->start_version()) {
-                pre_rowsets.emplace_back(it2.second);
-                pre_rowset_ids.emplace_back(it2.second->rowset_id());
-            }
-        }
-        std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
-        pre_rowsets_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
-        _agg_delete_bitmap_for_compaction(output_rowset->start_version(),
-                                          output_rowset->end_version(), pre_rowsets,
-                                          pre_rowsets_delete_bitmap);
-    }
-
     // 2. calc delete bitmap for incremental data
     int64_t t1 = MonotonicMicros();
     RETURN_IF_ERROR(_engine.meta_mgr().get_delete_bitmap_update_lock(
@@ -906,9 +889,9 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     return st;
 }
 
-void CloudTablet::_agg_delete_bitmap_for_compaction(int64_t start_version, int64_t end_version,
-                                                    const std::vector<RowsetSharedPtr>& pre_rowsets,
-                                                    DeleteBitmapPtr& new_delete_bitmap) {
+void CloudTablet::agg_delete_bitmap_for_compaction(int64_t start_version, int64_t end_version,
+                                                   const std::vector<RowsetSharedPtr>& pre_rowsets,
+                                                   DeleteBitmapPtr& new_delete_bitmap) {
     for (auto& rowset : pre_rowsets) {
         for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
             auto d = tablet_meta()->delete_bitmap().get_agg(
