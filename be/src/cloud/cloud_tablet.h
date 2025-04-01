@@ -274,6 +274,11 @@ private:
 
     // Schema will be merged from all rowsets when sync_rowsets
     TabletSchemaSPtr _merged_tablet_schema;
+
+    // unused_rowsets, [start_version, end_version]
+    std::mutex _gc_mutex;
+    std::vector<std::pair<std::vector<RowsetSharedPtr>, DeleteBitmapKeyRanges>>
+            _unused_delete_bitmap;
 };
 
 using CloudTabletSPtr = std::shared_ptr<CloudTablet>;

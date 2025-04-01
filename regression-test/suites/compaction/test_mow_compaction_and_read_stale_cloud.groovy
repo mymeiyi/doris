@@ -335,7 +335,7 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         assertEquals(2, ms_dm["delete_bitmap_count"])
         assertEquals(10, ms_dm["cardinality"])
         // check delete bitmap count
-        /*boolean is_local_dm_deleted = false
+        boolean is_local_dm_deleted = false
         for (int i = 0; i < 100; i++) {
             local_dm_status = getLocalDeleteBitmapStatus(tablet)
             if (local_dm_status["delete_bitmap_count"] < 10) {
@@ -344,7 +344,7 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
             }
             sleep(500)
         }
-        assertTrue(is_local_dm_deleted, "delete bitmap of compaction2 stale rowsets are not deleted")*/
+        assertTrue(is_local_dm_deleted, "delete bitmap of compaction2 stale rowsets are not deleted")
         order_qt_sql5 "select * from ${testTable}"
     } finally {
         reset_be_param("compaction_promotion_version_count")
