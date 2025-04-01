@@ -2028,7 +2028,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         LOG(INFO) << "xxx update delete bitmap put pending_key=" << hex(pending_key)
                   << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
                   << " value_size: " << pending_val.size();
-    } else if (request->lock_id() == -3) {
+    } /*else if (request->lock_id() == -3) {
         // delete existing key
         for (size_t i = 0; i < request->rowset_ids_size(); ++i) {
             auto& start_key = delete_bitmap_keys.delete_bitmap_keys(i);
@@ -2037,7 +2037,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
             txn->remove(start_key, end_key);
             LOG(INFO) << "xxx remove existing key=" << hex(start_key) << " tablet_id=" << tablet_id;
         }
-    }
+    }*/
 
     // 4. Update delete bitmap for curent txn
     size_t current_key_count = 0;
@@ -2047,6 +2047,12 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
     size_t total_txn_put_keys = 0;
     size_t total_txn_put_bytes = 0;
     size_t total_txn_size = 0;
+    bool remove_pre_rowset_delete_bitmap =
+            request->has_pre_rowset_agg_start_version() &&
+            request->has_pre_rowset_agg_end_version() &&
+            request->pre_rowset_agg_start_version() > 0 &&
+            request->pre_rowset_agg_end_version() > 0 &&
+            request->pre_rowset_agg_start_version() < request->pre_rowset_agg_end_version();
     for (size_t i = 0; i < request->rowset_ids_size(); ++i) {
         auto& key = delete_bitmap_keys.delete_bitmap_keys(i);
         auto& val = request->segment_delete_bitmaps(i);
@@ -2056,6 +2062,28 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                                          instance_id, table_id, tablet_id, request->lock_id(),
                                          request->initiator(), unlock, log)) {
             return;
+        }
+        // remove first
+        if (request->lock_id() == COMPACTION_WITHOUT_LOCK_DELETE_BITMAP_LOCK_ID) {
+            auto& start_key = key;
+            std::string end_key {start_key};
+            encode_int64(INT64_MAX, &end_key);
+            txn->remove(start_key, end_key);
+            LOG(INFO) << "xxx remove delete_bitmap_key=" << hex(start_key)
+                      << " tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
+                      << " initiator=" << request->initiator();
+            if (remove_pre_rowset_delete_bitmap) {
+                auto delete_bitmap_start = meta_delete_bitmap_key(
+                        {instance_id, tablet_id, request->rowset_ids(i),
+                         request->pre_rowset_agg_start_version(), request->segment_ids(i)});
+                auto delete_bitmap_end = meta_delete_bitmap_key(
+                        {instance_id, tablet_id, request->rowset_ids(i),
+                         request->pre_rowset_agg_end_version(), request->segment_ids(i)});
+                txn->remove(delete_bitmap_start, delete_bitmap_end);
+                LOG(INFO) << "remove pre rowsets delete bitmap, tablet_id=" << tablet_id
+                          << " start_key=" << hex(delete_bitmap_start)
+                          << " end_key=" << hex(delete_bitmap_end);
+            }
         }
         // splitting large values (>90*1000) into multiple KVs
         cloud::put(txn.get(), key, val, 0);
@@ -2067,7 +2095,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                    << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
                    << " key_size: " << key.size() << " value_size: " << val.size();
     }
-    for (size_t i = 0; i < request->pre_rowset_ids_size(); ++i) {
+    /*for (size_t i = 0; i < request->pre_rowset_ids_size(); ++i) {
         MetaDeleteBitmapInfo key_info {instance_id, tablet_id, request->pre_rowset_ids(i),
                                        request->pre_versions(i), request->pre_segment_ids(i)};
         std::string key;
@@ -2097,7 +2125,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         VLOG_DEBUG << "xxx update delete bitmap put delete_bitmap_key=" << hex(key)
                    << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
                    << " key_size: " << key.size() << " value_size: " << val.size();
-    }
+    }*/
     err = txn->commit();
     total_txn_put_keys += txn->num_put_keys();
     total_txn_put_bytes += txn->put_bytes();
