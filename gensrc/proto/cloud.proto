@@ -1430,6 +1430,8 @@ message UpdateDeleteBitmapRequest {
     repeated uint32 pre_segment_ids = 15;
     repeated int64 pre_versions = 16;
     repeated bytes pre_segment_delete_bitmaps = 17;
+    optional int64 pre_rowset_agg_start_version = 18;
+    optional int64 pre_rowset_agg_end_version = 19;
 }
 
 message UpdateDeleteBitmapResponse {
