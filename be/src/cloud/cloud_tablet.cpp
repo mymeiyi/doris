@@ -887,6 +887,28 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     return st;
 }
 
+void CloudTablet::agg_delete_bitmap_for_compaction(int64_t start_version, int64_t end_version,
+                                                   const std::vector<RowsetSharedPtr>& pre_rowsets,
+                                                   DeleteBitmapPtr& new_delete_bitmap) {
+    for (auto& rowset : pre_rowsets) {
+        for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
+            auto d = tablet_meta()->delete_bitmap().get_agg(
+                    {rowset->rowset_id(), seg_id, end_version}, start_version);
+            if (d->isEmpty()) {
+                continue;
+            }
+            VLOG_DEBUG << "agg for tablet_id=" << tablet_id()
+                       << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
+                       << ", rowset_version=" << rowset->version().to_string()
+                       << ". compaction start_version=" << start_version
+                       << ", end_version=" << end_version
+                       << ". delete_bitmap cardinality=" << d->cardinality();
+            DeleteBitmap::BitmapKey end_key {rowset->rowset_id(), seg_id, end_version};
+            new_delete_bitmap->set(end_key, *d);
+        }
+    }
+}
+
 Status CloudTablet::sync_meta() {
     if (!config::enable_file_cache) {
         return Status::OK();
