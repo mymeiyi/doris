@@ -335,10 +335,11 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
         assertEquals(2, ms_dm["delete_bitmap_count"])
         assertEquals(10, ms_dm["cardinality"])
         // check delete bitmap count
+        logger.info("check local delete bitmap is deleted")
         boolean is_local_dm_deleted = false
         for (int i = 0; i < 100; i++) {
             local_dm_status = getLocalDeleteBitmapStatus(tablet)
-            if (local_dm_status["delete_bitmap_count"] < 10) {
+            if (local_dm_status["delete_bitmap_count"] == 2) {
                 is_local_dm_deleted = true
                 break
             }
