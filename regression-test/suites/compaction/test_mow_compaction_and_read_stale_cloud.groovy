@@ -22,6 +22,7 @@ suite("test_mow_compaction_and_read_stale_cloud", "nonConcurrent") {
     if (!isCloudMode()) {
         return
     }
+    // be.conf: vacuum_stale_rowsets_interval_s=30
     def testTable = "test_mow_compaction_and_read_stale_cloud"
     def backendId_to_backendIP = [:]
     def backendId_to_backendHttpPort = [:]
