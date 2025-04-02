@@ -18,7 +18,7 @@
 import org.apache.doris.regression.suite.ClusterOptions
 import groovy.json.JsonSlurper
 
-suite('test_mow', 'multi_cluster,docker') {
+suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
     def options = new ClusterOptions()
     options.cloudMode = true
     options.setFeNum(1)
@@ -29,11 +29,11 @@ suite('test_mow', 'multi_cluster,docker') {
     options.beConfigs += [
         'enable_debug_points=true',
         'tablet_rowset_stale_sweep_time_sec=0',
+        'vacuum_stale_rowsets_interval_s=10',
     ]
 
     def backendId_to_backendIP = [:]
     def backendId_to_backendHttpPort = [:]
-    def backendId_to_params = [string: [:]]
 
     def triggerCompaction = { tablet ->
         def compact_type = "cumulative"
@@ -157,7 +157,6 @@ suite('test_mow', 'multi_cluster,docker') {
         def currentCluster = ret.stream().filter(cluster -> cluster.is_current == "TRUE").findFirst().orElse(null)
         def otherCluster = ret.stream().filter(cluster -> cluster.is_current == "FALSE").findFirst().orElse(null)
         assertTrue(otherCluster != null)
-
         getBackendIpHttpPort(backendId_to_backendIP, backendId_to_backendHttpPort);
 
         GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
@@ -171,12 +170,19 @@ suite('test_mow', 'multi_cluster,docker') {
                 "disable_auto_compaction" = "true"
             );
         """
-
         def tablets = sql_return_maparray """ show tablets from ${testTable}; """
-        logger.info("tablets: " + tablets)
+        logger.info("tablets in cluster 0: " + tablets)
         assertEquals(1, tablets.size())
         def tablet = tablets[0]
+        def tablet_id = tablet.TabletId
+        sql """use @${otherCluster.cluster}"""
+        tablets = sql_return_maparray """ show tablets from ${testTable}; """
+        logger.info("tablets in cluster 1: " + tablets)
+        assertEquals(1, tablets.size())
+        def tablet1 = tablets[0]
 
+        // 1. insert some data
+        sql """use @${currentCluster.cluster}"""
         sql """ INSERT INTO ${testTable} VALUES (1,99); """
         sql """ INSERT INTO ${testTable} VALUES (1,99); """
         sql """ INSERT INTO ${testTable} VALUES (2,99); """
@@ -185,9 +191,25 @@ suite('test_mow', 'multi_cluster,docker') {
         sql "sync"
         order_qt_sql1 """ select * from ${testTable}; """
 
+        // 2. trigger compaction 0
+        getTabletStatus(tablet)
+        assertTrue(triggerCompaction(tablet).contains("Success"))
+        waitForCompaction(tablet)
+        logger.info("after compaction 1")
+        getTabletStatus(tablet)
+        def local_dm = getLocalDeleteBitmapStatus(tablet)
+        logger.info("local_dm 0.2: " + local_dm)
+        assertEquals(0, local_dm.delete_bitmap_count)
+        assertEquals(0, local_dm.cardinality)
+        def ms_dm = getMsDeleteBitmapStatus(tablet)
+        logger.info("ms_dm: " + ms_dm)
+        assertEquals(0, ms_dm.delete_bitmap_count)
+        assertEquals(0, ms_dm.cardinality)
+
         sql """use @${otherCluster.cluster}"""
         order_qt_sql2 """ select * from ${testTable}; """
 
+        // 3. insert some data
         logger.info("use cluster 0")
         sql """use @${currentCluster.cluster}"""
         sql """ INSERT INTO ${testTable} VALUES (1,100); """
@@ -197,23 +219,59 @@ suite('test_mow', 'multi_cluster,docker') {
         sql """ INSERT INTO ${testTable} VALUES (5,100); """
         sql """ sync """
         order_qt_sql3 """ select * from ${testTable}; """
-
         getTabletStatus(tablet)
+        local_dm = getLocalDeleteBitmapStatus(tablet)
+        logger.info("local_dm 0.3: " + local_dm)
+        assertEquals(4, local_dm.delete_bitmap_count)
+        assertEquals(4, local_dm.cardinality)
+
+        sql """use @${otherCluster.cluster}"""
+        order_qt_sql4 """ select * from ${testTable}; """
+        local_dm = getLocalDeleteBitmapStatus(tablet1)
+        logger.info("local_dm 1.3: " + local_dm)
+        assertEquals(4, local_dm.delete_bitmap_count)
+        assertEquals(4, local_dm.cardinality)
+
+        logger.info("use cluster 0")
+        sql """use @${currentCluster.cluster}"""
+
+        // 4. trigger compaction 1
+        GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
+                [tablet_id:"${tablet_id}", start_version: 7, end_version: 11]);
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)
-        getTabletStatus(tablet)
-        def local_dm = getLocalDeleteBitmapStatus(tablet)
-        logger.info("local_dm 0: " + local_dm)
-        def ms_dm = getMsDeleteBitmapStatus(tablet)
+        def tablet_status = getTabletStatus(tablet)
+        assertEquals(3, tablet_status.rowsets.size())
+        ms_dm = getMsDeleteBitmapStatus(tablet)
         logger.info("ms_dm: " + ms_dm)
+        assertEquals(1, ms_dm.delete_bitmap_count)
+        assertEquals(4, ms_dm.cardinality)
+        for (int i = 0; i < 100; i++) {
+            local_dm = getLocalDeleteBitmapStatus(tablet)
+            logger.info("local_dm 0.4: " + local_dm)
+            if (local_dm.delete_bitmap_count == 1) {
+                break
+            }
+            sleep(2000)
+        }
+        assertEquals(1, local_dm.delete_bitmap_count)
+        assertEquals(4, local_dm.cardinality)
+        sql """ insert into ${testTable} values (6, 100); """
+        sql """ sync """
 
         logger.info("use cluster 1")
         sql """use @${otherCluster.cluster}"""
-        order_qt_sql4 """ select * from ${testTable}; """
-        getTabletStatus(tablet)
-        local_dm = getLocalDeleteBitmapStatus(tablet)
-        logger.info("local_dm 1: " + local_dm)
-        ms_dm = getMsDeleteBitmapStatus(tablet)
-        logger.info("ms_dm: " + ms_dm)
+        order_qt_sql5 """ select * from ${testTable}; """
+        getTabletStatus(tablet1)
+        for (int i = 0; i < 100; i++) {
+            local_dm = getLocalDeleteBitmapStatus(tablet1)
+            logger.info("local_dm 1.4: " + local_dm)
+            if (local_dm.delete_bitmap_count == 1) {
+                break
+            }
+            sleep(2000)
+        }
+        assertEquals(1, local_dm.delete_bitmap_count)
+        assertEquals(4, local_dm.cardinality)
     }
 }
