@@ -2049,16 +2049,21 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                       << " tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
                       << " initiator=" << request->initiator();
             if (remove_pre_rowset_delete_bitmap) {
-                auto delete_bitmap_start = meta_delete_bitmap_key(
-                        {instance_id, tablet_id, request->rowset_ids(i),
-                         request->pre_rowset_agg_start_version(), request->segment_ids(i)});
-                auto delete_bitmap_end = meta_delete_bitmap_key(
-                        {instance_id, tablet_id, request->rowset_ids(i),
-                         request->pre_rowset_agg_end_version(), request->segment_ids(i)});
-                txn->remove(delete_bitmap_start, delete_bitmap_end);
-                LOG(INFO) << "remove pre rowsets delete bitmap, tablet_id=" << tablet_id
-                          << " start_key=" << hex(delete_bitmap_start)
-                          << " end_key=" << hex(delete_bitmap_end);
+                for (int64_t version = request->pre_rowset_agg_start_version();
+                     version < request->pre_rowset_agg_end_version(); ++version) {
+                    auto delete_bitmap_start =
+                            meta_delete_bitmap_key({instance_id, tablet_id, request->rowset_ids(i),
+                                                    version, request->segment_ids(i)});
+                    std::string delete_bitmap_end {delete_bitmap_start};
+                    encode_int64(INT64_MAX, &delete_bitmap_end);
+                    txn->remove(delete_bitmap_start, delete_bitmap_end);
+                    LOG(INFO) << "remove pre rowsets delete bitmap, tablet_id=" << tablet_id
+                              << ", rowset=" << request->rowset_ids(i)
+                              << ", segment=" << request->segment_ids(i)
+                              << ", version=" << version
+                              << ", start_key=" << hex(delete_bitmap_start)
+                              << ", end_key=" << hex(delete_bitmap_end);
+                }
             }
         }
         // splitting large values (>90*1000) into multiple KVs
