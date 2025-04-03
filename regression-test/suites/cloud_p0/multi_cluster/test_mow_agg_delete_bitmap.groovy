@@ -150,16 +150,16 @@ suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
     docker(options) {
         def testTable = "test_mow"
 
-        // add_new_cluster
-        def clusterName = "newcluster1"
-        cluster.addBackend(1, clusterName)
+        // add cluster1
+        cluster.addBackend(1, "cluster1")
+        cluster.addBackend(1, "cluster2")
         def ret = sql_return_maparray """show clusters"""
-        def currentCluster = ret.stream().filter(cluster -> cluster.is_current == "TRUE").findFirst().orElse(null)
-        def otherCluster = ret.stream().filter(cluster -> cluster.is_current == "FALSE").findFirst().orElse(null)
-        assertTrue(otherCluster != null)
-        getBackendIpHttpPort(backendId_to_backendIP, backendId_to_backendHttpPort);
-
-        GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
+        def cluster0 = ret.stream().filter(cluster -> cluster.is_current == "TRUE").findFirst().orElse(null)
+        def cluster1 = ret.stream().filter(cluster -> cluster.cluster == "cluster1").findFirst().orElse(null)
+        def cluster2 = ret.stream().filter(cluster -> cluster.cluster == "cluster2").findFirst().orElse(null)
+        assertTrue(cluster1 != null)
+        assertTrue(cluster2 != null)
+        getBackendIpHttpPort(backendId_to_backendIP, backendId_to_backendHttpPort)
 
         sql """
             create table ${testTable} (`k` int NOT NULL, `v` int NOT NULL)
@@ -170,19 +170,29 @@ suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
                 "disable_auto_compaction" = "true"
             );
         """
+        // get tablet in cluster0
         def tablets = sql_return_maparray """ show tablets from ${testTable}; """
         logger.info("tablets in cluster 0: " + tablets)
         assertEquals(1, tablets.size())
         def tablet = tablets[0]
         def tablet_id = tablet.TabletId
-        sql """use @${otherCluster.cluster}"""
+        // get tablet in cluster1
+        sql """use @${cluster1.cluster}"""
         tablets = sql_return_maparray """ show tablets from ${testTable}; """
         logger.info("tablets in cluster 1: " + tablets)
         assertEquals(1, tablets.size())
         def tablet1 = tablets[0]
+        // get tablet in cluster2
+        sql """use @${cluster2.cluster}"""
+        tablets = sql_return_maparray """ show tablets from ${testTable}; """
+        logger.info("tablets in cluster 2: " + tablets)
+        assertEquals(1, tablets.size())
+        def tablet2 = tablets[0]
+
+        GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
 
         // 1. insert some data
-        sql """use @${currentCluster.cluster}"""
+        sql """use @${cluster0.cluster}"""
         sql """ INSERT INTO ${testTable} VALUES (1,99); """
         sql """ INSERT INTO ${testTable} VALUES (1,99); """
         sql """ INSERT INTO ${testTable} VALUES (2,99); """
@@ -206,12 +216,12 @@ suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
         assertEquals(0, ms_dm.delete_bitmap_count)
         assertEquals(0, ms_dm.cardinality)
 
-        sql """use @${otherCluster.cluster}"""
+        sql """use @${cluster1.cluster}"""
         order_qt_sql2 """ select * from ${testTable}; """
 
         // 3. insert some data
         logger.info("use cluster 0")
-        sql """use @${currentCluster.cluster}"""
+        sql """use @${cluster0.cluster}"""
         sql """ INSERT INTO ${testTable} VALUES (1,100); """
         sql """ INSERT INTO ${testTable} VALUES (2,100); """
         sql """ INSERT INTO ${testTable} VALUES (3,100); """
@@ -225,7 +235,7 @@ suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
         assertEquals(4, local_dm.delete_bitmap_count)
         assertEquals(4, local_dm.cardinality)
 
-        sql """use @${otherCluster.cluster}"""
+        sql """use @${cluster1.cluster}"""
         order_qt_sql4 """ select * from ${testTable}; """
         local_dm = getLocalDeleteBitmapStatus(tablet1)
         logger.info("local_dm 1.3: " + local_dm)
@@ -233,7 +243,7 @@ suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
         assertEquals(4, local_dm.cardinality)
 
         logger.info("use cluster 0")
-        sql """use @${currentCluster.cluster}"""
+        sql """use @${cluster0.cluster}"""
 
         // 4. trigger compaction 1
         GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
@@ -260,7 +270,7 @@ suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
         sql """ sync """
 
         logger.info("use cluster 1")
-        sql """use @${otherCluster.cluster}"""
+        sql """use @${cluster1.cluster}"""
         order_qt_sql5 """ select * from ${testTable}; """
         getTabletStatus(tablet1)
         for (int i = 0; i < 100; i++) {
