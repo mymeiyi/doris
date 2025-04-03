@@ -209,6 +209,12 @@ public:
               _registration_time(registration_time),
               _wait_time_ms(wait_time_ms) {}
 
+    RuntimeFilterTimer(int64_t registration_time, int32_t wait_time_ms,
+                       std::shared_ptr<Dependency> parent)
+            : _parent1(std::move(parent)),
+              _registration_time(registration_time),
+              _wait_time_ms(wait_time_ms) {}
+
     // Called by runtime filter producer.
     void call_ready();
 
@@ -228,6 +234,7 @@ public:
 private:
     friend struct RuntimeFilterTimerQueue;
     std::shared_ptr<RuntimeFilterDependency> _parent = nullptr;
+    std::shared_ptr<Dependency> _parent1 = nullptr;
     std::vector<std::shared_ptr<RuntimeFilterDependency>> _local_runtime_filter_dependencies;
     std::mutex _lock;
     int64_t _registration_time;

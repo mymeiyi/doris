@@ -122,18 +122,29 @@ std::string RuntimeFilterDependency::debug_string(int indentation_level) {
 }
 
 void RuntimeFilterTimer::call_timeout() {
-    _parent->set_ready();
+    if (_parent) {
+        _parent->set_ready();
+    } else {
+        DCHECK(_parent1 != nullptr);
+        _parent1->set_ready();
+    }
 }
 
 void RuntimeFilterTimer::call_ready() {
-    _parent->set_ready();
+    if (_parent) {
+        _parent->set_ready();
+    } else {
+        DCHECK(_parent1 != nullptr);
+        _parent1->set_ready();
+    }
 }
 
 // should check rf timeout in two case:
 // 1. the rf is ready just remove the wait queue
 // 2. if the rf have local dependency, the rf should start wait when all local dependency is ready
 bool RuntimeFilterTimer::should_be_check_timeout() {
-    if (!_parent->ready() && !_local_runtime_filter_dependencies.empty()) {
+    if (((_parent && !_parent->ready()) || (_parent1 && !_parent1->ready())) &&
+        !_local_runtime_filter_dependencies.empty()) {
         bool all_ready = true;
         for (auto& dep : _local_runtime_filter_dependencies) {
             if (!dep->ready()) {
@@ -167,7 +178,8 @@ void RuntimeFilterTimerQueue::start() {
                 if (it.use_count() == 1) {
                     // `use_count == 1` means this runtime filter has been released
                 } else if (it->should_be_check_timeout()) {
-                    if (it->_parent->is_blocked_by()) {
+                    if ((it->_parent && it->_parent->is_blocked_by()) ||
+                        (it->_parent1 && it->_parent1->is_blocked_by())) {
                         // This means runtime filter is not ready, so we call timeout or continue to poll this timer.
                         int64_t ms_since_registration = MonotonicMillis() - it->registration_time();
                         if (ms_since_registration > it->wait_time_ms()) {
