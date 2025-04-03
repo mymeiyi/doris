@@ -2001,6 +2001,8 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                       << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
                       << ", need to commit";
             err = txn->commit();
+            TEST_SYNC_POINT_CALLBACK("update_delete_bitmap:commit:err", request->initiator(), i,
+                                     &err);
             total_txn_put_keys += txn->num_put_keys();
             total_txn_put_bytes += txn->put_bytes();
             total_txn_size += txn->approximate_bytes();

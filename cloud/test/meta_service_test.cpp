@@ -5920,9 +5920,9 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithException) {
     }
 }
 
-void update_delete_bitmap_with_remove_pre() {
-    int64_t table_id = 200;
-    int64_t tablet_id = 202;
+void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_t table_id,
+                                          int64_t tablet_id, bool inject = false) {
+    brpc::Controller cntl;
     // compaction update delete bitmap with remove pre rowset delete bitmaps
     // get update lock
     GetDeleteBitmapUpdateLockRequest get_lock_req;
@@ -5963,6 +5963,10 @@ void update_delete_bitmap_with_remove_pre() {
             &update_delete_bitmap_req, &update_delete_bitmap_res, nullptr);
     ASSERT_EQ(update_delete_bitmap_res.status().code(), MetaServiceCode::OK);
     // remove delete bitmap lock
+    RemoveDeleteBitmapUpdateLockRequest remove_lock_req;
+    RemoveDeleteBitmapUpdateLockResponse remove_lock_res;
+    remove_lock_req.set_cloud_unique_id("test_cloud_unique_id");
+    remove_lock_req.set_table_id(table_id);
     remove_lock_req.set_lock_id(-1);
     remove_lock_req.set_initiator(203);
     meta_service->remove_delete_bitmap_update_lock(
@@ -5995,6 +5999,7 @@ void update_delete_bitmap_with_remove_pre() {
     update_delete_bitmap_req.clear_segment_delete_bitmaps();
     update_delete_bitmap_req.set_lock_id(-3);
     update_delete_bitmap_req.set_unlock(true);
+    update_delete_bitmap_req.set_initiator(tablet_id);
     update_delete_bitmap_req.set_pre_rowset_agg_start_version(4);
     update_delete_bitmap_req.set_pre_rowset_agg_end_version(6);
     std::vector<std::tuple<std::string, int64_t, int64_t>> new_rowset_segment_version_vector = {
@@ -6013,11 +6018,17 @@ void update_delete_bitmap_with_remove_pre() {
     meta_service->update_delete_bitmap(
             reinterpret_cast<google::protobuf::RpcController*>(&cntl),
             &update_delete_bitmap_req, &update_delete_bitmap_res, nullptr);
-    ASSERT_EQ(update_delete_bitmap_res.status().code(), MetaServiceCode::OK);
+    ASSERT_EQ(update_delete_bitmap_res.status().code(),
+              inject ? MetaServiceCode::KV_TXN_CONFLICT : MetaServiceCode::OK);
     // get delete bitmap again
     meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                     &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
     ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
+    for (int i = 0; i < get_delete_bitmap_res.rowset_ids_size(); i++) {
+        LOG(INFO) << "sout: i=" << i << ", rowset_id: " << get_delete_bitmap_res.rowset_ids(i)
+                  << ", segment_id: " << get_delete_bitmap_res.segment_ids(i)
+                  << ", version: " << get_delete_bitmap_res.versions(i);
+    }
     size = 6;
     ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), size);
     ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
@@ -6038,7 +6049,30 @@ void update_delete_bitmap_with_remove_pre() {
 }
 
 TEST(MetaServiceTest, UpdateDeleteBitmapWithRemovePreDeleteBitmap) {
+    auto meta_service = get_meta_service();
+    [[maybe_unused]] auto sp = SyncPoint::get_instance();
+    std::unique_ptr<int, std::function<void(int*)>> defer(
+            (int*)0x01, [](int*) { SyncPoint::get_instance()->clear_all_call_backs(); });
 
+    update_delete_bitmap_with_remove_pre(meta_service.get(), 200, 202);
+
+    int64_t max_txn_commit_byte = config::max_txn_commit_byte;
+    config::max_txn_commit_byte = 1000;
+    update_delete_bitmap_with_remove_pre(meta_service.get(), 300, 302);
+
+    sp->set_call_back("update_delete_bitmap:commit:err", [&](auto&& args) {
+        auto initiator = try_any_cast<int64_t>(args[0]);
+        auto i = try_any_cast<size_t>(args[1]);
+        if (initiator == 402 && i == 2) {
+            *try_any_cast<TxnErrorCode*>(args[2]) = TxnErrorCode::TXN_CONFLICT;
+        }
+    });
+    sp->enable_processing();
+    update_delete_bitmap_with_remove_pre(meta_service.get(), 400, 402, true);
+    sp->clear_all_call_backs();
+    sp->clear_trace();
+    sp->disable_processing();
+    config::max_txn_commit_byte = max_txn_commit_byte;
 }
 
 TEST(MetaServiceTest, GetDeleteBitmapWithIdx) {
