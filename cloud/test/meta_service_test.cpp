@@ -5591,250 +5591,6 @@ TEST(MetaServiceTest, UpdateDeleteBitmap) {
         ASSERT_EQ(get_delete_bitmap_res.versions(0), 2);
         ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps(0), large_value);
     }
-
-    {
-        int64_t table_id = 200;
-        int64_t tablet_id = 202;
-        // compaction update delete bitmap with remove pre rowset delete bitmaps
-        // get update lock
-        get_lock_req.set_table_id(table_id);
-        get_lock_req.set_lock_id(-1);
-        get_lock_req.set_initiator(203);
-        get_lock_req.set_expiration(10);
-        meta_service->get_delete_bitmap_update_lock(
-                reinterpret_cast<::google::protobuf::RpcController*>(&cntl), &get_lock_req,
-                &get_lock_res, nullptr);
-        ASSERT_EQ(get_lock_res.status().code(), MetaServiceCode::OK);
-        // write delete bitmap
-        UpdateDeleteBitmapRequest update_delete_bitmap_req;
-        UpdateDeleteBitmapResponse update_delete_bitmap_res;
-        update_delete_bitmap_req.set_cloud_unique_id("test_cloud_unique_id");
-        update_delete_bitmap_req.set_table_id(table_id);
-        update_delete_bitmap_req.set_partition_id(201);
-        update_delete_bitmap_req.set_tablet_id(tablet_id);
-        update_delete_bitmap_req.set_lock_id(-1);
-        update_delete_bitmap_req.set_initiator(203);
-        std::string large_value = generate_random_string(300 * 1000);
-        std::vector<std::tuple<std::string, int64_t, int64_t>> rowset_segment_version_vector = {
-                /* r2-0 */ {"r2", 0, 3}, {"r2", 0, 4}, {"r2", 0, 5}, {"r2", 0, 6},
-                /* r3-0 */ {"r3", 0, 4}, {"r3", 0, 5}, {"r3", 0, 6},
-                /* r3-1 */ {"r3", 1, 4}, {"r3", 1, 5},
-                /* r3-2 */ {"r3", 2, 4}, {"r3", 2, 6},
-                /* r4-0 */ {"r4", 0, 5}, {"r4", 0, 6}};
-        for (const auto& [rowset, segment, version] : rowset_segment_version_vector) {
-            update_delete_bitmap_req.add_rowset_ids(rowset);
-            update_delete_bitmap_req.add_segment_ids(segment);
-            update_delete_bitmap_req.add_versions(version);
-            update_delete_bitmap_req.add_segment_delete_bitmaps(large_value);
-        }
-        meta_service->update_delete_bitmap(
-                reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                &update_delete_bitmap_req, &update_delete_bitmap_res, nullptr);
-        ASSERT_EQ(update_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        // remove delete bitmap lock
-        remove_lock_req.set_lock_id(-1);
-        remove_lock_req.set_initiator(203);
-        meta_service->remove_delete_bitmap_update_lock(
-                reinterpret_cast<::google::protobuf::RpcController*>(&cntl), &remove_lock_req,
-                &remove_lock_res, nullptr);
-        ASSERT_EQ(remove_lock_res.status().code(), MetaServiceCode::OK);
-        // get delete bitmap
-        GetDeleteBitmapRequest get_delete_bitmap_req;
-        GetDeleteBitmapResponse get_delete_bitmap_res;
-        get_delete_bitmap_req.set_cloud_unique_id("test_cloud_unique_id");
-        get_delete_bitmap_req.set_tablet_id(tablet_id);
-        std::vector<std::string> rowset_vector = {"r2", "r3", "r4"};
-        for (const auto& rowset : rowset_vector) {
-            get_delete_bitmap_req.add_rowset_ids(rowset);
-            get_delete_bitmap_req.add_begin_versions(0);
-            get_delete_bitmap_req.add_end_versions(6);
-        }
-        meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                                        &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
-        ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        auto size = rowset_segment_version_vector.size();
-        ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.versions_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-        // update pre rowset delete bitmap
-        update_delete_bitmap_req.clear_rowset_ids();
-        update_delete_bitmap_req.clear_segment_ids();
-        update_delete_bitmap_req.clear_versions();
-        update_delete_bitmap_req.clear_segment_delete_bitmaps();
-        update_delete_bitmap_req.set_lock_id(-3);
-        update_delete_bitmap_req.set_unlock(true);
-        update_delete_bitmap_req.set_pre_rowset_agg_start_version(4);
-        update_delete_bitmap_req.set_pre_rowset_agg_end_version(6);
-        std::vector<std::tuple<std::string, int64_t, int64_t>> new_rowset_segment_version_vector = {
-                /* r2-0 */ {"r2", 0, 6},
-                /* r3-0 */ {"r3", 0, 6},
-                /* r3-1 */ {"r3", 1, 6},
-                /* r3-2 */ {"r3", 2, 6},
-                /* r4-0 */ {"r4", 0, 6}};
-        std::string new_large_value = generate_random_string(300 * 1000);
-        for (const auto& [rowset, segment, version] : new_rowset_segment_version_vector) {
-            update_delete_bitmap_req.add_rowset_ids(rowset);
-            update_delete_bitmap_req.add_segment_ids(segment);
-            update_delete_bitmap_req.add_versions(version);
-            update_delete_bitmap_req.add_segment_delete_bitmaps(new_large_value);
-        }
-        meta_service->update_delete_bitmap(
-                reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                &update_delete_bitmap_req, &update_delete_bitmap_res, nullptr);
-        ASSERT_EQ(update_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        // get delete bitmap again
-        meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                                        &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
-        ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        size = 6;
-        ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.versions_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-        std::vector<std::tuple<std::string, int64_t, int64_t, std::string>> expected_dm = {
-                /* r2-0 */ {"r2", 0, 3, large_value},     {"r2", 0, 6, new_large_value},
-                /* r3-0 */ {"r3", 0, 6, new_large_value},
-                /* r3-1 */ {"r3", 1, 6, new_large_value},
-                /* r3-2 */ {"r3", 2, 6, new_large_value},
-                /* r4-0 */ {"r4", 0, 6, new_large_value}};
-        for (size_t i = 0; i < get_delete_bitmap_res.rowset_ids_size(); i++) {
-            ASSERT_EQ(get_delete_bitmap_res.rowset_ids(i), std::get<0>(expected_dm[i]));
-            ASSERT_EQ(get_delete_bitmap_res.segment_ids(i), std::get<1>(expected_dm[i]));
-            ASSERT_EQ(get_delete_bitmap_res.versions(i), std::get<2>(expected_dm[i]));
-            ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps(i), std::get<3>(expected_dm[i]));
-        }
-        remove_delete_bitmap(meta_service.get());
-        /*meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                                        &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
-        ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), 0);*/
-    }
-
-    {
-        // compaction update delete bitmap with remove pre rowset delete bitmaps
-        // and some commit_txn fail
-        int64_t table_id = 300;
-        int64_t tablet_id = 302;
-        // compaction update delete bitmap with remove pre rowset delete bitmaps
-        // get update lock
-        get_lock_req.set_table_id(table_id);
-        get_lock_req.set_lock_id(-1);
-        get_lock_req.set_initiator(203);
-        get_lock_req.set_expiration(10);
-        meta_service->get_delete_bitmap_update_lock(
-                reinterpret_cast<::google::protobuf::RpcController*>(&cntl), &get_lock_req,
-                &get_lock_res, nullptr);
-        ASSERT_EQ(get_lock_res.status().code(), MetaServiceCode::OK);
-        // write delete bitmap
-        UpdateDeleteBitmapRequest update_delete_bitmap_req;
-        UpdateDeleteBitmapResponse update_delete_bitmap_res;
-        update_delete_bitmap_req.set_cloud_unique_id("test_cloud_unique_id");
-        update_delete_bitmap_req.set_table_id(table_id);
-        update_delete_bitmap_req.set_partition_id(201);
-        update_delete_bitmap_req.set_tablet_id(tablet_id);
-        update_delete_bitmap_req.set_lock_id(-1);
-        update_delete_bitmap_req.set_initiator(203);
-        std::string large_value = generate_random_string(300 * 1000);
-        std::vector<std::tuple<std::string, int64_t, int64_t>> rowset_segment_version_vector = {
-                /* r2-0 */ {"r2", 0, 3}, {"r2", 0, 4}, {"r2", 0, 5}, {"r2", 0, 6},
-                /* r3-0 */ {"r3", 0, 4}, {"r3", 0, 5}, {"r3", 0, 6},
-                /* r3-1 */ {"r3", 1, 4}, {"r3", 1, 5},
-                /* r3-2 */ {"r3", 2, 4}, {"r3", 2, 6},
-                /* r4-0 */ {"r4", 0, 5}, {"r4", 0, 6}};
-        for (const auto& [rowset, segment, version] : rowset_segment_version_vector) {
-            update_delete_bitmap_req.add_rowset_ids(rowset);
-            update_delete_bitmap_req.add_segment_ids(segment);
-            update_delete_bitmap_req.add_versions(version);
-            update_delete_bitmap_req.add_segment_delete_bitmaps(large_value);
-        }
-        meta_service->update_delete_bitmap(
-                reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                &update_delete_bitmap_req, &update_delete_bitmap_res, nullptr);
-        ASSERT_EQ(update_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        // remove delete bitmap lock
-        remove_lock_req.set_lock_id(-1);
-        remove_lock_req.set_initiator(203);
-        meta_service->remove_delete_bitmap_update_lock(
-                reinterpret_cast<::google::protobuf::RpcController*>(&cntl), &remove_lock_req,
-                &remove_lock_res, nullptr);
-        ASSERT_EQ(remove_lock_res.status().code(), MetaServiceCode::OK);
-        // get delete bitmap
-        GetDeleteBitmapRequest get_delete_bitmap_req;
-        GetDeleteBitmapResponse get_delete_bitmap_res;
-        get_delete_bitmap_req.set_cloud_unique_id("test_cloud_unique_id");
-        get_delete_bitmap_req.set_tablet_id(tablet_id);
-        std::vector<std::string> rowset_vector = {"r2", "r3", "r4"};
-        for (const auto& rowset : rowset_vector) {
-            get_delete_bitmap_req.add_rowset_ids(rowset);
-            get_delete_bitmap_req.add_begin_versions(0);
-            get_delete_bitmap_req.add_end_versions(6);
-        }
-        meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                                        &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
-        ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        for (int i = 0; i < get_delete_bitmap_res.rowset_ids_size(); i++) {
-            LOG(INFO) << "sout: i=" << i << ", rowset_id: " << get_delete_bitmap_res.rowset_ids(i)
-                      << ", segment_id: " << get_delete_bitmap_res.segment_ids(i)
-                      << ", version: " << get_delete_bitmap_res.versions(i);
-        }
-        auto size = rowset_segment_version_vector.size();
-        ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.versions_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-        // update pre rowset delete bitmap
-        int64_t max_txn_commit_byte = config::max_txn_commit_byte;
-        config::max_txn_commit_byte = 1000;
-        update_delete_bitmap_req.clear_rowset_ids();
-        update_delete_bitmap_req.clear_segment_ids();
-        update_delete_bitmap_req.clear_versions();
-        update_delete_bitmap_req.clear_segment_delete_bitmaps();
-        update_delete_bitmap_req.set_lock_id(-3);
-        update_delete_bitmap_req.set_unlock(true);
-        update_delete_bitmap_req.set_pre_rowset_agg_start_version(4);
-        update_delete_bitmap_req.set_pre_rowset_agg_end_version(6);
-        std::vector<std::tuple<std::string, int64_t, int64_t>> new_rowset_segment_version_vector = {
-                /* r2-0 */ {"r2", 0, 6},
-                /* r3-0 */ {"r3", 0, 6},
-                /* r3-1 */ {"r3", 1, 6},
-                /* r3-2 */ {"r3", 2, 6},
-                /* r4-0 */ {"r4", 0, 6}};
-        std::string new_large_value = generate_random_string(300 * 1000);
-        for (const auto& [rowset, segment, version] : new_rowset_segment_version_vector) {
-            update_delete_bitmap_req.add_rowset_ids(rowset);
-            update_delete_bitmap_req.add_segment_ids(segment);
-            update_delete_bitmap_req.add_versions(version);
-            update_delete_bitmap_req.add_segment_delete_bitmaps(new_large_value);
-        }
-        meta_service->update_delete_bitmap(
-                reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                &update_delete_bitmap_req, &update_delete_bitmap_res, nullptr);
-        ASSERT_EQ(update_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        // get delete bitmap again
-        meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                                        &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
-        ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-        size = 6;
-        ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.versions_size(), size);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-        std::vector<std::tuple<std::string, int64_t, int64_t, std::string>> expected_dm = {
-                /* r2-0 */ {"r2", 0, 3, large_value},     {"r2", 0, 6, new_large_value},
-                /* r3-0 */ {"r3", 0, 6, new_large_value},
-                /* r3-1 */ {"r3", 1, 6, new_large_value},
-                /* r3-2 */ {"r3", 2, 6, new_large_value},
-                /* r4-0 */ {"r4", 0, 6, new_large_value}};
-        for (size_t i = 0; i < get_delete_bitmap_res.rowset_ids_size(); i++) {
-            ASSERT_EQ(get_delete_bitmap_res.rowset_ids(i), std::get<0>(expected_dm[i]));
-            ASSERT_EQ(get_delete_bitmap_res.segment_ids(i), std::get<1>(expected_dm[i]));
-            ASSERT_EQ(get_delete_bitmap_res.versions(i), std::get<2>(expected_dm[i]));
-            ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps(i), std::get<3>(expected_dm[i]));
-        }
-        remove_delete_bitmap(meta_service.get());
-        config::max_txn_commit_byte = max_txn_commit_byte;
-    }
     remove_delete_bitmap_lock(meta_service.get(), 112);
 }
 
@@ -5958,9 +5714,9 @@ void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_
         update_delete_bitmap_req.add_versions(version);
         update_delete_bitmap_req.add_segment_delete_bitmaps(large_value);
     }
-    meta_service->update_delete_bitmap(
-            reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-            &update_delete_bitmap_req, &update_delete_bitmap_res, nullptr);
+    meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
+                                       &update_delete_bitmap_req, &update_delete_bitmap_res,
+                                       nullptr);
     ASSERT_EQ(update_delete_bitmap_res.status().code(), MetaServiceCode::OK);
     // remove delete bitmap lock
     RemoveDeleteBitmapUpdateLockRequest remove_lock_req;
@@ -6015,31 +5771,36 @@ void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_
         update_delete_bitmap_req.add_versions(version);
         update_delete_bitmap_req.add_segment_delete_bitmaps(new_large_value);
     }
-    meta_service->update_delete_bitmap(
-            reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-            &update_delete_bitmap_req, &update_delete_bitmap_res, nullptr);
+    meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
+                                       &update_delete_bitmap_req, &update_delete_bitmap_res,
+                                       nullptr);
     ASSERT_EQ(update_delete_bitmap_res.status().code(),
               inject ? MetaServiceCode::KV_TXN_CONFLICT : MetaServiceCode::OK);
     // get delete bitmap again
     meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                     &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
     ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-    for (int i = 0; i < get_delete_bitmap_res.rowset_ids_size(); i++) {
-        LOG(INFO) << "sout: i=" << i << ", rowset_id: " << get_delete_bitmap_res.rowset_ids(i)
-                  << ", segment_id: " << get_delete_bitmap_res.segment_ids(i)
-                  << ", version: " << get_delete_bitmap_res.versions(i);
-    }
-    size = 6;
+    size = inject ? 9 : 6;
     ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), size);
     ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
     ASSERT_EQ(get_delete_bitmap_res.versions_size(), size);
     ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
-    std::vector<std::tuple<std::string, int64_t, int64_t, std::string>> expected_dm = {
-            /* r2-0 */ {"r2", 0, 3, large_value},     {"r2", 0, 6, new_large_value},
-            /* r3-0 */ {"r3", 0, 6, new_large_value},
-            /* r3-1 */ {"r3", 1, 6, new_large_value},
-            /* r3-2 */ {"r3", 2, 6, new_large_value},
-            /* r4-0 */ {"r4", 0, 6, new_large_value}};
+    std::vector<std::tuple<std::string, int64_t, int64_t, std::string>> expected_dm;
+    if (inject) {
+        expected_dm = {/* r2-0 */ {"r2", 0, 3, large_value}, {"r2", 0, 6, new_large_value},
+                       /* r3-0 is agg */ {"r3", 1, 4, large_value},
+                       {"r3", 2, 4, large_value},
+                       {"r3", 1, 5, large_value},
+                       {"r3", 0, 6, new_large_value},
+                       {"r3", 2, 6, large_value},
+                       /* r4-0 */ {"r4", 0, 5, large_value}, {"r4", 0, 6, large_value}};
+    } else {
+        expected_dm = {/* r2-0 */ {"r2", 0, 3, large_value}, {"r2", 0, 6, new_large_value},
+                       /* r3-0 */ {"r3", 0, 6, new_large_value},
+                       /* r3-1 */ {"r3", 1, 6, new_large_value},
+                       /* r3-2 */ {"r3", 2, 6, new_large_value},
+                       /* r4-0 */ {"r4", 0, 6, new_large_value}};
+    }
     for (size_t i = 0; i < get_delete_bitmap_res.rowset_ids_size(); i++) {
         ASSERT_EQ(get_delete_bitmap_res.rowset_ids(i), std::get<0>(expected_dm[i]));
         ASSERT_EQ(get_delete_bitmap_res.segment_ids(i), std::get<1>(expected_dm[i]));
