@@ -1986,8 +1986,6 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
     bool remove_pre_rowset_delete_bitmap =
             request->has_pre_rowset_agg_start_version() &&
             request->has_pre_rowset_agg_end_version() &&
-            request->pre_rowset_agg_start_version() > 0 &&
-            request->pre_rowset_agg_end_version() > 0 &&
             request->pre_rowset_agg_start_version() < request->pre_rowset_agg_end_version();
     for (size_t i = 0; i < request->rowset_ids_size(); ++i) {
         auto& key = delete_bitmap_keys.delete_bitmap_keys(i);

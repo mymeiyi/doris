@@ -1781,7 +1781,7 @@ void BaseTablet::agg_delete_bitmap_for_stale_rowsets(
         }
         end_version = timestampedVersion->version().second;
     }
-    DCHECK(start_version > 0 && end_version > 0 && start_version < end_version)
+    DCHECK(start_version < end_version)
             << ". start_version: " << start_version << ", end_version: " << end_version;
     // do agg for pre rowsets
     DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
