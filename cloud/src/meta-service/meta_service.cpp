@@ -2159,7 +2159,20 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                       << " tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
                       << " initiator=" << request->initiator();
             if (remove_pre_rowset_delete_bitmap) {
-                for (int64_t version = request->pre_rowset_agg_start_version();
+                // range get, check segment id
+                MetaDeleteBitmapInfo start_key_info {instance_id, tablet_id, request->rowset_ids(i),
+                                                     request->pre_rowset_agg_start_version(), 0};
+                MetaDeleteBitmapInfo end_key_info {instance_id, tablet_id, request->rowset_ids(i),
+                                                   request->pre_rowset_agg_end_version(),
+                                                   INT64_MAX};
+                std::string start_key;
+                std::string end_key;
+                meta_delete_bitmap_key(start_key_info, &start_key);
+                meta_delete_bitmap_key(end_key_info, &end_key);
+                // in order to get splitted large value
+                encode_int64(INT64_MAX, &end_key);
+
+                /*for (int64_t version = request->pre_rowset_agg_start_version();
                      version < request->pre_rowset_agg_end_version(); ++version) {
                     auto delete_bitmap_start =
                             meta_delete_bitmap_key({instance_id, tablet_id, request->rowset_ids(i),
@@ -2172,7 +2185,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                               << ", segment=" << request->segment_ids(i) << ", version=" << version
                               << ", start_key=" << hex(delete_bitmap_start)
                               << ", end_key=" << hex(delete_bitmap_end);
-                }
+                }*/
             }
         }
         // splitting large values (>90*1000) into multiple KVs
