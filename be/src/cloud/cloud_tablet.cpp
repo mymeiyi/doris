@@ -464,7 +464,6 @@ bool CloudTablet::need_remove_pre_rowset_delete_bitmap() {
 }
 
 void CloudTablet::remove_pre_rowset_delete_bitmap() {
-    LOG(INFO) << "sout: size=" << _unused_delete_bitmap.size() << " tablet_id=" << tablet_id();
     std::lock_guard<std::mutex> lock(_gc_mutex);
     for (auto it = _unused_delete_bitmap.begin(); it != _unused_delete_bitmap.end();) {
         auto& rowsets = std::get<0>(*it);
@@ -472,10 +471,11 @@ void CloudTablet::remove_pre_rowset_delete_bitmap() {
         bool find_unused_rowset = false;
         for (const auto& rowset : rowsets) {
             if (rowset.use_count() > 1) {
-                LOG(INFO) << "sout: rowset is in use, tablet_id=" << tablet_id()
-                          << " rowset_id=" << rowset->rowset_id().to_string()
-                          << " version=" << rowset->version().to_string()
-                          << " use_count=" << rowset.use_count();
+                LOG(INFO) << "can not remove pre rowset delete bitmap because rowset is in use"
+                          << ", tablet_id=" << tablet_id()
+                          << ", rowset_id=" << rowset->rowset_id().to_string()
+                          << ", version=" << rowset->version().to_string()
+                          << ", use_count=" << rowset.use_count();
                 find_unused_rowset = true;
                 break;
             }
