@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+import java.util.concurrent.atomic.AtomicBoolean
 import org.apache.doris.regression.suite.ClusterOptions
 import groovy.json.JsonSlurper
 
@@ -201,6 +202,35 @@ suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
         sql "sync"
         order_qt_sql1 """ select * from ${testTable}; """
 
+        // read data from cluster2
+        def fes = sql_return_maparray "show frontends"
+        logger.info("frontends: ${fes}")
+        def url = "jdbc:mysql://${fes[0].Host}:${fes[0].QueryPort}/"
+        logger.info("url: " + url)
+        AtomicBoolean query_result = new AtomicBoolean(true)
+        def query = {
+            connect( context.config.jdbcUser,  context.config.jdbcPassword,  url) {
+                sql """use @${cluster2.cluster}"""
+                logger.info("query start")
+                def results = sql_return_maparray """ select * from ${testTable}; """
+                logger.info("query result: " + results)
+                Set<String> keys = new HashSet<>()
+                for (final def result in results) {
+                    if (keys.contains(result.k)) {
+                        logger.info("find duplicate key: " + result.k)
+                        query_result.set(false)
+                        break
+                    }
+                    keys.add(result.k)
+                }
+                logger.info("query finish. query_result: " + query_result.get())
+            }
+        }
+        GetDebugPoint().enableDebugPointForAllBEs("CloudMetaMgr::sync_tablet_rowsets.sync_tablet_delete_bitmap.block")
+        Thread query_thread = new Thread(() -> query())
+        query_thread.start()
+        sleep(100)
+
         // 2. trigger compaction 0
         getTabletStatus(tablet)
         assertTrue(triggerCompaction(tablet).contains("Success"))
@@ -215,6 +245,10 @@ suite('test_mow_agg_delete_bitmap', 'multi_cluster,docker') {
         logger.info("ms_dm: " + ms_dm)
         assertEquals(0, ms_dm.delete_bitmap_count)
         assertEquals(0, ms_dm.cardinality)
+
+        GetDebugPoint().disableDebugPointForAllBEs("NewOlapScanner::_init_tablet_reader_params.block")
+        query_thread.join()
+        assertTrue(query_result.get(), "find duplicated keys")
 
         sql """use @${cluster1.cluster}"""
         order_qt_sql2 """ select * from ${testTable}; """

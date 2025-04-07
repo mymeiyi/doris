@@ -570,6 +570,8 @@ Status CloudMetaMgr::sync_tablet_rowsets(CloudTablet* tablet, const SyncOptions&
         // So dont need to sync it.
         if (options.sync_delete_bitmap && tablet->enable_unique_key_merge_on_write() &&
             tablet->tablet_state() == TABLET_RUNNING) {
+            DBUG_EXECUTE_IF("CloudMetaMgr::sync_tablet_rowsets.sync_tablet_delete_bitmap.block",
+                            DBUG_BLOCK);
             DeleteBitmap delete_bitmap(tablet_id);
             int64_t old_max_version = req.start_version() - 1;
             auto st = sync_tablet_delete_bitmap(tablet, old_max_version, resp.rowset_meta(),
