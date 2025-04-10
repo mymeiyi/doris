@@ -61,6 +61,12 @@ suite("test_schema_change_unique", "p0") {
                 }
                 log.info("Stream load result: ${result}".toString())
                 def json = parseJson(result)
+                if (isGroupCommitMode()) {
+                    if (json.Status.toLowerCase() == "fail") {
+                        assertTrue(json.Message.contains("schema version not match"))
+                        return
+                    }
+                }
                 assertEquals("success", json.Status.toLowerCase())
                 assertEquals(2500, json.NumberTotalRows)
                 assertEquals(0, json.NumberFilteredRows)
@@ -189,8 +195,16 @@ suite("test_schema_change_unique", "p0") {
     checkNoDuplicatedKeys(tableName3)
 
     sql """ alter table ${tableName3} add column v14 int NOT NULL default "1" after k13 """
-    sql """ insert into ${tableName3} values (10001, 2, 3, 4, 5, 6.6, 1.7, 8.8,
+    try {
+        sql """ insert into ${tableName3} values (10001, 2, 3, 4, 5, 6.6, 1.7, 8.8,
     'a', 'b', 'c', '2021-10-30', '2021-10-30 00:00:00', 10086) """
+    } catch (Exception e) {
+        if (isGroupCommitMode() && (e.getMessage().contains("schema version not match") || e.getMessage().contains("is blocked on schema change"))) {
+            log.info(e.getMessage())
+        } else {
+            throw e
+        }
+    }
     checkNoDuplicatedKeys(tableName3)
 
     sql """ alter table ${tableName3} modify column v14 int NULL default "1" """
