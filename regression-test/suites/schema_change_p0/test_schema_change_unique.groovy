@@ -61,6 +61,12 @@ suite("test_schema_change_unique", "p0") {
                 }
                 log.info("Stream load result: ${result}".toString())
                 def json = parseJson(result)
+                if (isGroupCommitMode()) {
+                    if (json.Status.toLowerCase() == "fail") {
+                        assertTrue(json.Message.contains("schema version not match"))
+                        return
+                    }
+                }
                 assertEquals("success", json.Status.toLowerCase())
                 assertEquals(2500, json.NumberTotalRows)
                 assertEquals(0, json.NumberFilteredRows)
