@@ -18,9 +18,9 @@
 import org.codehaus.groovy.runtime.IOGroovyMethods
 
 suite("test_mow_compaction_and_schema_change", "nonConcurrent") {
-    if (isCloudMode()) {
+    /*if (isCloudMode()) {
         return
-    }
+    }*/
     def dbName = "regression_test_compaction"
     def testTable = ""
     def backendId_to_backendIP = [:]
