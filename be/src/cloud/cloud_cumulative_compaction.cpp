@@ -492,6 +492,12 @@ Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
         int64_t candidate_version = std::max(
                 std::max(cloud_tablet()->cumulative_layer_point(), _max_conflict_version + 1),
                 cloud_tablet()->alter_version() + 1);
+        LOG(INFO) << "sout: tablet=" << cloud_tablet()->tablet_id() << ", candidate_version="
+                  << candidate_version << ", max_conflict_version=" << _max_conflict_version
+                  << ", alter_version=" << cloud_tablet()->alter_version()
+                  << ", last_sync_time_s=" << cloud_tablet()->last_sync_time_s
+                  << ", last_compaction_status="
+                  << cloud_tablet()->last_compaction_status.to_string();
         // Get all rowsets whose version >= `candidate_version` as candidate rowsets
         cloud_tablet()->traverse_rowsets(
                 [&candidate_rowsets, candidate_version](const RowsetSharedPtr& rs) {
@@ -523,6 +529,8 @@ Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
 
     size_t compaction_score = 0;
     auto compaction_policy = cloud_tablet()->tablet_meta()->compaction_policy();
+    LOG(INFO) << "sout: tablet=" << cloud_tablet()->tablet_id()
+              << ", candidate=" << candidate_rowsets.size();
     _engine.cumu_compaction_policy(compaction_policy)
             ->pick_input_rowsets(cloud_tablet(), candidate_rowsets, max_score,
                                  config::cumulative_compaction_min_deltas, &_input_rowsets,

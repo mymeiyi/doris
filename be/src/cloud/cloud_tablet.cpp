@@ -458,6 +458,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
 }
 
 bool CloudTablet::need_remove_pre_rowset_delete_bitmap() {
+    std::lock_guard<std::mutex> lock(_gc_mutex);
     return !_unused_delete_bitmap.empty();
 }
 
