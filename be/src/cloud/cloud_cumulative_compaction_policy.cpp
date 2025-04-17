@@ -62,6 +62,10 @@ int64_t CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets(
                     auto start_version = dp->param<int64_t>("start_version", -1);
                     auto end_version = dp->param<int64_t>("end_version", -1);
                     for (auto& rowset : candidate_rowsets) {
+                        LOG(INFO) << "sout: candidate rowset_id=" << rowset->rowset_id()
+                                  << ", start_version=" << rowset->start_version()
+                                  << ", end_version=" << rowset->end_version()
+                                  << ", tablet_id=" << tablet->tablet_id();
                         if (rowset->start_version() >= start_version &&
                             rowset->end_version() <= end_version) {
                             input_rowsets->push_back(rowset);
