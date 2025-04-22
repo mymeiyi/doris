@@ -1262,6 +1262,17 @@ std::vector<RowsetSharedPtr> Tablet::pick_candidate_rowsets_to_base_compaction()
 std::vector<RowsetSharedPtr> Tablet::_pick_visible_rowsets_to_compaction(
         int64_t min_start_version, int64_t max_start_version) {
     auto [visible_version, update_ts] = get_visible_version_and_time();
+    DBUG_EXECUTE_IF("Tablet::_pick_visible_rowsets_to_compaction.set_visible_version", {
+        auto target_tablet_id = dp->param<int64_t>("tablet_id", -1);
+        if (target_tablet_id == tablet_id()) {
+            auto version = dp->param<int64_t>("visible_version", -1);
+            if (version != -1) {
+                visible_version = version;
+                LOG(INFO) << "set visible version to " << visible_version
+                          << ", tablet_id=" << tablet_id();
+            }
+        }
+    })
     bool update_time_long = MonotonicMillis() - update_ts >
                             config::compaction_keep_invisible_version_timeout_sec * 1000L;
     int32_t keep_invisible_version_limit =

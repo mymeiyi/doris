@@ -64,6 +64,7 @@ import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
+import org.apache.doris.common.util.DebugPointUtil;
 import org.apache.doris.common.util.DebugUtil;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.nereids.glue.translator.PlanTranslatorContext;
@@ -754,6 +755,14 @@ public class OlapScanNode extends ScanNode {
         // assign a snapshot version of all partitions.
         if (!(Config.isCloudMode() && Config.enable_cloud_snapshot_version)) {
             visibleVersion = partition.getVisibleVersion();
+            if (partition.getId() == DebugPointUtil.getDebugParamOrDefault(
+                    "OlapScanNode.addScanRangeLocations.set_partition_visible_version", "partitionId", -1L)) {
+                long version = DebugPointUtil.getDebugParamOrDefault(
+                        "OlapScanNode.addScanRangeLocations.set_partition_visible_version", "visibleVersion", -1L);
+                LOG.info("debug set partition {} visible version from {} to {}", partition.getId(), visibleVersion,
+                        version);
+                visibleVersion = version;
+            }
         }
         String visibleVersionStr = String.valueOf(visibleVersion);
 

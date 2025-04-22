@@ -1286,7 +1286,8 @@ void StorageEngine::add_unused_rowset(RowsetSharedPtr rowset) {
 void StorageEngine::add_unused_delete_bitmap_key_ranges(int64_t tablet_id,
                                                         const std::vector<RowsetId>& rowsets,
                                                         const DeleteBitmapKeyRanges& key_ranges) {
-    VLOG_NOTICE << "add unused delete bitmap key ranges, tablet id:" << tablet_id;
+    VLOG_NOTICE << "add unused delete bitmap key ranges, tablet id:" << tablet_id
+                << ", rowset size:" << rowsets.size() << ", key ranges size:" << key_ranges.size();
     std::lock_guard<std::mutex> lock(_gc_mutex);
     _unused_delete_bitmap.push_back(std::make_tuple(tablet_id, rowsets, key_ranges));
 }
