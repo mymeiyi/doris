@@ -390,7 +390,6 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
         LOG_INFO("begin delete_expired_stale_rowset for tablet={}", tablet_id());
     }
     std::vector<RowsetSharedPtr> expired_rowsets;
-    // ATTN: trick, Use stale_rowsets or unused_rowsets to temporarily increase the reference count of the rowset shared pointer in _stale_rs_version_map so that in the recycle_cached_data function, it checks if the reference count is 2.
     // ATTN: trick, Use stale_rowsets to temporarily increase the reference count of the rowset shared pointer in _stale_rs_version_map so that in the recycle_cached_data function, it checks if the reference count is 2.
     std::vector<std::pair<Version, std::vector<RowsetSharedPtr>>> deleted_stale_rowsets;
     int64_t expired_stale_sweep_endtime =
@@ -416,6 +415,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
             for (auto& v_ts : version_path->timestamped_versions()) {
                 auto rs_it = _stale_rs_version_map.find(v_ts->version());
                 if (rs_it != _stale_rs_version_map.end()) {
+                    expired_rowsets.push_back(rs_it->second);
                     remove_rowsets.emplace_back(rs_it->second);
                     LOG(INFO) << "erase stale rowset, tablet_id=" << tablet_id()
                               << " rowset_id=" << rs_it->second->rowset_id().to_string()
