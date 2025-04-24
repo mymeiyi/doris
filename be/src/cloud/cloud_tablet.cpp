@@ -409,14 +409,14 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
         for (int64_t path_id : path_ids) {
             int64_t start_version = -1;
             int64_t end_version = -1;
-            std::vector<RowsetSharedPtr> remove_rowsets;
+            std::vector<RowsetSharedPtr> stale_rowsets;
             // delete stale versions in version graph
             auto version_path = _timestamped_version_tracker.fetch_and_delete_path_by_id(path_id);
             for (auto& v_ts : version_path->timestamped_versions()) {
                 auto rs_it = _stale_rs_version_map.find(v_ts->version());
                 if (rs_it != _stale_rs_version_map.end()) {
                     expired_rowsets.push_back(rs_it->second);
-                    remove_rowsets.emplace_back(rs_it->second);
+                    stale_rowsets.emplace_back(rs_it->second);
                     LOG(INFO) << "erase stale rowset, tablet_id=" << tablet_id()
                               << " rowset_id=" << rs_it->second->rowset_id().to_string()
                               << " version=" << rs_it->first.to_string();
@@ -436,8 +436,8 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
             }
             Version version(start_version, end_version);
             version_to_delete.emplace_back(version.to_string());
-            if (!remove_rowsets.empty()) {
-                deleted_stale_rowsets.emplace_back(version, std::move(remove_rowsets));
+            if (!stale_rowsets.empty()) {
+                deleted_stale_rowsets.emplace_back(version, std::move(stale_rowsets));
             }
         }
         _reconstruct_version_tracker_if_necessary();
