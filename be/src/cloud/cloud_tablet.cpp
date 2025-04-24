@@ -442,15 +442,12 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
         }
         _reconstruct_version_tracker_if_necessary();
     }
+    _tablet_meta->delete_bitmap().remove_stale_delete_bitmap_from_queue(version_to_delete);
+    recycle_cached_data(expired_rowsets);
     if (config::enable_mow_verbose_log) {
         LOG_INFO("finish delete_expired_stale_rowset for tablet={}", tablet_id());
     }
-    _tablet_meta->delete_bitmap().remove_stale_delete_bitmap_from_queue(version_to_delete);
-    int64_t expired_rowsets_size = 0;
-    for (const auto& [version, unused_rowsets] : deleted_stale_rowsets) {
-        expired_rowsets_size += unused_rowsets.size();
-        recycle_cached_data(unused_rowsets);
-    }
+
     if (keys_type() == UNIQUE_KEYS && enable_unique_key_merge_on_write() &&
         !deleted_stale_rowsets.empty()) {
         // agg delete bitmap for pre rowsets; record unused delete bitmap key ranges
@@ -470,7 +467,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
                   << ", size=" << deleted_stale_rowsets.size()
                   << ", cost(us)=" << watch.get_elapse_time_us();
     }
-    return expired_rowsets_size;
+    return expired_rowsets.size();
 }
 
 bool CloudTablet::need_remove_pre_rowset_delete_bitmap() {
