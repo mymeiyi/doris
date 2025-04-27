@@ -385,6 +385,9 @@ Status CloudCumulativeCompaction::modify_rowsets() {
                                                          _output_rowset->end_version(), pre_rowsets,
                                                          pre_rowsets_delete_bitmap);
         // update delete bitmap to ms
+        DBUG_EXECUTE_IF(
+                "CumulativeCompaction.modify_rowsets.cloud_update_delete_bitmap_without_lock.block",
+                DBUG_BLOCK);
         auto status = _engine.meta_mgr().cloud_update_delete_bitmap_without_lock(
                 *cloud_tablet(), pre_rowsets_delete_bitmap.get(), _output_rowset->start_version(),
                 _output_rowset->end_version());
