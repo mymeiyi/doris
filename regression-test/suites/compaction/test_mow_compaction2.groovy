@@ -195,7 +195,7 @@ suite("test_mow_compaction2", "nonConcurrent") {
             if (method == 0) {
                 // solution2: no duplicated key problems
                 set_be_param("enable_delete_bitmap_merge_on_compaction", "false")
-                set_be_param("enable_agg_and_remove_pre_rowsets_delete_bitmap", "false")
+                set_be_param("enable_agg_and_remove_pre_rowsets_delete_bitmap", "true")
             } /*else if (method == 1) {
                 // solution1: has duplicated key problems
                 set_be_param("enable_delete_bitmap_merge_on_compaction", "true")
@@ -265,9 +265,15 @@ suite("test_mow_compaction2", "nonConcurrent") {
             GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
                     [tablet_id: "${tablet.TabletId}", start_version: 7, end_version: 11]);
             assertTrue(triggerCompaction(tablet).contains("Success"))
-            waitForCompaction(tablet)
-            tablet_status = getTabletStatus(tablet)
-            logger.info("tablet_status 2: " + tablet_status)
+            // waitForCompaction(tablet)
+            for (int i = 0; i < 10; i++) {
+                tablet_status = getTabletStatus(tablet)
+                logger.info("tablet_status 2: " + tablet_status)
+                if (tablet_status["rowsets"].size() == 3) {
+                    break
+                }
+                sleep(1000)
+            }
             assertEquals(3, tablet_status["rowsets"].size())
             local_dm = getLocalDeleteBitmapStatus(tablet)
             logger.info("local_dm 2: " + local_dm)
@@ -276,7 +282,15 @@ suite("test_mow_compaction2", "nonConcurrent") {
             order_qt_sql4 "select * from ${testTable}"
 
             triggerFullCompaction(tablet)
-            waitForCompaction(tablet)
+            // waitForCompaction(tablet)
+            for (int i = 0; i < 10; i++) {
+                tablet_status = getTabletStatus(tablet)
+                logger.info("tablet_status 2: " + tablet_status)
+                if (tablet_status["rowsets"].size() == 2) {
+                    break
+                }
+                sleep(1000)
+            }
             sleep(1000)
             // check rowset is 1
             getTabletStatus(tablet)
