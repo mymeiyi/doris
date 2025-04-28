@@ -239,6 +239,13 @@ suite("test_mow_compaction2", "nonConcurrent") {
             getTabletStatus(tablet)
             assertTrue(triggerCompaction(tablet).contains("Success"))
             waitForCompaction(tablet)
+            for (int i = 0; i < 10; i++) {
+                def tablet_status = getTabletStatus(tablet)
+                if (tablet_status["stale_rowsets"].size() == 0) {
+                    break
+                }
+                sleep(5000)
+            }
             def tablet_status = getTabletStatus(tablet)
             logger.info("tablet_status 0: " + tablet_status)
             assertEquals(2, tablet_status["rowsets"].size())
