@@ -1308,7 +1308,8 @@ Status CloudMetaMgr::cloud_update_delete_bitmap_without_lock(
             << "pre_rowset_agg_end_version=" << pre_rowset_agg_end_version
             << " delete_bitmap size=" << delete_bitmap->delete_bitmap.size()
             << " pre_rowset_versions size=" << pre_rowset_versions.size();
-    for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
+    for (size_t i = 0; i < delete_bitmap->delete_bitmap.size(); i++) {
+        auto& [key, bitmap] = delete_bitmap->delete_bitmap[i];
         req.add_rowset_ids(std::get<0>(key).to_string());
         req.add_segment_ids(std::get<1>(key));
         req.add_versions(std::get<2>(key));
