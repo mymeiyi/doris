@@ -381,9 +381,10 @@ Status CloudCumulativeCompaction::modify_rowsets() {
         }
         std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
         auto pre_rowsets_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
-        cloud_tablet()->agg_delete_bitmap_for_compaction(_output_rowset->start_version(),
-                                                         _output_rowset->end_version(), pre_rowsets,
-                                                         pre_rowsets_delete_bitmap);
+        std::vector<int64_t> pre_rowset_versions;
+        cloud_tablet()->agg_delete_bitmap_for_compaction(
+                _output_rowset->start_version(), _output_rowset->end_version(), pre_rowsets,
+                pre_rowsets_delete_bitmap, pre_rowset_versions);
         // update delete bitmap to ms
         DBUG_EXECUTE_IF(
                 "CumulativeCompaction.modify_rowsets.cloud_update_delete_bitmap_without_lock.block",

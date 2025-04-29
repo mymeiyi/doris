@@ -239,7 +239,8 @@ public:
 
     void agg_delete_bitmap_for_compaction(int64_t start_version, int64_t end_version,
                                           const std::vector<RowsetSharedPtr>& pre_rowsets,
-                                          DeleteBitmapPtr& new_delete_bitmap);
+                                          DeleteBitmapPtr& new_delete_bitmap,
+                                          std::vector<int64_t>& pre_rowset_versions);
 
     bool need_remove_pre_rowset_delete_bitmap();
     void remove_pre_rowset_delete_bitmap();
