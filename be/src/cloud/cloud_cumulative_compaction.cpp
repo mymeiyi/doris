@@ -433,8 +433,10 @@ Status CloudCumulativeCompaction::process_old_version_delete_bitmap() {
                                         "test fail to update delete bitmap for tablet_id {}",
                                         cloud_tablet()->tablet_id());
                             });
+            std::vector<int64_t> pre_rowset_versions;
             RETURN_IF_ERROR(_engine.meta_mgr().cloud_update_delete_bitmap_without_lock(
-                    *cloud_tablet(), new_delete_bitmap.get()));
+                                    *cloud_tablet(), new_delete_bitmap.get()),
+                            pre_rowset_versions);
 
             Version version(_input_rowsets.front()->start_version(),
                             _input_rowsets.back()->end_version());

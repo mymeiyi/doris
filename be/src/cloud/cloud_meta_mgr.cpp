@@ -1303,8 +1303,10 @@ Status CloudMetaMgr::cloud_update_delete_bitmap_without_lock(
     // use a fake lock id to resolve compatibility issues
     req.set_lock_id(-3);
     req.set_without_lock(true);
-    DCHECK(delete_bitmap->delete_bitmap.size() == pre_rowset_versions.size())
-            << "delete_bitmap size=" << delete_bitmap->delete_bitmap.size()
+    DCHECK(pre_rowset_agg_end_version == 0 ||
+           delete_bitmap->delete_bitmap.size() == pre_rowset_versions.size())
+            << "pre_rowset_agg_end_version=" << pre_rowset_agg_end_version
+            << " delete_bitmap size=" << delete_bitmap->delete_bitmap.size()
             << " pre_rowset_versions size=" << pre_rowset_versions.size();
     for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
         req.add_rowset_ids(std::get<0>(key).to_string());
