@@ -6051,6 +6051,22 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithException) {
 
 void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_t table_id,
                                           int64_t tablet_id, bool inject = false) {
+    // create rowset
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+        for (int i = 2; i <= 4; i++) {
+            std::string rs_key, rs_val;
+            MetaRowsetKeyInfo rs_key_info {"test_instance", tablet_id, i};
+            meta_rowset_key(rs_key_info, &rs_key);
+            doris::RowsetMetaCloudPB rs;
+            rs.set_rowset_id(0);
+            rs.set_rowset_id_v2("r" + std::to_string(i));
+            ASSERT_TRUE(rs.SerializeToString(&rs_val));
+            txn->put(rs_key, rs_val);
+        }
+        ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+    }
     brpc::Controller cntl;
     // compaction update delete bitmap with remove pre rowset delete bitmaps
     // get update lock
@@ -6131,18 +6147,19 @@ void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_
     update_delete_bitmap_req.set_initiator(tablet_id);
     update_delete_bitmap_req.set_pre_rowset_agg_start_version(4);
     update_delete_bitmap_req.set_pre_rowset_agg_end_version(6);
-    std::vector<std::tuple<std::string, int64_t, int64_t>> new_rowset_segment_version_vector = {
-            /* r2-0 */ {"r2", 0, 6},
-            /* r3-0 */ {"r3", 0, 6},
-            /* r3-1 */ {"r3", 1, 6},
-            /* r3-2 */ {"r3", 2, 6},
-            /* r4-0 */ {"r4", 0, 6}};
+    std::vector<std::tuple<std::string, int64_t, int64_t, int64_t>>
+            new_rowset_segment_version_vector = {/* r2-0 */ {"r2", 0, 6, 2},
+                                                 /* r3-0 */ {"r3", 0, 6, 3},
+                                                 /* r3-1 */ {"r3", 1, 6, 3},
+                                                 /* r3-2 */ {"r3", 2, 6, 3},
+                                                 /* r4-0 */ {"r4", 0, 6, 4}};
     std::string new_large_value = generate_random_string(300 * 1000);
-    for (const auto& [rowset, segment, version] : new_rowset_segment_version_vector) {
+    for (const auto& [rowset, segment, version, rowset_version] : new_rowset_segment_version_vector) {
         update_delete_bitmap_req.add_rowset_ids(rowset);
         update_delete_bitmap_req.add_segment_ids(segment);
         update_delete_bitmap_req.add_versions(version);
         update_delete_bitmap_req.add_segment_delete_bitmaps(new_large_value);
+        update_delete_bitmap_req.add_pre_rowset_versions(rowset_version);
     }
     meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                        &update_delete_bitmap_req, &update_delete_bitmap_res,

@@ -2173,25 +2173,15 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
             }
         }
 
-        // remove first
-        if (request->lock_id() == COMPACTION_WITHOUT_LOCK_DELETE_BITMAP_LOCK_ID) {
-            auto& start_key = key;
-            std::string end_key {start_key};
-            encode_int64(INT64_MAX, &end_key);
-            txn->remove(start_key, end_key);
-            LOG(INFO) << "xxx remove delete_bitmap_key=" << hex(start_key)
-                      << " tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
-                      << " initiator=" << request->initiator();
-        }
         if (without_lock && request->has_pre_rowset_agg_end_version() &&
             request->pre_rowset_agg_end_version() > 0) {
+            // check the rowset exists
             if (non_exist_rowset_ids.contains(request->rowset_ids(i))) {
                 LOG(INFO) << "skip update delete bitmap, rowset_id=" << request->rowset_ids(i)
                           << " version=" << request->pre_rowset_versions(i)
-                          << " tablet_id=" << tablet_id << " because the rowset is not exist";
+                          << " tablet_id=" << tablet_id << " because the rowset does not exist";
                 continue;
             }
-            // check the rowset exists
             auto rowset_key =
                     meta_rowset_key({instance_id, tablet_id, request->pre_rowset_versions(i)});
             std::string rowset_val;
@@ -2212,7 +2202,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                 continue;
             }
             doris::RowsetMetaCloudPB rs;
-            if (!rs.ParseFromArray(val.data(), val.size())) {
+            if (!rs.ParseFromArray(rowset_val.data(), rowset_val.size())) {
                 code = MetaServiceCode::PROTOBUF_PARSE_ERR;
                 ss << "malformed rowset meta, unable to deserialize, tablet_id=" << tablet_id
                    << " key=" << hex(rowset_key);
@@ -2226,6 +2216,16 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                 non_exist_rowset_ids.emplace(request->rowset_ids(i));
                 continue;
             }
+        }
+        // remove first
+        if (request->lock_id() == COMPACTION_WITHOUT_LOCK_DELETE_BITMAP_LOCK_ID) {
+            auto& start_key = key;
+            std::string end_key {start_key};
+            encode_int64(INT64_MAX, &end_key);
+            txn->remove(start_key, end_key);
+            LOG(INFO) << "xxx remove delete_bitmap_key=" << hex(start_key)
+                      << " tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
+                      << " initiator=" << request->initiator();
         }
         // splitting large values (>90*1000) into multiple KVs
         cloud::put(txn.get(), key, val, 0);
