@@ -2246,6 +2246,12 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
             if (request->rowset_ids(i) == pre_rowset_id) {
                 continue;
             }
+            if (non_exist_rowset_ids.contains(request->rowset_ids(i))) {
+                LOG(INFO) << "skip remove pre rowsets delete bitmap, rowset_id="
+                          << request->rowset_ids(i) << " tablet_id=" << tablet_id
+                          << " because the rowset does not exist";
+                continue;
+            }
             pre_rowset_id = request->rowset_ids(i);
             auto delete_bitmap_start =
                     meta_delete_bitmap_key({instance_id, tablet_id, request->rowset_ids(i),

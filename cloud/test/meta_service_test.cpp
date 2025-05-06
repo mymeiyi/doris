@@ -6050,12 +6050,14 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithException) {
 }
 
 void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_t table_id,
-                                          int64_t tablet_id, bool inject = false) {
-    // create rowset
+                                          int64_t tablet_id, bool inject = false,
+                                          bool rowset_non_exist = false) {
+    // create rowset, if `rowset_non_exist` enabled, only r4 exists
     {
         std::unique_ptr<Transaction> txn;
         ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
-        for (int i = 2; i <= 4; i++) {
+        int start_rowset = rowset_non_exist ? 4: 2;
+        for (int i = start_rowset; i <= 4; i++) {
             std::string rs_key, rs_val;
             MetaRowsetKeyInfo rs_key_info {"test_instance", tablet_id, i};
             meta_rowset_key(rs_key_info, &rs_key);
@@ -6154,7 +6156,8 @@ void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_
                                                  /* r3-2 */ {"r3", 2, 6, 3},
                                                  /* r4-0 */ {"r4", 0, 6, 4}};
     std::string new_large_value = generate_random_string(300 * 1000);
-    for (const auto& [rowset, segment, version, rowset_version] : new_rowset_segment_version_vector) {
+    for (const auto& [rowset, segment, version, rowset_version] :
+         new_rowset_segment_version_vector) {
         update_delete_bitmap_req.add_rowset_ids(rowset);
         update_delete_bitmap_req.add_segment_ids(segment);
         update_delete_bitmap_req.add_versions(version);
@@ -6170,7 +6173,12 @@ void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_
     meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                     &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
     ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-    size = inject ? 13 : 6;
+    size = 6;
+    if (inject) {
+        size = 13;
+    } else if (rowset_non_exist) {
+        size = 12;
+    }
     ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), size);
     ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), size);
     ASSERT_EQ(get_delete_bitmap_res.versions_size(), size);
@@ -6190,6 +6198,19 @@ void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_
                        {"r3", 2, 6, large_value},
                        /* r4-0 */ {"r4", 0, 5, large_value},
                        {"r4", 0, 6, large_value}};
+    } else if (rowset_non_exist) {
+        expected_dm = {/* r2-0 */ {"r2", 0, 3, large_value},
+                       {"r2", 0, 4, large_value},
+                       {"r2", 0, 5, large_value},
+                       {"r2", 0, 6, large_value},
+                       /* r3-0 */ {"r3", 0, 4, large_value},
+                       {"r3", 1, 4, large_value},
+                       {"r3", 2, 4, large_value},
+                       {"r3", 0, 5, large_value},
+                       {"r3", 1, 5, large_value},
+                       {"r3", 0, 6, large_value},
+                       {"r3", 2, 6, large_value},
+                       /* r4-0 */ {"r4", 0, 6, new_large_value}};
     } else {
         expected_dm = {/* r2-0 */ {"r2", 0, 3, large_value},
                        {"r2", 0, 6, new_large_value},
@@ -6231,6 +6252,8 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithRemovePreDeleteBitmap) {
     sp->clear_trace();
     sp->disable_processing();
     config::max_txn_commit_byte = max_txn_commit_byte;
+
+    update_delete_bitmap_with_remove_pre(meta_service.get(), 500, 502, false, true);
 }
 
 TEST(MetaServiceTest, GetDeleteBitmapWithIdx) {
