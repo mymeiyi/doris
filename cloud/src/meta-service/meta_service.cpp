@@ -1982,6 +1982,18 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         LOG(WARNING) << msg << ", cloud_unique_id=" << request->cloud_unique_id();
         return;
     }
+
+    if (request->without_lock() && request->has_pre_rowset_agg_end_version() &&
+        request->pre_rowset_agg_end_version() > 0) {
+        if (request->rowset_ids_size() != request->pre_rowset_versions_size()) {
+            code = MetaServiceCode::INVALID_ARGUMENT;
+            ss << "pre rowset version size=" << request->pre_rowset_versions_size()
+               << " not equal to rowset size=" << request->rowset_ids_size();
+            msg = ss.str();
+            return;
+        }
+    }
+
     RPC_RATE_LIMIT(update_delete_bitmap)
 
     uint64_t fdb_txn_size = 0;
@@ -2108,6 +2120,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
     size_t total_txn_put_keys = 0;
     size_t total_txn_put_bytes = 0;
     size_t total_txn_size = 0;
+    std::set<std::string> non_exist_rowset_ids;
     for (size_t i = 0; i < request->rowset_ids_size(); ++i) {
         auto& key = delete_bitmap_keys.delete_bitmap_keys(i);
         auto& val = request->segment_delete_bitmaps(i);
@@ -2169,6 +2182,50 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
             LOG(INFO) << "xxx remove delete_bitmap_key=" << hex(start_key)
                       << " tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
                       << " initiator=" << request->initiator();
+        }
+        if (without_lock && request->has_pre_rowset_agg_end_version() &&
+            request->pre_rowset_agg_end_version() > 0) {
+            if (non_exist_rowset_ids.contains(request->rowset_ids(i))) {
+                LOG(INFO) << "skip update delete bitmap, rowset_id=" << request->rowset_ids(i)
+                          << " version=" << request->pre_rowset_versions(i)
+                          << " tablet_id=" << tablet_id << " because the rowset is not exist";
+                continue;
+            }
+            // check the rowset exists
+            auto rowset_key =
+                    meta_rowset_key({instance_id, tablet_id, request->pre_rowset_versions(i)});
+            std::string rowset_val;
+            err = txn->get(rowset_key, &rowset_val);
+            if (err != TxnErrorCode::TXN_OK && TxnErrorCode::TXN_KEY_NOT_FOUND != err) {
+                ss << "failed to get rowset, instance_id=" << instance_id
+                   << " tablet_id=" << tablet_id << " version=" << request->pre_rowset_versions(i)
+                   << " err=" << err;
+                msg = ss.str();
+                code = cast_as<ErrCategory::READ>(err);
+                return;
+            }
+            if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
+                non_exist_rowset_ids.emplace(request->rowset_ids(i));
+                LOG(INFO) << "skip update delete bitmap, rowset_id=" << request->rowset_ids(i)
+                          << " version=" << request->pre_rowset_versions(i)
+                          << " tablet_id=" << tablet_id << " because the rowset is not exist";
+                continue;
+            }
+            doris::RowsetMetaCloudPB rs;
+            if (!rs.ParseFromArray(val.data(), val.size())) {
+                code = MetaServiceCode::PROTOBUF_PARSE_ERR;
+                ss << "malformed rowset meta, unable to deserialize, tablet_id=" << tablet_id
+                   << " key=" << hex(rowset_key);
+                msg = ss.str();
+                return;
+            }
+            if (rs.rowset_id_v2() != request->rowset_ids(i)) {
+                LOG(INFO) << "skip update delete bitmap, rowset_id=" << request->rowset_ids(i)
+                          << " version=" << request->pre_rowset_versions(i)
+                          << " tablet_id=" << tablet_id << " because the rowset is not exist";
+                non_exist_rowset_ids.emplace(request->rowset_ids(i));
+                continue;
+            }
         }
         // splitting large values (>90*1000) into multiple KVs
         cloud::put(txn.get(), key, val, 0);
