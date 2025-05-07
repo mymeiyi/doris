@@ -1790,6 +1790,9 @@ void BaseTablet::agg_delete_bitmap_for_stale_rowsets(
             }
         }
     }
+    LOG(INFO) << "sout: agg_delete_bitmap_for_stale_rowsets tablet_id=" << tablet_id()
+              << ", start_version=" << start_version << ", end_version=" << end_version
+              << ", pre_rowsets_num=" << pre_rowsets.size();
     std::sort(pre_rowsets.begin(), pre_rowsets.end(), Rowset::comparator);
     // do agg for pre rowsets
     DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet_id());
@@ -1800,7 +1803,7 @@ void BaseTablet::agg_delete_bitmap_for_stale_rowsets(
             if (d->isEmpty()) {
                 continue;
             }
-            VLOG_DEBUG << "agg for table_id=" << tablet_id()
+            VLOG_DEBUG << "agg delete bitmap for tablet_id=" << tablet_id()
                        << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
                        << ", rowset_version=" << rowset->version().to_string()
                        << ". compaction start_version=" << start_version

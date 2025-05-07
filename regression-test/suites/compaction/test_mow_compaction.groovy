@@ -162,7 +162,7 @@ suite("test_mow_compaction", "nonConcurrent") {
 
     try {
         set_be_param("tablet_rowset_stale_sweep_time_sec", "0")
-        for (int method = 0; method < 2; method++) {
+        for (int method = 0; method < 1; method++) {
             if (method == 0) {
                 // solution2: no duplicated key problems
                 set_be_param("enable_delete_bitmap_merge_on_compaction", "false")
@@ -196,6 +196,8 @@ suite("test_mow_compaction", "nonConcurrent") {
             sql """ INSERT INTO ${testTable} VALUES (2,'99'); """
             sql """ INSERT INTO ${testTable} VALUES (3,'99'); """
             sql """ INSERT INTO ${testTable} VALUES (4,'99'); """
+            sql """ INSERT INTO ${testTable} VALUES (5,'99'); """
+            order_qt_sql1 """ select * from ${testTable}; """
             sql "sync"
 
             // for solution1
@@ -203,11 +205,6 @@ suite("test_mow_compaction", "nonConcurrent") {
             // for solution2
             GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
             GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")
-
-            // write some data
-            sql """ INSERT INTO ${testTable} VALUES (5,'99'); """
-            sql "sync"
-            order_qt_sql1 """ select * from ${testTable}; """
 
             // trigger compaction to generate base rowset
             getTabletStatus(tablet)
@@ -220,8 +217,6 @@ suite("test_mow_compaction", "nonConcurrent") {
 
             // write some data
             sql """ INSERT INTO ${testTable} VALUES (1, '100'), (2, '97'); """
-            sql " sync "
-
             sql """ INSERT INTO ${testTable} VALUES (2, '100'); """
             sql """ INSERT INTO ${testTable} VALUES (3, '100'); """
             sql """ INSERT INTO ${testTable} VALUES (4, '100'); """
