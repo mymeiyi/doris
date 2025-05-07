@@ -166,7 +166,7 @@ suite("test_mow_compaction", "nonConcurrent") {
             if (method == 0) {
                 // solution2: no duplicated key problems
                 set_be_param("enable_delete_bitmap_merge_on_compaction", "false")
-                set_be_param("enable_agg_and_remove_pre_rowsets_delete_bitmap", "false")
+                set_be_param("enable_agg_and_remove_pre_rowsets_delete_bitmap", "true")
             } else if (method == 1) {
                 // solution1: has duplicated key problems
                 set_be_param("enable_delete_bitmap_merge_on_compaction", "true")
