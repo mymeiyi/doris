@@ -202,6 +202,7 @@ suite("test_mow_compaction", "nonConcurrent") {
 
             // for solution1
             GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets")
+            GetDebugPoint().enableDebugPointForAllBEs("CloudTablet.delete_expired_stale_rowsets.vacuum_stale_rowsets")
             // for solution2
             GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
             GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")

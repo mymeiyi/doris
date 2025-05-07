@@ -468,7 +468,7 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
         LOG(INFO) << "agg pre rowsets delete bitmap. tablet_id=" << tablet_id()
                   << ", size=" << deleted_stale_rowsets.size()
                   << ", cost(us)=" << watch.get_elapse_time_us();
-        DBUG_EXECUTE_IF("CloudTabletMgr.vacuum_stale_rowsets",
+        DBUG_EXECUTE_IF("CloudTablet.delete_expired_stale_rowsets.vacuum_stale_rowsets",
                         { _engine.tablet_mgr().vacuum_stale_rowsets(CountDownLatch(1)); });
     }
     return expired_rowsets.size();
