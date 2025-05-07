@@ -18,6 +18,9 @@
 import org.codehaus.groovy.runtime.IOGroovyMethods
 
 suite("test_mow_compaction_and_rowset_not_exist", "nonConcurrent") {
+    if (!isCloudMode()) {
+        return
+    }
     def testTable = "test_mow_compaction_and_rowset_not_exist"
     def backendId_to_backendIP = [:]
     def backendId_to_backendHttpPort = [:]
