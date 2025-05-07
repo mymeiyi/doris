@@ -201,10 +201,12 @@ suite("test_mow_compaction", "nonConcurrent") {
             sql "sync"
 
             // for solution1
-            GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets")
-            GetDebugPoint().enableDebugPointForAllBEs("CloudTablet.delete_expired_stale_rowsets.vacuum_stale_rowsets")
+            // GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowsets")
+            // GetDebugPoint().enableDebugPointForAllBEs("CloudTablet.delete_expired_stale_rowsets.vacuum_stale_rowsets")
             // for solution2
+            // cloud and local
             GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
+            // local
             GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")
 
             // trigger compaction to generate base rowset
