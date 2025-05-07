@@ -247,6 +247,8 @@ suite("test_mow_compaction", "nonConcurrent") {
             }
             logger.info("wait for no stale rowsets")
             getTabletStatus(tablet)
+            // cloud
+            GetDebugPoint().enableDebugPointForAllBEs("DeleteBitmapAction._handle_show_local_delete_bitmap_count.vacuum_stale_rowsets")
             local_dm = getLocalDeleteBitmapStatus(tablet)
             logger.info(testTable + ", local_dm 2: " + local_dm)
             if (method == 0) {
