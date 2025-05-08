@@ -331,6 +331,8 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                     return true; // Same rowset
                 }
 
+                LOG(INFO) << "sout: replace, rs=" << rs->rowset_id()
+                          << ", v=" << rs->version().to_string();
                 // If version of rowset in `to_add` is equal to rowset in tablet but rowset_id is not equal,
                 // replace existed rowset with `to_add` rowset. This may occur when:
                 //  1. schema change converts rowsets which have been double written to new tablet
@@ -342,7 +344,12 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                 return true;
             });
 
+    auto print = [this](std::string prefix) {
+
+    };
+    print("sout: before ");
     to_add.erase(remove_it, to_add.end());
+    print("sout: after ");
 
     // delete rowsets with overlapped version
     std::vector<RowsetSharedPtr> to_add_directly;
@@ -354,11 +361,19 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
         if (to_add_v.first > _max_version) {
             // if start_version  > max_version, we can skip checking overlap here.
             to_add_directly.push_back(to_add_rs);
+            LOG(INFO) << "sout: 1 add to_add=" << to_add_rs->rowset_id()
+                      << ", v=" << to_add_rs->version().to_string()
+                      << ", max_version=" << _max_version;
         } else {
             to_add_directly.push_back(to_add_rs);
+            LOG(INFO) << "sout: 2 add to_add=" << to_add_rs->rowset_id()
+                      << ", v=" << to_add_rs->version().to_string()
+                      << ", max_version=" << _max_version;
             for (auto& [v, rs] : _rs_version_map) {
                 if (to_add_v.contains(v)) {
                     to_delete.push_back(rs);
+                    LOG(INFO) << "sout: 3 delete to_delete=" << rs->rowset_id()
+                              << ", v=" << rs->version().to_string();
                 }
             }
             delete_rowsets(to_delete, meta_lock);
