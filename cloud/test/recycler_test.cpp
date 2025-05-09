@@ -3325,7 +3325,7 @@ TEST(CheckerTest, delete_bitmap_storage_optimize_v2_check_abnormal) {
         ASSERT_EQ(0,
                   create_tablet(txn_kv.get(), table_id, index_id, partition_id, tablet_id, true));
         std::vector<std::pair<int64_t, int64_t>> rowset_vers {
-                {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 7} /*created before 5 min*/, {8, 10}, {11, 11}};
+                {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 7}, {8, 10} /*created before 5 min*/, {11, 11}};
         std::vector<std::vector<int64_t>> delete_bitmaps_vers {{3, 5, 6, 7, 8, 9},
                                                                {4, 5, 6, 7, 8},
                                                                {6, 7, 8, 9},
@@ -3337,7 +3337,7 @@ TEST(CheckerTest, delete_bitmap_storage_optimize_v2_check_abnormal) {
         for (size_t i {0}; i < 7; i++) {
             std::string rowset_id = std::to_string(rowset_start_id++);
             int64_t create_time = current_time;
-            if (i == 4) {
+            if (i == 5) {
                 create_time = current_time - 500;
             }
             create_committed_rowset_with_rowset_id(txn_kv.get(), accessor.get(), "1", tablet_id,

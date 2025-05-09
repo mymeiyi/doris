@@ -1237,8 +1237,8 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(int64_t tablet_id) 
         LOG(WARNING) << fmt::format(
                 "[delete bitmap check fails] delete bitmap storage optimize v2 check fail "
                 "for instance_id={}, tablet_id={}, rowset_id={}, found delete bitmap "
-                "with versions={}",
-                instance_id_, tablet_id, last_rowset_id, ss.str());
+                "with versions={}, size={}",
+                instance_id_, tablet_id, last_rowset_id, ss.str(), failed_versions.size());
     };
     using namespace std::chrono;
     int64_t now = duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
@@ -1275,12 +1275,10 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(int64_t tablet_id) 
                 continue;
             }
             if (rowset_id != last_rowset_id && !failed_versions.empty()) {
-                // log an error and continue to check the next delete bitmap
                 print_failed_versions();
-                // clear the failed versions if we find a new rowset
-                failed_versions.clear();
-                last_failed_version = 0;
                 abnormal_rowsets_num++;
+                last_failed_version = 0;
+                failed_versions.clear();
                 TEST_SYNC_POINT_CALLBACK(
                         "InstanceChecker::check_delete_bitmap_storage_optimize_v2.get_abnormal_"
                         "rowset",
@@ -1303,7 +1301,7 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(int64_t tablet_id) 
             }
             if (rowset_it->second + config::delete_bitmap_storage_optimize_v2_check_skip_seconds >=
                 now) {
-                LOG(INFO) << fmt::format(
+                LOG(DEBUG) << fmt::format(
                         "[delete bitmap check] delete bitmap storage optimize v2 check "
                         "for instance_id={}, tablet_id={}, rowset_id={}, found delete "
                         "bitmap with version={}. related rowset end version={}, "
@@ -1320,6 +1318,7 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(int64_t tablet_id) 
     } while (it->more() && !stopped());
     if (!failed_versions.empty()) {
         print_failed_versions();
+        abnormal_rowsets_num++;
     }
     LOG(INFO) << fmt::format(
             "[delete bitmap checker] finish check delete bitmap storage optimize v2 for "
