@@ -1201,7 +1201,45 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(int64_t tablet_id) 
     auto end = meta_delete_bitmap_key({instance_id_, tablet_id + 1, "", 0, 0});
     std::string last_rowset_id = "";
     int64_t last_version = 0;
-    std::string last_failed_rowset_id = "";
+    int64_t last_failed_version = 0;
+    std::vector<int64_t> failed_versions;
+    auto print_failed_versions = [&]() {
+        // some versions are continuous, such as [8, 9, 10, 11, 13, 17, 18]
+        // print as [8-11, 13, 17-18]
+        int64_t last_start_version = -1;
+        int64_t last_end_version = -1;
+        std::stringstream ss;
+        ss << "[";
+        for (int64_t version : failed_versions) {
+            if (last_start_version == -1) {
+                last_start_version = version;
+                last_end_version = version;
+                continue;
+            }
+            if (last_end_version + 1 == version) {
+                last_end_version = version;
+            } else {
+                if (last_start_version == last_end_version) {
+                    ss << last_start_version << ", ";
+                } else {
+                    ss << last_start_version << "-" << last_end_version << ", ";
+                }
+                last_start_version = version;
+                last_end_version = version;
+            }
+        }
+        if (last_start_version == last_end_version) {
+            ss << last_start_version;
+        } else {
+            ss << last_start_version << "-" << last_end_version;
+        }
+        ss << "]";
+        LOG(WARNING) << fmt::format(
+                "[delete bitmap check fails] delete bitmap storage optimize v2 check fail "
+                "for instance_id={}, tablet_id={}, rowset_id={}, found delete bitmap "
+                "with versions={}",
+                instance_id_, tablet_id, last_rowset_id, ss.str());
+    };
     using namespace std::chrono;
     int64_t now = duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
     do {
@@ -1236,45 +1274,53 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(int64_t tablet_id) 
                 // skip the same rowset and version
                 continue;
             }
-            if (tablet_rowsets_map.find(version) == tablet_rowsets_map.end()) {
-                // there may be an interval in this situation:
-                // 1. finish compaction job; 2. checker; 3. finish agg and remove delete bitmap to ms
-                auto rowset_it = tablet_rowsets_map.upper_bound(version);
-                if (rowset_it != tablet_rowsets_map.end()) {
-                    if (rowset_it->second +
-                                config::delete_bitmap_storage_optimize_v2_check_skip_seconds >=
-                        now) {
-                        LOG(INFO) << fmt::format(
-                                "[delete bitmap check] delete bitmap storage optimize v2 check "
-                                "for instance_id={}, tablet_id={}, rowset_id={}, found delete "
-                                "bitmap with version={}. related rowset end version={}, "
-                                "create_time={}",
-                                instance_id_, tablet_id, rowset_id, version, rowset_it->first,
-                                rowset_it->second);
-                        continue;
-                    }
-                }
-
-                if (rowset_id != last_failed_rowset_id) {
-                    abnormal_rowsets_num++;
-                    last_failed_rowset_id = rowset_id;
-                    TEST_SYNC_POINT_CALLBACK(
-                            "InstanceChecker::check_delete_bitmap_storage_optimize_v2.get_abnormal_"
-                            "rowset",
-                            &tablet_id, &rowset_id);
-                }
+            if (rowset_id != last_rowset_id && !failed_versions.empty()) {
                 // log an error and continue to check the next delete bitmap
-                LOG(WARNING) << fmt::format(
-                        "[delete bitmap check fails] delete bitmap storage optimize v2 check fail "
-                        "for instance_id={}, tablet_id={}, rowset_id={}, found delete bitmap "
-                        "with version={}",
-                        instance_id_, tablet_id, rowset_id, version);
+                print_failed_versions();
+                // clear the failed versions if we find a new rowset
+                failed_versions.clear();
+                last_failed_version = 0;
+                abnormal_rowsets_num++;
+                TEST_SYNC_POINT_CALLBACK(
+                        "InstanceChecker::check_delete_bitmap_storage_optimize_v2.get_abnormal_"
+                        "rowset",
+                        &tablet_id, &last_rowset_id);
             }
-            // check version exist
             last_rowset_id = rowset_id;
             last_version = version;
+            if (tablet_rowsets_map.find(version) != tablet_rowsets_map.end()) {
+                continue;
+            }
+            // there may be an interval in this situation:
+            // 1. finish compaction job; 2. checker; 3. finish agg and remove delete bitmap to ms
+            auto rowset_it = tablet_rowsets_map.upper_bound(version);
+            if (rowset_it == tablet_rowsets_map.end()) {
+                if (version != last_failed_version) {
+                    failed_versions.push_back(version);
+                }
+                last_failed_version = version;
+                continue;
+            }
+            if (rowset_it->second + config::delete_bitmap_storage_optimize_v2_check_skip_seconds >=
+                now) {
+                LOG(INFO) << fmt::format(
+                        "[delete bitmap check] delete bitmap storage optimize v2 check "
+                        "for instance_id={}, tablet_id={}, rowset_id={}, found delete "
+                        "bitmap with version={}. related rowset end version={}, "
+                        "create_time={}",
+                        instance_id_, tablet_id, rowset_id, version, rowset_it->first,
+                        rowset_it->second);
+                continue;
+            }
+            if (version != last_failed_version) {
+                failed_versions.push_back(version);
+            }
+            last_failed_version = version;
         }
     } while (it->more() && !stopped());
+    if (!failed_versions.empty()) {
+        print_failed_versions();
+    }
     LOG(INFO) << fmt::format(
             "[delete bitmap checker] finish check delete bitmap storage optimize v2 for "
             "instance_id={}, tablet_id={}, rowsets_num={}, abnormal_rowsets_num={}",
