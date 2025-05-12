@@ -1339,16 +1339,22 @@ int InstanceChecker::do_delete_bitmap_storage_optimize_check(int version) {
     int ret = traverse_mow_tablet([&](int64_t tablet_id) {
         ++total_tablets_num;
         int64_t rowsets_with_useless_delete_bitmap_version = 0;
-        int res = version == 1 ? check_delete_bitmap_storage_optimize(tablet_id)
-                               : check_delete_bitmap_storage_optimize_v2(
-                                         tablet_id, rowsets_with_useless_delete_bitmap_version);
-        failed_tablets_num += (res != 0);
-        if (version == 2 && rowsets_with_useless_delete_bitmap_version >
-                                    max_rowsets_with_useless_delete_bitmap_version) {
-            max_rowsets_with_useless_delete_bitmap_version =
-                    rowsets_with_useless_delete_bitmap_version;
-            tablet_id_with_max_rowsets_with_useless_delete_bitmap_version = tablet_id;
+        int res = 0;
+        if (version == 1) {
+            res = check_delete_bitmap_storage_optimize(tablet_id);
+        } else if (version == 2) {
+            res = check_delete_bitmap_storage_optimize_v2(
+                    tablet_id, rowsets_with_useless_delete_bitmap_version);
+            if (rowsets_with_useless_delete_bitmap_version >
+                max_rowsets_with_useless_delete_bitmap_version) {
+                max_rowsets_with_useless_delete_bitmap_version =
+                        rowsets_with_useless_delete_bitmap_version;
+                tablet_id_with_max_rowsets_with_useless_delete_bitmap_version = tablet_id;
+            }
+        } else {
+            return -1;
         }
+        failed_tablets_num += (res != 0);
         return res;
     });
 
