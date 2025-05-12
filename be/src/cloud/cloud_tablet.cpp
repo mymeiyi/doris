@@ -347,9 +347,9 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
     /*auto print = [this](std::string prefix) {
 
     };*/
-    print("sout: before ");
+    /*print("sout: before ");
     to_add.erase(remove_it, to_add.end());
-    print("sout: after ");
+    print("sout: after ");*/
 
     // delete rowsets with overlapped version
     std::vector<RowsetSharedPtr> to_add_directly;
