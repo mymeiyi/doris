@@ -1304,20 +1304,8 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
                 last_failed_version = version;
                 continue;
             }
-            /*LOG(INFO) << "sout: found it, tablet_id=" << tablet_id << ", rowset_id=" << rowset_id
-                      << ", version=" << version << ", end_version=" << rowset_it->first
-                      << ", create_time=" << rowset_it->second << ", now=" << now
-                      << ", skip_seconds="
-                      << config::delete_bitmap_storage_optimize_v2_check_skip_seconds;*/
             if (rowset_it->second + config::delete_bitmap_storage_optimize_v2_check_skip_seconds >=
                 now) {
-                /*LOG(INFO) << fmt::format(
-                        "[delete bitmap check] delete bitmap storage optimize v2 check "
-                        "for instance_id={}, tablet_id={}, rowset_id={}, found delete "
-                        "bitmap with version={}. related rowset end version={}, "
-                        "create_time={}",
-                        instance_id_, tablet_id, rowset_id, version, rowset_it->first,
-                        rowset_it->second);*/
                 continue;
             }
             if (version != last_failed_version) {

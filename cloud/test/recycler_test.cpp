@@ -3346,6 +3346,10 @@ TEST(CheckerTest, delete_bitmap_storage_optimize_v2_check_abnormal) {
                         {4, 4, {7, 11}, expire_time, 3, false},
                         {5, 7, {8, 10}, expire_time, 1, true},
                         {8, 11, {12}, expire_time, 1, true}}});
+    // skip create rowset (put it in the last tablet)
+    tablets.push_back({{{2, 2, {5}, expire_time, 2, false},
+                        {3, 3, {4}, expire_time, 1, false} /*skip create rowset*/,
+                        {3, 5, {}, expire_time, 2, false}}});
 
     for (int i = 0; i < tablets.size(); ++i) {
         int tablet_id = 900021 + i;
@@ -3355,9 +3359,12 @@ TEST(CheckerTest, delete_bitmap_storage_optimize_v2_check_abnormal) {
         for (int j = 0; j < rowsets.size(); j++) {
             auto& rowset = rowsets[j];
             std::string rowset_id = std::to_string(rowset_start_id++);
-            create_committed_rowset_with_rowset_id(txn_kv.get(), accessor.get(), "1", tablet_id,
-                                                   rowset.start_version, rowset.end_version,
-                                                   rowset_id, true, 1, rowset.create_time);
+            bool skip_create_rowset = i == tablets.size() - 1 && j == 1;
+            if (!skip_create_rowset) {
+                create_committed_rowset_with_rowset_id(txn_kv.get(), accessor.get(), "1", tablet_id,
+                                                       rowset.start_version, rowset.end_version,
+                                                       rowset_id, true, 1, rowset.create_time);
+            }
             create_delete_bitmaps(txn.get(), tablet_id, rowset_id, rowset.delete_bitmap_versions,
                                   rowset.segment_num /*segment_num*/);
             if (rowset.is_abnormal) {
