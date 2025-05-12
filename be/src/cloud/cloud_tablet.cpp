@@ -344,9 +344,9 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                 return true;
             });
 
-    auto print = [this](std::string prefix) {
+    /*auto print = [this](std::string prefix) {
 
-    };
+    };*/
     print("sout: before ");
     to_add.erase(remove_it, to_add.end());
     print("sout: after ");
