@@ -89,6 +89,10 @@ using namespace ErrorCode;
 extern void get_round_robin_stores(int64 curr_index, const std::vector<DirInfo>& dir_infos,
                                    std::vector<DataDir*>& stores);
 DEFINE_GAUGE_METRIC_PROTOTYPE_2ARG(unused_rowsets_count, MetricUnit::ROWSETS);
+bvar::Status<int64_t> g_max_rowsets_with_useless_delete_bitmap(
+        "max_rowsets_with_useless_delete_bitmap", 0);
+bvar::Status<int64_t> g_max_rowsets_with_useless_delete_bitmap_version(
+        "max_rowsets_with_useless_delete_bitmap_version", 0);
 
 namespace {
 bvar::Adder<uint64_t> unused_rowsets_counter("ununsed_rowsets_counter");
