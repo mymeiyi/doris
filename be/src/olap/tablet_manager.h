@@ -278,6 +278,11 @@ private:
     tablets_shard& _get_tablets_shard(TTabletId tabletId);
 
     std::mutex _two_tablet_mtx;
+
+    bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap(
+            "max_rowset_count_with_useless_delete_bitmap", 0);
+    bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap_version(
+            "g_max_rowset_count_with_useless_delete_bitmap_version", 0);
 };
 
 } // namespace doris
