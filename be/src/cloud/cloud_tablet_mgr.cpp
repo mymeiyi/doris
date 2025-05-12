@@ -31,10 +31,10 @@
 
 namespace doris {
 uint64_t g_tablet_report_inactive_duration_ms = 0;
-bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap(
+/*extern bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap(
         "max_rowset_count_with_useless_delete_bitmap", 0);
-bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap_version(
-        "g_max_rowset_count_with_useless_delete_bitmap_version", 0);
+extern bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap_version(
+        "g_max_rowset_count_with_useless_delete_bitmap_version", 0);*/
 
 namespace {
 

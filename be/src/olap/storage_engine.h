@@ -82,6 +82,11 @@ using CumuCompactionPolicyTable =
 class StorageEngine;
 class CloudStorageEngine;
 
+extern bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap(
+        "max_rowset_count_with_useless_delete_bitmap", 0);
+extern  bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap_version(
+        "g_max_rowset_count_with_useless_delete_bitmap_version", 0);
+
 // StorageEngine singleton to manage all Table pointers.
 // Providing add/drop/get operations.
 // StorageEngine instance doesn't own the Table resources, just hold the pointer,
