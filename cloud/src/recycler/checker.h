@@ -131,7 +131,7 @@ private:
     int traverse_delete_bitmaps(const std::function<int(int64_t)>& check_func);
 
     int check_delete_bitmap_storage_optimize(int64_t tablet_id);
-    int check_delete_bitmap_storage_optimize_v2(int64_t tablet_id);
+    int check_delete_bitmap_storage_optimize_v2(int64_t tablet_id, int64_t& abnormal_rowsets_num);
 
     std::atomic_bool stopped_ {false};
     std::shared_ptr<TxnKv> txn_kv_;
