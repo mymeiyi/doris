@@ -1814,7 +1814,8 @@ void BaseTablet::agg_delete_bitmap_for_stale_rowsets(
     tablet_meta()->delete_bitmap().merge(*new_delete_bitmap);
 }
 
-void BaseTablet::check_agg_delete_bitmap_for_stale_rowsets() {
+void BaseTablet::check_agg_delete_bitmap_for_stale_rowsets(int64_t& useless_rowset_count,
+                                                           int64_t& useless_rowset_version_count) {
     std::set<RowsetId> rowset_ids;
     std::set<int64_t> end_versions;
     traverse_rowsets(
@@ -1847,6 +1848,8 @@ void BaseTablet::check_agg_delete_bitmap_for_stale_rowsets() {
                     return 0;
                 });
     }
+    useless_rowset_count = useless_rowsets.size();
+    useless_rowset_version_count = useless_rowset_versions.size();
     if (!useless_rowsets.empty() || !useless_rowset_versions.empty()) {
         std::stringstream ss;
         if (!useless_rowsets.empty()) {
