@@ -3320,38 +3320,51 @@ TEST(CheckerTest, delete_bitmap_storage_optimize_v2_check_abnormal) {
 
     constexpr int table_id = 10000, index_id = 10001, partition_id = 10002;
     int64_t rowset_start_id = 600;
+    int64_t expire_time = current_time - 500;
 
-    for (int tablet_id = 900021; tablet_id <= 900025; ++tablet_id) {
+    struct Rowset {
+        int64_t start_version;
+        int64_t end_version;
+        std::vector<int64_t> delete_bitmap_versions;
+        int64_t create_time;
+        int segment_num;
+        bool is_abnormal;
+    };
+    struct Tablet {
+        std::vector<Rowset> rowsets;
+    };
+
+    std::vector<Tablet> tablets;
+    // current_time is skipped
+    tablets.push_back({{{2, 2, {3, 5, 7, 9}, current_time, 2, false},
+                        {3, 3, {5, 7, 8, 9, 10}, current_time, 1, false},
+                        {4, 4, {7, 11}, current_time, 3, false},
+                        {5, 7, {8, 10}, current_time, 1, false},
+                        {8, 11, {}, current_time, 2, false}}});
+    tablets.push_back({{{2, 2, {3, 5, 7, 9}, expire_time, 2, true},
+                        {3, 3, {5, 7, 8, 9, 10}, expire_time, 1, true},
+                        {4, 4, {7, 11}, expire_time, 3, false},
+                        {5, 7, {8, 10}, expire_time, 1, true},
+                        {8, 11, {12}, expire_time, 1, true}}});
+
+    for (int i = 0; i < tablets.size(); ++i) {
+        int tablet_id = 900021 + i;
         ASSERT_EQ(0,
                   create_tablet(txn_kv.get(), table_id, index_id, partition_id, tablet_id, true));
-        std::vector<std::pair<int64_t, int64_t>> rowset_vers {
-                {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 7}, {8, 10} /*created before 5 min*/, {11, 11}};
-        std::vector<std::vector<int64_t>> delete_bitmaps_vers {
-                {3, 5, 6, 7, 8, 9} /* 8,9 is abnormal */,
-                {4, 5, 6, 7, 8} /* 8 is abnormal */,
-                {6, 7, 8, 9} /* 8, 9 is abnormal */,
-                {7, 8, 9, 10} /* 8, 9 is abnormal */,
-                {10, 11},
-                {},
-                {11}};
-        std::vector<bool> segments_overlap {true, true, true, true, false, true, true};
-        for (size_t i {0}; i < 7; i++) {
+        auto& rowsets = tablets[i].rowsets;
+        for (int j = 0; j < rowsets.size(); j++) {
+            auto& rowset = rowsets[j];
             std::string rowset_id = std::to_string(rowset_start_id++);
-            int64_t create_time = current_time;
-            if (i == 5) {
-                create_time = current_time - 500;
-            }
             create_committed_rowset_with_rowset_id(txn_kv.get(), accessor.get(), "1", tablet_id,
-                                                   rowset_vers[i].first, rowset_vers[i].second,
-                                                   rowset_id, segments_overlap[i], 1, create_time);
-            create_delete_bitmaps(txn.get(), tablet_id, rowset_id, delete_bitmaps_vers[i],
-                                  i == 2 ? 2 : 1 /*segment_num*/);
-            if (i < 4) {
+                                                   rowset.start_version, rowset.end_version,
+                                                   rowset_id, true, 1, rowset.create_time);
+            create_delete_bitmaps(txn.get(), tablet_id, rowset_id, rowset.delete_bitmap_versions,
+                                  rowset.segment_num /*segment_num*/);
+            if (rowset.is_abnormal) {
                 expected_abnormal_rowsets[tablet_id].insert(rowset_id);
             }
         }
     }
-
     ASSERT_EQ(TxnErrorCode::TXN_OK, txn->commit());
     ASSERT_EQ(checker.do_delete_bitmap_storage_optimize_check(2), 1);
     ASSERT_EQ(expected_abnormal_rowsets, real_abnormal_rowsets);
