@@ -3326,13 +3326,14 @@ TEST(CheckerTest, delete_bitmap_storage_optimize_v2_check_abnormal) {
                   create_tablet(txn_kv.get(), table_id, index_id, partition_id, tablet_id, true));
         std::vector<std::pair<int64_t, int64_t>> rowset_vers {
                 {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 7}, {8, 10} /*created before 5 min*/, {11, 11}};
-        std::vector<std::vector<int64_t>> delete_bitmaps_vers {{3, 5, 6, 7, 8, 9},
-                                                               {4, 5, 6, 7, 8},
-                                                               {6, 7, 8, 9},
-                                                               {7, 8, 9, 10},
-                                                               {10, 11},
-                                                               {},
-                                                               {11}};
+        std::vector<std::vector<int64_t>> delete_bitmaps_vers {
+                {3, 5, 6, 7, 8, 9} /* 8,9 is abnormal */,
+                {4, 5, 6, 7, 8} /* 8 is abnormal */,
+                {6, 7, 8, 9} /* 8, 9 is abnormal */,
+                {7, 8, 9, 10} /* 8, 9 is abnormal */,
+                {10, 11},
+                {},
+                {11}};
         std::vector<bool> segments_overlap {true, true, true, true, false, true, true};
         for (size_t i {0}; i < 7; i++) {
             std::string rowset_id = std::to_string(rowset_start_id++);
@@ -3345,7 +3346,7 @@ TEST(CheckerTest, delete_bitmap_storage_optimize_v2_check_abnormal) {
                                                    rowset_id, segments_overlap[i], 1, create_time);
             create_delete_bitmaps(txn.get(), tablet_id, rowset_id, delete_bitmaps_vers[i],
                                   i == 2 ? 2 : 1 /*segment_num*/);
-            if (i < 3) {
+            if (i < 4) {
                 expected_abnormal_rowsets[tablet_id].insert(rowset_id);
             }
         }

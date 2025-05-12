@@ -1204,6 +1204,11 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
     int64_t last_failed_version = 0;
     std::vector<int64_t> failed_versions;
     auto print_failed_versions = [&]() {
+        TEST_SYNC_POINT_CALLBACK(
+                "InstanceChecker::check_delete_bitmap_storage_optimize_v2.get_abnormal_"
+                "rowset",
+                &tablet_id, &last_rowset_id);
+        rowsets_with_useless_delete_bitmap_version++;
         // some versions are continuous, such as [8, 9, 10, 11, 13, 17, 18]
         // print as [8-11, 13, 17-18]
         int64_t last_start_version = -1;
@@ -1276,13 +1281,9 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
             }
             if (rowset_id != last_rowset_id && !failed_versions.empty()) {
                 print_failed_versions();
-                rowsets_with_useless_delete_bitmap_version++;
                 last_failed_version = 0;
                 failed_versions.clear();
-                TEST_SYNC_POINT_CALLBACK(
-                        "InstanceChecker::check_delete_bitmap_storage_optimize_v2.get_abnormal_"
-                        "rowset",
-                        &tablet_id, &last_rowset_id);
+
             }
             last_rowset_id = rowset_id;
             last_version = version;
@@ -1303,15 +1304,20 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
                 last_failed_version = version;
                 continue;
             }
+            /*LOG(INFO) << "sout: found it, tablet_id=" << tablet_id << ", rowset_id=" << rowset_id
+                      << ", version=" << version << ", end_version=" << rowset_it->first
+                      << ", create_time=" << rowset_it->second << ", now=" << now
+                      << ", skip_seconds="
+                      << config::delete_bitmap_storage_optimize_v2_check_skip_seconds;*/
             if (rowset_it->second + config::delete_bitmap_storage_optimize_v2_check_skip_seconds >=
                 now) {
-                LOG(INFO) << fmt::format(
+                /*LOG(INFO) << fmt::format(
                         "[delete bitmap check] delete bitmap storage optimize v2 check "
                         "for instance_id={}, tablet_id={}, rowset_id={}, found delete "
                         "bitmap with version={}. related rowset end version={}, "
                         "create_time={}",
                         instance_id_, tablet_id, rowset_id, version, rowset_it->first,
-                        rowset_it->second);
+                        rowset_it->second);*/
                 continue;
             }
             if (version != last_failed_version) {
@@ -1322,7 +1328,6 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
     } while (it->more() && !stopped());
     if (!failed_versions.empty()) {
         print_failed_versions();
-        rowsets_with_useless_delete_bitmap_version++;
     }
     LOG(INFO) << fmt::format(
             "[delete bitmap checker] finish check delete bitmap storage optimize v2 for "
