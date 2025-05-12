@@ -1301,7 +1301,7 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(int64_t tablet_id) 
             }
             if (rowset_it->second + config::delete_bitmap_storage_optimize_v2_check_skip_seconds >=
                 now) {
-                LOG(DEBUG) << fmt::format(
+                LOG(INFO) << fmt::format(
                         "[delete bitmap check] delete bitmap storage optimize v2 check "
                         "for instance_id={}, tablet_id={}, rowset_id={}, found delete "
                         "bitmap with version={}. related rowset end version={}, "
