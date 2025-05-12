@@ -1294,8 +1294,8 @@ Status CloudMetaMgr::cloud_update_delete_bitmap_without_lock(
         const CloudTablet& tablet, DeleteBitmap* delete_bitmap,
         std::map<std::string, int64_t>& rowset_to_versions, int64_t pre_rowset_agg_start_version,
         int64_t pre_rowset_agg_end_version) {
-    LOG(INFO) << "cloud_update_delete_bitmap_without_lock , tablet_id: " << tablet.tablet_id()
-              << ",delete_bitmap size:" << delete_bitmap->delete_bitmap.size();
+    LOG(INFO) << "cloud_update_delete_bitmap_without_lock, tablet_id: " << tablet.tablet_id()
+              << ", delete_bitmap size: " << delete_bitmap->delete_bitmap.size();
     UpdateDeleteBitmapRequest req;
     UpdateDeleteBitmapResponse res;
     req.set_cloud_unique_id(config::cloud_unique_id);

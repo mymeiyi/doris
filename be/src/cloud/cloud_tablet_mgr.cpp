@@ -273,11 +273,34 @@ void CloudTabletMgr::vacuum_stale_rowsets(const CountDownLatch& stop_latch) {
         LOG_INFO("finish remove pre rowsets delete bitmap")
                 .tag("num_tablets", tablets_to_remove_delete_bitmap.size());
         if (config::enable_check_agg_and_remove_pre_rowsets_delete_bitmap) {
+            int64_t max_useless_rowset_count = 0;
+            int64_t tablet_id_with_max_useless_rowset_count = 0;
+            int64_t max_useless_rowset_version_count = 0;
+            int64_t tablet_id_with_max_useless_rowset_version_count = 0;
             OlapStopWatch watch;
-            _tablet_map->traverse(
-                    [](auto&& tablet) { tablet->check_agg_delete_bitmap_for_stale_rowsets(); });
+            _tablet_map->traverse([&](auto&& tablet) {
+                int64_t useless_rowset_count = 0;
+                int64_t useless_rowset_version_count = 0;
+                tablet->check_agg_delete_bitmap_for_stale_rowsets(useless_rowset_count,
+                                                                  useless_rowset_version_count);
+                if (useless_rowset_count > max_useless_rowset_count) {
+                    max_useless_rowset_count = useless_rowset_count;
+                    tablet_id_with_max_useless_rowset_count = tablet->tablet_id();
+                }
+                if (useless_rowset_version_count > max_useless_rowset_version_count) {
+                    max_useless_rowset_version_count = useless_rowset_version_count;
+                    tablet_id_with_max_useless_rowset_version_count = tablet->tablet_id();
+                }
+            });
+            g_max_rowsets_with_useless_delete_bitmap.set_value(max_useless_rowset_count);
+            g_max_rowsets_with_useless_delete_bitmap_version.set_value(
+                    max_useless_rowset_version_count);
             LOG(INFO) << "finish check_agg_delete_bitmap_for_stale_rowsets, cost(us)="
-                      << watch.get_elapse_time_us();
+                      << watch.get_elapse_time_us()
+                      << ". max useless rowset count=" << max_useless_rowset_count
+                      << ", tablet_id=" << tablet_id_with_max_useless_rowset_count
+                      << ", max useless rowset version count=" << max_useless_rowset_version_count
+                      << ", tablet_id=" << tablet_id_with_max_useless_rowset_version_count;
         }
     }
 }
