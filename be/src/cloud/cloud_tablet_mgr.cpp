@@ -31,6 +31,11 @@
 
 namespace doris {
 uint64_t g_tablet_report_inactive_duration_ms = 0;
+bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap(
+        "max_rowset_count_with_useless_delete_bitmap", 0);
+bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap_version(
+        "g_max_rowset_count_with_useless_delete_bitmap_version", 0);
+
 namespace {
 
 // port from
@@ -292,6 +297,9 @@ void CloudTabletMgr::vacuum_stale_rowsets(const CountDownLatch& stop_latch) {
                     tablet_id_with_max_useless_rowset_version_count = tablet->tablet_id();
                 }
             });
+            g_max_rowset_count_with_useless_delete_bitmap.set_value(max_useless_rowset_count);
+            g_max_rowset_count_with_useless_delete_bitmap_version.set_value(
+                    max_useless_rowset_version_count);
             LOG(INFO) << "finish check_agg_delete_bitmap_for_stale_rowsets, cost(us)="
                       << watch.get_elapse_time_us()
                       << ". max useless rowset count=" << max_useless_rowset_count
