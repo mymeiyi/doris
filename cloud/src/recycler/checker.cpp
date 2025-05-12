@@ -1182,13 +1182,15 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
         int64_t tablet_id, int64_t& rowsets_with_useless_delete_bitmap_version) {
     // [end_version, create_time]
     std::map<int64_t, int64_t> tablet_rowsets_map {};
+    std::set<std::string> rowsets;
     // Get all visible rowsets of this tablet
-    auto collect_cb = [&tablet_rowsets_map](const doris::RowsetMetaCloudPB& rowset) {
+    auto collect_cb = [&](const doris::RowsetMetaCloudPB& rowset) {
         if (rowset.start_version() == 0 && rowset.end_version() == 1) {
             // ignore dummy rowset [0-1]
             return;
         }
         tablet_rowsets_map[rowset.end_version()] = rowset.creation_time();
+        rowsets.insert(rowset.rowset_id_v2());
     };
     if (int ret = collect_tablet_rowsets(tablet_id, collect_cb); ret != 0) {
         return ret;
@@ -1285,6 +1287,10 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
             last_rowset_id = rowset_id;
             last_version = version;
             if (tablet_rowsets_map.find(version) != tablet_rowsets_map.end()) {
+                continue;
+            }
+            if (!rowsets.contains(rowset_id)) {
+                // checked in do_delete_bitmap_inverted_check
                 continue;
             }
             // there may be an interval in this situation:
