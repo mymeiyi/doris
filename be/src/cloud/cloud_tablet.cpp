@@ -322,7 +322,7 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
     }
 
     // Filter out existed rowsets
-    auto remove_it =
+    /*auto remove_it =
             std::remove_if(to_add.begin(), to_add.end(), [this](const RowsetSharedPtr& rs) {
                 if (auto find_it = _rs_version_map.find(rs->version());
                     find_it == _rs_version_map.end()) {
@@ -342,7 +342,7 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                 _tablet_meta->add_rowsets_unchecked({rs});
                 update_base_size(*rs);
                 return true;
-            });
+            });*/
 
     /*auto print = [this](std::string prefix) {
 
