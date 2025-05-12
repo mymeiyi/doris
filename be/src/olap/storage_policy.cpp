@@ -31,6 +31,11 @@
 
 namespace doris {
 
+bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap(
+        "max_rowset_count_with_useless_delete_bitmap", 0);
+bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap_version(
+        "g_max_rowset_count_with_useless_delete_bitmap_version", 0);
+
 struct StoragePolicyMgr {
     std::mutex mtx;
     std::unordered_map<int64_t, StoragePolicyPtr> map;
