@@ -80,6 +80,10 @@ namespace doris {
 using namespace ErrorCode;
 
 bvar::Adder<int64_t> g_tablet_meta_schema_columns_count("tablet_meta_schema_columns_count");
+bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap(
+        "max_rowset_count_with_useless_delete_bitmap", 0);
+bvar::Status<int64_t> g_max_rowset_count_with_useless_delete_bitmap_version(
+        "g_max_rowset_count_with_useless_delete_bitmap_version", 0);
 
 TabletManager::TabletManager(StorageEngine& engine, int32_t tablet_map_lock_shard_size)
         : _engine(engine),
