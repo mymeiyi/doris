@@ -21,15 +21,41 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
     def tableName = "test_mow_compact_multi_segments"
     def backendId_to_backendIP = [:]
     def backendId_to_backendHttpPort = [:]
+    def backendId_to_params = [string: [:]]
+    getBackendIpHttpPort(backendId_to_backendIP, backendId_to_backendHttpPort)
 
-    def getTabletStatus = { rowsetNum, lastRowsetSegmentNum, enableAssert = false ->
-        def tablets = sql_return_maparray """ show tablets from ${tableName}; """
-        logger.info("tablets: ${tablets}")
-        assertTrue(tablets.size() >= 1)
-        String compactionUrl = ""
-        for (Map<String, String> tablet : tablets) {
-            compactionUrl = tablet["CompactionStatus"]
+    def reset_be_param = { paramName ->
+        // for eache be node, reset paramName to default
+        for (String id in backendId_to_backendIP.keySet()) {
+            def beIp = backendId_to_backendIP.get(id)
+            def bePort = backendId_to_backendHttpPort.get(id)
+            def original_value = backendId_to_params.get(id).get(paramName)
+            def (code, out, err) = curl("POST", String.format("http://%s:%s/api/update_config?%s=%s", beIp, bePort, paramName, original_value))
+            assertTrue(out.contains("OK"))
         }
+    }
+
+    def get_be_param = { paramName ->
+        // for eache be node, get param value by default
+        def paramValue = ""
+        for (String id in backendId_to_backendIP.keySet()) {
+            def beIp = backendId_to_backendIP.get(id)
+            def bePort = backendId_to_backendHttpPort.get(id)
+            // get the config value from be
+            def (code, out, err) = curl("GET", String.format("http://%s:%s/api/show_config?conf_item=%s", beIp, bePort, paramName))
+            assertTrue(code == 0)
+            assertTrue(out.contains(paramName))
+            // parsing
+            def resultList = parseJson(out)[0]
+            assertTrue(resultList.size() == 4)
+            // get original value
+            paramValue = resultList[2]
+            backendId_to_params.get(id, [:]).put(paramName, paramValue)
+        }
+    }
+
+    def getTabletStatus = { tablet, rowsetNum, lastRowsetSegmentNum, enableAssert = false ->
+        String compactionUrl = tablet["CompactionStatus"]
         def (code, out, err) = curl("GET", compactionUrl)
         logger.info("Show tablets status: code=" + code + ", out=" + out + ", err=" + err)
         assertEquals(code, 0)
@@ -72,18 +98,22 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
 
     // batch_size is 4164 in csv_reader.cpp
     // _batch_size is 8192 in vtablet_writer.cpp
-    def backendId_to_params = get_be_param("doris_scanner_row_bytes")
     onFinish {
         GetDebugPoint().clearDebugPointsForAllBEs()
-        set_original_be_param("doris_scanner_row_bytes", backendId_to_params)
+        reset_be_param("doris_scanner_row_bytes")
+        reset_be_param("tablet_rowset_stale_sweep_time_sec")
     }
     GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
-    set_be_param.call("doris_scanner_row_bytes", "1")
+    GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
+    GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")
+    get_be_param("doris_scanner_row_bytes")
+    set_be_param("doris_scanner_row_bytes", "1")
+    get_be_param("tablet_rowset_stale_sweep_time_sec")
+    set_be_param("tablet_rowset_stale_sweep_time_sec", "0")
 
-    try {
-        tableName = "test_compact_multi_segments_"
-        sql """ DROP TABLE IF EXISTS ${tableName} """
-        sql """
+    tableName = "test_compact_multi_segments_"
+    sql """ DROP TABLE IF EXISTS ${tableName} """
+    sql """
             CREATE TABLE IF NOT EXISTS ${tableName} (
                 `k1` int(11) NULL, 
                 `k2` int(11) NULL, 
@@ -96,100 +126,94 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
                 "disable_auto_compaction" = "true"
             );
             """
+    def tablets = sql_return_maparray """ show tablets from ${tableName}; """
+    assertEquals(1, tablets.size())
+    def tablet = tablets[0]
+    String tablet_id = tablet.TabletId
+    def backend_id = tablet.BackendId
 
-        streamLoad {
-            table "${tableName}"
-            set 'column_separator', ','
-            file 'test_schema_change_add_key_column.csv'
-            time 10000 // limit inflight 10s
+    // load 1
+    streamLoad {
+        table "${tableName}"
+        set 'column_separator', ','
+        file 'test_schema_change_add_key_column.csv'
+        time 10000 // limit inflight 10s
 
-            check { result, exception, startTime, endTime ->
-                if (exception != null) {
-                    throw exception
-                }
-                def json = parseJson(result)
-                assertEquals("success", json.Status.toLowerCase())
-                assertEquals(8192, json.NumberTotalRows)
-                assertEquals(0, json.NumberFilteredRows)
+        check { result, exception, startTime, endTime ->
+            if (exception != null) {
+                throw exception
             }
+            def json = parseJson(result)
+            assertEquals("success", json.Status.toLowerCase())
+            assertEquals(8192, json.NumberTotalRows)
+            assertEquals(0, json.NumberFilteredRows)
         }
-        // check generate 3 segments
-        sql """ select * from ${tableName} limit 1; """
-        getTabletStatus(2, 3)
-
-        def rowCount1 = sql """ select count() from ${tableName}; """
-        logger.info("rowCount1: ${rowCount1}")
-
-        // get be info
-        getBackendIpHttpPort(backendId_to_backendIP, backendId_to_backendHttpPort)
-        def tablets = sql_return_maparray """ show tablets from ${tableName}; """
-        assertEquals(1, tablets.size())
-        def tablet = tablets[0]
-        String tablet_id = tablet.TabletId
-        def backend_id = tablet.BackendId
-
-        // trigger compaction
-        GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
-                [tablet_id: "${tablet.TabletId}", start_version: 2, end_version: 2])
-        def (code, out, err) = be_run_cumulative_compaction(backendId_to_backendIP.get(backend_id), backendId_to_backendHttpPort.get(backend_id), tablet_id)
-        logger.info("Run compaction: code=" + code + ", out=" + out + ", err=" + err)
-        assertEquals(code, 0)
-        def compactJson = parseJson(out.trim())
-        logger.info("compact json: " + compactJson)
-        for (int i = 0; i < 20; i++) {
-            if (getTabletStatus(2, 1, false)) {
-                break
-            }
-            sleep(1000)
-        }
-        // check generate 1 segments
-        sql """ select * from ${tableName} limit 1; """
-        getTabletStatus(2, 1)
-
-        // load 2
-        streamLoad {
-            table "${tableName}"
-            set 'column_separator', ','
-            file 'test_schema_change_add_key_column1.csv'
-            time 10000 // limit inflight 10s
-
-            check { result, exception, startTime, endTime ->
-                if (exception != null) {
-                    throw exception
-                }
-                def json = parseJson(result)
-                assertEquals("success", json.Status.toLowerCase())
-                assertEquals(20480, json.NumberTotalRows)
-                assertEquals(0, json.NumberFilteredRows)
-            }
-        }
-        // check generate 3 segments
-        sql """ select * from ${tableName} limit 1; """
-        getTabletStatus(3, 6)
-        def local_dm = getLocalDeleteBitmapStatus(tablet)
-        logger.info("local delete bitmap 1: " + local_dm)
-
-        // trigger compaction
-        GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
-                [tablet_id: "${tablet.TabletId}", start_version: 3, end_version: 3])
-        (code, out, err) = be_run_cumulative_compaction(backendId_to_backendIP.get(backend_id), backendId_to_backendHttpPort.get(backend_id), tablet_id)
-        logger.info("Run compaction: code=" + code + ", out=" + out + ", err=" + err)
-        assertEquals(code, 0)
-        compactJson = parseJson(out.trim())
-        logger.info("compact json: " + compactJson)
-        for (int i = 0; i < 20; i++) {
-            if (getTabletStatus(3, 1, false)) {
-                break
-            }
-            sleep(1000)
-        }
-        // check generate 1 segments
-        sql """ select * from ${tableName} limit 1; """
-        getTabletStatus(3, 1)
-        local_dm = getLocalDeleteBitmapStatus(tablet)
-        logger.info("local delete bitmap 2: " + local_dm)
-
-    } finally {
-        GetDebugPoint().clearDebugPointsForAllBEs()
     }
+    sql "sync"
+    def rowCount1 = sql """ select count() from ${tableName}; """
+    logger.info("rowCount1: ${rowCount1}")
+    // check generate 3 segments
+    getTabletStatus(tablet, 2, 3)
+
+    // trigger compaction
+    GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
+            [tablet_id: "${tablet.TabletId}", start_version: 2, end_version: 2])
+    def (code, out, err) = be_run_cumulative_compaction(backendId_to_backendIP.get(backend_id), backendId_to_backendHttpPort.get(backend_id), tablet_id)
+    logger.info("Run compaction: code=" + code + ", out=" + out + ", err=" + err)
+    assertEquals(code, 0)
+    def compactJson = parseJson(out.trim())
+    logger.info("compact json: " + compactJson)
+    // check generate 1 segments
+    for (int i = 0; i < 20; i++) {
+        if (getTabletStatus(tablet, 2, 1, false)) {
+            break
+        }
+        sleep(100)
+    }
+    getTabletStatus(tablet, 2, 1)
+    sql """ select * from ${tableName} limit 1; """
+
+    // load 2
+    streamLoad {
+        table "${tableName}"
+        set 'column_separator', ','
+        file 'test_schema_change_add_key_column1.csv'
+        time 10000 // limit inflight 10s
+
+        check { result, exception, startTime, endTime ->
+            if (exception != null) {
+                throw exception
+            }
+            def json = parseJson(result)
+            assertEquals("success", json.Status.toLowerCase())
+            assertEquals(20480, json.NumberTotalRows)
+            assertEquals(0, json.NumberFilteredRows)
+        }
+    }
+    sql "sync"
+    def rowCount2 = sql """ select count() from ${tableName}; """
+    logger.info("rowCount2: ${rowCount2}")
+    // check generate 3 segments
+    getTabletStatus(tablet, 3, 6)
+    def local_dm = getLocalDeleteBitmapStatus(tablet)
+    logger.info("local delete bitmap 1: " + local_dm)
+
+    // trigger compaction
+    GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
+            [tablet_id: "${tablet.TabletId}", start_version: 3, end_version: 3])
+    (code, out, err) = be_run_cumulative_compaction(backendId_to_backendIP.get(backend_id), backendId_to_backendHttpPort.get(backend_id), tablet_id)
+    logger.info("Run compaction: code=" + code + ", out=" + out + ", err=" + err)
+    assertEquals(code, 0)
+    compactJson = parseJson(out.trim())
+    logger.info("compact json: " + compactJson)
+    // check generate 1 segments
+    for (int i = 0; i < 20; i++) {
+        if (getTabletStatus(tablet, 3, 1, false)) {
+            break
+        }
+        sleep(100)
+    }
+    getTabletStatus(tablet, 3, 1)
+    local_dm = getLocalDeleteBitmapStatus(tablet)
+    logger.info("local delete bitmap 2: " + local_dm)
 }
