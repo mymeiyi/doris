@@ -461,7 +461,8 @@ void TabletMeta::remove_rowset_delete_bitmap(const RowsetId& rowset_id) {
         size_t rowset_cache_version_size =
                 delete_bitmap().remove_rowset_cache_version(rowset_id);
         if (config::enable_mow_verbose_log) {
-            LOG_INFO("delete rowset delete bitmap. tablet={}, rowset={}", tablet_id(), rowset_id);
+            LOG_INFO("delete rowset delete bitmap. tablet={}, rowset={}", tablet_id(),
+                     rowset_id.to_string());
         }
         _check_mow_rowset_cache_version_size(rowset_cache_version_size);
     }
