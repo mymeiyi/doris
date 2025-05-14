@@ -208,17 +208,18 @@ suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
         sql """ INSERT INTO ${testTable} VALUES (5,99); """
         sql "sync"
         order_qt_sql1 """ select * from ${testTable}; """
+        getTabletStatus(tablet)
+        getLocalDeleteBitmapStatus(tablet)
 
         // trigger and block one query
         GetDebugPoint().enableDebugPointForAllBEs("NewOlapScanner::_init_tablet_reader_params.block")
-        GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
-        GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")
         Thread query_thread = new Thread(() -> query())
         query_thread.start()
         sleep(100)
 
         // trigger compaction to generate base rowset
-        getTabletStatus(tablet)
+        GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
+        GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")
         assertTrue(triggerCompaction(tablet).contains("Success"))
         waitForCompaction(tablet)
         // wait for stale rowsets are deleted
