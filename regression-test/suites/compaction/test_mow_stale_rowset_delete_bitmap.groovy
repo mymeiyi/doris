@@ -19,9 +19,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.codehaus.groovy.runtime.IOGroovyMethods
 
 suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
-    /*if (isCloudMode()) {
-        return
-    }*/
     def testTable = "test_mow_stale_rowset_delete_bitmap"
     def backendId_to_backendIP = [:]
     def backendId_to_backendHttpPort = [:]
@@ -191,12 +188,9 @@ suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
     logger.info("tablets: " + tablets)
     assertEquals(1, tablets.size())
     def tablet = tablets[0]
-    String tablet_id = tablet.TabletId
 
     GetDebugPoint().clearDebugPointsForAllBEs()
-    // get_be_param("compaction_promotion_version_count")
     get_be_param("tablet_rowset_stale_sweep_time_sec")
-    // set_be_param("compaction_promotion_version_count", "5")
     set_be_param("tablet_rowset_stale_sweep_time_sec", "0")
 
     try {
@@ -207,7 +201,6 @@ suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
         sql """ INSERT INTO ${testTable} VALUES (4,99),(5,0); """
         sql """ INSERT INTO ${testTable} VALUES (5,99); """
         sql "sync"
-        order_qt_sql1 """ select * from ${testTable}; """
         getTabletStatus(tablet)
         getLocalDeleteBitmapStatus(tablet)
 
@@ -217,7 +210,7 @@ suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
         query_thread.start()
         sleep(100)
 
-        // trigger compaction to generate base rowset
+        // trigger compaction
         GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
         GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")
         assertTrue(triggerCompaction(tablet).contains("Success"))
@@ -228,10 +221,11 @@ suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
             if (tablet_status["rowsets"].size() <= 2 && tablet_status["stale_rowsets"].size() == 0) {
                 break
             }
-            sleep(1000)
+            sleep(200)
         }
         getLocalDeleteBitmapStatus(tablet)
 
+        // unblock the query
         GetDebugPoint().disableDebugPointForAllBEs("NewOlapScanner::_init_tablet_reader_params.block")
         query_thread.join()
         assertTrue(query_result.get(), "found duplicated keys")
@@ -244,9 +238,9 @@ suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
             if (local_delete_bitmap_status["delete_bitmap_count"] == 0) {
                 break
             }
+            sleep(100)
         }
     } finally {
-        // reset_be_param("compaction_promotion_version_count")
         reset_be_param("tablet_rowset_stale_sweep_time_sec")
         GetDebugPoint().clearDebugPointsForAllBEs()
     }
