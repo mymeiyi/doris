@@ -1180,9 +1180,10 @@ int InstanceChecker::check_delete_bitmap_storage_optimize(int64_t tablet_id) {
 
 int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
         int64_t tablet_id, int64_t& rowsets_with_useless_delete_bitmap_version) {
-    // [end_version, create_time]
+    // end_version: create_time
     std::map<int64_t, int64_t> tablet_rowsets_map {};
-    std::set<std::string> rowsets;
+    // rowset_id: {start_version, end_version}
+    std::map<std::string, std::pair<int64_t, int64_t>> rowset_version_map;
     // Get all visible rowsets of this tablet
     auto collect_cb = [&](const doris::RowsetMetaCloudPB& rowset) {
         if (rowset.start_version() == 0 && rowset.end_version() == 1) {
@@ -1190,7 +1191,8 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
             return;
         }
         tablet_rowsets_map[rowset.end_version()] = rowset.creation_time();
-        rowsets.insert(rowset.rowset_id_v2());
+        rowset_version_map[rowset.rowset_id_v2()] =
+                std::make_pair(rowset.start_version(), rowset.end_version());
     };
     if (int ret = collect_tablet_rowsets(tablet_id, collect_cb); ret != 0) {
         return ret;
@@ -1239,11 +1241,17 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
             ss << last_start_version << "-" << last_end_version;
         }
         ss << "]";
+        std::stringstream version_str;
+        auto it = rowset_version_map.find(last_rowset_id);
+        if (it != rowset_version_map.end()) {
+            version_str << "[" << it->second.first << "-" << it->second.second << "]";
+        }
         LOG(WARNING) << fmt::format(
                 "[delete bitmap check fails] delete bitmap storage optimize v2 check fail "
-                "for instance_id={}, tablet_id={}, rowset_id={}, found delete bitmap "
-                "with versions={}, size={}",
-                instance_id_, tablet_id, last_rowset_id, ss.str(), failed_versions.size());
+                "for instance_id={}, tablet_id={}, rowset_id={}, version={} found delete "
+                "bitmap with versions={}, size={}",
+                instance_id_, tablet_id, last_rowset_id, version_str.str(), ss.str(),
+                failed_versions.size());
     };
     using namespace std::chrono;
     int64_t now = duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
@@ -1289,7 +1297,7 @@ int InstanceChecker::check_delete_bitmap_storage_optimize_v2(
             if (tablet_rowsets_map.find(version) != tablet_rowsets_map.end()) {
                 continue;
             }
-            if (!rowsets.contains(rowset_id)) {
+            if (rowset_version_map.find(rowset_id) == rowset_version_map.end()) {
                 // checked in do_delete_bitmap_inverted_check
                 continue;
             }
