@@ -195,6 +195,9 @@ Status OlapScanner::init() {
             auto st = tablet->capture_rs_readers(_tablet_reader_params.version,
                                                  &read_source.rs_splits,
                                                  _state->skip_missing_version());
+            LOG_INFO("finish capture_rs_readers for tablet={}, query_id={}, rs_size={}",
+                     tablet->tablet_id(), print_id(_state->query_id()),
+                     read_source.rs_splits.size());
             if (!st.ok()) {
                 LOG(WARNING) << "fail to init reader.res=" << st;
                 return st;
