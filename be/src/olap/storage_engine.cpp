@@ -1249,13 +1249,6 @@ void StorageEngine::start_delete_unused_rowset() {
             it = _unused_delete_bitmap.erase(it);
         }
     }
-    for (const auto& tablet_id : tablets_to_save_meta) {
-        auto tablet = _tablet_manager->get_tablet(tablet_id);
-        if (tablet) {
-            std::shared_lock rlock(tablet->get_header_lock());
-            tablet->save_meta();
-        }
-    }
     LOG(INFO) << "collected " << unused_rowsets_copy.size() << " unused rowsets to remove, skipped "
               << due_to_use_count << " rowsets due to use count > 1, skipped "
               << due_to_not_delete_file << " rowsets due to don't need to delete file, skipped "
@@ -1267,13 +1260,19 @@ void StorageEngine::start_delete_unused_rowset() {
         // delete delete_bitmap of unused rowsets
         if (auto tablet = _tablet_manager->get_tablet(rs->rowset_meta()->tablet_id());
             tablet && tablet->enable_unique_key_merge_on_write()) {
-            tablet->tablet_meta()->delete_bitmap().remove({rs->rowset_id(), 0, 0},
-                                                          {rs->rowset_id(), UINT32_MAX, 0});
-            tablet->tablet_meta()->delete_bitmap().remove_rowset_cache_version(rs->rowset_id());
+            tablet->tablet_meta()->remove_rowset_delete_bitmap(rs->rowset_id());
+            tablets_to_save_meta.emplace(tablet->tablet_id());
         }
         Status status = rs->remove();
         unused_rowsets_counter << -1;
         VLOG_NOTICE << "remove rowset:" << rs->rowset_id() << " finished. status:" << status;
+    }
+    for (const auto& tablet_id : tablets_to_save_meta) {
+        auto tablet = _tablet_manager->get_tablet(tablet_id);
+        if (tablet) {
+            std::shared_lock rlock(tablet->get_header_lock());
+            tablet->save_meta();
+        }
     }
     LOG(INFO) << "removed all collected unused rowsets";
 }
