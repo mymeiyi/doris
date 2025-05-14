@@ -352,6 +352,7 @@ Status OlapScanLocalState::_init_scanners(std::list<vectorized::ScannerSPtr>* sc
     bool has_cpu_limit = state()->query_options().__isset.resource_limit &&
                          state()->query_options().resource_limit.__isset.cpu_limit;
 
+    //
     RETURN_IF_ERROR(hold_tablets());
     if (enable_parallel_scan && !p._should_run_serial && !has_cpu_limit &&
         p._push_down_agg_type == TPushAggOp::NONE &&
