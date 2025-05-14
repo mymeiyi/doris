@@ -209,6 +209,9 @@ Status OlapScanner::init() {
             }
             _tablet_reader_params.set_read_source(std::move(read_source));
         }
+        LOG_INFO("sout: finish capture_rs_readers for tablet={}, query_id={}, rs_size={}",
+                 tablet->tablet_id(), print_id(_state->query_id()),
+                 _tablet_reader_params.rs_splits.size());
 
         // Initialize tablet_reader_params
         RETURN_IF_ERROR(_init_tablet_reader_params(_key_ranges, local_state->_olap_filters,
@@ -377,6 +380,8 @@ Status OlapScanner::_init_tablet_reader_params(
     }
 
     DBUG_EXECUTE_IF("NewOlapScanner::_init_tablet_reader_params.block", DBUG_BLOCK);
+    LOG(INFO) << "sout: tablet_id=" << tablet->tablet_id()
+              << ", dm size=" << _tablet_reader_params.delete_bitmap->delete_bitmap.size();
 
     if (!_state->skip_storage_engine_merge()) {
         TOlapScanNode& olap_scan_node =
