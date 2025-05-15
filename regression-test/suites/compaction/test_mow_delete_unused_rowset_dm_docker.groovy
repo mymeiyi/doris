@@ -164,7 +164,6 @@ suite("test_mow_delete_unused_rowset_dm_docker", "docker") {
         waitForCompaction(tablet)
         def tablet_status = getTabletStatus(tablet)
         assertEquals(2, tablet_status["rowsets"].size())
-        order_qt_sql2 "select * from ${testTable}"
 
         // 3. wait for no delete bitmap and no stale rowsets
         def local_dm = getLocalDeleteBitmapStatus(tablet)
@@ -173,13 +172,13 @@ suite("test_mow_delete_unused_rowset_dm_docker", "docker") {
         assertEquals(0, tablet_status["stale_rowsets"].size())
 
         // 3. write some data
-        sql """ INSERT INTO ${testTable} VALUES (1,99); """
-        sql """ INSERT INTO ${testTable} VALUES (1,100),(2,99); """
-        sql """ INSERT INTO ${testTable} VALUES (3,99); """
-        sql """ INSERT INTO ${testTable} VALUES (4,99); """
-        sql """ INSERT INTO ${testTable} VALUES (5,99); """
+        sql """ INSERT INTO ${testTable} VALUES (1,100); """
+        sql """ INSERT INTO ${testTable} VALUES (1,101),(2,100); """
+        sql """ INSERT INTO ${testTable} VALUES (3,100); """
+        sql """ INSERT INTO ${testTable} VALUES (4,100); """
+        sql """ INSERT INTO ${testTable} VALUES (5,100); """
         sql """ sync """
-        order_qt_sql3 "select * from ${testTable}"
+        order_qt_sql2 "select * from ${testTable}"
         tablet_status = getTabletStatus(tablet)
         assertEquals(7, tablet_status["rowsets"].size())
 
@@ -200,7 +199,6 @@ suite("test_mow_delete_unused_rowset_dm_docker", "docker") {
 
         // 6. restart be. check delete bitmap count
         cluster.restartBackends()
-        GetDebugPoint().enableDebugPointForAllBEs("DeleteBitmapAction._handle_show_local_delete_bitmap_count.start_delete_unused_rowset")
         tablet_status = getTabletStatus(tablet)
         logger.info("tablet status after restart: " + tablet_status)
         for (int i = 0; i < 20; i++) {
@@ -213,5 +211,6 @@ suite("test_mow_delete_unused_rowset_dm_docker", "docker") {
         local_dm = getLocalDeleteBitmapStatus(tablet)
         logger.info("local_dm 2: " + local_dm)
         assertEquals(5, local_dm["delete_bitmap_count"])
+        order_qt_sql3 """ select * from ${testTable}; """
     }
 }
