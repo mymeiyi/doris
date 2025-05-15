@@ -191,11 +191,11 @@ suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
     assertEquals(1, tablets.size())
     def tablet = tablets[0]
 
-    GetDebugPoint().clearDebugPointsForAllBEs()
-    get_be_param("tablet_rowset_stale_sweep_time_sec")
-    set_be_param("tablet_rowset_stale_sweep_time_sec", "0")
-
     try {
+        GetDebugPoint().clearDebugPointsForAllBEs()
+        get_be_param("tablet_rowset_stale_sweep_time_sec")
+        set_be_param("tablet_rowset_stale_sweep_time_sec", "0")
+
         // write some data
         sql """ INSERT INTO ${testTable} VALUES (1,99); """
         sql """ INSERT INTO ${testTable} VALUES (2,99); """
