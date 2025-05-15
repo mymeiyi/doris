@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// when compaction for one rowsets with multiple segments, the delete bitmap can be deleted
 suite("test_mow_compact_multi_segments", "nonConcurrent") {
     GetDebugPoint().clearDebugPointsForAllFEs()
     GetDebugPoint().clearDebugPointsForAllBEs()
@@ -216,6 +217,7 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
     getTabletStatus(tablet, 3, 1)
 
     GetDebugPoint().enableDebugPointForAllBEs("DeleteBitmapAction._handle_show_local_delete_bitmap_count.vacuum_stale_rowsets") // cloud
+    GetDebugPoint().enableDebugPointForAllBEs("DeleteBitmapAction._handle_show_local_delete_bitmap_count.start_delete_unused_rowset") // local
     local_dm = getLocalDeleteBitmapStatus(tablet)
     logger.info("local delete bitmap 2: " + local_dm)
     assertEquals(1, local_dm["delete_bitmap_count"])

@@ -18,6 +18,8 @@
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.codehaus.groovy.runtime.IOGroovyMethods
 
+// when move rowsets from stale to unused, the delete bitmap are not deleted
+// when delete unused rowsets, the delete bitmap are deleted
 suite("test_mow_stale_rowset_delete_bitmap", "nonConcurrent") {
     def testTable = "test_mow_stale_rowset_delete_bitmap"
     def backendId_to_backendIP = [:]
