@@ -201,16 +201,32 @@ suite("test_mow_delete_unused_rowset_dm_docker", "docker") {
         cluster.restartBackends()
         tablet_status = getTabletStatus(tablet)
         logger.info("tablet status after restart: " + tablet_status)
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < 300; i++) {
             local_dm = getLocalDeleteBitmapStatus(tablet)
             if (local_dm["delete_bitmap_count"] == 5) {
                 break
             }
-            sleep(500)
+            sleep(20)
         }
         local_dm = getLocalDeleteBitmapStatus(tablet)
         logger.info("local_dm 2: " + local_dm)
         assertEquals(5, local_dm["delete_bitmap_count"])
         order_qt_sql3 """ select * from ${testTable}; """
+
+        // 7. restart be
+        /*cluster.restartBackends()
+        tablet_status = getTabletStatus(tablet)
+        logger.info("tablet status after restart: " + tablet_status)
+        for (int i = 0; i < 300; i++) {
+            local_dm = getLocalDeleteBitmapStatus(tablet)
+            if (local_dm["delete_bitmap_count"] == 5) {
+                break
+            }
+            sleep(20)
+        }
+        local_dm = getLocalDeleteBitmapStatus(tablet)
+        logger.info("local_dm 2: " + local_dm)
+        assertEquals(5, local_dm["delete_bitmap_count"])
+        order_qt_sql3 """ select * from ${testTable}; """*/
     }
 }

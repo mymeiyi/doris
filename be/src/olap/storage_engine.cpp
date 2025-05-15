@@ -954,10 +954,7 @@ void StorageEngine::_clean_unused_rowset_metas() {
             static_cast<void>(RowsetMetaManager::remove(
                     data_dir->get_meta(), rowset_meta->tablet_uid(), rowset_meta->rowset_id()));
             TabletSharedPtr tablet = _tablet_manager->get_tablet(rowset_meta->tablet_id());
-            LOG(INFO) << "sout: 1 invalid rowset=" << rowset_meta->rowset_id().to_string()
-                      << ", tablet_id=" << rowset_meta->tablet_id();
             if (tablet && tablet->tablet_meta()->enable_unique_key_merge_on_write()) {
-                LOG(INFO) << "sout: 2 invalid rowset=" << rowset_meta->rowset_id().to_string();
                 tablet->tablet_meta()->remove_rowset_delete_bitmap(rowset_meta->rowset_id());
                 tablets_to_save_meta.emplace(tablet->tablet_id());
             }
