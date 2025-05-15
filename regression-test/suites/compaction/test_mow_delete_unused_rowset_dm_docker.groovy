@@ -26,10 +26,11 @@ suite("test_mow_delete_unused_rowset_dm_docker", "docker") {
     options.setFeNum(1)
     options.setBeNum(1)
     options.enableDebugPoints()
+    options.feConfigs.add("enable_workload_group=false")
+    // beConfigs
     options.beConfigs.add('compaction_promotion_version_count=5')
     options.beConfigs.add('tablet_rowset_stale_sweep_time_sec=0')
-    // options.beConfigs.add('vacuum_stale_rowsets_interval_s=10')
-    options.feConfigs.add("enable_workload_group=false")
+    options.beConfigs.add('enable_mow_verbose_log=true')
     options.beConfigs.add('enable_java_support=false')
 
     def testTable = "test_mow_delete_unused_rowset_dm_docker"
@@ -202,6 +203,13 @@ suite("test_mow_delete_unused_rowset_dm_docker", "docker") {
         GetDebugPoint().enableDebugPointForAllBEs("DeleteBitmapAction._handle_show_local_delete_bitmap_count.start_delete_unused_rowset")
         tablet_status = getTabletStatus(tablet)
         logger.info("tablet status after restart: " + tablet_status)
+        for (int i = 0; i < 20; i++) {
+            local_dm = getLocalDeleteBitmapStatus(tablet)
+            if (local_dm["delete_bitmap_count"] == 5) {
+                break
+            }
+            sleep(500)
+        }
         local_dm = getLocalDeleteBitmapStatus(tablet)
         logger.info("local_dm 2: " + local_dm)
         assertEquals(5, local_dm["delete_bitmap_count"])
