@@ -800,6 +800,8 @@ void DataDir::_perform_rowset_gc(const std::string& tablet_schema_hash_path) {
             }
             reclaim_rowset_file(tablet_schema_hash_path + '/' + filename);
             checked_rowsets.emplace(rowset_id, true);
+            // delete bitmap is deleted in StorageEngine:_clean_unused_rowset_metas
+            // but if rowset meta is deleted first, be restart, the delete bitmap may leak
         } else {
             checked_rowsets.emplace(rowset_id, false);
         }
