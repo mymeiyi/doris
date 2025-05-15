@@ -373,7 +373,9 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                 if (to_add_v.contains(v)) {
                     to_delete.push_back(rs);
                     LOG(INFO) << "sout: 3 delete to_delete=" << rs->rowset_id()
-                              << ", v=" << rs->version().to_string();
+                              << ", v=" << rs->version().to_string()
+                              << ", overlap=" << version_overlap
+                              << ", max_version=" << _max_version;
                 }
             }
             delete_rowsets(to_delete, meta_lock);

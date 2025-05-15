@@ -54,15 +54,15 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
         }
     }
 
-    def getTabletStatus = { tablet, rowsetNum, lastRowsetSegmentNum, enableAssert = false ->
+    def getTabletStatus = { tablet, rowsetIndex, lastRowsetSegmentNum, enableAssert = false ->
         String compactionUrl = tablet["CompactionStatus"]
         def (code, out, err) = curl("GET", compactionUrl)
         logger.info("Show tablets status: code=" + code + ", out=" + out + ", err=" + err)
         assertEquals(code, 0)
         def tabletJson = parseJson(out.trim())
         assert tabletJson.rowsets instanceof List
-        assertTrue(tabletJson.rowsets.size() >= rowsetNum)
-        def rowset = tabletJson.rowsets.get(rowsetNum - 1)
+        assertTrue(tabletJson.rowsets.size() >= rowsetIndex)
+        def rowset = tabletJson.rowsets.get(rowsetIndex - 1)
         logger.info("rowset: ${rowset}")
         int start_index = rowset.indexOf("]")
         int end_index = rowset.indexOf("DATA")
@@ -198,7 +198,32 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
     def local_dm = getLocalDeleteBitmapStatus(tablet)
     logger.info("local delete bitmap 1: " + local_dm)
 
-    // trigger compaction
+    // load 3
+    streamLoad {
+        table "${tableName}"
+        set 'column_separator', ','
+        file 'test_schema_change_add_key_column1.csv'
+        time 10000 // limit inflight 10s
+
+        check { result, exception, startTime, endTime ->
+            if (exception != null) {
+                throw exception
+            }
+            def json = parseJson(result)
+            assertEquals("success", json.Status.toLowerCase())
+            assertEquals(20480, json.NumberTotalRows)
+            assertEquals(0, json.NumberFilteredRows)
+        }
+    }
+    sql "sync"
+    def rowCount3 = sql """ select count() from ${tableName}; """
+    logger.info("rowCount3: ${rowCount3}")
+    // check generate 3 segments
+    getTabletStatus(tablet, 4, 6)
+    local_dm = getLocalDeleteBitmapStatus(tablet)
+    logger.info("local delete bitmap 2: " + local_dm)
+
+    // trigger compaction for load 2
     GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
             [tablet_id: "${tablet.TabletId}", start_version: 3, end_version: 3])
     (code, out, err) = be_run_cumulative_compaction(backendId_to_backendIP.get(backend_id), backendId_to_backendHttpPort.get(backend_id), tablet_id)
@@ -214,6 +239,26 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
         sleep(100)
     }
     getTabletStatus(tablet, 3, 1)
+
+    // trigger compaction for load 3
+    GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
+            [tablet_id: "${tablet.TabletId}", start_version: 4, end_version: 4])
+    (code, out, err) = be_run_cumulative_compaction(backendId_to_backendIP.get(backend_id), backendId_to_backendHttpPort.get(backend_id), tablet_id)
+    logger.info("Run compaction: code=" + code + ", out=" + out + ", err=" + err)
+    assertEquals(code, 0)
+    compactJson = parseJson(out.trim())
+    logger.info("compact json: " + compactJson)
+    // check generate 1 segments
+    for (int i = 0; i < 20; i++) {
+        if (getTabletStatus(tablet, 4, 1, false)) {
+            break
+        }
+        sleep(100)
+    }
+    getTabletStatus(tablet, 4, 1)
+
+    GetDebugPoint().enableDebugPointForAllBEs("DeleteBitmapAction._handle_show_local_delete_bitmap_count.vacuum_stale_rowsets") // cloud
     local_dm = getLocalDeleteBitmapStatus(tablet)
     logger.info("local delete bitmap 2: " + local_dm)
+    assertEquals(1, local_dm["delete_bitmap_count"])
 }
