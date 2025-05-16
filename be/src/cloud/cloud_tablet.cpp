@@ -346,6 +346,13 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                 // replace existed rowset with `to_add` rowset. This may occur when:
                 //  1. schema change converts rowsets which have been double written to new tablet
                 //  2. cumu compaction picks single overlapping input rowset to perform compaction
+                if (keys_type() == UNIQUE_KEYS && enable_unique_key_merge_on_write()) {
+                    // add existed rowset to unused_rowsets to remove delete bitmap
+                    if (auto find_it = _rs_version_map.find(rs->version());
+                        find_it != _stale_rs_version_map.end()) {
+                        _unused_rowsets.emplace(find_it->second->rowset_id(), find_it->second);
+                    }
+                }
                 _tablet_meta->delete_rs_meta_by_version(rs->version(), nullptr);
                 _rs_version_map[rs->version()] = rs;
                 _tablet_meta->add_rowsets_unchecked({rs});
