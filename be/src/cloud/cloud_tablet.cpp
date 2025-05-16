@@ -350,6 +350,10 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                     // add existed rowset to unused_rowsets to remove delete bitmap
                     if (auto find_it = _rs_version_map.find(rs->version());
                         find_it != _stale_rs_version_map.end()) {
+                        DCHECK(find_it->second->rowset_id() != rs->rowset_id())
+                                << "tablet_id=" << tablet_id()
+                                << ", rowset_id=" << rs->rowset_id().to_string()
+                                << ", existed rowset=" << find_it->second->rowset_id().to_string();
                         _unused_rowsets.emplace(find_it->second->rowset_id(), find_it->second);
                     }
                 }
