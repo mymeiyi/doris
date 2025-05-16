@@ -342,7 +342,9 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                 return true;
             });
 
+    LOG(INFO) << "sout: tablet_id=" << tablet_id() << ", before to add size=" << to_add.size();
     to_add.erase(remove_it, to_add.end());
+    LOG(INFO) << "sout: tablet_id=" << tablet_id() << ", after to add size=" << to_add.size();
 
     // delete rowsets with overlapped version
     std::vector<RowsetSharedPtr> to_add_directly;
@@ -350,15 +352,23 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
         // delete rowsets with overlapped version
         std::vector<RowsetSharedPtr> to_delete;
         Version to_add_v = to_add_rs->version();
+        LOG(INFO) << "sout: 1 tablet_id=" << tablet_id() << ", rs=" << to_add_rs->rowset_id()
+                  << ", version=" << to_add_v.to_string() << ", max_version=" << _max_version;
         // if start_version  > max_version, we can skip checking overlap here.
         if (to_add_v.first > _max_version) {
             // if start_version  > max_version, we can skip checking overlap here.
             to_add_directly.push_back(to_add_rs);
+            LOG(INFO) << "sout: 2 tablet_id=" << tablet_id() << ", rs=" << to_add_rs->rowset_id()
+                      << ", version=" << to_add_v.to_string() << ", max_version=" << _max_version;
         } else {
             to_add_directly.push_back(to_add_rs);
+            LOG(INFO) << "sout: 3 tablet_id=" << tablet_id() << ", rs=" << to_add_rs->rowset_id()
+                      << ", version=" << to_add_v.to_string() << ", max_version=" << _max_version;
             for (auto& [v, rs] : _rs_version_map) {
                 if (to_add_v.contains(v)) {
                     to_delete.push_back(rs);
+                    LOG(INFO) << "sout: 4 tablet_id=" << tablet_id() << ", rs=" << to_add_rs->rowset_id()
+                              << ", version=" << to_add_v.to_string() << ", max_version=" << _max_version;
                 }
             }
             delete_rowsets(to_delete, meta_lock);
