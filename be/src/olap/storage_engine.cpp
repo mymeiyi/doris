@@ -946,29 +946,33 @@ void StorageEngine::_clean_unused_rowset_metas() {
         return true;
     };
     auto data_dirs = get_stores();
-    std::set<int64_t> tablets_to_save_meta;
     for (auto data_dir : data_dirs) {
         static_cast<void>(
                 RowsetMetaManager::traverse_rowset_metas(data_dir->get_meta(), clean_rowset_func));
+        // delete delete bitmap
+        std::set<int64_t> tablets_to_save_meta;
         for (auto& rowset_meta : invalid_rowset_metas) {
-            static_cast<void>(RowsetMetaManager::remove(
-                    data_dir->get_meta(), rowset_meta->tablet_uid(), rowset_meta->rowset_id()));
             TabletSharedPtr tablet = _tablet_manager->get_tablet(rowset_meta->tablet_id());
             if (tablet && tablet->tablet_meta()->enable_unique_key_merge_on_write()) {
                 tablet->tablet_meta()->remove_rowset_delete_bitmap(rowset_meta->rowset_id());
                 tablets_to_save_meta.emplace(tablet->tablet_id());
             }
         }
+        for (const auto& tablet_id : tablets_to_save_meta) {
+            auto tablet = _tablet_manager->get_tablet(tablet_id);
+            if (tablet) {
+                std::shared_lock rlock(tablet->get_header_lock());
+                tablet->save_meta();
+            }
+        }
+        // delete rowset meta
+        for (auto& rowset_meta : invalid_rowset_metas) {
+            static_cast<void>(RowsetMetaManager::remove(
+                    data_dir->get_meta(), rowset_meta->tablet_uid(), rowset_meta->rowset_id()));
+        }
         LOG(INFO) << "remove " << invalid_rowset_metas.size()
                   << " invalid rowset meta from dir: " << data_dir->path();
         invalid_rowset_metas.clear();
-    }
-    for (const auto& tablet_id : tablets_to_save_meta) {
-        auto tablet = _tablet_manager->get_tablet(tablet_id);
-        if (tablet) {
-            std::shared_lock rlock(tablet->get_header_lock());
-            tablet->save_meta();
-        }
     }
 }
 
