@@ -326,11 +326,22 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
             std::remove_if(to_add.begin(), to_add.end(), [this](const RowsetSharedPtr& rs) {
                 if (auto find_it = _rs_version_map.find(rs->version());
                     find_it == _rs_version_map.end()) {
+                    LOG(INFO) << "sout: 10 tablet_id=" << tablet_id()
+                              << ", rowset_id=" << rs->rowset_id().to_string()
+                              << ", version=" << rs->version().to_string()
+                              << ", not found in _rs_version_map, need to add.";
                     return false;
                 } else if (find_it->second->rowset_id() == rs->rowset_id()) {
+                    LOG(INFO) << "sout: 20 tablet_id=" << tablet_id()
+                              << ", rowset_id=" << rs->rowset_id().to_string()
+                              << ", version=" << rs->version().to_string()
+                              << ", found in _rs_version_map, need to skip.";
                     return true; // Same rowset
                 }
-
+                LOG(INFO) << "sout: 30 tablet_id=" << tablet_id()
+                          << ", rowset_id=" << rs->rowset_id().to_string()
+                          << ", version=" << rs->version().to_string() << ", old rowset="
+                          << _rs_version_map[rs->version()]->rowset_id().to_string();
                 // If version of rowset in `to_add` is equal to rowset in tablet but rowset_id is not equal,
                 // replace existed rowset with `to_add` rowset. This may occur when:
                 //  1. schema change converts rowsets which have been double written to new tablet
