@@ -179,12 +179,16 @@ suite("test_mow_compaction_and_schema_change", "nonConcurrent") {
 
     try {
         set_be_param("tablet_rowset_stale_sweep_time_sec", "0")
-        for (int method = 0; method < 2; method++) {
+        for (int method = 0; method < 3; method++) {
             if (method == 0) {
+                // off
+                set_be_param("enable_delete_bitmap_merge_on_compaction", "false")
+                set_be_param("enable_agg_and_remove_pre_rowsets_delete_bitmap", "false")
+            } else if (method == 1) {
                 // solution2: no duplicated key problems
                 set_be_param("enable_delete_bitmap_merge_on_compaction", "false")
                 set_be_param("enable_agg_and_remove_pre_rowsets_delete_bitmap", "true")
-            } else if (method == 1) {
+            } else if (method == 2) {
                 // solution1: has duplicated key problems
                 set_be_param("enable_delete_bitmap_merge_on_compaction", "true")
                 set_be_param("enable_agg_and_remove_pre_rowsets_delete_bitmap", "false")
@@ -290,12 +294,20 @@ suite("test_mow_compaction_and_schema_change", "nonConcurrent") {
             logger.info(testTable + ", local_dm 2: " + local_dm)
             if (method == 0) {
                 if (isCloudMode()) {
+                    assertEquals(5, local_dm["delete_bitmap_count"])
+                    assertEquals(6, local_dm["cardinality"])
+                } else {
+                    assertEquals(4, local_dm["delete_bitmap_count"])
+                    assertEquals(5, local_dm["cardinality"])
+                }
+            } else if (method == 1) {
+                if (isCloudMode()) {
                     assertEquals(3, local_dm["delete_bitmap_count"])
                     assertEquals(6, local_dm["cardinality"]) // the last one is agged
                 } else {
                     assertEquals(9, local_dm["cardinality"]) // the last one is agged
                 }
-            } else if (method == 1) {
+            } else if (method == 2) {
                 if (isCloudMode()) { // compaction select [8-11]
                     assertEquals(2, local_dm["delete_bitmap_count"])
                     assertEquals(6, local_dm["cardinality"])
@@ -313,10 +325,10 @@ suite("test_mow_compaction_and_schema_change", "nonConcurrent") {
 
             // 6. check duplicated keys
             def result = sql "select `k`, count(*) from ${testTable} group by `k` having count(*) > 1"
-            if (method == 0) {
+            if (method == 0 || method == 1) {
                 logger.info("no duplicated keys: " + result)
                 assertEquals(0, result.size())
-            } else if (method == 1) {
+            } else if (method == 2) {
                 logger.info("find duplicated keys: " + result)
                 assertEquals(2, result.size())
             }
