@@ -144,9 +144,9 @@ Status LoadBlockQueue::get_block(RuntimeState* runtime_state, vectorized::Block*
                           << ", duration=" << duration << ", load_ids=" << get_load_ids();
             }
         }
-        if (!_need_commit && !timer_dependency->ready()) {
+        if (!_need_commit) {
             get_block_dep->block();
-            VLOG_DEBUG << "block get_block for query_id=" << load_instance_id;
+            LOG(INFO) << "block get_block for query_id=" << load_instance_id;
         }
     } else {
         const BlockData block_data = _block_queue.front();
