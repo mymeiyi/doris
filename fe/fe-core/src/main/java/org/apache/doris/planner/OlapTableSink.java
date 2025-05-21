@@ -152,6 +152,7 @@ public class OlapTableSink extends DataSink {
         tSink.setTxnId(txnId);
         tSink.setDbId(dbId);
         tSink.setBaseSchemaVersion(dstTable.getBaseSchemaVersion());
+        tSink.setIndexSize(dstTable.getIndexes().size());
         tSink.setLoadChannelTimeoutS(loadChannelTimeoutS);
         tSink.setSendBatchParallelism(sendBatchParallelism);
         tSink.setWriteFileCache(ConnectContext.get() != null

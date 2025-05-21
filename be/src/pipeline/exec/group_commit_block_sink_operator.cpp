@@ -262,6 +262,8 @@ Status GroupCommitBlockSinkOperatorX::init(const TDataSink& t_sink) {
     _db_id = table_sink.db_id;
     _table_id = table_sink.table_id;
     _base_schema_version = table_sink.base_schema_version;
+    LOG(INFO) << "sout: base version=" << _base_schema_version << ", version=" << _schema->version()
+              << ", index size=" << _schema->indexes().size();
     _partition = table_sink.partition;
     _group_commit_mode = table_sink.group_commit_mode;
     _load_id = table_sink.load_id;
