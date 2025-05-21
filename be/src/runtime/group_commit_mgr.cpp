@@ -397,7 +397,7 @@ Status GroupCommitTable::_create_group_commit_load(int be_exe_version,
                    << pipeline_params.fragment.output_sink.olap_table_sink.schema.version;
         {
             auto load_block_queue = std::make_shared<LoadBlockQueue>(
-                    instance_id, label, txn_id, schema_version, LoadBlockQueue,
+                    instance_id, label, txn_id, schema_version, index_size,
                     _all_block_queues_bytes, result.wait_internal_group_commit_finish,
                     result.group_commit_interval_ms, result.group_commit_data_bytes);
             RETURN_IF_ERROR(load_block_queue->create_wal(
