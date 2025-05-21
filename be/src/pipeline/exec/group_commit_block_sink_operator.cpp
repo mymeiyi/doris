@@ -114,6 +114,7 @@ Status GroupCommitBlockSinkLocalState::_add_block(RuntimeState* state,
     if (block->rows() == 0) {
         return Status::OK();
     }
+    LOG(INFO) << "sout: GroupCommitBlockSinkLocalState::_add_block";
     // the insert group commit tvf always accept nullable columns, so we should convert
     // the non-nullable columns to nullable columns
     for (int i = 0; i < block->columns(); ++i) {
@@ -185,6 +186,7 @@ void GroupCommitBlockSinkLocalState::_remove_estimated_wal_bytes() {
 
 Status GroupCommitBlockSinkLocalState::_add_blocks(RuntimeState* state,
                                                    bool is_blocks_contain_all_load_data) {
+    LOG(INFO) << "sout: GroupCommitBlockSinkLocalState::_add_blocks";
     DCHECK(_is_block_appended == false);
     auto& p = _parent->cast<GroupCommitBlockSinkOperatorX>();
     if (_state->exec_env()->wal_mgr()->is_running()) {

@@ -695,6 +695,7 @@ void Block::clear() {
 }
 
 void Block::clear_column_data(int64_t column_size) noexcept {
+    LOG(INFO) << "sout: call clear_column_data";
     SCOPED_SKIP_MEMORY_CHECK();
     // data.size() greater than column_size, means here have some
     // function exec result in block, need erase it here
@@ -1182,6 +1183,7 @@ size_t MutableBlock::allocated_bytes() const {
 }
 
 void MutableBlock::clear_column_data() noexcept {
+    LOG(INFO) << "sout: call clear_column_data";
     SCOPED_SKIP_MEMORY_CHECK();
     for (auto& col : _columns) {
         if (col) {
