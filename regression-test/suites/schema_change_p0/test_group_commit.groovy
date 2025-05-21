@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-
 import groovyjarjarantlr4.v4.codegen.model.ExceptionClause
 
 import java.util.Date
@@ -42,100 +41,83 @@ import static java.util.concurrent.TimeUnit.SECONDS
 suite("test_group_commit", "p0") {
     def tableName3 = "test_group_commit"
 
+    onFinish {
+        GetDebugPoint().clearDebugPointsForAllBEs()
+        GetDebugPoint().clearDebugPointsForAllFEs()
+    }
+
     def getJobState = { tableName ->
         def jobStateResult = sql """ SHOW ALTER TABLE COLUMN WHERE IndexName='${tableName}' ORDER BY createtime DESC LIMIT 1 """
         logger.info("jobStateResult: ${jobStateResult}")
         return jobStateResult[0][9]
     }
 
-    def getCreateViewState = { tableName ->
-        def createViewStateResult = sql """ SHOW ALTER TABLE MATERIALIZED VIEW WHERE IndexName='${tableName}' ORDER BY createtime DESC LIMIT 1 """
-        return createViewStateResult[0][8]
-    }
-
-    def execStreamLoad = {
-        streamLoad {
-            table "${tableName3}"
-
-            set 'column_separator', ','
-
-            file 'all_types.csv'
-            time 10000 // limit inflight 10s
-
-            check { result, exception, startTime, endTime ->
-                if (exception != null) {
-                    throw exception
-                }
-                log.info("Stream load result: ${result}".toString())
-                def json = parseJson(result)
-                // assertEquals("success", json.Status.toLowerCase())
-                // assertEquals(2500, json.NumberTotalRows)
-                // assertEquals(0, json.NumberFilteredRows)
+    def getRowCount = { expectedRowCount ->
+        Awaitility.await().atMost(30, SECONDS).pollInterval(1, SECONDS).until(
+            {
+                def result = sql "select count(*) from ${tableName3}"
+                logger.info("table: ${tableName3}, rowCount: ${result}")
+                return result[0][0] == expectedRowCount
             }
-        }
-    }
-
-    onFinish {
-        GetDebugPoint().clearDebugPointsForAllBEs()
-        GetDebugPoint().clearDebugPointsForAllFEs()
+        )
     }
 
     GetDebugPoint().clearDebugPointsForAllFEs()
     sql """ DROP TABLE IF EXISTS ${tableName3} """
-
     sql """
         CREATE TABLE ${tableName3} (
-                `id` int(11) NOT NULL,
-                `name` varchar(50) NULL,
-                `score` int(11) NULL
-            ) ENGINE=OLAP
-            DUPLICATE KEY(`id`)
-            DISTRIBUTED BY HASH(`id`) BUCKETS 1
-            PROPERTIES (
-                "replication_num" = "1",
-                "group_commit_interval_ms" = "200"
-            );
+            `id` int(11) NOT NULL,
+            `name` varchar(50) NULL,
+            `score` varchar(11) NULL
+        ) ENGINE=OLAP
+        DUPLICATE KEY(`id`)
+        DISTRIBUTED BY HASH(`id`) BUCKETS 1
+        PROPERTIES (
+            "replication_num" = "1",
+            "group_commit_interval_ms" = "200"
+        );
     """
-
-
-    // CountDownLatch latch = new CountDownLatch(1)
-    def insert = {
-        sql """ set group_commit = async_mode; """
-        sql """ insert into ${tableName3} values (1, 'a', 100) """
-        // latch.countDown()
-    }
 
     GetDebugPoint().enableDebugPointForAllFEs("FE.FrontendServiceImpl.initHttpStreamPlan.block")
     GetDebugPoint().enableDebugPointForAllFEs("FE.SchemaChangeJobV2.createShadowIndexReplica.addShadowIndexToCatalog.block")
-    // sql """ set group_commit = aysnc_mode; """
-    // sql """ insert into ${tableName3} values (1, 'a', 1) """
-    // execStreamLoad()
-    Thread thread = new Thread(() -> insert())
+
+    // write data
+    Thread thread = new Thread(() -> {
+        sql """ set group_commit = async_mode; """
+        sql """ insert into ${tableName3} values (1, 'a', 100) """
+    })
     thread.start()
     sleep(1000)
     def result = sql "select count(*) from ${tableName3}"
-    logger.info("table: ${tableName3}, rowCount: ${result}")
+    logger.info("rowCount 0: ${result}")
     assertEquals(0, result[0][0])
 
-    // sql """ alter table ${tableName3} modify column score int NULL"""
-    sql """ alter table ${tableName3} order by(id, score, name) """
+    // schema change
+    sql """ alter table ${tableName3} modify column score int NULL"""
     GetDebugPoint().enableDebugPointForAllFEs("FE.SchemaChangeJobV2.runRunning.block")
     GetDebugPoint().disableDebugPointForAllFEs("FE.SchemaChangeJobV2.createShadowIndexReplica.addShadowIndexToCatalog.block")
-    sleep(2000)
-    getJobState(tableName3)
-    GetDebugPoint().disableDebugPointForAllFEs("FE.FrontendServiceImpl.initHttpStreamPlan.block")
-
-    def getRowCount = { expectedRowCount ->
-        Awaitility.await().atMost(90, SECONDS).pollInterval(1, SECONDS).until(
-                {
-                    result = sql "select count(*) from ${tableName3}"
-                    logger.info("table: ${tableName3}, rowCount: ${result}")
-                    return result[0][0] == expectedRowCount
-                }
-        )
+    for (int i = 0; i < 10; i++) {
+        def job_state = getJobState(tableName3)
+        if (job_state == "RUNNING") {
+            break
+        }
+        sleep(100)
     }
 
+    GetDebugPoint().disableDebugPointForAllFEs("FE.FrontendServiceImpl.initHttpStreamPlan.block")
+    thread.join()
     getRowCount(1)
     qt_sql """ select id, name, score from ${tableName3} """
+    def job_state = getJobState(tableName3)
+    assertEquals("RUNNING", job_state)
+    GetDebugPoint().disableDebugPointForAllFEs("FE.SchemaChangeJobV2.runRunning.block")
+    for (int i = 0; i < 10; i++) {
+        job_state = getJobState(tableName3)
+        if (job_state == "FINISHED") {
+            break
+        }
+        sleep(100)
+    }
+    assertEquals("FINISHED", job_state)
 }
 
