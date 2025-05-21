@@ -392,7 +392,7 @@ Status GroupCommitTable::_create_group_commit_load(int be_exe_version,
         VLOG_DEBUG << "create plan fragment, db_id=" << _db_id << ", table=" << _table_id
                    << ", schema version=" << schema_version << ", label=" << label
                    << ", txn_id=" << txn_id << ", instance_id=" << print_id(instance_id)
-                   << ", params=" << pipeline_params << ". index size=" << index_size
+                   << ". index size=" << index_size
                    << ", schema version="
                    << pipeline_params.fragment.output_sink.olap_table_sink.schema.version;
         {
