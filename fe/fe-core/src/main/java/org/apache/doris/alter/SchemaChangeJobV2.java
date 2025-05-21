@@ -619,6 +619,14 @@ public class SchemaChangeJobV2 extends AlterJobV2 {
             }
             return;
         }
+        while (DebugPointUtil.isEnable("FE.SchemaChangeJobV2.runRunning.block")) {
+            try {
+                Thread.sleep(1000);
+                LOG.info("sout: sleep 1s to block schema change. job: {}", jobId);
+            } catch (InterruptedException e) {
+                LOG.warn("InterruptedException: ", e);
+            }
+        }
         Env.getCurrentEnv().getGroupCommitManager().blockTable(tableId);
         Env.getCurrentEnv().getGroupCommitManager().waitWalFinished(tableId);
         Env.getCurrentEnv().getGroupCommitManager().unblockTable(tableId);

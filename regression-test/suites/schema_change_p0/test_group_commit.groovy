@@ -101,7 +101,7 @@ suite("test_group_commit", "p0") {
     // CountDownLatch latch = new CountDownLatch(1)
     def insert = {
         sql """ set group_commit = async_mode; """
-        sql """ insert into ${tableName3} values (1, 'a', 1) """
+        sql """ insert into ${tableName3} values (1, 'a', 100) """
         // latch.countDown()
     }
 
@@ -115,9 +115,12 @@ suite("test_group_commit", "p0") {
     sleep(1000)
     def result = sql "select count(*) from ${tableName3}"
     logger.info("table: ${tableName3}, rowCount: ${result}")
+    assertEquals(0, result[0][0])
 
     // sql """ alter table ${tableName3} modify column score int NULL"""
     sql """ alter table ${tableName3} order by(id, score, name) """
+    GetDebugPoint().enableDebugPointForAllFEs("FE.SchemaChangeJobV2.runRunning.block")
+    GetDebugPoint().disableDebugPointForAllFEs("FE.SchemaChangeJobV2.createShadowIndexReplica.addShadowIndexToCatalog.block")
     sleep(2000)
     getJobState(tableName3)
     GetDebugPoint().disableDebugPointForAllFEs("FE.FrontendServiceImpl.initHttpStreamPlan.block")
@@ -133,5 +136,6 @@ suite("test_group_commit", "p0") {
     }
 
     getRowCount(1)
+    qt_sql """ select id, name, score from ${tableName3} """
 }
 
