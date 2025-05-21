@@ -75,6 +75,7 @@ public class OlapInsertExecutor extends AbstractInsertExecutor {
     protected TransactionStatus txnStatus = TransactionStatus.ABORTED;
 
     protected OlapTable olapTable;
+    protected long baseSchemaVersion = -1L;
 
     /**
      * constructor
@@ -122,6 +123,12 @@ public class OlapInsertExecutor extends AbstractInsertExecutor {
                     false,
                     isStrictMode,
                     timeout, olapInsertCtx);
+            baseSchemaVersion = olapTableSink.getOlapTableSchemaParam().getVersion();
+            long indexSize = olapTableSink.getOlapTableSchemaParam().getIndexes().size();
+            LOG.info("sout: table: {}, state: {}, version: {}, index: {}",
+                    olapTableSink.getDstTable().getId(), olapTableSink.getDstTable().getState(),
+                    baseSchemaVersion, indexSize);
+            // olapTableSink.getDstTable().getBaseSchemaVersion();
 
             // set schema and partition info for tablet id shuffle exchange
             if (fragment.getPlanRoot() instanceof ExchangeNode
@@ -307,6 +314,10 @@ public class OlapInsertExecutor extends AbstractInsertExecutor {
 
     public long getTimeout() {
         return ctx.getExecTimeoutS();
+    }
+
+    public long getBaseSchemaVersion() {
+        return baseSchemaVersion;
     }
 
     private boolean isGroupCommitHttpStream() {
