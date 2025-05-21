@@ -2219,7 +2219,8 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                     .setIsMowTable(((OlapTable) httpStreamParams.getTable()).getEnableUniqueKeyMergeOnWrite());
             result.setDbId(httpStreamParams.getDb().getId());
             result.setTableId(httpStreamParams.getTable().getId());
-            result.setBaseSchemaVersion(((OlapTable) httpStreamParams.getTable()).getBaseSchemaVersion());
+            result.setBaseSchemaVersion(httpStreamParams.getBaseSchemaVersion());
+            LOG.info("sout: set base schema version: {}", httpStreamParams.getBaseSchemaVersion());
             result.setGroupCommitIntervalMs(((OlapTable) httpStreamParams.getTable()).getGroupCommitIntervalMs());
             result.setGroupCommitDataBytes(((OlapTable) httpStreamParams.getTable()).getGroupCommitDataBytes());
             result.setWaitInternalGroupCommitFinish(Config.wait_internal_group_commit_finish);

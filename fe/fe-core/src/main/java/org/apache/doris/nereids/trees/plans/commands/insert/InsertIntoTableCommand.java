@@ -245,6 +245,9 @@ public class InsertIntoTableCommand extends Command implements NeedAuditEncrypti
                             buildResult.physicalSink
                     );
                 }
+                if (newestTargetTableIf instanceof OlapTable) {
+                    insertExecutor.baseSchemaVersion = ((OlapTable) newestTargetTableIf).getBaseSchemaVersion();
+                }
                 newestTargetTableIf.readUnlock();
             } catch (Throwable e) {
                 newestTargetTableIf.readUnlock();

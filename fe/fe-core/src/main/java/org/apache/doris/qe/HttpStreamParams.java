@@ -29,5 +29,6 @@ public class HttpStreamParams {
     private long txnId;
     private DatabaseIf db;
     private TableIf table;
+    private long baseSchemaVersion = -1;
     private String label;
 }

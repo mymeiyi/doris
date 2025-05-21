@@ -3652,6 +3652,7 @@ public class StmtExecutor {
             httpStreamParams.setTxnId(insertExecutor.getTxnId());
             httpStreamParams.setDb(insertExecutor.getDatabase());
             httpStreamParams.setTable(insertExecutor.getTable());
+            httpStreamParams.setBaseSchemaVersion(insertExecutor.getBaseSchemaVersion());
             httpStreamParams.setLabel(insertExecutor.getLabelName());
 
             PlanNode planRoot = planner.getFragments().get(0).getPlanRoot();

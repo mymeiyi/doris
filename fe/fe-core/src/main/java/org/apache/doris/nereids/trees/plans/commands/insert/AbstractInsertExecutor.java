@@ -67,6 +67,7 @@ public abstract class AbstractInsertExecutor {
     protected Optional<InsertCommandContext> insertCtx;
     protected final boolean emptyInsert;
     protected long txnId = INVALID_TXN_ID;
+    protected long baseSchemaVersion = -1L;
 
     /**
      * Constructor
@@ -92,6 +93,10 @@ public abstract class AbstractInsertExecutor {
 
     public TableIf getTable() {
         return table;
+    }
+
+    public long getBaseSchemaVersion() {
+        return baseSchemaVersion;
     }
 
     public String getLabelName() {
