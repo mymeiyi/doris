@@ -256,7 +256,7 @@ void LoadBlockQueue::_cancel_without_lock(const Status& st) {
 }
 
 Status GroupCommitTable::get_first_block_load_queue(
-        int64_t table_id, int64_t base_schema_version, const UniqueId& load_id,
+        int64_t table_id, int64_t base_schema_version, int64_t index_size, const UniqueId& load_id,
         std::shared_ptr<LoadBlockQueue>& load_block_queue, int be_exe_version,
         std::shared_ptr<MemTrackerLimiter> mem_tracker,
         std::shared_ptr<pipeline::Dependency> create_plan_dep,
@@ -272,7 +272,8 @@ Status GroupCommitTable::get_first_block_load_queue(
         }
         for (const auto& [_, inner_block_queue] : _load_block_queues) {
             if (!inner_block_queue->need_commit()) {
-                if (base_schema_version == inner_block_queue->schema_version) {
+                if (base_schema_version == inner_block_queue->schema_version &&
+                    index_size == inner_block_queue->index_size) {
                     if (inner_block_queue->add_load_id(load_id, put_block_dep).ok()) {
                         load_block_queue = inner_block_queue;
                         return Status::OK();
@@ -382,6 +383,8 @@ Status GroupCommitTable::_create_group_commit_load(int be_exe_version,
         }
         auto schema_version = result.base_schema_version;
         auto& pipeline_params = result.pipeline_params;
+        auto index_size =
+                pipeline_params.fragment.output_sink.olap_table_sink.schema.indexes.size();
         DCHECK(pipeline_params.fragment.output_sink.olap_table_sink.db_id == _db_id);
         txn_id = pipeline_params.txn_conf.txn_id;
         DCHECK(pipeline_params.local_params.size() == 1);
@@ -389,12 +392,14 @@ Status GroupCommitTable::_create_group_commit_load(int be_exe_version,
         VLOG_DEBUG << "create plan fragment, db_id=" << _db_id << ", table=" << _table_id
                    << ", schema version=" << schema_version << ", label=" << label
                    << ", txn_id=" << txn_id << ", instance_id=" << print_id(instance_id)
-                   << ", params=" << pipeline_params;
+                   << ", params=" << pipeline_params << ". index size=" << index_size
+                   << ", schema version="
+                   << pipeline_params.fragment.output_sink.olap_table_sink.schema.version;
         {
             auto load_block_queue = std::make_shared<LoadBlockQueue>(
-                    instance_id, label, txn_id, schema_version, _all_block_queues_bytes,
-                    result.wait_internal_group_commit_finish, result.group_commit_interval_ms,
-                    result.group_commit_data_bytes);
+                    instance_id, label, txn_id, schema_version, LoadBlockQueue,
+                    _all_block_queues_bytes, result.wait_internal_group_commit_finish,
+                    result.group_commit_interval_ms, result.group_commit_data_bytes);
             RETURN_IF_ERROR(load_block_queue->create_wal(
                     _db_id, _table_id, txn_id, label, _exec_env->wal_mgr(),
                     pipeline_params.fragment.output_sink.olap_table_sink.schema.slot_descs,
@@ -629,9 +634,9 @@ void GroupCommitMgr::stop() {
 }
 
 Status GroupCommitMgr::get_first_block_load_queue(
-        int64_t db_id, int64_t table_id, int64_t base_schema_version, const UniqueId& load_id,
-        std::shared_ptr<LoadBlockQueue>& load_block_queue, int be_exe_version,
-        std::shared_ptr<MemTrackerLimiter> mem_tracker,
+        int64_t db_id, int64_t table_id, int64_t base_schema_version, int64_t index_size,
+        const UniqueId& load_id, std::shared_ptr<LoadBlockQueue>& load_block_queue,
+        int be_exe_version, std::shared_ptr<MemTrackerLimiter> mem_tracker,
         std::shared_ptr<pipeline::Dependency> create_plan_dep,
         std::shared_ptr<pipeline::Dependency> put_block_dep) {
     std::shared_ptr<GroupCommitTable> group_commit_table;
@@ -645,8 +650,8 @@ Status GroupCommitMgr::get_first_block_load_queue(
         group_commit_table = _table_map[table_id];
     }
     RETURN_IF_ERROR(group_commit_table->get_first_block_load_queue(
-            table_id, base_schema_version, load_id, load_block_queue, be_exe_version, mem_tracker,
-            create_plan_dep, put_block_dep));
+            table_id, base_schema_version, index_size, load_id, load_block_queue, be_exe_version,
+            mem_tracker, create_plan_dep, put_block_dep));
     return Status::OK();
 }
 
