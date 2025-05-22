@@ -48,6 +48,7 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state,
     RETURN_IF_ERROR(status);
     LOG(INFO) << "query_id: " << print_id(runtime_state->query_id())
               << ", add block rows=" << block->rows() << ", use group_commit label=" << label;
+    DBUG_EXECUTE_IF("LoadBlockQueue.add_block.block", DBUG_BLOCK);
     if (block->rows() > 0) {
         if (!config::group_commit_wait_replay_wal_finish) {
             _block_queue.emplace_back(block);
