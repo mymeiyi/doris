@@ -293,8 +293,8 @@ Status GroupCommitTable::get_first_block_load_queue(
         return Status::OK();
     }
     create_plan_dep->block();
-    _create_plan_deps.emplace(load_id,
-                              std::make_tuple(create_plan_dep, put_block_dep, base_schema_version));
+    _create_plan_deps.emplace(load_id, std::make_tuple(create_plan_dep, put_block_dep,
+                                                       base_schema_version, index_size));
     if (!_is_creating_plan_fragment) {
         _is_creating_plan_fragment = true;
         RETURN_IF_ERROR(
@@ -411,7 +411,8 @@ Status GroupCommitTable::_create_group_commit_load(int be_exe_version,
             for (const auto& [id, load_info] : _create_plan_deps) {
                 auto create_dep = std::get<0>(load_info);
                 auto put_dep = std::get<1>(load_info);
-                if (load_block_queue->schema_version == std::get<2>(load_info)) {
+                if (load_block_queue->schema_version == std::get<2>(load_info) &&
+                    load_block_queue->index_size == std::get<3>(load_info)) {
                     if (load_block_queue->add_load_id(id, put_dep).ok()) {
                         create_dep->set_ready();
                         success_load_ids.emplace_back(id);

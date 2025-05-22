@@ -191,9 +191,10 @@ private:
     // fragment_instance_id to load_block_queue
     std::unordered_map<UniqueId, std::shared_ptr<LoadBlockQueue>> _load_block_queues;
     bool _is_creating_plan_fragment = false;
-    // user_load_id -> <create_plan_dep, put_block_dep, base_schema_version>
-    std::unordered_map<UniqueId, std::tuple<std::shared_ptr<pipeline::Dependency>,
-                                            std::shared_ptr<pipeline::Dependency>, int64_t>>
+    // user_load_id -> <create_plan_dep, put_block_dep, base_schema_version, index_size>
+    std::unordered_map<UniqueId,
+                       std::tuple<std::shared_ptr<pipeline::Dependency>,
+                                  std::shared_ptr<pipeline::Dependency>, int64_t, int64_t>>
             _create_plan_deps;
 };
 
