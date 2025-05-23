@@ -97,6 +97,32 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
         return deleteBitmapStatus
     }
 
+    def waitForCompaction = { tablet ->
+        String tablet_id = tablet.TabletId
+        String trigger_backend_id = tablet.BackendId
+        def be_host = backendId_to_backendIP[trigger_backend_id]
+        def be_http_port = backendId_to_backendHttpPort[trigger_backend_id]
+        def running = true
+        do {
+            Thread.sleep(1000)
+            StringBuilder sb = new StringBuilder();
+            sb.append("curl -X GET http://${be_host}:${be_http_port}")
+            sb.append("/api/compaction/run_status?tablet_id=")
+            sb.append(tablet_id)
+
+            String command = sb.toString()
+            logger.info(command)
+            def process = command.execute()
+            def code = process.waitFor()
+            def out = process.getText()
+            logger.info("Get compaction status: code=" + code + ", out=" + out)
+            assertEquals(code, 0)
+            def compactionStatus = parseJson(out.trim())
+            assertEquals("success", compactionStatus.status.toLowerCase())
+            running = compactionStatus.run_status
+        } while (running)
+    }
+
     // batch_size is 4164 in csv_reader.cpp
     // _batch_size is 8192 in vtablet_writer.cpp
     onFinish {
@@ -207,6 +233,7 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
     assertEquals(code, 0)
     compactJson = parseJson(out.trim())
     logger.info("compact json: " + compactJson)
+    waitForCompaction(tablet)
     // check generate 1 segments
     for (int i = 0; i < 20; i++) {
         if (getTabletStatus(tablet, 3, 1, false)) {
