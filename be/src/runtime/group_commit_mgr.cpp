@@ -82,6 +82,7 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state,
                     config::group_commit_queue_mem_limit) {
             DCHECK(_load_ids_to_write_dep.find(load_id) != _load_ids_to_write_dep.end());
             _load_ids_to_write_dep[load_id]->block();
+            VLOG_DEBUG << "block add_block for load_id=" << load_id;
         }
     }
     if (!_need_commit) {
