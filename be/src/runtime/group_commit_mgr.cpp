@@ -81,7 +81,8 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state,
             DCHECK(_load_ids_to_write_dep.find(load_id) != _load_ids_to_write_dep.end());
             _load_ids_to_write_dep[load_id]->block();
             VLOG_DEBUG << "block add_block for load_id=" << load_id
-                       << ", memory=" << _all_block_queues_bytes->load(std::memory_order_relaxed);
+                       << ", memory=" << _all_block_queues_bytes->load(std::memory_order_relaxed)
+                       << ". inner load_id=" << load_instance_id << ", label=" << label;
         }
     }
     if (!_need_commit) {
@@ -101,7 +102,7 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state,
     }
     for (auto read_dep : _read_deps) {
         read_dep->set_ready();
-        VLOG_DEBUG << "set ready for load_id=" << load_instance_id;
+        VLOG_DEBUG << "set ready for inner load_id=" << load_instance_id;
     }
     return Status::OK();
 }
@@ -147,7 +148,7 @@ Status LoadBlockQueue::get_block(RuntimeState* runtime_state, vectorized::Block*
         }
         if (!_need_commit && !timer_dependency->ready()) {
             get_block_dep->block();
-            VLOG_DEBUG << "block get_block for load_id=" << load_instance_id;
+            VLOG_DEBUG << "block get_block for inner load_id=" << load_instance_id;
         }
     } else {
         const BlockData block_data = _block_queue.front();
@@ -173,7 +174,8 @@ Status LoadBlockQueue::get_block(RuntimeState* runtime_state, vectorized::Block*
         config::group_commit_queue_mem_limit) {
         for (auto& id : _load_ids_to_write_dep) {
             id.second->set_ready();
-            VLOG_DEBUG << "set ready for load_id=" << id.first;
+            VLOG_DEBUG << "set ready for load_id=" << id.first
+                       << ". inner load_id=" << load_instance_id << ", label=" << label;
         }
     }
     return Status::OK();
