@@ -59,16 +59,14 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state,
             }
             ss << "]";
             VLOG_DEBUG << "[Group Commit Debug] (LoadBlockQueue::add_block). "
-                       << "block queue size is " << _block_queue.size() << ", block rows is "
-                       << block->rows() << ", block bytes is " << block->bytes()
-                       << ", before add block, all block queues bytes is "
-                       << before_block_queues_bytes
-                       << ", after add block, all block queues bytes is "
-                       << _all_block_queues_bytes->load() << ", txn_id=" << txn_id
-                       << ", label=" << label << ", instance_id=" << load_instance_id
-                       << ", load_ids=" << ss.str() << ", runtime_state=" << runtime_state
-                       << ", the block is " << block->dump_data() << ", the block column size is "
-                       << block->columns_bytes();
+                       << "Cur block rows=" << block->rows() << ", bytes=" << block->bytes()
+                       << ", column size=" << block->columns_bytes()
+                       << ". all block queues bytes from " << before_block_queues_bytes << " to  "
+                       << _all_block_queues_bytes->load() << ", block queue size="
+                       << _block_queue.size() << ". txn_id=" << txn_id << ", label=" << label
+                       << ", instance_id=" << load_instance_id
+                       << ", load_ids=" << ss.str() /*<< ", runtime_state=" << runtime_state*/
+                    /*<< ", the block is " << block->dump_data()*/;
         }
         if (write_wal || config::group_commit_wait_replay_wal_finish) {
             auto st = _v_wal_writer->write_wal(block.get());
@@ -82,7 +80,8 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state,
                     config::group_commit_queue_mem_limit) {
             DCHECK(_load_ids_to_write_dep.find(load_id) != _load_ids_to_write_dep.end());
             _load_ids_to_write_dep[load_id]->block();
-            VLOG_DEBUG << "block add_block for load_id=" << load_id;
+            VLOG_DEBUG << "block add_block for load_id=" << load_id
+                       << ", memory=" << _all_block_queues_bytes->load(std::memory_order_relaxed);
         }
     }
     if (!_need_commit) {
@@ -102,6 +101,7 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state,
     }
     for (auto read_dep : _read_deps) {
         read_dep->set_ready();
+        VLOG_DEBUG << "set ready for load_id=" << load_instance_id;
     }
     return Status::OK();
 }
@@ -147,7 +147,7 @@ Status LoadBlockQueue::get_block(RuntimeState* runtime_state, vectorized::Block*
         }
         if (!_need_commit && !timer_dependency->ready()) {
             get_block_dep->block();
-            VLOG_DEBUG << "block get_block for query_id=" << load_instance_id;
+            VLOG_DEBUG << "block get_block for load_id=" << load_instance_id;
         }
     } else {
         const BlockData block_data = _block_queue.front();
@@ -157,15 +157,12 @@ Status LoadBlockQueue::get_block(RuntimeState* runtime_state, vectorized::Block*
         int before_block_queues_bytes = _all_block_queues_bytes->load();
         _all_block_queues_bytes->fetch_sub(block_data.block_bytes, std::memory_order_relaxed);
         VLOG_DEBUG << "[Group Commit Debug] (LoadBlockQueue::get_block). "
-                   << "block queue size is " << _block_queue.size() << ", block rows is "
-                   << block->rows() << ", block bytes is " << block->bytes()
-                   << ", before remove block, all block queues bytes is "
-                   << before_block_queues_bytes
-                   << ", after remove block, all block queues bytes is "
-                   << _all_block_queues_bytes->load() << ", txn_id=" << txn_id
-                   << ", label=" << label << ", instance_id=" << load_instance_id
-                   << ", load_ids=" << get_load_ids() << ", the block is " << block->dump_data()
-                   << ", the block column size is " << block->columns_bytes();
+                   << "Cur block rows=" << block->rows() << ", bytes=" << block->bytes()
+                   << ", column size=" << block->columns_bytes() << ". all block queues bytes from "
+                   << before_block_queues_bytes << " to  " << _all_block_queues_bytes->load()
+                   << ", block queue size=" << _block_queue.size() << ". txn_id=" << txn_id
+                   << ", label=" << label << ", instance_id=" << load_instance_id << ", load_ids="
+                   << get_load_ids() /*<< ", the block is " << block->dump_data()*/;
     }
     if (_block_queue.empty() && _need_commit && _load_ids_to_write_dep.empty()) {
         *eos = true;
@@ -176,6 +173,7 @@ Status LoadBlockQueue::get_block(RuntimeState* runtime_state, vectorized::Block*
         config::group_commit_queue_mem_limit) {
         for (auto& id : _load_ids_to_write_dep) {
             id.second->set_ready();
+            VLOG_DEBUG << "set ready for load_id=" << id.first;
         }
     }
     return Status::OK();
@@ -234,16 +232,14 @@ void LoadBlockQueue::_cancel_without_lock(const Status& st) {
         }
         ss << "]";
         VLOG_DEBUG << "[Group Commit Debug] (LoadBlockQueue::_cancel_without_block). "
-                   << "block queue size is " << _block_queue.size() << ", block rows is "
-                   << block_data.block->rows() << ", block bytes is " << block_data.block->bytes()
-                   << ", before remove block, all block queues bytes is "
-                   << before_block_queues_bytes
-                   << ", after remove block, all block queues bytes is "
-                   << _all_block_queues_bytes->load() << ", txn_id=" << txn_id
+                   << "Cur block rows=" << block_data.block->rows()
+                   << ", bytes=" << block_data.block->bytes()
+                   << ", column size=" << block_data.block->columns_bytes()
+                   << ". all block queues bytes from " << before_block_queues_bytes << " to "
+                   << _all_block_queues_bytes->load()
+                   << ", block queue size=" << _block_queue.size() << ", txn_id=" << txn_id
                    << ", label=" << label << ", instance_id=" << load_instance_id
-                   << ", load_ids=" << ss.str() << ", the block is "
-                   << block_data.block->dump_data() << ", the block column size is "
-                   << block_data.block->columns_bytes();
+                   << ", load_ids=" << ss.str();
         _block_queue.pop_front();
     }
     for (auto& id : _load_ids_to_write_dep) {
