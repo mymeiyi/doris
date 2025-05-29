@@ -113,8 +113,7 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state,
 
 Status LoadBlockQueue::get_block(RuntimeState* runtime_state, vectorized::Block* block,
                                  bool* find_block, bool* eos,
-                                 std::shared_ptr<pipeline::Dependency> get_block_dep,
-                                 std::shared_ptr<pipeline::Dependency> timer_dependency) {
+                                 std::shared_ptr<pipeline::Dependency> get_block_dep) {
     *find_block = false;
     *eos = false;
     std::unique_lock l(mutex);
