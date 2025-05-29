@@ -144,6 +144,7 @@ Status LoadBlockQueue::get_block(RuntimeState* runtime_state, vectorized::Block*
             get_block_dep->block();
             VLOG_DEBUG << "block get_block for inner load_id=" << load_instance_id;
         }
+        VLOG_DEBUG << "get_block for inner load_id=" << load_instance_id << ", but queue is empty";
     } else {
         const BlockData block_data = _block_queue.front();
         block->swap(*block_data.block);
