@@ -124,6 +124,7 @@ public:
 
 private:
     void _cancel_without_lock(const Status& st);
+    std::string _get_load_ids();
 
     // the set of load ids of all blocks in this queue
     std::map<UniqueId, std::shared_ptr<pipeline::Dependency>> _load_ids_to_write_dep;
