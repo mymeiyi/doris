@@ -163,7 +163,8 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
     streamLoad {
         table "${tableName}"
         set 'column_separator', ','
-        file 'test_schema_change_add_key_column.csv'
+        set 'compress_type', 'GZ'
+        file 'test_schema_change_add_key_column.csv.tar.gz'
         time 10000 // limit inflight 10s
 
         check { result, exception, startTime, endTime ->
@@ -204,7 +205,8 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
     streamLoad {
         table "${tableName}"
         set 'column_separator', ','
-        file 'test_schema_change_add_key_column1.csv'
+        set 'compress_type', 'GZ'
+        file 'test_schema_change_add_key_column1.csv.tar.gz'
         time 10000 // limit inflight 10s
 
         check { result, exception, startTime, endTime ->
