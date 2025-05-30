@@ -297,23 +297,23 @@ suite("test_mow_compaction_and_schema_change", "nonConcurrent") {
                     assertEquals(5, local_dm["delete_bitmap_count"])
                     assertEquals(6, local_dm["cardinality"])
                 } else {
-                    assertEquals(4, local_dm["delete_bitmap_count"])
-                    assertEquals(5, local_dm["cardinality"])
+                    assertEquals(5, local_dm["delete_bitmap_count"])
+                    assertEquals(6, local_dm["cardinality"])
                 }
             } else if (method == 1) {
                 if (isCloudMode()) {
                     assertEquals(3, local_dm["delete_bitmap_count"])
                     assertEquals(6, local_dm["cardinality"]) // the last one is agged
                 } else {
-                    assertEquals(9, local_dm["cardinality"]) // the last one is agged
+                    assertEquals(10, local_dm["cardinality"]) // the last one is agged
                 }
             } else if (method == 2) {
                 if (isCloudMode()) { // compaction select [8-11]
                     assertEquals(2, local_dm["delete_bitmap_count"])
                     assertEquals(6, local_dm["cardinality"])
                 } else {
-                    assertEquals(1, local_dm["delete_bitmap_count"])
-                    assertEquals(5, local_dm["cardinality"])
+                    assertEquals(2, local_dm["delete_bitmap_count"])
+                    assertEquals(6, local_dm["cardinality"])
                 }
             }
 
