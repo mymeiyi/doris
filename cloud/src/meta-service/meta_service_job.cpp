@@ -1085,6 +1085,7 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
                                FinishTabletJobResponse* response, TabletJobInfoPB& recorded_job,
                                std::string& instance_id, std::string& job_key, bool& need_commit,
                                std::string& use_version) {
+    LOG(INFO) << "sout: process sc 0";
     //==========================================================================
     //                                check
     //==========================================================================
@@ -1176,7 +1177,7 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
         msg = ss.str();
         return;
     }
-
+    LOG(INFO) << "sout: process sc 1";
     if (request->action() != FinishTabletJobRequest::COMMIT &&
         request->action() != FinishTabletJobRequest::ABORT) {
         SS << "unsupported action, tablet_id=" << tablet_id << " action=" << request->action();
@@ -1206,7 +1207,7 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
             return;
         }
     }
-
+    LOG(INFO) << "sout: process sc 2";
     //==========================================================================
     //                               Abort
     //==========================================================================
@@ -1264,6 +1265,7 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
     //==========================================================================
     //                          update tablet meta
     //==========================================================================
+    LOG(INFO) << "sout: process sc 3";
     new_tablet_meta.set_tablet_state(doris::TabletStatePB::PB_RUNNING);
     new_tablet_meta.set_cumulative_layer_point(schema_change.output_cumulative_point());
     new_tablet_meta.SerializeToString(&new_tablet_val);
@@ -1302,8 +1304,10 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
             txn->put(new_tablet_job_key, new_tablet_job_val);
         }
         need_commit = true;
+        LOG(INFO) << "sout: process sc 3.1";
         return;
     }
+    LOG(INFO) << "sout: process sc 4";
 
     int64_t num_remove_rows = 0;
     int64_t size_remove_rowsets = 0;
@@ -1362,6 +1366,7 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
     } while (it->more());
 
     txn->remove(rs_start, rs_end);
+    LOG(INFO) << "sout: process sc 5";
 
     //==========================================================================
     //                        update new_tablet stats
@@ -1397,8 +1402,11 @@ void process_schema_change_job(MetaServiceCode& code, std::string& msg, std::str
         msg = "empty txn_ids or output_versions";
         return;
     }
+    LOG(INFO) << "sout: process sc 6";
 
     // process mow table, check lock
+    LOG(INFO) << "sout: new tablet enable mow="
+              << new_tablet_meta.enable_unique_key_merge_on_write();
     if (new_tablet_meta.enable_unique_key_merge_on_write()) {
         bool success = check_and_remove_delete_bitmap_update_lock(
                 code, msg, ss, txn, instance_id, new_table_id, new_tablet_id,
