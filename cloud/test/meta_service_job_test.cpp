@@ -275,11 +275,12 @@ void start_schema_change_job(MetaServiceProxy* meta_service, int64_t table_id, i
     EXPECT_EQ(job_pb.schema_change().id(), job_id) << ' ' << initiator;
 };
 
-void finish_schema_change_job(
-        MetaService* meta_service, int64_t tablet_id, int64_t new_tablet_id,
-        const std::string& job_id, const std::string& initiator,
-        const std::vector<doris::RowsetMetaCloudPB>& output_rowsets, FinishTabletJobResponse& res,
-        FinishTabletJobRequest_Action action = FinishTabletJobRequest::COMMIT) {
+void finish_schema_change_job(MetaService* meta_service, int64_t tablet_id, int64_t new_tablet_id,
+                              const std::string& job_id, const std::string& initiator,
+                              const std::vector<doris::RowsetMetaCloudPB>& output_rowsets,
+                              FinishTabletJobResponse& res,
+                              FinishTabletJobRequest_Action action = FinishTabletJobRequest::COMMIT,
+                              int64_t delete_bitmap_lock_initiator = 12345) {
     brpc::Controller cntl;
     FinishTabletJobRequest req;
     req.set_action(action);
@@ -305,9 +306,18 @@ void finish_schema_change_job(
     }
     sc->set_id(job_id);
     sc->set_initiator(initiator);
-    sc->set_delete_bitmap_lock_initiator(12345);
+    sc->set_delete_bitmap_lock_initiator(delete_bitmap_lock_initiator);
     meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
 }
+}
+
+void finish_schema_change_job(MetaService* meta_service, int64_t tablet_id, int64_t new_tablet_id,
+                              const std::string& job_id, const std::string& initiator,
+                              const std::vector<doris::RowsetMetaCloudPB>& output_rowsets,
+                              FinishTabletJobResponse& res, int64_t delete_bitmap_lock_initiator) {
+    finish_schema_change_job(meta_service, tablet_id, new_tablet_id, job_id, initiator,
+                             output_rowsets, res, FinishTabletJobRequest::COMMIT,
+                             delete_bitmap_lock_initiator);
 } // namespace
 
 TEST(MetaServiceJobTest, StartCompactionArguments) {
@@ -1355,6 +1365,73 @@ TEST(MetaServiceJobTest, DeleteBitmapUpdateLockCompatibilityTest) {
     config::use_delete_bitmap_lock_random_version = false;
     int64_t table_id = 111;
     remove_delete_bitmap_lock(meta_service.get(), table_id);
+
+    // test compaction and schema change
+    std::set<std::tuple<int, int, int, int, MetaServiceCode>> use_versions = {
+            {1, 1, 1, 1, MetaServiceCode::OK},
+            {1, 1, 1, 2, MetaServiceCode::OK},
+            {1, 1, 2, 1, MetaServiceCode::OK},
+            {1, 1, 2, 2, MetaServiceCode::OK},
+            {1, 2, 1, 1, MetaServiceCode::LOCK_CONFLICT},
+            {1, 2, 1, 2, MetaServiceCode::LOCK_CONFLICT},
+            {1, 2, 2, 1, MetaServiceCode::OK},
+            {1, 2, 2, 2, MetaServiceCode::OK},
+            {2, 1, 1, 1, MetaServiceCode::OK},
+            {2, 1, 1, 2, MetaServiceCode::OK},
+            {2, 1, 2, 1, MetaServiceCode::OK},
+            {2, 1, 2, 2, MetaServiceCode::OK},
+            {2, 2, 1, 1, MetaServiceCode::LOCK_CONFLICT},
+            {2, 2, 1, 2, MetaServiceCode::LOCK_CONFLICT},
+            {2, 2, 2, 1, MetaServiceCode::OK},
+            {2, 2, 2, 2, MetaServiceCode::OK}};
+    for (auto& use_version : use_versions) {
+        int64_t version1 = std::get<0>(use_version);
+        int64_t version2 = std::get<1>(use_version);
+        int64_t version3 = std::get<2>(use_version);
+        int64_t version4 = std::get<3>(use_version);
+        LOG(INFO) << "version1=" << version1 << ", version2=" << version2
+                  << ", version3=" << version3 << ", version4=" << version4;
+
+        config::delete_bitmap_lock_v2_white_list = version1 == 1 ? "" : "*";
+        // 1. compaction1 get lock, but not commit job, the lock is timeout
+        auto tablet_id = 5;
+        auto new_tablet_id = 6;
+        test_start_compaction_job(table_id, 2, 3, tablet_id, TabletCompactionJobPB::BASE);
+        auto res_code = get_delete_bitmap_lock(meta_service.get(), table_id, -1, 12345, 1);
+        ASSERT_EQ(res_code, MetaServiceCode::OK);
+        sleep(2);
+        // 2. schema change1 get lock (commit; or timeout)
+        config::delete_bitmap_lock_v2_white_list = version2 == 1 ? "" : "*";
+        ASSERT_NO_FATAL_FAILURE(
+                create_tablet(meta_service.get(), table_id, 2, 3, new_tablet_id, true, true));
+        StartTabletJobResponse start_sc_res;
+        ASSERT_NO_FATAL_FAILURE(start_schema_change_job(meta_service.get(), table_id, 2, 3,
+                                                        tablet_id, new_tablet_id, "job1", "be1",
+                                                        start_sc_res));
+        res_code = get_delete_bitmap_lock(meta_service.get(), table_id, -2, 12346);
+        ASSERT_EQ(res_code, MetaServiceCode::OK);
+        std::vector<doris::RowsetMetaCloudPB> output_rowsets;
+        for (int64_t i = 0; i < 5; ++i) {
+            output_rowsets.push_back(create_rowset(new_tablet_id, i + 2, i + 2));
+            CreateRowsetResponse create_rowset_response;
+            commit_rowset(meta_service.get(), output_rowsets.back(), create_rowset_response);
+            ASSERT_EQ(create_rowset_response.status().code(), MetaServiceCode::OK) << i;
+        }
+        FinishTabletJobResponse finish_sc_res;
+        finish_schema_change_job(meta_service.get(), tablet_id, new_tablet_id, "job1", "be1",
+                                 output_rowsets, finish_sc_res, 12346);
+        ASSERT_EQ(finish_sc_res.status().code(), MetaServiceCode::OK);
+        // 3. compaction2 get lock, compaction1 start commit
+        config::delete_bitmap_lock_v2_white_list = version3 == 1 ? "" : "*";
+        res_code = get_delete_bitmap_lock(meta_service.get(), table_id, -1, 12347);
+        ASSERT_EQ(res_code, std::get<4>(use_version));
+        config::delete_bitmap_lock_v2_white_list = version4 == 1 ? "" : "*";
+        test_commit_compaction_job(table_id, 2, 3, tablet_id, TabletCompactionJobPB::BASE);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::LOCK_EXPIRED);
+        clear_rowsets(table_id);
+        clear_rowsets(new_tablet_id);
+        remove_delete_bitmap_lock(meta_service.get(), table_id);
+    }
 
     // case 1: lock key does not exist, get and remove load lock in new way, success
     config::delete_bitmap_lock_v2_white_list = "*";
