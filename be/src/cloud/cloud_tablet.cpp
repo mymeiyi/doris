@@ -512,7 +512,7 @@ void CloudTablet::remove_delete_bitmap() {
             ++it;
             continue;
         }
-        tablet_meta()->remove_rowset_delete_bitmap(rs->rowset_id());
+        tablet_meta()->remove_rowset_delete_bitmap(rs->rowset_id(), rs->version());
         it = _unused_rowsets.erase(it);
     }
 
