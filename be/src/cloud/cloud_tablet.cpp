@@ -328,9 +328,10 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
         return;
     }
 
+    std::vector<RowsetSharedPtr> unused_rowsets;
     // Filter out existed rowsets
-    auto remove_it =
-            std::remove_if(to_add.begin(), to_add.end(), [this](const RowsetSharedPtr& rs) {
+    auto remove_it = std::remove_if(
+            to_add.begin(), to_add.end(), [this, &unused_rowsets](const RowsetSharedPtr& rs) {
                 if (auto find_it = _rs_version_map.find(rs->version());
                     find_it == _rs_version_map.end()) {
                     return false;
@@ -350,7 +351,7 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                                 << "tablet_id=" << tablet_id()
                                 << ", rowset_id=" << rs->rowset_id().to_string()
                                 << ", existed rowset=" << find_it->second->rowset_id().to_string();
-                        _unused_rowsets.emplace(find_it->second->rowset_id(), find_it->second);
+                        unused_rowsets.emplace_back(find_it->second);
                     }
                 }
                 _tablet_meta->delete_rs_meta_by_version(rs->version(), nullptr);

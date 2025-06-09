@@ -105,6 +105,10 @@ public:
                      std::unique_lock<std::shared_mutex>& meta_lock,
                      bool warmup_delta_data = false);
 
+    void add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_overlap,
+                     std::unique_lock<std::shared_mutex>& meta_lock,
+                     std::vector<RowsetSharedPtr>& unused_rowsets);
+
     // MUST hold EXCLUSIVE `_meta_lock`.
     void delete_rowsets(const std::vector<RowsetSharedPtr>& to_delete,
                         std::unique_lock<std::shared_mutex>& meta_lock);

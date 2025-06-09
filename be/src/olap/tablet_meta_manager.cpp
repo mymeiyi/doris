@@ -235,7 +235,7 @@ void TabletMetaManager::decode_delete_bitmap_key(std::string_view enc_key, TTabl
 
 Status TabletMetaManager::save_delete_bitmap(DataDir* store, TTabletId tablet_id,
                                              DeleteBitmapPtr delete_bitmap, int64_t version) {
-    VLOG_NOTICE << "save delete bitmap, tablet_id:" << tablet_id << ", version: " << version;
+    LOG(INFO) << "sout: save delete bitmap, tablet_id:" << tablet_id << ", version: " << version;
     if (delete_bitmap->delete_bitmap.empty()) {
         return Status::OK();
     }
