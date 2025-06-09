@@ -83,7 +83,7 @@ RUN curl -f https://repo1.maven.org/maven2/org/jacoco/jacoco/${JACOCO_VERSION}/j
 # COPY need refine ARG after FROM
 ARG OUTPUT_PATH
 COPY --chmod=777 ${OUTPUT_PATH} /opt/apache-doris/
-RUN sysctl -w vm.max_map_count=2000000
+RUN sudo sysctl -w vm.max_map_count=2000000
 # in docker, run 'chmod 755 doris_be' first time cost 1min, remove it.
 RUN sed -i 's/\<chmod\>/echo/g' /opt/apache-doris/be/bin/start_be.sh
 RUN if [ -d /opt/apache-doris/ms/bin ]; then                            \
