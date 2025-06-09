@@ -349,6 +349,7 @@ Status CloudCumulativeCompaction::modify_rowsets() {
 
     auto& stats = resp.stats();
     LOG(INFO) << "tablet stats=" << stats.ShortDebugString();
+    RowsetSharedPtr unused_rowset = nullptr;
     {
         std::unique_lock wrlock(_tablet->get_header_lock());
         // clang-format off
@@ -373,7 +374,7 @@ Status CloudCumulativeCompaction::modify_rowsets() {
         if (_input_rowsets.size() == 1) {
             DCHECK_EQ(_output_rowset->version(), _input_rowsets[0]->version());
             // MUST NOT move input rowset to stale path
-            cloud_tablet()->add_rowsets({_output_rowset}, true, wrlock);
+            cloud_tablet()->add_rowsets({_output_rowset}, true, wrlock, false, unused_rowset);
         } else {
             cloud_tablet()->delete_rowsets(_input_rowsets, wrlock);
             cloud_tablet()->add_rowsets({_output_rowset}, false, wrlock);
@@ -389,6 +390,9 @@ Status CloudCumulativeCompaction::modify_rowsets() {
             cloud_tablet()->reset_approximate_stats(stats.num_rowsets(), stats.num_segments(),
                                                     stats.num_rows(), stats.data_size());
         }
+    }
+    if (unused_rowset != nullptr) {
+        cloud_tablet()->add_unused_rowset(unused_rowset);
     }
     // agg delete bitmap for pre rowsets
     if (config::enable_agg_and_remove_pre_rowsets_delete_bitmap &&

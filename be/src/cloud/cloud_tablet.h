@@ -102,12 +102,8 @@ public:
     // If 'need_download_data_async' is true, it means that we need to download the new version
     // rowsets datum async.
     void add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_overlap,
-                     std::unique_lock<std::shared_mutex>& meta_lock,
-                     bool warmup_delta_data = false);
-
-    void add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_overlap,
-                     std::unique_lock<std::shared_mutex>& meta_lock,
-                     std::vector<RowsetSharedPtr>& unused_rowsets);
+                     std::unique_lock<std::shared_mutex>& meta_lock, bool warmup_delta_data = false,
+                     RowsetSharedPtr unused_rowset = nullptr);
 
     // MUST hold EXCLUSIVE `_meta_lock`.
     void delete_rowsets(const std::vector<RowsetSharedPtr>& to_delete,
@@ -279,6 +275,7 @@ public:
                                           DeleteBitmapPtr& new_delete_bitmap,
                                           std::map<std::string, int64_t>& pre_rowset_to_versions);
 
+    void add_unused_rowset(RowsetSharedPtr rowset);
     bool need_remove_unused_rowsets();
     void remove_unused_rowsets();
 

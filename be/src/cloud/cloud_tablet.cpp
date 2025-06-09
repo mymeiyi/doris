@@ -236,7 +236,7 @@ TabletSchemaSPtr CloudTablet::merged_tablet_schema() const {
 
 void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_overlap,
                               std::unique_lock<std::shared_mutex>& meta_lock,
-                              bool warmup_delta_data) {
+                              bool warmup_delta_data, RowsetSharedPtr unused_rowset) {
     if (to_add.empty()) {
         return;
     }
@@ -328,10 +328,9 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
         return;
     }
 
-    std::vector<RowsetSharedPtr> unused_rowsets;
     // Filter out existed rowsets
     auto remove_it = std::remove_if(
-            to_add.begin(), to_add.end(), [this, &unused_rowsets](const RowsetSharedPtr& rs) {
+            to_add.begin(), to_add.end(), [this, &unused_rowset](const RowsetSharedPtr& rs) {
                 if (auto find_it = _rs_version_map.find(rs->version());
                     find_it == _rs_version_map.end()) {
                     return false;
@@ -351,7 +350,7 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
                                 << "tablet_id=" << tablet_id()
                                 << ", rowset_id=" << rs->rowset_id().to_string()
                                 << ", existed rowset=" << find_it->second->rowset_id().to_string();
-                        unused_rowsets.emplace_back(find_it->second);
+                        unused_rowset = find_it->second;
                     }
                 }
                 _tablet_meta->delete_rs_meta_by_version(rs->version(), nullptr);
@@ -498,6 +497,11 @@ uint64_t CloudTablet::delete_expired_stale_rowsets() {
                   << ", cost(us)=" << watch.get_elapse_time_us();
     }
     return expired_rowsets.size();
+}
+
+void CloudTablet::add_unused_rowset(RowsetSharedPtr rowset) {
+    std::lock_guard<std::mutex> lock(_gc_mutex);
+    _unused_rowsets.emplace(rowset->rowset_id(), rowset);
 }
 
 bool CloudTablet::need_remove_unused_rowsets() {
