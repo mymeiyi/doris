@@ -27,6 +27,7 @@ suite("test_unique_schema_key_change_multi_tablets","docker") {
      options.feConfigs.add("enable_workload_group=false")
      options.beConfigs.add('enable_java_support=false')
      options.beConfigs.add('meta_service_conflict_error_retry_times=1')
+     options.beConfigs.add('alter_tablet_worker_count=100')
      options.msConfigs.add('delete_bitmap_lock_v2_white_list=*')
      options.msConfigs.add('enable_retry_txn_conflict=false')
 
@@ -36,8 +37,8 @@ suite("test_unique_schema_key_change_multi_tablets","docker") {
              "  `source` int NOT NULL,\n" +
              "  `data_region` varchar(6) NULL,\n" +
              "  `report_date` date NOT NULL,\n" +
-             "  `report_hour` varchar(20) NOT NULL,\n" +
-             "  `affiliate_id` varchar(200) NOT NULL,\n" +
+             "  `report_hour` varchar(20),\n" +
+             "  `affiliate_id` varchar(200),\n" +
              "  `ad_format` varchar(200) NULL,\n" +
              "  `ad_width` varchar(200) NULL,\n" +
              "  `ad_height` varchar(200) NULL,\n" +
@@ -385,5 +386,6 @@ suite("test_unique_schema_key_change_multi_tablets","docker") {
           }
           assertEquals(1, result.size())
           assertEquals("FINISHED", result[0].State)
+          sql """ insert into ${tbName}(source, report_date) values (1, '2025-05-12'); """
      }
 }
