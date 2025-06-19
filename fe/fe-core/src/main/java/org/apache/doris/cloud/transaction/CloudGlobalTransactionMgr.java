@@ -156,50 +156,9 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
     private static final Logger LOG = LogManager.getLogger(CloudGlobalTransactionMgr.class);
     private static final String NOT_SUPPORTED_MSG = "Not supported in cloud mode";
 
-    class CommitCostTimeStatistic {
-        long waitCommitLockCostTimeMs = 0;
-        long waitDeleteBitmapLockCostTimeMs = 0;
-        long calculateDeleteBitmapCostTimeMs = 0;
-
-        long commitToMsCostTimeMs = 0;
-
-        public long getCommitToMsCostTimeMs() {
-            return commitToMsCostTimeMs;
-        }
-
-        public void setCommitToMsCostTimeMs(long commitToMsCostTimeMs) {
-            this.commitToMsCostTimeMs = commitToMsCostTimeMs;
-        }
-
-        public long getCalculateDeleteBitmapCostTimeMs() {
-            return calculateDeleteBitmapCostTimeMs;
-        }
-
-        public void setCalculateDeleteBitmapCostTimeMs(long calculateDeleteBitmapCostTimeMs) {
-            this.calculateDeleteBitmapCostTimeMs = calculateDeleteBitmapCostTimeMs;
-        }
-
-        public long getWaitCommitLockCostTimeMs() {
-            return waitCommitLockCostTimeMs;
-        }
-
-        public void setWaitCommitLockCostTimeMs(long waitCommitLockCostTimeMs) {
-            this.waitCommitLockCostTimeMs = waitCommitLockCostTimeMs;
-        }
-
-        public long getWaitDeleteBitmapLockCostTimeMs() {
-            return waitDeleteBitmapLockCostTimeMs;
-        }
-
-        public void setWaitDeleteBitmapLockCostTimeMs(long waitDeleteBitmapLockCostTimeMs) {
-            this.waitDeleteBitmapLockCostTimeMs = waitDeleteBitmapLockCostTimeMs;
-        }
-    }
-
     private TxnStateCallbackFactory callbackFactory;
     private final Map<Long, Long> subTxnIdToTxnId = new ConcurrentHashMap<>();
     private Map<Long, AtomicInteger> waitToCommitTxnCountMap = new ConcurrentHashMap<>();
-    private Map<Long, CommitCostTimeStatistic> commitCostTimeStatisticMap = new ConcurrentHashMap<>();
 
     // dbId -> tableId -> txnId
     private Map<Long, Map<Long, Long>> lastTxnIdMap = Maps.newConcurrentMap();
@@ -505,7 +464,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             }
             if (version == 2) {
                 partition.getMaterializedIndices(MaterializedIndex.IndexExtState.ALL)
-                    .stream().forEach(i -> i.setRowCountReported(false));
+                        .stream().forEach(i -> i.setRowCountReported(false));
             }
             partition.setCachedVisibleVersion(version, commitTxnResponse.getVersionUpdateTimeMs());
             LOG.info("Update Partition. transactionId:{}, table_id:{}, partition_id:{}, version:{}, update time:{}",
@@ -537,7 +496,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         try {
             for (Long tableId : tableList) {
                 Env.getCurrentEnv().getEventProcessor().processEvent(
-                    new DataChangeEvent(InternalCatalog.INTERNAL_CATALOG_ID, dbId, tableId));
+                        new DataChangeEvent(InternalCatalog.INTERNAL_CATALOG_ID, dbId, tableId));
             }
         } catch (Throwable t) {
             // According to normal logic, no exceptions will be thrown,
@@ -643,8 +602,6 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         TransactionState txnState = null;
         TxnStateChangeCallback cb = null;
         long callbackId = 0L;
-        StopWatch stopWatch = new StopWatch();
-        stopWatch.start();
         try {
             txnState = commitTxn(commitTxnRequest, transactionId, is2PC, dbId, tableList);
             txnOperated = true;
@@ -669,13 +626,6 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                 if (txnOperated) {
                     cb.afterVisible(txnState, txnOperated);
                 }
-            }
-            long costTime = stopWatch.getTime();
-            if (MetricRepo.isInit) {
-                MetricRepo.HISTO_COMMIT_TO_MS_LATENCY.update(costTime);
-            }
-            if (commitCostTimeStatisticMap.containsKey(transactionId)) {
-                commitCostTimeStatisticMap.get(transactionId).setCommitToMsCostTimeMs(costTime);
             }
         }
     }
@@ -903,151 +853,132 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         }
         StopWatch stopWatch = new StopWatch();
         stopWatch.start();
+        getPartitionInfo(mowTableList, tabletCommitInfos, lockContext);
         int totalRetryTime = 0;
         String retryMsg = "";
-        boolean res = false;
-        try {
-            getPartitionInfo(mowTableList, tabletCommitInfos, lockContext);
-            for (Map.Entry<Long, Set<Long>> entry : lockContext.getTableToPartitions().entrySet()) {
-                GetDeleteBitmapUpdateLockRequest.Builder builder = GetDeleteBitmapUpdateLockRequest.newBuilder();
-                builder.setTableId(entry.getKey()).setLockId(transactionId).setInitiator(-1)
-                        .setExpiration(Config.delete_bitmap_lock_expiration_seconds).setRequireCompactionStats(true);
-                List<Long> tabletList = lockContext.getTableToTabletList().get(entry.getKey());
-                for (Long tabletId : tabletList) {
-                    TabletMeta tabletMeta = lockContext.getTabletToTabletMeta().get(tabletId);
-                    TabletIndexPB.Builder tabletIndexBuilder = TabletIndexPB.newBuilder();
-                    tabletIndexBuilder.setDbId(tabletMeta.getDbId());
-                    tabletIndexBuilder.setTableId(tabletMeta.getTableId());
-                    tabletIndexBuilder.setIndexId(tabletMeta.getIndexId());
-                    tabletIndexBuilder.setPartitionId(tabletMeta.getPartitionId());
-                    tabletIndexBuilder.setTabletId(tabletId);
-                    builder.addTabletIndexes(tabletIndexBuilder);
-                }
-                final GetDeleteBitmapUpdateLockRequest request = builder.build();
-                GetDeleteBitmapUpdateLockResponse response = null;
+        for (Map.Entry<Long, Set<Long>> entry : lockContext.getTableToPartitions().entrySet()) {
+            GetDeleteBitmapUpdateLockRequest.Builder builder = GetDeleteBitmapUpdateLockRequest.newBuilder();
+            builder.setTableId(entry.getKey()).setLockId(transactionId).setInitiator(-1)
+                    .setExpiration(Config.delete_bitmap_lock_expiration_seconds).setRequireCompactionStats(true);
+            List<Long> tabletList = lockContext.getTableToTabletList().get(entry.getKey());
+            for (Long tabletId : tabletList) {
+                TabletMeta tabletMeta = lockContext.getTabletToTabletMeta().get(tabletId);
+                TabletIndexPB.Builder tabletIndexBuilder = TabletIndexPB.newBuilder();
+                tabletIndexBuilder.setDbId(tabletMeta.getDbId());
+                tabletIndexBuilder.setTableId(tabletMeta.getTableId());
+                tabletIndexBuilder.setIndexId(tabletMeta.getIndexId());
+                tabletIndexBuilder.setPartitionId(tabletMeta.getPartitionId());
+                tabletIndexBuilder.setTabletId(tabletId);
+                builder.addTabletIndexes(tabletIndexBuilder);
+            }
+            final GetDeleteBitmapUpdateLockRequest request = builder.build();
+            GetDeleteBitmapUpdateLockResponse response = null;
 
-                int retryTime = 0;
-                while (retryTime++ < Config.metaServiceRpcRetryTimes()) {
-                    try {
-                        response = MetaServiceProxy.getInstance().getDeleteBitmapUpdateLock(request);
-                        if (LOG.isDebugEnabled()) {
-                            LOG.debug("get delete bitmap lock, transactionId={}, Request: {}, Response: {}",
-                                    transactionId,
-                                    request, response);
-                        }
-                        if (DebugPointUtil.isEnable("CloudGlobalTransactionMgr.getDeleteBitmapUpdateLock.conflict")) {
-                            DebugPoint debugPoint = DebugPointUtil.getDebugPoint(
-                                    "CloudGlobalTransactionMgr.getDeleteBitmapUpdateLock.conflict");
-                            double percent = debugPoint.param("percent", 0.4);
-                            long timestamp = System.currentTimeMillis();
-                            Random random = new Random(timestamp);
-                            if (Math.abs(random.nextInt()) % 100 < 100 * percent) {
-                                LOG.info("set kv txn conflict for test");
-                                GetDeleteBitmapUpdateLockResponse.Builder getLockResponseBuilder
-                                        = GetDeleteBitmapUpdateLockResponse.newBuilder();
-                                getLockResponseBuilder.setStatus(MetaServiceResponseStatus.newBuilder()
-                                        .setCode(MetaServiceCode.KV_TXN_CONFLICT_RETRY_EXCEEDED_MAX_TIMES)
-                                        .setMsg("kv txn conflict"));
-                                response = getLockResponseBuilder.build();
-                            }
-                        }
-                        if (response.getStatus().getCode() != MetaServiceCode.LOCK_CONFLICT
-                                && response.getStatus().getCode() != MetaServiceCode.KV_TXN_CONFLICT) {
-                            break;
-                        }
-                    } catch (Exception e) {
-                        LOG.warn("ignore get delete bitmap lock exception, transactionId={}, retryTime={}, tableIds={}",
-                                transactionId,
-                                retryTime, mowTableList.stream().map(Table::getId).collect(Collectors.toList()), e);
-                    }
-                    retryMsg = response.toString();
-                    if (DebugPointUtil.isEnable("FE.mow.check.lock.release")
-                            && response.getStatus().getCode() == MetaServiceCode.LOCK_CONFLICT) {
-                        throw new UserException(InternalErrorCode.INTERNAL_ERR,
-                                "check delete bitmap lock release fail,response is " + response
-                                        + ", tableList=(" + StringUtils.join(mowTableList, ",") + ")");
-                    }
-                    // sleep random millis [20, 300] ms, avoid txn conflict
-                    int randomMillis = 20 + (int) (Math.random() * (300 - 20));
+            int retryTime = 0;
+            while (retryTime++ < Config.metaServiceRpcRetryTimes()) {
+                try {
+                    response = MetaServiceProxy.getInstance().getDeleteBitmapUpdateLock(request);
                     if (LOG.isDebugEnabled()) {
-                        LOG.debug("randomMillis:{}", randomMillis);
+                        LOG.debug("get delete bitmap lock, transactionId={}, Request: {}, Response: {}", transactionId,
+                                request, response);
                     }
-                    try {
-                        Thread.sleep(randomMillis);
-                    } catch (InterruptedException e) {
-                        LOG.info("InterruptedException: ", e);
+                    if (DebugPointUtil.isEnable("CloudGlobalTransactionMgr.getDeleteBitmapUpdateLock.conflict")) {
+                        DebugPoint debugPoint = DebugPointUtil.getDebugPoint(
+                                "CloudGlobalTransactionMgr.getDeleteBitmapUpdateLock.conflict");
+                        double percent = debugPoint.param("percent", 0.4);
+                        long timestamp = System.currentTimeMillis();
+                        Random random = new Random(timestamp);
+                        if (Math.abs(random.nextInt()) % 100 < 100 * percent) {
+                            LOG.info("set kv txn conflict for test");
+                            GetDeleteBitmapUpdateLockResponse.Builder getLockResponseBuilder
+                                    = GetDeleteBitmapUpdateLockResponse.newBuilder();
+                            getLockResponseBuilder.setStatus(MetaServiceResponseStatus.newBuilder()
+                                    .setCode(MetaServiceCode.KV_TXN_CONFLICT_RETRY_EXCEEDED_MAX_TIMES)
+                                    .setMsg("kv txn conflict"));
+                            response = getLockResponseBuilder.build();
+                        }
                     }
-                }
-                Preconditions.checkNotNull(response);
-                Preconditions.checkNotNull(response.getStatus());
-                if (DebugPointUtil.isEnable("FE.mow.get_delete_bitmap_lock.fail")) {
-                    throw new UserException(InternalErrorCode.DELETE_BITMAP_LOCK_ERR,
-                            "test get_delete_bitmap_lock fail");
-                }
-                if (response.getStatus().getCode() != MetaServiceCode.OK) {
-                    LOG.warn("get delete bitmap lock failed, transactionId={}, for {} times, response:{}",
+                    if (response.getStatus().getCode() != MetaServiceCode.LOCK_CONFLICT
+                            && response.getStatus().getCode() != MetaServiceCode.KV_TXN_CONFLICT) {
+                        break;
+                    }
+                } catch (Exception e) {
+                    LOG.warn("ignore get delete bitmap lock exception, transactionId={}, retryTime={}, tableIds={}",
                             transactionId,
-                            retryTime, response);
-                    if (response.getStatus().getCode() == MetaServiceCode.LOCK_CONFLICT
-                            || response.getStatus().getCode() == MetaServiceCode.KV_TXN_CONFLICT
-                            || response.getStatus().getCode()
-                            == MetaServiceCode.KV_TXN_CONFLICT_RETRY_EXCEEDED_MAX_TIMES) {
-                        // DELETE_BITMAP_LOCK_ERR will be retried on be
-                        throw new UserException(InternalErrorCode.DELETE_BITMAP_LOCK_ERR,
-                                "Failed to get delete bitmap lock due to conflict");
-                    }
-                    throw new UserException(
-                            "Failed to get delete bitmap lock, msg: " + response.getStatus().getMsg() + ", code: "
-                                    + response.getStatus().getCode());
+                            retryTime, mowTableList.stream().map(Table::getId).collect(Collectors.toList()), e);
                 }
+                retryMsg = response.toString();
+                if (DebugPointUtil.isEnable("FE.mow.check.lock.release")
+                        && response.getStatus().getCode() == MetaServiceCode.LOCK_CONFLICT) {
+                    throw new UserException(InternalErrorCode.INTERNAL_ERR,
+                            "check delete bitmap lock release fail,response is " + response
+                                    + ", tableList=(" + StringUtils.join(mowTableList, ",") + ")");
+                }
+                // sleep random millis [20, 300] ms, avoid txn conflict
+                int randomMillis = 20 + (int) (Math.random() * (300 - 20));
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("randomMillis:{}", randomMillis);
+                }
+                try {
+                    Thread.sleep(randomMillis);
+                } catch (InterruptedException e) {
+                    LOG.info("InterruptedException: ", e);
+                }
+            }
+            Preconditions.checkNotNull(response);
+            Preconditions.checkNotNull(response.getStatus());
+            if (DebugPointUtil.isEnable("FE.mow.get_delete_bitmap_lock.fail")) {
+                throw new UserException(InternalErrorCode.DELETE_BITMAP_LOCK_ERR,
+                        "test get_delete_bitmap_lock fail");
+            }
+            if (response.getStatus().getCode() != MetaServiceCode.OK) {
+                LOG.warn("get delete bitmap lock failed, transactionId={}, for {} times, response:{}", transactionId,
+                        retryTime, response);
+                if (response.getStatus().getCode() == MetaServiceCode.LOCK_CONFLICT
+                        || response.getStatus().getCode() == MetaServiceCode.KV_TXN_CONFLICT
+                        || response.getStatus().getCode() == MetaServiceCode.KV_TXN_CONFLICT_RETRY_EXCEEDED_MAX_TIMES) {
+                    // DELETE_BITMAP_LOCK_ERR will be retried on be
+                    throw new UserException(InternalErrorCode.DELETE_BITMAP_LOCK_ERR,
+                            "Failed to get delete bitmap lock due to conflict");
+                }
+                throw new UserException(
+                        "Failed to get delete bitmap lock, msg: " + response.getStatus().getMsg() + ", code: "
+                                + response.getStatus().getCode());
+            }
 
-                // record tablet's latest compaction stats from meta service and send them to BEs
-                // to let BEs eliminate unnecessary sync_rowsets() calls if possible
-                List<Long> respBaseCompactionCnts = response.getBaseCompactionCntsList();
-                List<Long> respCumulativeCompactionCnts = response.getCumulativeCompactionCntsList();
-                List<Long> respCumulativePoints = response.getCumulativePointsList();
-                List<Long> respTabletStates = response.getTabletStatesList();
-                int size1 = respBaseCompactionCnts.size();
-                int size2 = respCumulativeCompactionCnts.size();
-                int size3 = respCumulativePoints.size();
-                int size4 = respTabletStates.size();
-                if (size1 != tabletList.size() || size2 != tabletList.size() || size3 != tabletList.size()
-                        || (size4 > 0 && size4 != tabletList.size())) {
-                    throw new UserException("The size of returned compaction cnts can't match the size of tabletList, "
-                            + "tabletList.size()=" + tabletList.size() + ", respBaseCompactionCnts.size()=" + size1
-                            + ", respCumulativeCompactionCnts.size()=" + size2 + ", respCumulativePoints.size()="
-                            + size3
-                            + ", respTabletStates.size()=" + size4);
+            // record tablet's latest compaction stats from meta service and send them to BEs
+            // to let BEs eliminate unnecessary sync_rowsets() calls if possible
+            List<Long> respBaseCompactionCnts = response.getBaseCompactionCntsList();
+            List<Long> respCumulativeCompactionCnts = response.getCumulativeCompactionCntsList();
+            List<Long> respCumulativePoints = response.getCumulativePointsList();
+            List<Long> respTabletStates = response.getTabletStatesList();
+            int size1 = respBaseCompactionCnts.size();
+            int size2 = respCumulativeCompactionCnts.size();
+            int size3 = respCumulativePoints.size();
+            int size4 = respTabletStates.size();
+            if (size1 != tabletList.size() || size2 != tabletList.size() || size3 != tabletList.size()
+                    || (size4 > 0 && size4 != tabletList.size())) {
+                throw new UserException("The size of returned compaction cnts can't match the size of tabletList, "
+                        + "tabletList.size()=" + tabletList.size() + ", respBaseCompactionCnts.size()=" + size1
+                        + ", respCumulativeCompactionCnts.size()=" + size2 + ", respCumulativePoints.size()=" + size3
+                        + ", respTabletStates.size()=" + size4);
+            }
+            for (int i = 0; i < tabletList.size(); i++) {
+                long tabletId = tabletList.get(i);
+                lockContext.getBaseCompactionCnts().put(tabletId, respBaseCompactionCnts.get(i));
+                lockContext.getCumulativeCompactionCnts().put(tabletId, respCumulativeCompactionCnts.get(i));
+                lockContext.getCumulativePoints().put(tabletId, respCumulativePoints.get(i));
+                if (size4 > 0) {
+                    lockContext.getTabletStates().put(tabletId, respTabletStates.get(i));
                 }
-                for (int i = 0; i < tabletList.size(); i++) {
-                    long tabletId = tabletList.get(i);
-                    lockContext.getBaseCompactionCnts().put(tabletId, respBaseCompactionCnts.get(i));
-                    lockContext.getCumulativeCompactionCnts().put(tabletId, respCumulativeCompactionCnts.get(i));
-                    lockContext.getCumulativePoints().put(tabletId, respCumulativePoints.get(i));
-                    if (size4 > 0) {
-                        lockContext.getTabletStates().put(tabletId, respTabletStates.get(i));
-                    }
-                }
-                totalRetryTime += retryTime;
             }
-            res = true;
-        } finally {
-            stopWatch.stop();
-            long costTime = stopWatch.getTime();
-            if (MetricRepo.isInit) {
-                MetricRepo.HISTO_GET_DELETE_BITMAP_UPDATE_LOCK_LATENCY.update(costTime);
-            }
-            if (commitCostTimeStatisticMap.containsKey(transactionId)) {
-                commitCostTimeStatisticMap.get(transactionId).setWaitDeleteBitmapLockCostTimeMs(costTime);
-            }
-            String status = res ? "successfully" : "fail";
-            if (costTime > 1000) {
-                LOG.info("get delete bitmap lock {} . txnId: {}. totalRetryTime: {}. "
-                                + "tableSize: {}. cost: {} ms. tableIds: {}. retryMsg: {}.", status,
-                        transactionId, totalRetryTime, lockContext.getTableToPartitions().size(), costTime,
-                        mowTableList.stream().map(Table::getId).collect(Collectors.toList()), retryMsg);
-            }
+            totalRetryTime += retryTime;
         }
+        stopWatch.stop();
+        LOG.info("get delete bitmap lock successfully. txnId: {}. totalRetryTime: {}. "
+                        + "tableSize: {}. cost: {} ms. tableIds: {}. retryMsg: {}.", transactionId, totalRetryTime,
+                lockContext.getTableToPartitions().size(), stopWatch.getTime(),
+                mowTableList.stream().map(Table::getId).collect(Collectors.toList()), retryMsg);
     }
 
     private void removeDeleteBitmapUpdateLock(List<OlapTable> tableList, long transactionId) {
@@ -1093,7 +1024,6 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         }
         StopWatch stopWatch = new StopWatch();
         stopWatch.start();
-<<<<<<< HEAD
         int totalTaskNum = backendToPartitionInfos.size();
         MarkedCountDownLatch<Long, Long> countDownLatch = new MarkedCountDownLatch<Long, Long>(
                 totalTaskNum);
@@ -1150,108 +1080,38 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             LOG.warn("InterruptedException: ", e);
             ok = false;
         }
-=======
-        boolean res = false;
-        try {
-            int totalTaskNum = backendToPartitionInfos.size();
-            MarkedCountDownLatch<Long, Long> countDownLatch = new MarkedCountDownLatch<Long, Long>(
-                    totalTaskNum);
-            AgentBatchTask batchTask = new AgentBatchTask();
->>>>>>> 4798346291 ([improve](cloud-mow)Add some metrics aboout delete bitmap update lock (#47988))
 
-            long signature = getTxnLastSignature(dbId, transactionId);
-            if (signature == -1) {
-                // use txn_id as signature for every txn in first time
-                signature = transactionId;
+        if (!ok || !countDownLatch.getStatus().ok()) {
+            String errMsg = "Failed to calculate delete bitmap.";
+            // clear tasks
+            AgentTaskQueue.removeBatchTask(batchTask, TTaskType.CALCULATE_DELETE_BITMAP);
+
+            if (!countDownLatch.getStatus().ok()) {
+                errMsg += countDownLatch.getStatus().getErrorMsg();
+                if (countDownLatch.getStatus().getErrorCode() != TStatusCode.DELETE_BITMAP_LOCK_ERROR) {
+                    throw new UserException(errMsg);
+                }
             } else {
-                // If there exists other interleaved txns on the same table before,
-                // we can not accept the response of previous calc delete bitmap task which is created
-                // by the current transaction before because the delete bitmap written in those tasks
-                // maybe be removed in MS.
-                // So we change the signature to avoid to accept the response of previous calc delete bitmap task
-                boolean hasOtherInterleavedTxnBefore = mowTableIds.stream()
-                        .anyMatch(tableId -> {
-                            long lastTxnId = getTableLastTxnId(dbId, tableId);
-                            return lastTxnId != -1 && lastTxnId != transactionId;
-                        });
-                if (hasOtherInterleavedTxnBefore) {
-                    signature = UUID.randomUUID().getLeastSignificantBits();
+                errMsg += " Timeout.";
+                List<Entry<Long, Long>> unfinishedMarks = countDownLatch.getLeftMarks();
+                // only show at most 3 results
+                List<Entry<Long, Long>> subList = unfinishedMarks.subList(0,
+                        Math.min(unfinishedMarks.size(), 3));
+                if (!subList.isEmpty()) {
+                    errMsg += " Unfinished mark: " + Joiner.on(", ").join(subList);
                 }
             }
-            setTxnLastSignature(dbId, transactionId, signature);
-            for (long tableId : mowTableIds) {
-                setTableLastTxnId(dbId, tableId, transactionId);
-            }
-
-            for (Map.Entry<Long, List<TCalcDeleteBitmapPartitionInfo>> entry : backendToPartitionInfos.entrySet()) {
-                CalcDeleteBitmapTask task = new CalcDeleteBitmapTask(entry.getKey(),
-                        transactionId,
-                        dbId,
-                        entry.getValue(),
-                        signature,
-                        countDownLatch);
-                countDownLatch.addMark(entry.getKey(), transactionId);
-                // add to AgentTaskQueue for handling finish report.
-                // not check return value, because the add will success
-                AgentTaskQueue.addTask(task);
-                batchTask.addTask(task);
-                LOG.info("send calculate delete bitmap task to be {}, txn_id {}, signature {}, partitionInfos={}",
-                        entry.getKey(), transactionId, signature, entry.getValue());
-            }
-            AgentTaskExecutor.submit(batchTask);
-
-            boolean ok;
-            try {
-                ok = countDownLatch.await(calculateDeleteBitmapTaskTimeoutSeconds, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                LOG.warn("InterruptedException: ", e);
-                ok = false;
-            }
-
-            if (!ok || !countDownLatch.getStatus().ok()) {
-                String errMsg = "Failed to calculate delete bitmap.";
-                // clear tasks
-                AgentTaskQueue.removeBatchTask(batchTask, TTaskType.CALCULATE_DELETE_BITMAP);
-
-                if (!countDownLatch.getStatus().ok()) {
-                    errMsg += countDownLatch.getStatus().getErrorMsg();
-                    if (countDownLatch.getStatus().getErrorCode() != TStatusCode.DELETE_BITMAP_LOCK_ERROR) {
-                        throw new UserException(errMsg);
-                    }
-                } else {
-                    errMsg += " Timeout.";
-                    List<Entry<Long, Long>> unfinishedMarks = countDownLatch.getLeftMarks();
-                    // only show at most 3 results
-                    List<Entry<Long, Long>> subList = unfinishedMarks.subList(0,
-                            Math.min(unfinishedMarks.size(), 3));
-                    if (!subList.isEmpty()) {
-                        errMsg += " Unfinished mark: " + Joiner.on(", ").join(subList);
-                    }
-                }
-                LOG.warn(errMsg);
-                // DELETE_BITMAP_LOCK_ERR will be retried on be
-                throw new UserException(InternalErrorCode.DELETE_BITMAP_LOCK_ERR, errMsg);
-            } else {
-                // Sometimes BE calc delete bitmap succeed, but FE wait timeout for some unknown reasons,
-                // FE will retry the calculation on BE, this debug point simulates such situation.
-                debugCalcDeleteBitmapRandomTimeout();
-            }
-            res = true;
-        } finally {
-            stopWatch.stop();
-            long costTime = stopWatch.getTime();
-            if (MetricRepo.isInit) {
-                MetricRepo.HISTO_CALCULATE_DELETE_BITMAP_LATENCY.update(costTime);
-            }
-            if (commitCostTimeStatisticMap.containsKey(transactionId)) {
-                commitCostTimeStatisticMap.get(transactionId).setCalculateDeleteBitmapCostTimeMs(costTime);
-            }
-            String status = res ? "successfully" : "fail";
-            if (costTime > 1000) {
-                LOG.info("calc delete bitmap task {}. txns: {}. time cost: {} ms.",
-                        status, transactionId, stopWatch.getTime());
-            }
+            LOG.warn(errMsg);
+            // DELETE_BITMAP_LOCK_ERR will be retried on be
+            throw new UserException(InternalErrorCode.DELETE_BITMAP_LOCK_ERR, errMsg);
+        } else {
+            // Sometimes BE calc delete bitmap succeed, but FE wait timeout for some unknown reasons,
+            // FE will retry the calculation on BE, this debug point simulates such situation.
+            debugCalcDeleteBitmapRandomTimeout();
         }
+        stopWatch.stop();
+        LOG.info("calc delete bitmap task successfully. txns: {}. time cost: {} ms.",
+                transactionId, stopWatch.getTime());
     }
 
     private void debugCalcDeleteBitmapRandomTimeout() throws UserException {
@@ -1270,7 +1130,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
 
     @Override
     public boolean commitAndPublishTransaction(DatabaseIf db, List<Table> tableList, long transactionId,
-                                               List<TabletCommitInfo> tabletCommitInfos, long timeoutMillis)
+            List<TabletCommitInfo> tabletCommitInfos, long timeoutMillis)
             throws UserException {
         StopWatch stopWatch = new StopWatch();
         stopWatch.start();
@@ -1317,83 +1177,6 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                     "disable_load_job is set to true, all load jobs are not allowed");
         }
         LOG.info("try to commit transaction, txnId: {}, subTxnStates: {}", transactionId, subTransactionStates);
-<<<<<<< HEAD
-=======
-
-        Preconditions.checkState(db instanceof Database);
-        List<Long> tableIdList = subTransactionStates.stream().map(s -> s.getTable().getId()).distinct()
-                .collect(Collectors.toList());
-        List<Table> tableList = ((Database) db).getTablesOnIdOrderOrThrowException(tableIdList);
-        StopWatch stopWatch = new StopWatch();
-        stopWatch.start();
-        beforeCommitTransaction(tableList, transactionId, timeoutMillis);
-        List<TabletCommitInfo> tabletCommitInfos = subTransactionStates.stream().map(
-                        SubTransactionState::getTabletCommitInfos).flatMap(Collection::stream)
-                .map(c -> new TabletCommitInfo(c.getTabletId(), c.getBackendId())).collect(Collectors.toList());
-        List<OlapTable> mowTableList = getMowTableList(tableList, tabletCommitInfos);
-        try {
-            Map<Long, List<TCalcDeleteBitmapPartitionInfo>> backendToPartitionInfos = null;
-            if (!mowTableList.isEmpty()) {
-                if (!checkTransactionStateBeforeCommit(db.getId(), transactionId)) {
-                    return true;
-                }
-                DeleteBitmapUpdateLockContext lockContext = new DeleteBitmapUpdateLockContext();
-                getDeleteBitmapUpdateLock(transactionId, mowTableList, tabletCommitInfos, lockContext);
-                if (lockContext.getBackendToPartitionTablets().isEmpty()) {
-                    throw new UserException(
-                            "The partition info is empty, table may be dropped, txnid=" + transactionId);
-                }
-                Map<Long, List<Long>> partitionToSubTxnIds = getPartitionSubTxnIds(subTransactionStates,
-                        lockContext.getTableToTabletList(),
-                        lockContext.getTabletToTabletMeta());
-                backendToPartitionInfos = getCalcDeleteBitmapInfo(
-                        lockContext, partitionToSubTxnIds);
-            }
-            commitTransactionWithSubTxns(db.getId(), tableList, transactionId, subTransactionStates, mowTableList,
-                    backendToPartitionInfos);
-        } catch (Exception e) {
-            if (!mowTableList.isEmpty()) {
-                LOG.warn("commit txn {} failed, release delete bitmap lock, catch exception {}", transactionId,
-                        e.getMessage());
-                removeDeleteBitmapUpdateLock(mowTableList, transactionId);
-            }
-            throw e;
-        } finally {
-            stopWatch.stop();
-            String detailMsg = "";
-            long costTimeMs = stopWatch.getTime();
-            if (costTimeMs > 1000) {
-                if (commitCostTimeStatisticMap.containsKey(transactionId)) {
-                    StringBuilder sb = new StringBuilder();
-                    CommitCostTimeStatistic statistic = commitCostTimeStatisticMap.get(transactionId);
-                    sb.append("get commit lock cost ").append(statistic.getWaitCommitLockCostTimeMs())
-                            .append(" ms, get delete bitmap lock cost ")
-                            .append(statistic.getWaitDeleteBitmapLockCostTimeMs())
-                            .append(" ms, calculate delete bitmap cost ")
-                            .append(statistic.getCalculateDeleteBitmapCostTimeMs()).append(" ms, commit to ms cost ")
-                            .append(statistic.getCommitToMsCostTimeMs()).append(" ms");
-                    detailMsg = sb.toString();
-                }
-                LOG.info(
-                        "commit transaction {} cost {} ms, detail={}, tableIds={}",
-                        transactionId, costTimeMs, detailMsg,
-                        tableList.stream().map(Table::getId).collect(Collectors.toList()));
-            }
-            afterCommitTransaction(tableList, transactionId);
-        }
-        return true;
-    }
-
-    private void commitTransactionWithSubTxns(long dbId, List<Table> tableList, long transactionId,
-            List<SubTransactionState> subTransactionStates, List<OlapTable> mowTableList,
-            Map<Long, List<TCalcDeleteBitmapPartitionInfo>> backendToPartitionInfos) throws UserException {
-        if (!mowTableList.isEmpty()) {
-            List<Long> mowTableIds = mowTableList.stream().map(Table::getId).collect(Collectors.toList());
-            sendCalcDeleteBitmaptask(dbId, transactionId, backendToPartitionInfos, mowTableIds,
-                    Config.calculate_delete_bitmap_task_timeout_seconds_for_transaction_load);
-        }
-
->>>>>>> 4798346291 ([improve](cloud-mow)Add some metrics aboout delete bitmap update lock (#47988))
         cleanSubTransactions(transactionId);
         CommitTxnRequest.Builder builder = CommitTxnRequest.newBuilder();
         builder.setDbId(db.getId())
@@ -1420,7 +1203,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         try {
             txnState = commitTxn(commitTxnRequest, transactionId, false, db.getId(),
                     subTransactionStates.stream().map(SubTransactionState::getTable)
-                        .collect(Collectors.toList()));
+                            .collect(Collectors.toList()));
             txnOperated = true;
         } finally {
             if (txnState != null) {
@@ -1462,8 +1245,8 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
 
     @Override
     public boolean commitAndPublishTransaction(DatabaseIf db, List<Table> tableList, long transactionId,
-                                               List<TabletCommitInfo> tabletCommitInfos, long timeoutMillis,
-                                               TxnCommitAttachment txnCommitAttachment) throws UserException {
+            List<TabletCommitInfo> tabletCommitInfos, long timeoutMillis,
+            TxnCommitAttachment txnCommitAttachment) throws UserException {
         for (int i = 0; i < tableList.size(); i++) {
             long tableId = tableList.get(i).getId();
             LOG.info("start commit txn=" + transactionId + ",table=" + tableId);
@@ -1473,9 +1256,6 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                 LOG.info("now table {} commitAndPublishTransaction queue is {}", entry.getKey(),
                         entry.getValue().get());
             }
-        }
-        if (!commitCostTimeStatisticMap.containsKey(transactionId)) {
-            commitCostTimeStatisticMap.put(transactionId, new CommitCostTimeStatistic());
         }
 
         List<Table> tablesToLock = getTablesNeedCommitLock(tableList);
@@ -1517,75 +1297,17 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         if (stopWatch != null) {
             stopWatch.stop();
             long costTimeMs = stopWatch.getTime();
-            if (MetricRepo.isInit) {
-                MetricRepo.HISTO_GET_COMMIT_LOCK_LATENCY.update(costTimeMs);
-            }
-            if (commitCostTimeStatisticMap.containsKey(transactionId)) {
-                commitCostTimeStatisticMap.get(transactionId).setWaitCommitLockCostTimeMs(costTimeMs);
-            }
             if (costTimeMs > 1000) {
                 LOG.warn("get table cloud commit lock, tableList=(" + StringUtils.join(tablesToLock, ",") + ")"
                         + ", transactionId=" + transactionId + ", cost=" + costTimeMs + " ms");
             }
         }
 
-<<<<<<< HEAD
         try {
             commitTransactionWithoutLock(db.getId(), tableList, transactionId, tabletCommitInfos, txnCommitAttachment);
         } finally {
             decreaseWaitingLockCount(tablesToLock);
             MetaLockUtils.commitUnlockTables(tablesToLock);
-=======
-    private void afterCommitTransaction(List<Table> tableList, Long transactionId) {
-        if (commitCostTimeStatisticMap.containsKey(transactionId)) {
-            commitCostTimeStatisticMap.remove(transactionId);
-        }
-        List<Table> tablesToUnlock = getTablesNeedCommitLock(tableList);
-        decreaseWaitingLockCount(tablesToUnlock);
-        MetaLockUtils.commitUnlockTables(tablesToUnlock);
-    }
-
-    @Override
-    public void commitTransaction(DatabaseIf db, List<Table> tableList, long transactionId,
-            List<TabletCommitInfo> tabletCommitInfos, long timeoutMillis, TxnCommitAttachment txnCommitAttachment)
-            throws UserException {
-        // There is no publish in cloud mode
-        commitAndPublishTransaction(
-                db, tableList, transactionId, tabletCommitInfos, timeoutMillis, txnCommitAttachment);
-    }
-
-    @Override
-    public boolean commitAndPublishTransaction(DatabaseIf db, List<Table> tableList, long transactionId,
-                                               List<TabletCommitInfo> tabletCommitInfos, long timeoutMillis,
-                                               TxnCommitAttachment txnCommitAttachment) throws UserException {
-        StopWatch stopWatch = new StopWatch();
-        stopWatch.start();
-        beforeCommitTransaction(tableList, transactionId, timeoutMillis);
-        try {
-            commitTransactionWithoutLock(db.getId(), tableList, transactionId, tabletCommitInfos, txnCommitAttachment);
-        } finally {
-            stopWatch.stop();
-            long costTimeMs = stopWatch.getTime();
-            if (costTimeMs > 1000) {
-                String detailMsg = "";
-                if (commitCostTimeStatisticMap.containsKey(transactionId)) {
-                    StringBuilder sb = new StringBuilder();
-                    CommitCostTimeStatistic statistic = commitCostTimeStatisticMap.get(transactionId);
-                    sb.append("get commit lock cost ").append(statistic.getWaitCommitLockCostTimeMs())
-                            .append(" ms, get delete bitmap lock cost ")
-                            .append(statistic.getWaitDeleteBitmapLockCostTimeMs())
-                            .append(" ms, calculate delete bitmap cost ")
-                            .append(statistic.getCalculateDeleteBitmapCostTimeMs()).append(" ms, commit to ms cost ")
-                            .append(statistic.getCommitToMsCostTimeMs()).append(" ms");
-                    detailMsg = sb.toString();
-                }
-                LOG.info(
-                        "commit transaction {} cost {} ms, detail={}, tableIds={}",
-                        transactionId, costTimeMs, detailMsg,
-                        tableList.stream().map(Table::getId).collect(Collectors.toList()));
-            }
-            afterCommitTransaction(tableList, transactionId);
->>>>>>> 4798346291 ([improve](cloud-mow)Add some metrics aboout delete bitmap update lock (#47988))
         }
         return true;
     }
@@ -1678,7 +1400,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
     }
 
     private void handleAfterAbort(AbortTxnResponse abortTxnResponse, TxnCommitAttachment txnCommitAttachment,
-                                long transactionId) throws UserException {
+            long transactionId) throws UserException {
         TransactionState txnState = new TransactionState();
         boolean txnOperated = false;
         long callbackId = 0L;
@@ -1815,7 +1537,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         try {
             LOG.info("CheckTxnConflictRequest:{}", checkTxnConflictRequest);
             checkTxnConflictResponse = MetaServiceProxy
-                .getInstance().checkTxnConflict(checkTxnConflictRequest);
+                    .getInstance().checkTxnConflict(checkTxnConflictRequest);
             LOG.info("CheckTxnConflictResponse: {}", checkTxnConflictResponse);
         } catch (RpcException e) {
             throw new UserException(e.getMessage());
@@ -1865,7 +1587,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
     }
 
     public boolean isPreviousTransactionsFinished(long endTransactionId, long dbId, long tableId,
-                                                  long partitionId) throws AnalysisException {
+            long partitionId) throws AnalysisException {
         throw new AnalysisException(NOT_SUPPORTED_MSG);
     }
 
@@ -2012,7 +1734,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         AbortTxnWithCoordinatorResponse response = null;
         try {
             response = MetaServiceProxy
-                .getInstance().abortTxnWithCoordinator(request);
+                    .getInstance().abortTxnWithCoordinator(request);
             LOG.info("AbortTxnWithCoordinatorResponse: {}", response);
         } catch (RpcException e) {
             LOG.warn("Abort txn on coordinate BE {} failed, msg={}", coordinateHost, e.getMessage());
