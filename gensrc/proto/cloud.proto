@@ -1424,6 +1424,11 @@ enum MetaServiceCode {
     UNDEFINED_ERR = 1000000;
 }
 
+message RowsetDeleteBitmapPB {
+    optional string rowset_id = 1;
+    repeated DeleteBitmapPB delete_bitmaps = 2;
+}
+
 message UpdateDeleteBitmapRequest {
     optional string cloud_unique_id = 1; // For auth
     optional int64 table_id = 2;
@@ -1431,6 +1436,7 @@ message UpdateDeleteBitmapRequest {
     optional int64 tablet_id = 4;
     optional int64 lock_id = 5;
     optional int64 initiator = 6;
+    // 7-11: used for delete bitmap storage v1
     repeated string rowset_ids = 7;
     repeated uint32 segment_ids = 8;
     repeated int64 versions = 9;
@@ -1447,6 +1453,9 @@ message UpdateDeleteBitmapRequest {
     optional int64 pre_rowset_agg_end_version = 16;
     // when update delete_bitmap of pre rowsets, check the rowset exists
     repeated int64 pre_rowset_versions = 17;
+    // used for storage v2
+    optional int64 store_version = 18;
+    repeated RowsetDeleteBitmapPB rowset_delete_bitmaps = 19;
 }
 
 message UpdateDeleteBitmapResponse {

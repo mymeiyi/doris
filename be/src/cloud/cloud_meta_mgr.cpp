@@ -1281,10 +1281,17 @@ Status CloudMetaMgr::lease_tablet_job(const TabletJobInfoPB& job) {
     return retry_rpc("lease tablet job", req, &res, &MetaService_Stub::finish_tablet_job);
 }
 
+/*Status CloudMetaMgr::update_delete_bitmap_v2(const CloudTablet& tablet, int64_t lock_id,
+                                             int64_t initiator, DeleteBitmap* delete_bitmap,
+                                             int64_t txn_id, bool is_explicit_txn,
+                                             int64_t next_visible_version) {
+
+}*/
+
 Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t lock_id,
-                                          int64_t initiator, DeleteBitmap* delete_bitmap,
-                                          int64_t txn_id, bool is_explicit_txn,
-                                          int64_t next_visible_version) {
+                                          int64_t initiator, std::string rowset_id,
+                                          DeleteBitmap* delete_bitmap, int64_t txn_id,
+                                          bool is_explicit_txn, int64_t next_visible_version) {
     VLOG_DEBUG << "update_delete_bitmap , tablet_id: " << tablet.tablet_id();
     UpdateDeleteBitmapRequest req;
     UpdateDeleteBitmapResponse res;
@@ -1301,15 +1308,21 @@ Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t loc
     if (next_visible_version > 0) {
         req.set_next_visible_version(next_visible_version);
     }
-    for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
-        req.add_rowset_ids(std::get<0>(key).to_string());
-        req.add_segment_ids(std::get<1>(key));
-        req.add_versions(std::get<2>(key));
-        // To save space, convert array and bitmap containers to run containers
-        bitmap.runOptimize();
-        std::string bitmap_data(bitmap.getSizeInBytes(), '\0');
-        bitmap.write(bitmap_data.data());
-        *(req.add_segment_delete_bitmaps()) = std::move(bitmap_data);
+    if (config::delete_bitmap_store_version == 1) {
+        req.set_store_version(1);
+        for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
+            req.add_rowset_ids(std::get<0>(key).to_string());
+            req.add_segment_ids(std::get<1>(key));
+            req.add_versions(std::get<2>(key));
+            // To save space, convert array and bitmap containers to run containers
+            bitmap.runOptimize();
+            std::string bitmap_data(bitmap.getSizeInBytes(), '\0');
+            bitmap.write(bitmap_data.data());
+            *(req.add_segment_delete_bitmaps()) = std::move(bitmap_data);
+        }
+    } else {
+        req.set_store_version(2);
+        RowsetDeleteBitmapPB rowset_delete_bitmap;
     }
     DBUG_EXECUTE_IF("CloudMetaMgr::test_update_big_delete_bitmap", {
         LOG(INFO) << "test_update_big_delete_bitmap for tablet " << tablet.tablet_id();
