@@ -855,44 +855,53 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
         return Status::OK();
     }
 
-    if (!full_sync &&
-        sync_tablet_delete_bitmap_by_cache(tablet, old_max_version, rs_metas, delete_bitmap)) {
-        if (sync_stats) {
-            sync_stats->get_local_delete_bitmap_rowsets_num += rs_metas.size();
-        }
-        return Status::OK();
-    } else {
-        DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet->tablet_id());
-        *delete_bitmap = *new_delete_bitmap;
-    }
-
-    int64_t new_max_version = std::max(old_max_version, rs_metas.rbegin()->end_version());
-    // When there are many delete bitmaps that need to be synchronized, it
-    // may take a longer time, especially when loading the tablet for the
-    // first time, so set a relatively long timeout time.
     GetDeleteBitmapRequest req;
-    GetDeleteBitmapResponse res;
     req.set_cloud_unique_id(config::cloud_unique_id);
     req.set_tablet_id(tablet->tablet_id());
     req.set_base_compaction_cnt(stats.base_compaction_cnt());
     req.set_cumulative_compaction_cnt(stats.cumulative_compaction_cnt());
     req.set_cumulative_point(stats.cumulative_point());
+    // When there are many delete bitmaps that need to be synchronized, it
+    // may take a longer time, especially when loading the tablet for the
+    // first time, so set a relatively long timeout time.
     *(req.mutable_idx()) = idx;
-    // New rowset sync all versions of delete bitmap
-    for (const auto& rs_meta : rs_metas) {
-        req.add_rowset_ids(rs_meta.rowset_id_v2());
-        req.add_begin_versions(0);
-        req.add_end_versions(new_max_version);
-    }
+    GetDeleteBitmapResponse res;
+    if (config::delete_bitmap_store_version == 1) {
+        req.set_store_version(1);
+        if (!full_sync &&
+            sync_tablet_delete_bitmap_by_cache(tablet, old_max_version, rs_metas, delete_bitmap)) {
+            if (sync_stats) {
+                sync_stats->get_local_delete_bitmap_rowsets_num += rs_metas.size();
+            }
+            return Status::OK();
+        } else {
+            DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet->tablet_id());
+            *delete_bitmap = *new_delete_bitmap;
+        }
 
-    // old rowset sync incremental versions of delete bitmap
-    if (old_max_version > 0 && old_max_version < new_max_version) {
-        RowsetIdUnorderedSet all_rs_ids;
-        RETURN_IF_ERROR(tablet->get_all_rs_id(old_max_version, &all_rs_ids));
-        for (const auto& rs_id : all_rs_ids) {
-            req.add_rowset_ids(rs_id.to_string());
-            req.add_begin_versions(old_max_version + 1);
+        int64_t new_max_version = std::max(old_max_version, rs_metas.rbegin()->end_version());
+        // New rowset sync all versions of delete bitmap
+        for (const auto& rs_meta : rs_metas) {
+            req.add_rowset_ids(rs_meta.rowset_id_v2());
+            req.add_begin_versions(0);
             req.add_end_versions(new_max_version);
+        }
+
+        // old rowset sync incremental versions of delete bitmap
+        if (old_max_version > 0 && old_max_version < new_max_version) {
+            RowsetIdUnorderedSet all_rs_ids;
+            RETURN_IF_ERROR(tablet->get_all_rs_id(old_max_version, &all_rs_ids));
+            for (const auto& rs_id : all_rs_ids) {
+                req.add_rowset_ids(rs_id.to_string());
+                req.add_begin_versions(old_max_version + 1);
+                req.add_end_versions(new_max_version);
+            }
+        }
+    } else {
+        // TODO use cache
+        req.set_store_version(2);
+        for (const auto& rs_meta : rs_metas) {
+            req.add_rowset_ids(rs_meta.rowset_id_v2());
         }
     }
     if (sync_stats) {
@@ -939,42 +948,63 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
         return Status::Error<ErrorCode::INTERNAL_ERROR, false>("failed to get delete bitmap: {}",
                                                                res.status().msg());
     }
-    const auto& rowset_ids = res.rowset_ids();
-    const auto& segment_ids = res.segment_ids();
-    const auto& vers = res.versions();
-    const auto& delete_bitmaps = res.segment_delete_bitmaps();
-    if (rowset_ids.size() != segment_ids.size() || rowset_ids.size() != vers.size() ||
-        rowset_ids.size() != delete_bitmaps.size()) {
-        return Status::Error<ErrorCode::INTERNAL_ERROR, false>(
-                "get delete bitmap data wrong,"
-                "rowset_ids.size={},segment_ids.size={},vers.size={},delete_bitmaps.size={}",
-                rowset_ids.size(), segment_ids.size(), vers.size(), delete_bitmaps.size());
-    }
-    if (sync_stats) {
-        sync_stats->get_remote_delete_bitmap_rpc_ns +=
-                std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
-        sync_stats->get_remote_delete_bitmap_key_count += delete_bitmaps.size();
-        for (const auto& dbm : delete_bitmaps) {
-            sync_stats->get_remote_delete_bitmap_bytes += dbm.length();
+    if (config::delete_bitmap_store_version == 1) {
+        const auto& rowset_ids = res.rowset_ids();
+        const auto& segment_ids = res.segment_ids();
+        const auto& vers = res.versions();
+        const auto& delete_bitmaps = res.segment_delete_bitmaps();
+        if (rowset_ids.size() != segment_ids.size() || rowset_ids.size() != vers.size() ||
+            rowset_ids.size() != delete_bitmaps.size()) {
+            return Status::Error<ErrorCode::INTERNAL_ERROR, false>(
+                    "get delete bitmap data wrong,"
+                    "rowset_ids.size={},segment_ids.size={},vers.size={},delete_bitmaps.size={}",
+                    rowset_ids.size(), segment_ids.size(), vers.size(), delete_bitmaps.size());
         }
-    }
-    for (int i = 0; i < rowset_ids.size(); i++) {
-        RowsetId rst_id;
-        rst_id.init(rowset_ids[i]);
-        delete_bitmap->merge(
-                {rst_id, segment_ids[i], vers[i]},
-                roaring::Roaring::readSafe(delete_bitmaps[i].data(), delete_bitmaps[i].length()));
-    }
-    int64_t latency = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-    if (latency > 100 * 1000) { // 100ms
-        LOG(INFO) << "finish get_delete_bitmap rpc. rowset_ids.size()=" << rowset_ids.size()
-                  << ", delete_bitmaps.size()=" << delete_bitmaps.size() << ", latency=" << latency
-                  << "us";
+        if (sync_stats) {
+            sync_stats->get_remote_delete_bitmap_rpc_ns +=
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+            sync_stats->get_remote_delete_bitmap_key_count += delete_bitmaps.size();
+            for (const auto& dbm : delete_bitmaps) {
+                sync_stats->get_remote_delete_bitmap_bytes += dbm.length();
+            }
+        }
+        for (int i = 0; i < rowset_ids.size(); i++) {
+            RowsetId rst_id;
+            rst_id.init(rowset_ids[i]);
+            delete_bitmap->merge({rst_id, segment_ids[i], vers[i]},
+                                 roaring::Roaring::readSafe(delete_bitmaps[i].data(),
+                                                            delete_bitmaps[i].length()));
+        }
+        int64_t latency = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        if (latency > 100 * 1000) { // 100ms
+            LOG(INFO) << "finish get_delete_bitmap rpc. rowset_ids.size()=" << rowset_ids.size()
+                      << ", delete_bitmaps.size()=" << delete_bitmaps.size() << ", latency=" << latency
+                      << "us";
+        } else {
+            LOG_EVERY_N(INFO, 100) << "finish get_delete_bitmap rpc. rowset_ids.size()="
+                                   << rowset_ids.size()
+                                   << ", delete_bitmaps.size()=" << delete_bitmaps.size()
+                                   << ", latency=" << latency << "us";
+        }
     } else {
-        LOG_EVERY_N(INFO, 100) << "finish get_delete_bitmap rpc. rowset_ids.size()="
-                               << rowset_ids.size()
-                               << ", delete_bitmaps.size()=" << delete_bitmaps.size()
-                               << ", latency=" << latency << "us";
+        LOG(INFO) << "get delete bitmap, tablet_id=" << tablet->tablet_id()
+                  << ", delete_bitmap_pb_size()=" << res.delete_bitmap_size();
+        for (int i = 0; i < res.delete_bitmap_size(); i++) {
+            auto& dm = res.delete_bitmap(i);
+            LOG(INFO) << "get delete bitmap, tablet_id=" << tablet->tablet_id() << ", i=" << i
+                      << ". rowset_ids_size=" << dm.rowset_ids_size()
+                      << ", segment_ids_size=" << dm.segment_ids_size()
+                      << ", versions_size=" << dm.versions_size()
+                      << ", bitmap_size=" << dm.segment_delete_bitmaps_size();
+            for (int j = 0; j < dm.rowset_ids_size(); j++) {
+                RowsetId rst_id;
+                rst_id.init(dm.rowset_ids(j));
+                delete_bitmap->merge(
+                        {rst_id, dm.segment_ids(j), dm.versions(j)},
+                        roaring::Roaring::readSafe(dm.segment_delete_bitmaps(j).data(),
+                                                   dm.segment_delete_bitmaps(j).length()));
+            }
+        }
     }
     return Status::OK();
 }
@@ -1281,10 +1311,16 @@ Status CloudMetaMgr::lease_tablet_job(const TabletJobInfoPB& job) {
     return retry_rpc("lease tablet job", req, &res, &MetaService_Stub::finish_tablet_job);
 }
 
+/*Status CloudMetaMgr::update_delete_bitmap_v2(const CloudTablet& tablet, int64_t lock_id,
+                                             int64_t initiator, DeleteBitmap* delete_bitmap,
+                                             int64_t txn_id, bool is_explicit_txn,
+                                             int64_t next_visible_version) {
+}*/
+
 Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t lock_id,
                                           int64_t initiator, DeleteBitmap* delete_bitmap,
-                                          int64_t txn_id, bool is_explicit_txn,
-                                          int64_t next_visible_version) {
+                                          std::string rowset_id, int64_t txn_id,
+                                          bool is_explicit_txn, int64_t next_visible_version) {
     VLOG_DEBUG << "update_delete_bitmap , tablet_id: " << tablet.tablet_id();
     UpdateDeleteBitmapRequest req;
     UpdateDeleteBitmapResponse res;
@@ -1301,15 +1337,68 @@ Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t loc
     if (next_visible_version > 0) {
         req.set_next_visible_version(next_visible_version);
     }
-    for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
-        req.add_rowset_ids(std::get<0>(key).to_string());
-        req.add_segment_ids(std::get<1>(key));
-        req.add_versions(std::get<2>(key));
-        // To save space, convert array and bitmap containers to run containers
-        bitmap.runOptimize();
-        std::string bitmap_data(bitmap.getSizeInBytes(), '\0');
-        bitmap.write(bitmap_data.data());
-        *(req.add_segment_delete_bitmaps()) = std::move(bitmap_data);
+    if (config::delete_bitmap_store_version == 1) {
+        req.set_store_version(1);
+        for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
+            req.add_rowset_ids(std::get<0>(key).to_string());
+            req.add_segment_ids(std::get<1>(key));
+            req.add_versions(std::get<2>(key));
+            // To save space, convert array and bitmap containers to run containers
+            bitmap.runOptimize();
+            std::string bitmap_data(bitmap.getSizeInBytes(), '\0');
+            bitmap.write(bitmap_data.data());
+            *(req.add_segment_delete_bitmaps()) = std::move(bitmap_data);
+        }
+    } else {
+        req.set_store_version(2);
+        LOG(INFO) << "update_delete_bitmap for tablet_id: " << tablet.tablet_id()
+                  << ", rowset_id: " << rowset_id
+                  << ", delete_bitmap size: " << delete_bitmap->delete_bitmap.size();
+        if (rowset_id.empty()) {
+            std::string pre_rowset_id = "";
+            DeleteBitmapPB delete_bitmap_pb;
+            for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
+                auto cur_rowset_id = std::get<0>(key).to_string();
+                if (cur_rowset_id != pre_rowset_id) {
+                    if (!pre_rowset_id.empty()) {
+                        RowsetDeleteBitmapPB rowset_delete_bitmap;
+                        rowset_delete_bitmap.set_rowset_id(pre_rowset_id);
+                        *(rowset_delete_bitmap.mutable_delete_bitmap()) =
+                                std::move(delete_bitmap_pb);
+                        *(req.add_rowset_delete_bitmaps()) = std::move(rowset_delete_bitmap);
+                    }
+                    cur_rowset_id = pre_rowset_id;
+                    DCHECK(delete_bitmap_pb.rowset_ids_size() == 0);
+                    DCHECK(delete_bitmap_pb.segment_ids_size() == 0);
+                    DCHECK(delete_bitmap_pb.versions_size() == 0);
+                    DCHECK(delete_bitmap_pb.segment_delete_bitmaps_size() == 0);
+                }
+                delete_bitmap_pb.add_rowset_ids(cur_rowset_id);
+                delete_bitmap_pb.add_segment_ids(std::get<1>(key));
+                delete_bitmap_pb.add_versions(std::get<2>(key));
+                // To save space, convert array and bitmap containers to run containers
+                bitmap.runOptimize();
+                std::string bitmap_data(bitmap.getSizeInBytes(), '\0');
+                bitmap.write(bitmap_data.data());
+                *(delete_bitmap_pb.add_segment_delete_bitmaps()) = std::move(bitmap_data);
+            }
+        } else {
+            DeleteBitmapPB delete_bitmap_pb;
+            for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
+                delete_bitmap_pb.add_rowset_ids(std::get<0>(key).to_string());
+                delete_bitmap_pb.add_segment_ids(std::get<1>(key));
+                delete_bitmap_pb.add_versions(std::get<2>(key));
+                // To save space, convert array and bitmap containers to run containers
+                bitmap.runOptimize();
+                std::string bitmap_data(bitmap.getSizeInBytes(), '\0');
+                bitmap.write(bitmap_data.data());
+                *(delete_bitmap_pb.add_segment_delete_bitmaps()) = std::move(bitmap_data);
+            }
+            RowsetDeleteBitmapPB rowset_delete_bitmap;
+            rowset_delete_bitmap.set_rowset_id(rowset_id);
+            *(rowset_delete_bitmap.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
+            *(req.add_rowset_delete_bitmaps()) = std::move(rowset_delete_bitmap);
+        }
     }
     DBUG_EXECUTE_IF("CloudMetaMgr::test_update_big_delete_bitmap", {
         LOG(INFO) << "test_update_big_delete_bitmap for tablet " << tablet.tablet_id();

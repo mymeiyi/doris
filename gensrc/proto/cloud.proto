@@ -1581,6 +1581,11 @@ enum MetaServiceCode {
     UNDEFINED_ERR = 1000000;
 }
 
+message RowsetDeleteBitmapPB {
+    optional string rowset_id = 1;
+    optional DeleteBitmapPB delete_bitmap = 2;
+}
+
 message UpdateDeleteBitmapRequest {
     optional string cloud_unique_id = 1; // For auth
     optional int64 table_id = 2;
@@ -1588,6 +1593,7 @@ message UpdateDeleteBitmapRequest {
     optional int64 tablet_id = 4;
     optional int64 lock_id = 5;
     optional int64 initiator = 6;
+    // 7-11: used for delete bitmap storage v1
     repeated string rowset_ids = 7;
     repeated uint32 segment_ids = 8;
     repeated int64 versions = 9;
@@ -1604,6 +1610,9 @@ message UpdateDeleteBitmapRequest {
     optional int64 pre_rowset_agg_end_version = 16;
     // when update delete_bitmap of pre rowsets, check the rowset exists
     repeated int64 pre_rowset_versions = 17;
+    // used for storage v2
+    optional int64 store_version = 18;
+    repeated RowsetDeleteBitmapPB rowset_delete_bitmaps = 19;
 }
 
 message UpdateDeleteBitmapResponse {
@@ -1620,6 +1629,7 @@ message GetDeleteBitmapRequest {
     optional int64 base_compaction_cnt = 7;
     optional int64 cumulative_compaction_cnt = 8;
     optional int64 cumulative_point = 9;
+    optional int64 store_version = 10;
 }
 
 message GetDeleteBitmapResponse {
@@ -1630,6 +1640,7 @@ message GetDeleteBitmapResponse {
     // Serialized roaring bitmaps indexed with {rowset_id, segment_id, version}
     repeated bytes segment_delete_bitmaps = 5;
     optional int64 tablet_id = 6;
+    repeated DeleteBitmapPB delete_bitmap = 7; // For storage v2
 }
 
 message RemoveDeleteBitmapRequest {
