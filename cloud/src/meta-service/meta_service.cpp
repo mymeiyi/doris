@@ -2741,7 +2741,7 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
             DeleteBitmapStoragePB delete_bitmap_storage;
             if (!val_buf.to_pb(&delete_bitmap_storage)) {
                 code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-                ss << "failed to parse DeleteBitmapStoragePB" << " for tablet=" << tablet_id
+                ss << "failed to parse DeleteBitmapStoragePB for tablet=" << tablet_id
                    << ", rowset=" << rowset_ids[i] << ", key=" << hex(key)
                    << ", value_size=" << val_buf.value().size();
                 msg = ss.str();

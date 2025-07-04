@@ -985,10 +985,11 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
 }
 
 Status CloudMetaMgr::sync_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
-                                               std::ranges::range auto&& rs_metas,
-                                               const TabletStatsPB& stats, const TabletIndexPB& idx,
-                                               DeleteBitmap* delete_bitmap, bool full_sync,
-                                               SyncRowsetStats* sync_stats) {
+                                                  std::ranges::range auto&& rs_metas,
+                                                  const TabletStatsPB& stats,
+                                                  const TabletIndexPB& idx,
+                                                  DeleteBitmap* delete_bitmap, bool full_sync,
+                                                  SyncRowsetStats* sync_stats) {
     // TODO support sync_tablet_delete_bitmap_by_cache, now sync from ms to check the correctness
     DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet->tablet_id());
     *delete_bitmap = *new_delete_bitmap;
@@ -1078,12 +1079,11 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t o
             return Status::Error<ErrorCode::INTERNAL_ERROR, false>(
                     "get delete bitmap data wrong, rowset_id={}"
                     "rowset_ids.size={},segment_ids.size={},vers.size={},delete_bitmaps.size={}",
-                    rowset_id, dbm.rowset_ids_size(), dbm.segment_ids_size(),
-                    dbm.versions_size(), dbm.segment_delete_bitmaps_size());
+                    rowset_id, dbm.rowset_ids_size(), dbm.segment_ids_size(), dbm.versions_size(),
+                    dbm.segment_delete_bitmaps_size());
         }
         LOG(INFO) << "get delete bitmap for tablet_id=" << tablet->tablet_id()
-                  << ", rowset_id=" << rowset_id
-                  << ", size=" << dbm.segment_delete_bitmaps_size();
+                  << ", rowset_id=" << rowset_id << ", size=" << dbm.segment_delete_bitmaps_size();
         for (int j = 0; j < dbm.rowset_ids_size(); j++) {
             RowsetId rst_id;
             rst_id.init(dbm.rowset_ids(j));
