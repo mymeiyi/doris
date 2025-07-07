@@ -2357,11 +2357,11 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         if (store_version == 2) {
             if (!request->delete_bitmap_storages(i).SerializeToString(&val_v2)) {
                 code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
-                msg = "failed to serialize rowset delete bitmap";
+                msg = "failed to serialize delete bitmap storage";
                 return;
             }
             LOG(INFO) << "put delete bitmap kv, tablet_id=" << tablet_id
-                      << " rowset_id=" << request->rowset_ids(i) << ", delete_bitmap num="
+                      << " rowset_id=" << request->rowset_ids(i) << ", delete bitmap num="
                       << request->delete_bitmap_storages(i).delete_bitmap().rowset_ids_size()
                       << ". key=" << hex(key) << ", value_size=" << val_v2.size();
         }
@@ -2576,9 +2576,9 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
 
     auto tablet_id = request->tablet_id();
     auto& rowset_ids = request->rowset_ids();
-    auto store_version = request->has_store_version() ? request->store_version() : 1;
     auto& begin_versions = request->begin_versions();
     auto& end_versions = request->end_versions();
+    auto store_version = request->has_store_version() ? request->store_version() : 1;
     if (store_version != 1 && store_version != 2) {
         code = MetaServiceCode::INVALID_ARGUMENT;
         msg = "delete bitmap store version must be 1 or 2";
@@ -2732,6 +2732,7 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
                           << ", rowset=" << rowset_ids[i] << ", not found";
                 continue;
             }
+            // TODO new a txn if TXN_TOO_OLD
             if (err != TxnErrorCode::TXN_OK) {
                 code = cast_as<ErrCategory::READ>(err);
                 ss << "failed to get delete bitmap, ret=" << err;
@@ -2752,6 +2753,8 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
             LOG(INFO) << "get delete bitmap for tablet=" << tablet_id
                       << ", rowset=" << rowset_ids[i] << ", delete_bitmap_num="
                       << delete_bitmap_storage.delete_bitmap().rowset_ids_size();
+            delete_bitmap_num += delete_bitmap_storage.delete_bitmap().rowset_ids_size();
+            delete_bitmap_byte += val_buf.value().size();
         }
     }
     LOG(INFO) << "finish get delete bitmap for tablet=" << tablet_id
