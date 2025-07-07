@@ -1447,7 +1447,7 @@ Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t loc
                 auto& bitmap = delete_bitmap->delete_bitmap.begin()->second;
                 auto cur_rowset_id = std::get<0>(key).to_string();
                 if (cur_rowset_id != pre_rowset_id) {
-                    if (!pre_rowset_id.empty()) {
+                    if (!pre_rowset_id.empty() && delete_bitmap_pb.rowset_ids_size() > 0) {
                         DeleteBitmapStoragePB delete_bitmap_storage;
                         delete_bitmap_storage.set_store_in_fdb(false);
                         *(delete_bitmap_storage.mutable_delete_bitmap()) =
@@ -1469,7 +1469,8 @@ Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t loc
                 std::string bitmap_data(bitmap.getSizeInBytes(), '\0');
                 bitmap.write(bitmap_data.data());
                 *(delete_bitmap_pb.add_segment_delete_bitmaps()) = std::move(bitmap_data);
-                if (i == delete_bitmap->delete_bitmap.size() - 1) {
+                if (i == delete_bitmap->delete_bitmap.size() - 1 &&
+                    delete_bitmap_pb.rowset_ids_size() > 0) {
                     DeleteBitmapStoragePB delete_bitmap_storage;
                     delete_bitmap_storage.set_store_in_fdb(false);
                     *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
@@ -1477,7 +1478,6 @@ Status CloudMetaMgr::update_delete_bitmap(const CloudTablet& tablet, int64_t loc
                     req.add_rowset_ids(cur_rowset_id);
                 }
             }
-            // TODO add last one
         } else {
             DeleteBitmapPB delete_bitmap_pb;
             for (auto& [key, bitmap] : delete_bitmap->delete_bitmap) {
