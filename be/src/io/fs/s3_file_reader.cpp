@@ -128,7 +128,7 @@ Status S3FileReader::read_at_impl(size_t offset, Slice result, size_t* bytes_rea
     const int max_wait_time = config::s3_read_max_wait_time_ms; // Maximum wait time in milliseconds
     const int max_retries = config::max_s3_client_retry; // wait 1s, 2s, 4s, 8s for each backoff
 
-    LIMIT_REMOTE_SCAN_IO(bytes_read);
+    // LIMIT_REMOTE_SCAN_IO(bytes_read);
 
     int total_sleep_time = 0;
     while (retry_count <= max_retries) {
