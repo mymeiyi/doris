@@ -134,11 +134,11 @@ private:
                                      std::ranges::range auto&& rs_metas, const TabletStatsPB& stats,
                                      const TabletIndexPB& idx, DeleteBitmap* delete_bitmap,
                                      bool full_sync = false, SyncRowsetStats* sync_stats = nullptr);
-    Status sync_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
-                                        std::ranges::range auto&& rs_metas,
-                                        const TabletStatsPB& stats, const TabletIndexPB& idx,
-                                        DeleteBitmap* delete_bitmap, bool full_sync = false,
-                                        SyncRowsetStats* sync_stats = nullptr);
+    Status sync_tablet_delete_bitmap_v2(
+            CloudTablet* tablet, int64_t old_max_version, std::ranges::range auto&& rs_metas,
+            const TabletStatsPB& stats, const TabletIndexPB& idx, DeleteBitmap* delete_bitmap,
+            bool full_sync, SyncRowsetStats* sync_stats,
+            std::vector<std::pair<RowsetId, int64_t>> all_rowset_ids = {}, bool all_sync = false);
     void check_table_size_correctness(const RowsetMeta& rs_meta);
     int64_t get_segment_file_size(const RowsetMeta& rs_meta);
     int64_t get_inverted_index_file_szie(const RowsetMeta& rs_meta);
