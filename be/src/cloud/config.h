@@ -110,6 +110,7 @@ DECLARE_mInt32(get_delete_bitmap_lock_max_retry_times);
 
 DECLARE_Int32(delete_bitmap_store_version);
 DECLARE_Int64(delete_bitmap_max_bytes_store_in_fdb);
+DECLARE_mBool(enable_delete_bitmap_store_v2_check_correctness);
 
 // enable large txn lazy commit in meta-service `commit_txn`
 DECLARE_mBool(enable_cloud_txn_lazy_commit);
