@@ -1887,7 +1887,8 @@ void BaseTablet::check_agg_delete_bitmap_for_stale_rowsets(int64_t& useless_rows
             }
             ss << "}. ";
         }
-        if (!useless_rowset_versions.empty()) {
+        if ((!config::is_cloud_mode() || config::delete_bitmap_store_version == 1) &&
+            !useless_rowset_versions.empty()) {
             ss << "useless rowset versions: {";
             for (auto iter = useless_rowset_versions.begin(); iter != useless_rowset_versions.end();
                  ++iter) {
