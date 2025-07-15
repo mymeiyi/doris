@@ -738,7 +738,7 @@ Status CloudMetaMgr::sync_tablet_rowsets_unlocked(CloudTablet* tablet,
                             std::max(old_max_version, resp.rowset_meta().rbegin()->end_version());
                     for (auto& [rs_id, num_segments] : all_rowsets) {
                         for (int i = 0; i < num_segments; i++) {
-                            DeleteBitmap::BitmapKey key = {rs_id, i, new_max_version + 1};
+                            DeleteBitmap::BitmapKey key = {rs_id, i, new_max_version};
                             auto dm1 = tablet->tablet_meta()->delete_bitmap().get_agg(key);
                             auto dm2 = full_delete_bitmap.get_agg_without_cache(key);
                             if (*dm1 != *dm2) {
@@ -1057,8 +1057,6 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap_v2(
         bool full_sync, SyncRowsetStats* sync_stats,
         std::vector<std::pair<RowsetId, int64_t>> all_rowset_ids, bool all_sync) {
     // TODO support sync_tablet_delete_bitmap_by_cache, now sync from ms to check the correctness
-    DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet->tablet_id());
-    *delete_bitmap = *new_delete_bitmap;
 
     GetDeleteBitmapRequest req;
     GetDeleteBitmapResponse res;
@@ -1066,8 +1064,8 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap_v2(
     req.set_tablet_id(tablet->tablet_id());
     req.set_store_version(2);
     if (all_sync) {
-        for (auto rowset_id : all_rowset_ids) {
-            req.add_rowset_ids(rowset_id.first.to_string());
+        for (auto& [rowset_id, _] : all_rowset_ids) {
+            req.add_rowset_ids(rowset_id.to_string());
         }
     } else {
         req.set_base_compaction_cnt(stats.base_compaction_cnt());
@@ -1204,15 +1202,17 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap_v2(
         DeleteBitmapPB dbm;
         RETURN_IF_ERROR(reader.read(dbm));
         RETURN_IF_ERROR(reader.close());
-        RETURN_IF_ERROR(merge_delete_bitmap(rowset_id, dbm));
-        return Status::OK();
+        return merge_delete_bitmap(rowset_id, dbm);
     };
     CloudStorageEngine& engine = ExecEnv::GetInstance()->storage_engine().to_cloud();
     std::unique_ptr<ThreadPoolToken> token = engine.sync_delete_bitmap_thread_pool().new_token(
             ThreadPool::ExecutionMode::CONCURRENT);
     for (int i = 0; i < rowset_ids.size(); i++) {
         auto& rowset_id = rowset_ids[i];
-        if (!delete_bitmap_storages[i].store_in_fdb()) {
+        if (delete_bitmap_storages[i].store_in_fdb()) {
+            DeleteBitmapPB dbm = delete_bitmap_storages[i].delete_bitmap();
+            RETURN_IF_ERROR(merge_delete_bitmap(rowset_id, dbm));
+        } else {
             auto submit_st = token->submit_func([&]() {
                 auto status = get_delete_bitmap_from_file(rowset_id);
                 if (!status.ok()) {
@@ -1226,10 +1226,6 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap_v2(
                 }
             });
             RETURN_IF_ERROR(submit_st);
-            RETURN_IF_ERROR(st);
-        } else {
-            DeleteBitmapPB dbm = delete_bitmap_storages[i].delete_bitmap();
-            RETURN_IF_ERROR(merge_delete_bitmap(rowset_id, dbm));
         }
     }
     // wait for all finished
