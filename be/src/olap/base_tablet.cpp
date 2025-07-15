@@ -1875,7 +1875,9 @@ void BaseTablet::check_agg_delete_bitmap_for_stale_rowsets(int64_t& useless_rows
     }
     useless_rowset_count = useless_rowsets.size();
     useless_rowset_version_count = useless_rowset_versions.size();
-    if (!useless_rowsets.empty() || !useless_rowset_versions.empty()) {
+    if (!useless_rowsets.empty() ||
+        ((!config::is_cloud_mode() || config::delete_bitmap_store_version == 1) &&
+         !useless_rowset_versions.empty())) {
         std::stringstream ss;
         if (!useless_rowsets.empty()) {
             ss << "useless rowsets: {";
