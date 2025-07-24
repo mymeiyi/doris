@@ -1741,6 +1741,13 @@ int InstanceRecycler::delete_rowset_data(
     bool is_formal_rowset = (type == RowsetRecyclingState::FORMAL_ROWSET);
 
     for (const auto& [_, rs] : rowsets) {
+        // Recycle the versioned delete_bitmap keys
+        auto delete_bitmap_key =
+                versioned::meta_delete_bitmap_key({instance_id, tablet_id, rs.rowset_id_v2()});
+        std::string end_key = delete_bitmap_key;
+        encode_int64(INT64_MAX, &end_key);
+        txn->remove(delete_bitmap_key, end_key);
+
         // we have to treat tmp rowset as "orphans" that may not related to any existing tablets
         // due to aborted schema change.
         if (is_formal_rowset) {

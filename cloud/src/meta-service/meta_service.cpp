@@ -66,6 +66,7 @@
 #include "meta-store/keys.h"
 #include "meta-store/txn_kv.h"
 #include "meta-store/txn_kv_error.h"
+#include "meta-store/versioned_value.h"
 #include "rate-limiter/rate_limiter.h"
 
 using namespace std::chrono;
@@ -2288,8 +2289,9 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
                                            request->versions(i), request->segment_ids(i)};
             meta_delete_bitmap_key(key_info, &key);
         } else {
-            MetaDeleteBitmapInfoV2 key_info {instance_id, tablet_id, request->v2_rowset_ids(i)};
-            meta_delete_bitmap_key_v2(key_info, &key);
+            versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_id,
+                                                      request->v2_rowset_ids(i)};
+            versioned::meta_delete_bitmap_key(key_info, &key);
         }
         delete_bitmap_keys.add_delete_bitmap_keys(key);
     }
@@ -2737,8 +2739,8 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
                       << ", delete_bitmap_byte=" << delete_bitmap_byte;
         } else {
             std::string key;
-            MetaDeleteBitmapInfoV2 key_info {instance_id, tablet_id, rowset_ids[i]};
-            meta_delete_bitmap_key_v2(key_info, &key);
+            versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_id, rowset_ids[i]};
+            versioned::meta_delete_bitmap_key(key_info, &key);
             ValueBuf val_buf;
             err = cloud::blob_get(txn.get(), key, &val_buf);
             // TODO retry for TXN_TOO_OLD
