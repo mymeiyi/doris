@@ -6967,6 +6967,7 @@ TEST(MetaServiceTest, GetDeleteBitmapWithRetryTest2) {
     auto meta_service = get_meta_service();
     SyncPoint::get_instance()->enable_processing();
     size_t index = 0;
+    int store_version = 1;
     SyncPoint::get_instance()->set_call_back("get_delete_bitmap_test", [&](auto&& args) {
         auto* test = try_any_cast<bool*>(args[0]);
         *test = true;
@@ -6976,6 +6977,9 @@ TEST(MetaServiceTest, GetDeleteBitmapWithRetryTest2) {
         auto* round = try_any_cast<int64_t*>(args[0]);
         LOG(INFO) << "GET_DELETE_BITMAP_CODE,index=" << index << ",round=" << *round;
         if (*round > 2 && ++index < 2) {
+            *try_any_cast<TxnErrorCode*>(args[1]) = TxnErrorCode::TXN_TOO_OLD;
+        }
+        if (store_version == 2 && *round < 3) {
             *try_any_cast<TxnErrorCode*>(args[1]) = TxnErrorCode::TXN_TOO_OLD;
         }
     });
@@ -7010,40 +7014,87 @@ TEST(MetaServiceTest, GetDeleteBitmapWithRetryTest2) {
         segment_delete_bitmaps[i] = generate_random_string(300 * 1000 * 3);
     }
     int count = 5;
+    DeleteBitmapPB delete_bitmap;
     for (int i = 0; i < count; i++) {
         update_delete_bitmap_req.add_rowset_ids(rowset_id);
         update_delete_bitmap_req.add_segment_ids(i);
         update_delete_bitmap_req.add_versions(i + 1);
         update_delete_bitmap_req.add_segment_delete_bitmaps(segment_delete_bitmaps[i]);
+
+        delete_bitmap.add_rowset_ids(rowset_id);
+        delete_bitmap.add_segment_ids(i);
+        delete_bitmap.add_versions(i + 1);
+        delete_bitmap.add_segment_delete_bitmaps(segment_delete_bitmaps[i]);
     }
+    // v2 update delete bitmap
+    DeleteBitmapStoragePB delete_bitmap_storage_pb;
+    delete_bitmap_storage_pb.set_store_in_fdb(true);
+    *(delete_bitmap_storage_pb.mutable_delete_bitmap()) = std::move(delete_bitmap);
+    *(update_delete_bitmap_req.add_delete_bitmap_storages()) = std::move(delete_bitmap_storage_pb);
+    update_delete_bitmap_req.add_v2_rowset_ids(rowset_id);
     meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                        &update_delete_bitmap_req, &update_delete_bitmap_res,
                                        nullptr);
     ASSERT_EQ(update_delete_bitmap_res.status().code(), MetaServiceCode::OK);
 
-    GetDeleteBitmapRequest get_delete_bitmap_req;
-    GetDeleteBitmapResponse get_delete_bitmap_res;
-    get_delete_bitmap_req.set_cloud_unique_id("test_cloud_unique_id");
-    get_delete_bitmap_req.set_tablet_id(333);
+    // v1 get delete bitmap
+    {
+        GetDeleteBitmapRequest get_delete_bitmap_req;
+        GetDeleteBitmapResponse get_delete_bitmap_res;
+        get_delete_bitmap_req.set_cloud_unique_id("test_cloud_unique_id");
+        get_delete_bitmap_req.set_tablet_id(333);
 
-    get_delete_bitmap_req.add_rowset_ids(rowset_id);
-    get_delete_bitmap_req.add_begin_versions(1);
-    get_delete_bitmap_req.add_end_versions(count);
+        get_delete_bitmap_req.add_rowset_ids(rowset_id);
+        get_delete_bitmap_req.add_begin_versions(1);
+        get_delete_bitmap_req.add_end_versions(count);
 
-    meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
-                                    &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
-    ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
-    ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), count);
-    ASSERT_EQ(get_delete_bitmap_res.segment_ids_size(), count);
-    ASSERT_EQ(get_delete_bitmap_res.versions_size(), count);
-    ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), count);
+        meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
+                                        &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
+        ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
+        ASSERT_EQ(get_delete_bitmap_res.rowset_ids_size(), count);
+        ASSERT_EQ(get_delete_bitmap_res.segment_ids_size(), count);
+        ASSERT_EQ(get_delete_bitmap_res.versions_size(), count);
+        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps_size(), count);
 
-    for (int i = 0; i < count; i++) {
-        ASSERT_EQ(get_delete_bitmap_res.rowset_ids(i), rowset_id);
-        ASSERT_EQ(get_delete_bitmap_res.segment_ids(i), i);
-        ASSERT_EQ(get_delete_bitmap_res.versions(i), i + 1);
-        ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps(i), segment_delete_bitmaps[i]);
+        for (int i = 0; i < count; i++) {
+            ASSERT_EQ(get_delete_bitmap_res.rowset_ids(i), rowset_id);
+            ASSERT_EQ(get_delete_bitmap_res.segment_ids(i), i);
+            ASSERT_EQ(get_delete_bitmap_res.versions(i), i + 1);
+            ASSERT_EQ(get_delete_bitmap_res.segment_delete_bitmaps(i), segment_delete_bitmaps[i]);
+        }
     }
+
+    // v2 get delete bitmap
+    {
+        store_version = 2;
+        GetDeleteBitmapRequest get_delete_bitmap_req;
+        GetDeleteBitmapResponse get_delete_bitmap_res;
+        get_delete_bitmap_req.set_cloud_unique_id("test_cloud_unique_id");
+        get_delete_bitmap_req.set_tablet_id(333);
+        // add a rowset which does not exist
+        get_delete_bitmap_req.add_rowset_ids(rowset_id + "_non");
+        get_delete_bitmap_req.add_rowset_ids(rowset_id);
+        get_delete_bitmap_req.set_store_version(2);
+        meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
+                                        &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
+        ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::OK);
+        ASSERT_EQ(get_delete_bitmap_res.delete_bitmap_storages_size(), 1);
+        auto& delete_bitmap_storage = get_delete_bitmap_res.delete_bitmap_storages(0);
+        ASSERT_TRUE(delete_bitmap_storage.store_in_fdb());
+        auto& delete_bitmap_pb = delete_bitmap_storage.delete_bitmap();
+        ASSERT_EQ(delete_bitmap_pb.rowset_ids_size(), count);
+        ASSERT_EQ(delete_bitmap_pb.segment_ids_size(), count);
+        ASSERT_EQ(delete_bitmap_pb.versions_size(), count);
+        ASSERT_EQ(delete_bitmap_pb.segment_delete_bitmaps_size(), count);
+
+        for (int i = 0; i < count; i++) {
+            ASSERT_EQ(delete_bitmap_pb.rowset_ids(i), rowset_id);
+            ASSERT_EQ(delete_bitmap_pb.segment_ids(i), i);
+            ASSERT_EQ(delete_bitmap_pb.versions(i), i + 1);
+            ASSERT_EQ(delete_bitmap_pb.segment_delete_bitmaps(i), segment_delete_bitmaps[i]);
+        }
+    }
+
     SyncPoint::get_instance()->disable_processing();
     SyncPoint::get_instance()->clear_all_call_backs();
 }
