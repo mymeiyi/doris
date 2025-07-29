@@ -301,6 +301,12 @@ TEST(TabletMetaTest, TestDeleteBitmap) {
     }
 
     {
+        /*for(auto& [k, v] : dbmp) {
+            std::cout << "rowset=" << k << std::endl;
+        }*/
+    }
+
+    {
         auto old_size = dbmp->delete_bitmap.size();
         // test merge
         DeleteBitmap other(10086);
