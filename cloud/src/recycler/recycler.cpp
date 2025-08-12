@@ -2435,8 +2435,8 @@ int InstanceRecycler::recycle_tablet(int64_t tablet_id, RecyclerMetricsContext& 
     std::string dbm_start_key = versioned::meta_delete_bitmap_key({instance_id_, tablet_id, ""});
     std::string dbm_end_key = versioned::meta_delete_bitmap_key({instance_id_, tablet_id + 1, ""});
     txn->remove(dbm_start_key, dbm_end_key);
-    LOG(INFO) << "remove delete bitmap kv, tablet=" << tablet_id
-              << ", begin=" << hex(dbm_start_key) << " end=" << hex(dbm_end_key);
+    LOG(INFO) << "remove delete bitmap kv, tablet=" << tablet_id << ", begin=" << hex(dbm_start_key)
+              << " end=" << hex(dbm_end_key);
 
     TxnErrorCode err = txn->commit();
     if (err != TxnErrorCode::TXN_OK) {
@@ -2645,8 +2645,8 @@ int InstanceRecycler::recycle_versioned_tablet(int64_t tablet_id,
     std::string dbm_start_key = versioned::meta_delete_bitmap_key({instance_id_, tablet_id, ""});
     std::string dbm_end_key = versioned::meta_delete_bitmap_key({instance_id_, tablet_id + 1, ""});
     txn->remove(dbm_start_key, dbm_end_key);
-    LOG(INFO) << "remove delete bitmap kv, tablet=" << tablet_id
-              << ", begin=" << hex(dbm_start_key) << " end=" << hex(dbm_end_key);
+    LOG(INFO) << "remove delete bitmap kv, tablet=" << tablet_id << ", begin=" << hex(dbm_start_key)
+              << " end=" << hex(dbm_end_key);
 
     std::string versioned_idx_key = versioned::tablet_index_key({instance_id_, tablet_id});
     std::string tablet_index_val;
