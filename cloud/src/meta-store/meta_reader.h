@@ -170,6 +170,16 @@ public:
         return get_tablet_compact_stats(txn, tablet_id, tablet_stats, versionstamp, snapshot_);
     }
 
+    TxnErrorCode get_tablet_compact_statss(Transaction* txn, const std::vector<int64_t>& tablet_ids,
+                                           std::unordered_map<int64_t, TabletStatsPB>* tablet_stats,
+                                           std::unordered_map<int64_t, Versionstamp>* versionstamps,
+                                           bool snapshot);
+    TxnErrorCode get_tablet_compact_statss(Transaction* txn, const std::vector<int64_t>& tablet_ids,
+                                           std::unordered_map<int64_t, TabletStatsPB>* tablet_stats,
+                                           std::unordered_map<int64_t, Versionstamp>* versionstamps) {
+        return get_tablet_compact_statss(txn, tablet_ids, tablet_stats, versionstamps, snapshot_);
+    }
+
     // Get the merged (load, compact) tablet stats for the given tablet.
     //
     // The `tablet_stats` will be filled with the merged TabletStatsPB.
@@ -265,6 +275,16 @@ public:
     TxnErrorCode get_tablet_meta(Transaction* txn, int64_t tablet_id,
                                  TabletMetaCloudPB* tablet_meta, Versionstamp* versionstamp) {
         return get_tablet_meta(txn, tablet_id, tablet_meta, versionstamp, snapshot_);
+    }
+
+    TxnErrorCode get_tablet_metas(Transaction* txn, const std::vector<int64_t>& tablet_ids,
+                                  std::unordered_map<int64_t, TabletMetaCloudPB>* tablet_metas,
+                                  std::unordered_map<int64_t, Versionstamp>* versionstamps,
+                                  bool snapshot);
+    TxnErrorCode get_tablet_metes(Transaction* txn, const std::vector<int64_t>& tablet_ids,
+                                  std::unordered_map<int64_t, TabletMetaCloudPB>* tablet_metas,
+                                  std::unordered_map<int64_t, Versionstamp>* versionstamps) {
+        return get_tablet_metas(txn, tablet_ids, tablet_metas, versionstamps, snapshot_);
     }
 
     // Gets the first pending transaction ID from the partition version.
