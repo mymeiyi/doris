@@ -2119,7 +2119,6 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
             sub_txn_to_tmp_rowsets_meta;
     for (const auto& sub_txn_info : sub_txn_infos) {
         auto sub_txn_id = sub_txn_info.sub_txn_id();
-        LOG(INFO) << "sout: scan sub txn rowset, txn_id=" << sub_txn_id;
         std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>> tmp_rowsets_meta;
         scan_tmp_rowset(instance_id, sub_txn_id, txn_kv_, code, msg, &tmp_rowsets_meta, &stats);
         if (code != MetaServiceCode::OK) {
@@ -2130,9 +2129,7 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
         sub_txn_to_tmp_rowsets_meta.emplace(sub_txn_id, std::move(tmp_rowsets_meta));
     }
     do {
-        LOG(INFO) << "sout: before begin";
         TEST_SYNC_POINT_CALLBACK("commit_txn_with_sub_txn:begin", &txn_id);
-        LOG(INFO) << "sout: after begin";
         std::unique_ptr<Transaction> txn;
         TxnErrorCode err = txn_kv_->create_txn(&txn);
         if (err != TxnErrorCode::TXN_OK) {
@@ -2261,15 +2258,12 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
             }
         }
 
-        LOG(INFO) << "sout: last pending is " << last_pending_txn_id;
         if (last_pending_txn_id > 0) {
             stats.get_bytes += txn->get_bytes();
             stats.get_counter += txn->num_get_keys();
             txn.reset();
-            LOG(INFO) << "sout: before pending";
             TEST_SYNC_POINT_CALLBACK("commit_txn_with_sub_txn::advance_last_pending_txn_id",
                                      &last_pending_txn_id);
-            LOG(INFO) << "sout: after pending";
             std::shared_ptr<TxnLazyCommitTask> task =
                     txn_lazy_committer_->submit(instance_id, last_pending_txn_id);
 
@@ -2541,9 +2535,7 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
                   << " num_del_keys=" << txn->num_del_keys()
                   << " txn_size=" << txn->approximate_bytes() << " txn_id=" << txn_id;
 
-        LOG(INFO) << "sout: before commit";
         TEST_SYNC_POINT_RETURN_WITH_VOID("commit_txn_with_sub_txn::before_commit", &err, &code);
-        LOG(INFO) << "sout: after commit";
         err = txn->commit();
         if (err != TxnErrorCode::TXN_OK) {
             if (err == TxnErrorCode::TXN_CONFLICT) {
@@ -2572,9 +2564,7 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
         }
 
         response->mutable_txn_info()->CopyFrom(txn_info);
-        LOG(INFO) << "sout: before finish";
         TEST_SYNC_POINT_CALLBACK("commit_txn_with_sub_txn::finish", &code);
-        LOG(INFO) << "sout: after finish";
         break;
     } while (true);
 } // end commit_txn_with_sub_txn

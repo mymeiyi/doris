@@ -1991,10 +1991,7 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
         if (commit_txn_immediately_begin_count == 1) {
             {
                 first_txn_id = *try_any_cast<int64_t*>(args[0]);
-                LOG(INFO) << "sout: before wait first txn id=" << first_txn_id
-                          << ", txn_lazy_committer_wait_count=" << txn_lazy_committer_wait_count;
                 go_cv.wait(_lock, [&] { return txn_lazy_committer_wait_count == 1; });
-                LOG(INFO) << "sout: after wait first txn id=" << first_txn_id;
             }
         }
     });
@@ -2048,12 +2045,10 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
 
     int64_t txn_id1 = 0;
     std::thread thread1([&] {
-        LOG(INFO) << "sout: t1 1";
         {
             std::unique_lock<std::mutex> _lock(go_mutex);
             go_cv.wait(_lock, [&] { return go; });
         }
-        LOG(INFO) << "sout: t1 2";
         {
             brpc::Controller cntl;
             BeginTxnRequest req;
@@ -2071,7 +2066,6 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
             txn_id1 = res.txn_id();
             ASSERT_GT(txn_id1, 0);
         }
-        LOG(INFO) << "sout: t1 3";
         {
             for (int i = 0; i < 10; ++i) {
                 auto tmp_rowset =
@@ -2081,7 +2075,6 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
                 ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
             }
         }
-        LOG(INFO) << "sout: t1 4";
 
         {
             brpc::Controller cntl;
@@ -2096,17 +2089,14 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
                                      &req, &res, nullptr);
             ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
         }
-        LOG(INFO) << "sout: t1 5, finish";
     });
 
     int64_t txn_id2 = 0;
     std::thread thread2([&] {
-        LOG(INFO) << "sout: t2 1";
         {
             std::unique_lock<std::mutex> _lock(go_mutex);
             go_cv.wait(_lock, [&] { return go; });
         }
-        LOG(INFO) << "sout: t2 2";
         {
             brpc::Controller cntl;
             BeginTxnRequest req;
@@ -2124,7 +2114,6 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
             txn_id2 = res.txn_id();
             ASSERT_GT(txn_id2, 0);
         }
-        LOG(INFO) << "sout: t2 3";
         {
             for (int i = 0; i < 10; ++i) {
                 auto tmp_rowset =
@@ -2135,7 +2124,6 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
             }
         }
         int64_t sub_txn_id1 = txn_id2;
-        LOG(INFO) << "sout: t2 4";
 
         // begin sub_txn1
         int64_t sub_txn_id2 = -1;
@@ -2159,7 +2147,6 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
             sub_txn_id2 = res.sub_txn_id();
             ASSERT_EQ(sub_txn_id2, res.txn_info().sub_txn_ids()[0]);
         }
-        LOG(INFO) << "sout: t2 5";
         {
             for (int i = 0; i < 10; ++i) {
                 auto tmp_rowset =
@@ -2169,7 +2156,6 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
                 ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
             }
         }
-        LOG(INFO) << "sout: t2 6";
 
         {
             brpc::Controller cntl;
@@ -2200,7 +2186,6 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
                                      &req, &res, nullptr);
             ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
         }
-        LOG(INFO) << "sout: t2 7, finish";
     });
 
     std::unique_lock<std::mutex> go_lock(go_mutex);
@@ -2208,11 +2193,8 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase5Test) {
     go_lock.unlock();
     go_cv.notify_all();
 
-    LOG(INFO) << "sout: before join t1";
     thread1.join();
-    LOG(INFO) << "sout: before join t2";
     thread2.join();
-    LOG(INFO) << "sout: after join t2";
 
     sp->clear_all_call_backs();
     sp->clear_trace();
