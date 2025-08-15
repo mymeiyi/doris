@@ -2119,6 +2119,7 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
             sub_txn_to_tmp_rowsets_meta;
     for (const auto& sub_txn_info : sub_txn_infos) {
         auto sub_txn_id = sub_txn_info.sub_txn_id();
+        LOG(INFO) << "sout: scan sub txn rowset, txn_id=" << sub_txn_id;
         std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>> tmp_rowsets_meta;
         scan_tmp_rowset(instance_id, sub_txn_id, txn_kv_, code, msg, &tmp_rowsets_meta, &stats);
         if (code != MetaServiceCode::OK) {
