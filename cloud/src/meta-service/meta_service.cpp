@@ -713,6 +713,13 @@ void internal_create_tablet(const CreateTabletsRequest* request, MetaServiceCode
                         meta_schema_key({instance_id, index_id, tablet_meta.schema_version()});
                 put_schema_kv(code, msg, txn.get(), schema_key, tablet_meta.schema());
                 if (code != MetaServiceCode::OK) return;
+                if (is_versioned_write) {
+                    auto versioned_schema_key = versioned::meta_schema_key(
+                            {instance_id, index_id, tablet_meta.schema_version()});
+                    put_versioned_schema_kv(code, msg, txn.get(), versioned_schema_key,
+                                            tablet_meta.schema());
+                    if (code != MetaServiceCode::OK) return;
+                }
             }
             tablet_meta.set_allocated_schema(nullptr);
         } else {
@@ -1773,6 +1780,15 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
                     {instance_id, tablet_meta->index_id(), tablet_meta->schema_version()});
             put_schema_kv(code, msg, txn0.get(), schema_key, tablet_meta->schema());
             if (code != MetaServiceCode::OK) return;
+
+            bool is_versioned_write = is_version_write_enabled(instance_id);
+            if (is_versioned_write) {
+                auto versioned_schema_key = versioned::meta_schema_key(
+                        {instance_id, tablet_meta->index_id(), tablet_meta->schema_version()});
+                put_versioned_schema_kv(code, msg, txn0.get(), versioned_schema_key,
+                                        tablet_meta->schema());
+                if (code != MetaServiceCode::OK) return;
+            }
             tablet_meta->set_allocated_schema(nullptr);
         } else {
             fix_column_type(tablet_meta->mutable_schema());
