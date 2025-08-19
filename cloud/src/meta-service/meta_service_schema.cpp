@@ -140,10 +140,8 @@ void put_versioned_schema_kv(MetaServiceCode& code, std::string& msg, Transactio
     TxnErrorCode err = versioned::document_get(txn, schema_key, &saved_schema, nullptr);
     if (err == TxnErrorCode::TXN_OK) { // schema has already been saved
         TEST_SYNC_POINT_RETURN_WITH_VOID("put_schema_kv:schema_key_exists_return");
-        DCHECK([&] {
-            return check_tablet_schema(schema, saved_schema);
-        }()) << hex(schema_key)
-             << "\n to_save: " << schema.ShortDebugString();
+        DCHECK([&] { return check_tablet_schema(schema, saved_schema); }())
+                << hex(schema_key) << "\n to_save: " << schema.ShortDebugString();
         return;
     } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
         msg = fmt::format("failed to check that key exists, err={}", err);

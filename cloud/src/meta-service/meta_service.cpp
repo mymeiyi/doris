@@ -1658,7 +1658,8 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
                 if (is_versioned_write) {
                     std::string versioned_schema_key = versioned::meta_schema_key(
                         {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
-                    put_versioned_schema_kv(code, msg, txn.get(), versioned_schema_key, rowset_meta.tablet_schema());
+                    put_versioned_schema_kv(code, msg, txn.get(), versioned_schema_key,
+                                            rowset_meta.tablet_schema());
                     if (code != MetaServiceCode::OK) return;
                 }
                 rowset_meta.set_allocated_tablet_schema(nullptr);
@@ -2469,7 +2470,8 @@ void MetaServiceImpl::commit_rowset(::google::protobuf::RpcController* controlle
         if (is_versioned_write) {
             std::string versioned_schema_key = versioned::meta_schema_key(
                 {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
-            put_versioned_schema_kv(code, msg, txn.get(), versioned_schema_key, rowset_meta.tablet_schema());
+            put_versioned_schema_kv(code, msg, txn.get(), versioned_schema_key,
+                                    rowset_meta.tablet_schema());
             if (code != MetaServiceCode::OK) return;
         }
         rowset_meta.set_allocated_tablet_schema(nullptr);
