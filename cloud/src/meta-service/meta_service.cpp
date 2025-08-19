@@ -1643,14 +1643,14 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
             if (config::write_schema_kv && rowset_meta.has_tablet_schema()) {
                 rowset_meta.set_index_id(tablet_idx.index_id());
                 rowset_meta.set_schema_version(rowset_meta.tablet_schema().schema_version());
-                std::string schema_key = meta_schema_key(
-                        {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
                 if (rowset_meta.has_variant_type_in_schema()) {
                     write_schema_dict(code, msg, instance_id, txn.get(), &rowset_meta);
                     if (code != MetaServiceCode::OK) {
                         return;
                     }
                 }
+                std::string schema_key = meta_schema_key(
+                        {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
                 put_schema_kv(code, msg, txn.get(), schema_key, rowset_meta.tablet_schema());
                 if (code != MetaServiceCode::OK) {
                     return;
@@ -2462,11 +2462,12 @@ void MetaServiceImpl::commit_rowset(::google::protobuf::RpcController* controlle
             write_schema_dict(code, msg, instance_id, txn.get(), &rowset_meta);
             if (code != MetaServiceCode::OK) return;
         }
-        bool is_versioned_write = is_version_write_enabled(instance_id);
         std::string schema_key = meta_schema_key(
                 {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
         put_schema_kv(code, msg, txn.get(), schema_key, rowset_meta.tablet_schema());
         if (code != MetaServiceCode::OK) return;
+
+        bool is_versioned_write = is_version_write_enabled(instance_id);
         if (is_versioned_write) {
             std::string versioned_schema_key = versioned::meta_schema_key(
                     {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});

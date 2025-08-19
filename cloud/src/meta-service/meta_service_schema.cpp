@@ -150,7 +150,6 @@ void put_versioned_schema_kv(MetaServiceCode& code, std::string& msg, Transactio
     }
     LOG_INFO("put versioned schema kv").tag("key", hex(schema_key));
     doris::TabletSchemaCloudPB tablet_schema(schema);
-    // TODO config::meta_schema_value_version does not need any more
     if (!versioned::document_put(txn, schema_key, std::move(tablet_schema))) {
         code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
         msg = fmt::format("failed to serialize versioned tablet schema, key={}", hex(schema_key));
