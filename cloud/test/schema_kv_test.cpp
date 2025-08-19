@@ -279,8 +279,6 @@ TEST(DetachSchemaKVTest, PutSchemaKvTest) {
 
     int64_t index_id = 14221;
     int64_t schema_version = 0;
-    std::string key = meta_schema_key({instance_id, index_id, schema_version});
-    std::string versioned_key = versioned::meta_schema_key({instance_id, index_id, schema_version});
     doris::TabletSchemaCloudPB schema;
     fill_schema(&schema, schema_version);
 
@@ -288,7 +286,11 @@ TEST(DetachSchemaKVTest, PutSchemaKvTest) {
     MetaServiceCode code;
     std::string msg;
     Versionstamp commit_versionstamp;
+
     for (int i = 0; i < 2; ++i) {
+        auto key = meta_schema_key({instance_id, index_id, schema_version});
+        auto versioned_key = versioned::meta_schema_key({instance_id, index_id, schema_version});
+
         ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
         put_schema_kv(code, msg, txn.get(), key, schema);
         ASSERT_EQ(code, MetaServiceCode::OK);
@@ -318,8 +320,8 @@ TEST(DetachSchemaKVTest, PutSchemaKvTest) {
         // put new schema version
         schema_version = 1;
         schema.set_schema_version(schema_version);
-        key = meta_schema_key({instance_id, index_id, schema_version});
-        versioned_key = versioned::meta_schema_key({instance_id, index_id, schema_version});
+        auto key = meta_schema_key({instance_id, index_id, schema_version});
+        auto versioned_key = versioned::meta_schema_key({instance_id, index_id, schema_version});
 
         ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
         put_schema_kv(code, msg, txn.get(), key, schema);
