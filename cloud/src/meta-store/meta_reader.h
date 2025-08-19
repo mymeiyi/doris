@@ -164,6 +164,23 @@ public:
                                  TabletMetaCloudPB* tablet_meta, Versionstamp* versionstamp,
                                  bool snapshot = false);
 
+    // Get the tablet schema keys.
+    TxnErrorCode get_tablet_schema(int64_t index_id, int64_t schema_version,
+                                   TabletSchemaCloudPB* tablet_schema, Versionstamp* versionstamp,
+                                   bool snapshot);
+    TxnErrorCode get_tablet_schema(Transaction* txn, int64_t index_id, int64_t schema_version,
+                                   TabletSchemaCloudPB* tablet_schema, Versionstamp* versionstamp,
+                                   bool snapshot);
+    TxnErrorCode get_tablet_schema(int64_t index_id, int64_t schema_version,
+                                   TabletSchemaCloudPB* tablet_schema, Versionstamp* versionstamp) {
+        return get_tablet_schema(index_id, schema_version, tablet_schema, versionstamp, snapshot_);
+    }
+    TxnErrorCode get_tablet_schema(Transaction* txn, int64_t index_id, int64_t schema_version,
+                                   TabletSchemaCloudPB* tablet_schema, Versionstamp* versionstamp) {
+        return get_tablet_schema(txn, index_id, schema_version, tablet_schema, versionstamp,
+                                 snapshot_);
+    }
+
     // Gets the first pending transaction ID from the partition version.
     //
     // The first pending txn id is stored in `first_txn_id`. Sets -1 if no pending transactions exist.
