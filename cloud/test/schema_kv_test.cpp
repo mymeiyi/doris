@@ -284,12 +284,11 @@ TEST(DetachSchemaKVTest, PutSchemaKvTest) {
     doris::TabletSchemaCloudPB schema;
     fill_schema(&schema, schema_version);
 
+    std::unique_ptr<Transaction> txn;
+    MetaServiceCode code;
+    std::string msg;
     Versionstamp commit_versionstamp;
     for (int i = 0; i < 2; ++i) {
-        std::cout << i << std::endl;
-        std::unique_ptr<Transaction> txn;
-        MetaServiceCode code;
-        std::string msg;
         ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
         put_schema_kv(code, msg, txn.get(), key, schema);
         ASSERT_EQ(code, MetaServiceCode::OK);
@@ -308,10 +307,38 @@ TEST(DetachSchemaKVTest, PutSchemaKvTest) {
         ASSERT_EQ(versioned::document_get(txn.get(), versioned_key, &saved_schema, &versionstamp),
                   TxnErrorCode::TXN_OK);
         if (i == 0) {
-            commit_versionstamp= versionstamp;
+            commit_versionstamp = versionstamp;
         } else {
             ASSERT_EQ(versionstamp, commit_versionstamp);
         }
+        EXPECT_EQ(saved_schema.schema_version(), schema_version);
+    }
+
+    {
+        // put new schema version
+        schema_version = 1;
+        schema.set_schema_version(schema_version);
+        key = meta_schema_key({instance_id, index_id, schema_version});
+        versioned_key = versioned::meta_schema_key({instance_id, index_id, schema_version});
+
+        ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+        put_schema_kv(code, msg, txn.get(), key, schema);
+        ASSERT_EQ(code, MetaServiceCode::OK);
+        put_versioned_schema_kv(code, msg, txn.get(), versioned_key, schema);
+        ASSERT_EQ(code, MetaServiceCode::OK);
+        ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+        // verify the tablet schema is written
+        ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+        doris::TabletSchemaCloudPB saved_schema;
+        ValueBuf buf;
+        ASSERT_EQ(cloud::blob_get(txn.get(), key, &buf), TxnErrorCode::TXN_OK);
+
+        // verify the versioned tablet schema is written
+        Versionstamp versionstamp;
+        ASSERT_EQ(versioned::document_get(txn.get(), versioned_key, &saved_schema, &versionstamp),
+                  TxnErrorCode::TXN_OK);
+        ASSERT_NE(versionstamp, commit_versionstamp);
         EXPECT_EQ(saved_schema.schema_version(), schema_version);
     }
 }
