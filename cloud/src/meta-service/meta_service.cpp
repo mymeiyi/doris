@@ -1657,7 +1657,7 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
                 }
                 if (is_versioned_write) {
                     std::string versioned_schema_key = versioned::meta_schema_key(
-                        {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
+                            {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
                     put_versioned_schema_kv(code, msg, txn.get(), versioned_schema_key,
                                             rowset_meta.tablet_schema());
                     if (code != MetaServiceCode::OK) return;
@@ -2469,7 +2469,7 @@ void MetaServiceImpl::commit_rowset(::google::protobuf::RpcController* controlle
         if (code != MetaServiceCode::OK) return;
         if (is_versioned_write) {
             std::string versioned_schema_key = versioned::meta_schema_key(
-                {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
+                    {instance_id, rowset_meta.index_id(), rowset_meta.schema_version()});
             put_versioned_schema_kv(code, msg, txn.get(), versioned_schema_key,
                                     rowset_meta.tablet_schema());
             if (code != MetaServiceCode::OK) return;
