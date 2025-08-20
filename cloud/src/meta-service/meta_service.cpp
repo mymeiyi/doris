@@ -3524,10 +3524,10 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
     }
 
     // TODO
-    bool write_v2 = request->v2_rowset_ids_size() > 0 /*&& is_version_write_enabled(instance_id)*/;
-    if (write_v2 && request->v2_rowset_ids_size() != request->delete_bitmap_storages_size()) {
+    bool write_v2 = request->delta_rowset_ids_size() > 0 /*&& is_version_write_enabled(instance_id)*/;
+    if (write_v2 && request->delta_rowset_ids_size() != request->delete_bitmap_storages_size()) {
         code = MetaServiceCode::INVALID_ARGUMENT;
-        ss << "v2_rowset_ids size=" << request->v2_rowset_ids_size()
+        ss << "delta_rowset_ids size=" << request->delta_rowset_ids_size()
            << " not equal to delete_bitmap_storages size="
            << request->delete_bitmap_storages_size();
         msg = ss.str();
@@ -3598,10 +3598,10 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         delete_bitmap_keys_v1.emplace_back(key);
     }
     if (write_v2) {
-        for (size_t i = 0; i < request->v2_rowset_ids_size(); ++i) {
+        for (size_t i = 0; i < request->delta_rowset_ids_size(); ++i) {
             std::string key;
             versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_id,
-                                                      request->v2_rowset_ids(i)};
+                                                      request->delta_rowset_ids(i)};
             versioned::meta_delete_bitmap_key(key_info, &key);
             delete_bitmap_keys_v2.emplace_back(key);
         }
@@ -3690,7 +3690,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
             return;
         }
         LOG(INFO) << "put delete bitmap kv, tablet_id=" << tablet_id
-                  << " rowset_id=" << request->v2_rowset_ids(i) << ", delete bitmap num="
+                  << " rowset_id=" << request->delta_rowset_ids(i) << ", delete bitmap num="
                   << request->delete_bitmap_storages(i).delete_bitmap().rowset_ids_size()
                   << ". key=" << hex(key) << ", value_size=" << val.size();
         _write_delete_bitmap_kvs(code, msg, ss, txn_kv_, txn, use_version, non_exist_rowset_ids, i,

@@ -5320,7 +5320,7 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithBigKeys) {
     delete_bitmap_storage_pb.set_store_in_fdb(true);
     *(delete_bitmap_storage_pb.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
     *(update_delete_bitmap_req.add_delete_bitmap_storages()) = std::move(delete_bitmap_storage_pb);
-    update_delete_bitmap_req.add_v2_rowset_ids("0200000003ea308a3647dbea83220ed4b8897f2288244a91");
+    update_delete_bitmap_req.add_delta_rowset_ids("0200000003ea308a3647dbea83220ed4b8897f2288244a91");
 
     meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                        &update_delete_bitmap_req, &update_delete_bitmap_res,
@@ -5950,7 +5950,7 @@ void testUpdateDeleteBitmap(int lock_version) {
             *(delete_bitmap_storage_pb.mutable_delete_bitmap()) = std::move(delete_bitmap);
             *(update_delete_bitmap_req.add_delete_bitmap_storages()) =
                     std::move(delete_bitmap_storage_pb);
-            update_delete_bitmap_req.add_v2_rowset_ids("123");
+            update_delete_bitmap_req.add_delta_rowset_ids("123");
             delete_bitmap_keys.emplace_back(
                     versioned::meta_delete_bitmap_key({instance_id, 333, "123"}));
         }
@@ -5976,7 +5976,7 @@ void testUpdateDeleteBitmap(int lock_version) {
             *(delete_bitmap_storage_pb.mutable_delete_bitmap()) = std::move(delete_bitmap);
             *(update_delete_bitmap_req.add_delete_bitmap_storages()) =
                     std::move(delete_bitmap_storage_pb);
-            update_delete_bitmap_req.add_v2_rowset_ids("124");
+            update_delete_bitmap_req.add_delta_rowset_ids("124");
             delete_bitmap_keys.emplace_back(
                     versioned::meta_delete_bitmap_key({instance_id, 333, "124"}));
         }
@@ -7077,7 +7077,7 @@ TEST(MetaServiceTest, GetDeleteBitmapWithRetryTest2) {
     delete_bitmap_storage_pb.set_store_in_fdb(true);
     *(delete_bitmap_storage_pb.mutable_delete_bitmap()) = std::move(delete_bitmap);
     *(update_delete_bitmap_req.add_delete_bitmap_storages()) = std::move(delete_bitmap_storage_pb);
-    update_delete_bitmap_req.add_v2_rowset_ids(rowset_id);
+    update_delete_bitmap_req.add_delta_rowset_ids(rowset_id);
     meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                        &update_delete_bitmap_req, &update_delete_bitmap_res,
                                        nullptr);

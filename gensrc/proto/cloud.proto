@@ -1728,10 +1728,9 @@ message UpdateDeleteBitmapRequest {
     // when update delete_bitmap of pre rowsets, check the rowset exists
     repeated int64 pre_rowset_versions = 17;
     optional string request_ip = 18;
-    optional int64 store_version = 19;
-    // 20-21: used for storage v2
-    repeated string v2_rowset_ids = 20;
-    repeated DeleteBitmapStoragePB delete_bitmap_storages = 21;
+    // 50-51: used for storage v2
+    repeated string delta_rowset_ids = 50;
+    repeated DeleteBitmapStoragePB delete_bitmap_storages = 51;
 }
 
 message UpdateDeleteBitmapResponse {
