@@ -77,6 +77,7 @@ DEFINE_Int32(delete_bitmap_store_version, "1");
 DEFINE_mInt64(delete_bitmap_max_bytes_store_in_fdb, "1024"); // TODO change default value
 DEFINE_mBool(enable_delete_bitmap_store_v2_check_correctness, "true");
 DEFINE_Int32(sync_delete_bitmap_task_max_thread, "32");
+DEFINE_mBool(enable_agg_delta_delete_bitmap_for_store_v2, "true");
 
 DEFINE_Bool(enable_cloud_txn_lazy_commit, "false");
 
