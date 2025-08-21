@@ -163,9 +163,8 @@ private:
                                      bool full_sync = false, SyncRowsetStats* sync_stats = nullptr);
     Status handle_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
                                           std::ranges::range auto&& rs_metas,
-                                          DeleteBitmap* delete_bitmap,
-                                          GetDeleteBitmapResponse& res,
-                                          int64_t& s3_delete_bitmap_bytes);
+                                          DeleteBitmap* delete_bitmap, GetDeleteBitmapResponse& res,
+                                          int64_t& remote_delete_bitmap_bytes);
     Status sync_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
                                         std::ranges::range auto&& rs_metas,
                                         const TabletStatsPB& stats, const TabletIndexPB& idx,

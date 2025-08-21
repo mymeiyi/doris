@@ -76,6 +76,7 @@
 using namespace std::chrono;
 
 namespace doris::cloud {
+
 MetaServiceImpl::MetaServiceImpl(std::shared_ptr<TxnKv> txn_kv,
                                  std::shared_ptr<ResourceManager> resource_mgr,
                                  std::shared_ptr<RateLimiter> rate_limiter) {
@@ -3523,10 +3524,7 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         }
     }
 
-    // TODO
-    bool write_v2 =
-            request->delta_rowset_ids_size() > 0 /*&& is_version_write_enabled(instance_id)*/;
-    if (write_v2 && request->delta_rowset_ids_size() != request->delete_bitmap_storages_size()) {
+    if (request->delta_rowset_ids_size() != request->delete_bitmap_storages_size()) {
         code = MetaServiceCode::INVALID_ARGUMENT;
         ss << "delta_rowset_ids size=" << request->delta_rowset_ids_size()
            << " not equal to delete_bitmap_storages size="
@@ -3598,14 +3596,12 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         meta_delete_bitmap_key(key_info, &key);
         delete_bitmap_keys_v1.emplace_back(key);
     }
-    if (write_v2) {
-        for (size_t i = 0; i < request->delta_rowset_ids_size(); ++i) {
-            std::string key;
-            versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_id,
-                                                      request->delta_rowset_ids(i)};
-            versioned::meta_delete_bitmap_key(key_info, &key);
-            delete_bitmap_keys_v2.emplace_back(key);
-        }
+    for (size_t i = 0; i < request->delta_rowset_ids_size(); ++i) {
+        std::string key;
+        versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_id,
+                                                  request->delta_rowset_ids(i)};
+        versioned::meta_delete_bitmap_key(key_info, &key);
+        delete_bitmap_keys_v2.emplace_back(key);
     }
 
     PendingDeleteBitmapPB previous_pending_info;

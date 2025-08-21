@@ -1710,7 +1710,7 @@ message UpdateDeleteBitmapRequest {
     optional int64 tablet_id = 4;
     optional int64 lock_id = 5;
     optional int64 initiator = 6;
-    // 7-10: used for delete bitmap storage v1
+    // 7-10: used for storage v1
     repeated string rowset_ids = 7;
     repeated uint32 segment_ids = 8;
     repeated int64 versions = 9;
@@ -1748,12 +1748,12 @@ message GetDeleteBitmapRequest {
     optional int64 cumulative_compaction_cnt = 8;
     optional int64 cumulative_point = 9;
     optional string request_ip = 10;
-    optional int64 store_version = 11;
+    optional int64 store_version = 50;
 }
 
 message GetDeleteBitmapResponse {
     optional MetaServiceResponseStatus status = 1;
-    // 2-5: used for delete bitmap storage v1
+    // 2-5: used for storage v1
     repeated string rowset_ids = 2;
     repeated uint32 segment_ids = 3;
     repeated int64 versions = 4;

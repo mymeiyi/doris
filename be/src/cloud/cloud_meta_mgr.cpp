@@ -909,10 +909,10 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
             sync_stats->get_local_delete_bitmap_rowsets_num += rs_metas.size();
         }
         return Status::OK();
-        } else {
-            DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet->tablet_id());
-            *delete_bitmap = *new_delete_bitmap;
-        }
+    } else {
+        DeleteBitmapPtr new_delete_bitmap = std::make_shared<DeleteBitmap>(tablet->tablet_id());
+        *delete_bitmap = *new_delete_bitmap;
+    }
     int version = config::delete_bitmap_store_read_version;
     int64_t new_max_version = std::max(old_max_version, rs_metas.rbegin()->end_version());
     // When there are many delete bitmaps that need to be synchronized, it
@@ -1010,17 +1010,15 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
     // v2 delete bitmap
     const auto& delta_rowset_ids = res.delta_rowset_ids();
     const auto& delete_bitmap_storages = res.delete_bitmap_storages();
-    if (rowset_ids.size() != delete_bitmap_storages.size()) {
+    if (delta_rowset_ids.size() != delete_bitmap_storages.size()) {
         return Status::Error<ErrorCode::INTERNAL_ERROR, false>(
                 "get delete bitmap data wrong, delta_rowset_ids.size={}, "
                 "delete_bitmap_storages.size={}",
                 delta_rowset_ids.size(), delete_bitmap_storages.size());
     }
-    if (delta_rowset_ids.size() > 0) {
-        int64_t s3_delete_bitmap_bytes = 0;
-        RETURN_IF_ERROR(handle_tablet_delete_bitmap_v2(tablet, old_max_version, rs_metas,
-                                                       delete_bitmap, res, s3_delete_bitmap_bytes));
-    }
+    int64_t remote_delete_bitmap_bytes = 0;
+    RETURN_IF_ERROR(handle_tablet_delete_bitmap_v2(tablet, old_max_version, rs_metas, delete_bitmap,
+                                                   res, remote_delete_bitmap_bytes));
 
     if (sync_stats) {
         sync_stats->get_remote_delete_bitmap_rpc_ns +=
@@ -1030,10 +1028,7 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
         for (const auto& dbm : delete_bitmaps) {
             sync_stats->get_remote_delete_bitmap_bytes += dbm.length();
         }
-        // TODO
-        /*for (const auto& dbm : delete_bitmap_storages) {
-            sync_stats->get_remote_delete_bitmap_bytes += dbm.length();
-        }*/
+        sync_stats->get_remote_delete_bitmap_bytes += remote_delete_bitmap_bytes;
     }
     int64_t latency = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     if (latency > 100 * 1000) { // 100ms
@@ -1049,10 +1044,11 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
     return Status::OK();
 }
 
-Status CloudMetaMgr::handle_tablet_delete_bitmap_v2(
-        CloudTablet* tablet, int64_t old_max_version, std::ranges::range auto&& rs_metas,
-        DeleteBitmap* delete_bitmap,
-        GetDeleteBitmapResponse& res, int64_t& s3_delete_bitmap_bytes) {
+Status CloudMetaMgr::handle_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
+                                                    std::ranges::range auto&& rs_metas,
+                                                    DeleteBitmap* delete_bitmap,
+                                                    GetDeleteBitmapResponse& res,
+                                                    int64_t& remote_delete_bitmap_bytes) {
     const auto& rowset_ids = res.delta_rowset_ids();
     const auto& delete_bitmap_storages = res.delete_bitmap_storages();
     RowsetIdUnorderedSet all_rs_ids;
@@ -1102,7 +1098,7 @@ Status CloudMetaMgr::handle_tablet_delete_bitmap_v2(
                     {rst_id, dbm.segment_ids(j), dbm.versions(j)},
                     roaring::Roaring::readSafe(dbm.segment_delete_bitmaps(j).data(),
                                                dbm.segment_delete_bitmaps(j).length()));
-            s3_delete_bitmap_bytes += dbm.segment_delete_bitmaps(j).length();
+            remote_delete_bitmap_bytes += dbm.segment_delete_bitmaps(j).length();
         }
         return Status::OK();
     };
