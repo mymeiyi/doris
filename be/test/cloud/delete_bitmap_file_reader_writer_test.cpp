@@ -38,39 +38,38 @@ using std::string;
 namespace doris {
 
 class DeleteBitmapFileReaderWriterTest : public testing::Test {
+    TEST_F(DeleteBitmapFileReaderWriterTest, TestWriteAndRead) {
+        std::unique_ptr<ThreadPool> _pool;
+        std::ignore = ThreadPoolBuilder("S3FileUploadThreadPool")
+                              .set_min_threads(5)
+                              .set_max_threads(10)
+                              .build(&_pool);
+        ExecEnv::GetInstance()->_s3_file_upload_thread_pool = std::move(_pool);
 
-TEST_F(DeleteBitmapFileReaderWriterTest, TestWriteAndRead) {
-    std::unique_ptr<ThreadPool> _pool;
-    std::ignore = ThreadPoolBuilder("S3FileUploadThreadPool")
-                          .set_min_threads(5)
-                          .set_max_threads(10)
-                          .build(&_pool);
-    ExecEnv::GetInstance()->_s3_file_upload_thread_pool = std::move(_pool);
+        S3Conf s3_conf {.bucket = "bucket",
+                        .prefix = "prefix",
+                        .client_conf = {
+                                .endpoint = "endpoint",
+                                .region = "region",
+                                .ak = "ak",
+                                .sk = "sk",
+                                .token = "",
+                                .bucket = "",
+                                .role_arn = "",
+                                .external_id = "",
+                        }};
+        auto res = io::S3FileSystem::create(std::move(s3_conf), io::FileSystem::TMP_FS_ID);
+        ASSERT_TRUE(res.has_value()) << res.error();
+        StorageResource storage_resource(res.value());
+        std::optional<StorageResource> storage_resource_op =
+                std::make_optional<StorageResource>(storage_resource);
 
-    S3Conf s3_conf {.bucket = "bucket",
-                    .prefix = "prefix",
-                    .client_conf = {
-                            .endpoint = "endpoint",
-                            .region = "region",
-                            .ak = "ak",
-                            .sk = "sk",
-                            .token = "",
-                            .bucket = "",
-                            .role_arn = "",
-                            .external_id = "",
-                    }};
-    auto res = io::S3FileSystem::create(std::move(s3_conf), io::FileSystem::TMP_FS_ID);
-    ASSERT_TRUE(res.has_value()) << res.error();
-    StorageResource storage_resource(res.value());
-    std::optional<StorageResource> storage_resource_op =
-            std::make_optional<StorageResource>(storage_resource);
-
-    int64_t tablet_id = 43231;
-    std::string rowset_id = "432w1abc2";
-    DeleteBitmapPB delete_bitmap_pb;
-    DeleteBitmapFileWriter file_writer(tablet_id, rowset_id, storage_resource_op);
-    EXPECT_TRUE(file_writer.init().ok());
-    EXPECT_TRUE(file_writer.write(delete_bitmap_pb).ok());
-    EXPECT_TRUE(file_writer.close().ok());
-}
+        int64_t tablet_id = 43231;
+        std::string rowset_id = "432w1abc2";
+        DeleteBitmapPB delete_bitmap_pb;
+        DeleteBitmapFileWriter file_writer(tablet_id, rowset_id, storage_resource_op);
+        EXPECT_TRUE(file_writer.init().ok());
+        EXPECT_TRUE(file_writer.write(delete_bitmap_pb).ok());
+        EXPECT_TRUE(file_writer.close().ok());
+    }
 } // namespace doris
