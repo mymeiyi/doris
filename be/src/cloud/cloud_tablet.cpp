@@ -1198,7 +1198,7 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     // 3. store delete bitmap
     DeleteBitmapPtr delete_bitmap_v2 = std::make_shared<DeleteBitmap>(*output_rowset_delete_bitmap);
     auto delete_bitmap_size = output_rowset_delete_bitmap->delete_bitmap.size();
-    if (config::delete_bitmap_store_version >= 2) {
+    if (config::delete_bitmap_store_write_version >= 2) {
         std::vector<std::pair<RowsetId, int64_t>> retained_rowsets_to_seg_num;
         {
             std::shared_lock rlock(get_header_lock());
@@ -1229,7 +1229,7 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
               << " us, calc delete bitmap cost " << (t4 - t3) << " us, check rowid conversion cost "
               << (t5 - t4) << " us, store delete bitmap cost " << (t6 - t5)
               << " us, st=" << st.to_string()
-              << ". store_version=" << config::delete_bitmap_store_version
+              << ". store_version=" << config::delete_bitmap_store_write_version
               << ", calculated delete bitmap size=" << delete_bitmap_size
               << ", update delete bitmap size="
               << output_rowset_delete_bitmap->delete_bitmap.size();
