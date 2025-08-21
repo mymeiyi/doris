@@ -3747,7 +3747,8 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
     }
     LOG(INFO) << "update_delete_bitmap tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
               << " initiator=" << request->initiator()
-              << " rowset_num=" << (delete_bitmap_keys_v1.size() + delete_bitmap_keys_v2.size())
+              << " v1_rowset_num=" << delete_bitmap_keys_v1.size()
+              << " v2_rowset_num=" << delete_bitmap_keys_v2.size()
               << " total_key_count=" << txn_stats.total_key_count
               << " total_value_count=" << txn_stats.total_value_count
               << " without_lock=" << without_lock
@@ -3806,6 +3807,17 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
     int64_t delete_bitmap_byte = 0;
     bool test = false;
     TEST_SYNC_POINT_CALLBACK("get_delete_bitmap_test", &test);
+
+    auto check_delete_bitmap_bytes_exceed_limit = [&]() {
+        if (delete_bitmap_byte > config::max_get_delete_bitmap_byte) {
+            code = MetaServiceCode::KV_TXN_GET_ERR;
+            ss << "tablet=" << tablet_id << ", get_delete_bitmap_byte=" << delete_bitmap_byte
+               << ",exceed max byte";
+            msg = ss.str();
+            LOG(WARNING) << msg;
+            g_bvar_get_delete_bitmap_fail_counter << 1;
+        }
+    };
 
     for (size_t i = 0; i < rowset_ids.size(); i++) {
         // create a new transaction every time, avoid using one transaction that takes too long
@@ -3912,15 +3924,8 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
                         response->mutable_segment_delete_bitmaps()->rbegin()->append(v);
                     }
                 }
-                if (delete_bitmap_byte > config::max_get_delete_bitmap_byte) {
-                    code = MetaServiceCode::KV_TXN_GET_ERR;
-                    ss << "tablet=" << tablet_id
-                       << ", get_delete_bitmap_byte=" << delete_bitmap_byte << ",exceed max byte";
-                    msg = ss.str();
-                    LOG(WARNING) << msg;
-                    g_bvar_get_delete_bitmap_fail_counter << 1;
-                    return;
-                }
+                check_delete_bitmap_bytes_exceed_limit();
+                if (code != MetaServiceCode::OK) return;
                 round++;
                 start_key = it->next_begin_key(); // Update to next smallest key for iteration
             } while (it->more());
@@ -3931,15 +3936,8 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
                       << ", delete_bitmap_byte=" << delete_bitmap_byte;
         }
         if (read_v2 && begin_versions[i] == 0) {
-            if (delete_bitmap_byte > config::max_get_delete_bitmap_byte) {
-                code = MetaServiceCode::KV_TXN_GET_ERR;
-                ss << "tablet=" << tablet_id << ", get_delete_bitmap_byte=" << delete_bitmap_byte
-                   << ",exceed max byte";
-                msg = ss.str();
-                LOG(WARNING) << msg;
-                g_bvar_get_delete_bitmap_fail_counter << 1;
-                return;
-            }
+            check_delete_bitmap_bytes_exceed_limit();
+            if (code != MetaServiceCode::OK) return;
 
             std::string key;
             versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_id, rowset_ids[i]};
@@ -3991,7 +3989,9 @@ void MetaServiceImpl::get_delete_bitmap(google::protobuf::RpcController* control
             response->add_delta_rowset_ids(rowset_ids[i]);
             response->add_delete_bitmap_storages()->CopyFrom(delete_bitmap_storage);
             LOG(INFO) << "get delete bitmap for tablet=" << tablet_id
-                      << ", rowset=" << rowset_ids[i] << ", delete_bitmap_num="
+                      << ", rowset=" << rowset_ids[i]
+                      << ", store_in_fdb=" << delete_bitmap_storage.store_in_fdb()
+                      << ", delete_bitmap_num="
                       << delete_bitmap_storage.delete_bitmap().rowset_ids_size();
             delete_bitmap_num += delete_bitmap_storage.delete_bitmap().rowset_ids_size();
             delete_bitmap_byte += val_buf.value().size();

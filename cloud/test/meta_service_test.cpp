@@ -5336,6 +5336,16 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithBigKeys) {
     get_delete_bitmap_req.add_begin_versions(0);
     get_delete_bitmap_req.add_end_versions(num);
     {
+        // get exceed max_get_delete_bitmap_byte limit
+        auto max_get_delete_bitmap_byte = config::max_get_delete_bitmap_byte;
+        config::max_get_delete_bitmap_byte = 1;
+        GetDeleteBitmapResponse get_delete_bitmap_res;
+        meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
+                                        &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
+        ASSERT_EQ(get_delete_bitmap_res.status().code(), MetaServiceCode::KV_TXN_GET_ERR);
+        config::max_get_delete_bitmap_byte = max_get_delete_bitmap_byte;
+    }
+    {
         GetDeleteBitmapResponse get_delete_bitmap_res;
         meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                         &get_delete_bitmap_req, &get_delete_bitmap_res, nullptr);
