@@ -1760,8 +1760,9 @@ message GetDeleteBitmapResponse {
     // Serialized roaring bitmaps indexed with {rowset_id, segment_id, version}
     repeated bytes segment_delete_bitmaps = 5;
     optional int64 tablet_id = 6;
-    // 2, 7: used for storage v2
-    repeated DeleteBitmapStoragePB delete_bitmap_storages = 7;
+    // 50-51: used for storage v2
+    repeated string delta_rowset_ids = 50;
+    repeated DeleteBitmapStoragePB delete_bitmap_storages = 51;
 }
 
 message RemoveDeleteBitmapRequest {

@@ -20,8 +20,8 @@ import org.apache.doris.regression.suite.ClusterOptions
 suite("test_cu_compaction", "docker") {
     def options = new ClusterOptions()
     options.beConfigs += [
-        'delete_bitmap_store_version=2',
-        'delete_bitmap_max_bytes_store_in_fdb=-1',
+        'delete_bitmap_store_write_version=2',
+        'delete_bitmap_store_v2_max_bytes_in_fdb=-1',
         'enable_delete_bitmap_store_v2_check_correctness=true',
         'enable_debug_points=true',
         'enable_java_support=false',
