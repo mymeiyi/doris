@@ -1047,6 +1047,9 @@ Status CloudMetaMgr::_read_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t 
                                                    GetDeleteBitmapResponse& res,
                                                    int64_t& remote_delete_bitmap_bytes,
                                                    bool full_sync_v2) {
+    if (res.delta_rowset_ids().empty()) {
+        return Status::OK();
+    }
     const auto& rowset_ids = res.delta_rowset_ids();
     const auto& delete_bitmap_storages = res.delete_bitmap_storages();
     RowsetIdUnorderedSet all_rs_ids;

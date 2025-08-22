@@ -24,6 +24,7 @@ suite("test_load", "docker") {
         'delete_bitmap_store_v2_max_bytes_in_fdb=-1',
         'enable_delete_bitmap_store_v2_check_correctness=true',
         'enable_java_support=false'
+        enable_mow_verbose_log=true
     ]*/
     options.setFeNum(1)
     options.setBeNum(1)
