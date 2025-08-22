@@ -962,13 +962,15 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
     int64_t latency = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
     if (latency > 100 * 1000) { // 100ms
         LOG(INFO) << "finish get_delete_bitmap rpc. rowset_ids.size()=" << rowset_ids.size()
-                  << ", delete_bitmaps.size()=" << delete_bitmaps.size() << ", latency=" << latency
-                  << "us";
+                  << ", delete_bitmaps.size()=" << delete_bitmaps.size()
+                  << ", delta_delete_bitmaps.size()=" << delta_rowset_ids.size()
+                  << ", latency=" << latency << "us, read_version=" << read_version;
     } else {
         LOG_EVERY_N(INFO, 100) << "finish get_delete_bitmap rpc. rowset_ids.size()="
                                << rowset_ids.size()
                                << ", delete_bitmaps.size()=" << delete_bitmaps.size()
-                               << ", latency=" << latency << "us";
+                               << ", delta_delete_bitmaps.size()=" << delta_rowset_ids.size()
+                               << ", latency=" << latency << "us, read_version=" << read_version;
     }
     return Status::OK();
 }
@@ -1064,10 +1066,13 @@ Status CloudMetaMgr::_read_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t 
         all_rs_ids.emplace(rs_id);
         rowset_to_resource[rs_meta.rowset_id_v2()] = rs_meta.resource_id();
     }
-    LOG(INFO) << "get delete bitmap for tablet_id=" << tablet->tablet_id()
-              << ", old_max_version=" << old_max_version << ", new rowset num=" << rs_metas.size()
-              << ", rowset has delete bitmap num=" << rowset_ids.size()
-              << ". all rowset num=" << all_rs_ids.size();
+    if (config::enable_mow_verbose_log) {
+        LOG(INFO) << "read delete bitmap for tablet_id=" << tablet->tablet_id()
+                  << ", old_max_version=" << old_max_version
+                  << ", new rowset num=" << rs_metas.size()
+                  << ", rowset has delete bitmap num=" << rowset_ids.size()
+                  << ". all rowset num=" << all_rs_ids.size();
+    }
 
     std::mutex result_mtx;
     Status result;
@@ -1102,8 +1107,10 @@ Status CloudMetaMgr::_read_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t 
         return Status::OK();
     };
     auto get_delete_bitmap_from_file = [&](const std::string& rowset_id) {
-        LOG(INFO) << "get delete bitmap for tablet_id=" << tablet->tablet_id()
-                  << ", rowset_id=" << rowset_id << " from file";
+        if (config::enable_mow_verbose_log) {
+            LOG(INFO) << "get delete bitmap for tablet_id=" << tablet->tablet_id()
+                      << ", rowset_id=" << rowset_id << " from file";
+        }
         if (rowset_to_resource.find(rowset_id) == rowset_to_resource.end()) {
             return Status::InternalError("vault id not found for tablet_id={}, rowset_id={}",
                                          tablet->tablet_id(), rowset_id);
