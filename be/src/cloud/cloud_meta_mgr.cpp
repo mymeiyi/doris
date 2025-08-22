@@ -479,7 +479,7 @@ Status CloudMetaMgr::sync_tablet_rowsets(CloudTablet* tablet, const SyncOptions&
 
 Status CloudMetaMgr::_log_mow_delete_bitmap(CloudTablet* tablet, GetRowsetResponse& resp,
                                             DeleteBitmap& delete_bitmap, int64_t old_max_version,
-                                            bool full_sync) {
+                                            bool full_sync, int32_t read_version) {
     if (config::enable_mow_verbose_log && !resp.rowset_meta().empty() &&
         delete_bitmap.cardinality() > 0) {
         int64_t tablet_id = tablet->tablet_id();
@@ -537,6 +537,7 @@ Status CloudMetaMgr::_log_mow_delete_bitmap(CloudTablet* tablet, GetRowsetRespon
                 tablet->table_id(), tablet->index_id(), tablet->partition_id());
         LOG_INFO("[verbose] sync tablet delete bitmap " + tablet_info)
                 .tag("full_sync", full_sync)
+                .tag("read_version", read_version)
                 .tag("old_max_version", old_max_version)
                 .tag("new_max_version", new_max_version)
                 .tag("cumu_compaction_cnt", resp.stats().cumulative_compaction_cnt())
@@ -658,10 +659,10 @@ Status CloudMetaMgr::sync_tablet_rowsets_unlocked(CloudTablet* tablet,
                             DBUG_BLOCK);
             DeleteBitmap delete_bitmap(tablet_id);
             int64_t old_max_version = req.start_version() - 1;
+            auto read_version = config::delete_bitmap_store_read_version;
             auto st = sync_tablet_delete_bitmap(tablet, old_max_version, resp.rowset_meta(),
                                                 resp.stats(), req.idx(), &delete_bitmap,
-                                                options.full_sync, sync_stats,
-                                                config::delete_bitmap_store_read_version, false);
+                                                options.full_sync, sync_stats, read_version, false);
             if (st.is<ErrorCode::ROWSETS_EXPIRED>() && tried++ < retry_times) {
                 LOG_INFO("rowset meta is expired, need to retry, " + tablet_info)
                         .tag("tried", tried)
@@ -674,7 +675,7 @@ Status CloudMetaMgr::sync_tablet_rowsets_unlocked(CloudTablet* tablet,
             }
             tablet->tablet_meta()->delete_bitmap().merge(delete_bitmap);
             RETURN_IF_ERROR(_log_mow_delete_bitmap(tablet, resp, delete_bitmap, old_max_version,
-                                                   options.full_sync));
+                                                   options.full_sync, read_version));
             RETURN_IF_ERROR(
                     _check_delete_bitmap_v2_correctness(tablet, req, resp, old_max_version));
         }
@@ -816,7 +817,7 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
                                                std::ranges::range auto&& rs_metas,
                                                const TabletStatsPB& stats, const TabletIndexPB& idx,
                                                DeleteBitmap* delete_bitmap, bool full_sync,
-                                               SyncRowsetStats* sync_stats, int64_t read_version,
+                                               SyncRowsetStats* sync_stats, int32_t read_version,
                                                bool full_sync_v2) {
     if (rs_metas.empty()) {
         return Status::OK();

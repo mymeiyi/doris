@@ -160,14 +160,14 @@ private:
                                      std::ranges::range auto&& rs_metas, const TabletStatsPB& stats,
                                      const TabletIndexPB& idx, DeleteBitmap* delete_bitmap,
                                      bool full_sync, SyncRowsetStats* sync_stats,
-                                     int64_t read_version, bool full_sync_v2);
+                                     int32_t read_version, bool full_sync_v2);
     Status _read_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
                                          std::ranges::range auto&& rs_metas,
                                          DeleteBitmap* delete_bitmap, GetDeleteBitmapResponse& res,
                                          int64_t& remote_delete_bitmap_bytes, bool full_sync_v2);
     Status _log_mow_delete_bitmap(CloudTablet* tablet, GetRowsetResponse& resp,
                                   DeleteBitmap& delete_bitmap, int64_t old_max_version,
-                                  bool full_sync);
+                                  bool full_sync, int32_t read_version);
     Status _check_delete_bitmap_v2_correctness(CloudTablet* tablet, GetRowsetRequest& req,
                                                GetRowsetResponse& resp, int64_t old_max_version);
     void check_table_size_correctness(const RowsetMeta& rs_meta);
