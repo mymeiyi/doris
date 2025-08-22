@@ -21,23 +21,64 @@ suite("test_delete_bitmap_v2", "nonConcurrent") {
     }
 
     def configs = [
-            // read v1, write v1
+            // 0: write v1, read v1
             ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
              'delete_bitmap_store_write_version'              : '1',
              'delete_bitmap_store_read_version'               : '1',
              'enable_delete_bitmap_store_v2_check_correctness': 'false'
-            ]
+            ],
+            // 1: write v2, read v2, store in fdb, check correctness
+            ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
+             'delete_bitmap_store_write_version'              : '2',
+             'delete_bitmap_store_read_version'               : '2',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '-1',
+             'enable_delete_bitmap_store_v2_check_correctness': 'true'
+            ],
+            // 2: write v2, read v2, store in s3, check correctness
+            ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
+             'delete_bitmap_store_write_version'              : '2',
+             'delete_bitmap_store_read_version'               : '2',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '0',
+             'enable_delete_bitmap_store_v2_check_correctness': 'true'
+            ],
+            // 3: write v2, read v2, store in fdb or s3, check correctness
+            ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
+             'delete_bitmap_store_write_version'              : '2',
+             'delete_bitmap_store_read_version'               : '2',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '1',
+             'enable_delete_bitmap_store_v2_check_correctness': 'true'
+            ],
+            // 4: write v3, read v3, store in fdb or s3, check correctness
+            ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
+             'delete_bitmap_store_write_version'              : '3',
+             'delete_bitmap_store_read_version'               : '3',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '1',
+             'enable_delete_bitmap_store_v2_check_correctness': 'true'
+            ],
+            // 5: write v3, read v1, store in fdb or s3, check correctness
+            ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
+             'delete_bitmap_store_write_version'              : '3',
+             'delete_bitmap_store_read_version'               : '1',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '1',
+             'enable_delete_bitmap_store_v2_check_correctness': 'true'
+            ],
+            // 6: write v3, read v2, store in fdb or s3, check correctness
+            ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
+             'delete_bitmap_store_write_version'              : '3',
+             'delete_bitmap_store_read_version'               : '2',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '1',
+             'enable_delete_bitmap_store_v2_check_correctness': 'true'
+            ],
     ]
 
     for (int i = 0; i < configs.size(); i++) {
         def config = configs[i]
         config.each { k, v ->
-            println "${k}, ${v}"
             update_all_be_config(k, v)
         }
 
-        def table_name = "test_delete_bitmap_v2" + "_" + i
-        sql """ drop table if exists ${table_name} """
+        def table_name = "test_delete_bitmap_v2_" + i
+        sql """ drop table if exists ${table_name} force; """
         sql """
             CREATE TABLE ${table_name} (
                 `k` int(11) NOT NULL,
@@ -55,10 +96,10 @@ suite("test_delete_bitmap_v2", "nonConcurrent") {
         sql """ insert into ${table_name} values(3, 3), (4, 4); """
         sql """ insert into ${table_name} values(1, 10), (3, 30); """
         order_qt_select_1 "SELECT * FROM ${table_name};"
-        // change be config: delete_bitmap_store_v2_max_bytes_in_fdb=0
-        // update_all_be_config("delete_bitmap_store_v2_max_bytes_in_fdb", "0")
+
         sql """ insert into ${table_name} values(2, 20), (4, 40); """
         order_qt_select_2 "SELECT * FROM ${table_name};"
-        // sql """ drop table if exists ${table_name} """
+
+        sql """ drop table if exists ${table_name} force; """
     }
 }
