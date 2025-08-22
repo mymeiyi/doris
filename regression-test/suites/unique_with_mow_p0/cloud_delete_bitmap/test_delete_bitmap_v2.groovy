@@ -35,7 +35,9 @@ suite("test_delete_bitmap_v2", "nonConcurrent") {
             println "${k}, ${v}"
             update_all_be_config(k, v)
         }
+
         def table_name = "test_delete_bitmap_v2" + "_" + i
+        sql """ drop table if exists ${table_name} """
         sql """
             CREATE TABLE ${table_name} (
                 `k` int(11) NOT NULL,
