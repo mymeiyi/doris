@@ -676,7 +676,7 @@ Status CloudMetaMgr::sync_tablet_rowsets_unlocked(CloudTablet* tablet,
             RETURN_IF_ERROR(_log_mow_delete_bitmap(tablet, resp, delete_bitmap, old_max_version,
                                                    options.full_sync));
             RETURN_IF_ERROR(
-                    _check_delete_bitmap_store_correctness(tablet, req, resp, old_max_version));
+                    _check_delete_bitmap_v2_correctness(tablet, req, resp, old_max_version));
         }
         DBUG_EXECUTE_IF("CloudMetaMgr::sync_tablet_rowsets.before.modify_tablet_meta", {
             auto target_tablet_id = dp->param<int64_t>("tablet_id", -1);
@@ -816,7 +816,7 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
                                                std::ranges::range auto&& rs_metas,
                                                const TabletStatsPB& stats, const TabletIndexPB& idx,
                                                DeleteBitmap* delete_bitmap, bool full_sync,
-                                               SyncRowsetStats* sync_stats, int64_t store_version,
+                                               SyncRowsetStats* sync_stats, int64_t read_version,
                                                bool full_sync_v2) {
     if (rs_metas.empty()) {
         return Status::OK();
@@ -844,7 +844,7 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
     req.set_cumulative_compaction_cnt(stats.cumulative_compaction_cnt());
     req.set_cumulative_point(stats.cumulative_point());
     *(req.mutable_idx()) = idx;
-    req.set_store_version(store_version);
+    req.set_store_version(read_version);
     // New rowset sync all versions of delete bitmap
     for (const auto& rs_meta : rs_metas) {
         req.add_rowset_ids(rs_meta.rowset_id_v2());
@@ -972,10 +972,9 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
     return Status::OK();
 }
 
-Status CloudMetaMgr::_check_delete_bitmap_store_correctness(CloudTablet* tablet,
-                                                            GetRowsetRequest& req,
-                                                            GetRowsetResponse& resp,
-                                                            int64_t old_max_version) {
+Status CloudMetaMgr::_check_delete_bitmap_v2_correctness(CloudTablet* tablet, GetRowsetRequest& req,
+                                                         GetRowsetResponse& resp,
+                                                         int64_t old_max_version) {
     if (!config::enable_delete_bitmap_store_v2_check_correctness ||
         config::delete_bitmap_store_write_version == 1) {
         return Status::OK();

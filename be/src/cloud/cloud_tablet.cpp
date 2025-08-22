@@ -1198,7 +1198,8 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     // 3. store delete bitmap
     DeleteBitmapPtr delete_bitmap_v2 = std::make_shared<DeleteBitmap>(*output_rowset_delete_bitmap);
     auto delete_bitmap_size = output_rowset_delete_bitmap->delete_bitmap.size();
-    if (config::delete_bitmap_store_write_version >= 2) {
+    if (config::delete_bitmap_store_write_version == 2 ||
+        config::delete_bitmap_store_write_version == 3) {
         std::vector<std::pair<RowsetId, int64_t>> retained_rowsets_to_seg_num;
         {
             std::shared_lock rlock(get_header_lock());
