@@ -865,12 +865,14 @@ Status CloudMetaMgr::sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_
             }
         }
     } else {
-        RowsetIdUnorderedSet all_rs_ids;
-        RETURN_IF_ERROR(tablet->get_all_rs_id(old_max_version, &all_rs_ids));
-        for (const auto& rs_id : all_rs_ids) {
-            req.add_rowset_ids(rs_id.to_string());
-            req.add_begin_versions(0);
-            req.add_end_versions(new_max_version);
+        if (old_max_version > 0) {
+            RowsetIdUnorderedSet all_rs_ids;
+            RETURN_IF_ERROR(tablet->get_all_rs_id(old_max_version, &all_rs_ids));
+            for (const auto& rs_id : all_rs_ids) {
+                req.add_rowset_ids(rs_id.to_string());
+                req.add_begin_versions(0);
+                req.add_end_versions(new_max_version);
+            }
         }
     }
     if (sync_stats) {
