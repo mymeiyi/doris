@@ -976,7 +976,7 @@ Status CloudMetaMgr::_check_delete_bitmap_v2_correctness(CloudTablet* tablet, Ge
                                                          GetRowsetResponse& resp,
                                                          int64_t old_max_version) {
     if (!config::enable_delete_bitmap_store_v2_check_correctness ||
-        config::delete_bitmap_store_write_version == 1) {
+        config::delete_bitmap_store_write_version == 1 || resp.rowset_meta().empty()) {
         return Status::OK();
     }
     int64_t tablet_id = tablet->tablet_id();
