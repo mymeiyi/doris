@@ -93,7 +93,10 @@ suite("test_delete_bitmap_v2", "nonConcurrent") {
         """
         def tablets = sql_return_maparray """ show tablets from ${table_name} """
         assertEquals(1, tablets.size())
-        logger.info("table: ${table_name}, tablets: ${tablets}" )
+        def tablet = tablets[0]
+        logger.info("table: ${table_name}, tablets: ${tablet['TabletId']}" )
+
+        order_qt_select_0 "SELECT ${table_name};"
 
         sql """ insert into ${table_name} values(1, 1), (2, 2); """
         sql """ insert into ${table_name} values(3, 3), (4, 4); """
