@@ -45,28 +45,28 @@ suite("test_delete_bitmap_v2", "nonConcurrent") {
             ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
              'delete_bitmap_store_write_version'              : '2',
              'delete_bitmap_store_read_version'               : '2',
-             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '1',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '100',
              'enable_delete_bitmap_store_v2_check_correctness': 'true'
             ],
             // 4: write v3, read v3, store in fdb or s3, check correctness
             ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
              'delete_bitmap_store_write_version'              : '3',
              'delete_bitmap_store_read_version'               : '3',
-             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '1',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '100',
              'enable_delete_bitmap_store_v2_check_correctness': 'true'
             ],
             // 5: write v3, read v1, store in fdb or s3, check correctness
             ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
              'delete_bitmap_store_write_version'              : '3',
              'delete_bitmap_store_read_version'               : '1',
-             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '1',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '100',
              'enable_delete_bitmap_store_v2_check_correctness': 'true'
             ],
             // 6: write v3, read v2, store in fdb or s3, check correctness
             ['enable_sync_tablet_delete_bitmap_by_cache'      : 'false',
              'delete_bitmap_store_write_version'              : '3',
              'delete_bitmap_store_read_version'               : '2',
-             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '1',
+             'delete_bitmap_store_v2_max_bytes_in_fdb'        : '100',
              'enable_delete_bitmap_store_v2_check_correctness': 'true'
             ],
     ]

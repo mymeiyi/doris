@@ -1091,9 +1091,11 @@ Status CloudMetaMgr::_read_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t 
                     rowset_id, dbm.rowset_ids_size(), dbm.segment_ids_size(), dbm.versions_size(),
                     dbm.segment_delete_bitmaps_size());
         }
-        LOG(INFO) << "get delete bitmap for tablet_id=" << tablet->tablet_id()
-                  << ", rowset_id=" << rowset_id
-                  << ", delete_bitmap num=" << dbm.segment_delete_bitmaps_size();
+        if (config::enable_mow_verbose_log) {
+            LOG(INFO) << "get delete bitmap for tablet_id=" << tablet->tablet_id()
+                      << ", rowset_id=" << rowset_id
+                      << ", delete_bitmap num=" << dbm.segment_delete_bitmaps_size();
+        }
         std::lock_guard lock(result_mtx);
         for (int j = 0; j < dbm.rowset_ids_size(); j++) {
             RowsetId rst_id;
