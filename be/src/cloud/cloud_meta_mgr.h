@@ -160,18 +160,17 @@ private:
     Status sync_tablet_delete_bitmap(CloudTablet* tablet, int64_t old_max_version,
                                      std::ranges::range auto&& rs_metas, const TabletStatsPB& stats,
                                      const TabletIndexPB& idx, DeleteBitmap* delete_bitmap,
-                                     bool full_sync = false, SyncRowsetStats* sync_stats = nullptr);
-    Status handle_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
-                                          std::ranges::range auto&& rs_metas,
-                                          DeleteBitmap* delete_bitmap, GetDeleteBitmapResponse& res,
-                                          int64_t& remote_delete_bitmap_bytes);
-    Status sync_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
-                                        std::ranges::range auto&& rs_metas,
-                                        const TabletStatsPB& stats, const TabletIndexPB& idx,
-                                        DeleteBitmap* delete_bitmap, bool full_sync,
-                                        SyncRowsetStats* sync_stats,
-                                        std::map<std::string, std::string> rowset_to_resource = {},
-                                        bool all_sync = false);
+                                     bool full_sync, SyncRowsetStats* sync_stats,
+                                     int64_t store_version, bool full_sync_v2);
+    Status _read_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t old_max_version,
+                                         std::ranges::range auto&& rs_metas,
+                                         DeleteBitmap* delete_bitmap, GetDeleteBitmapResponse& res,
+                                         int64_t& remote_delete_bitmap_bytes, bool full_sync_v2);
+    Status _log_mow_delete_bitmap(CloudTablet* tablet, GetRowsetResponse& resp,
+                                  DeleteBitmap& delete_bitmap, int64_t old_max_version,
+                                  bool full_sync);
+    Status _check_delete_bitmap_store_correctness(CloudTablet* tablet, GetRowsetRequest& req,
+                                                  GetRowsetResponse& resp, int64_t old_max_version);
     void check_table_size_correctness(const RowsetMeta& rs_meta);
     int64_t get_segment_file_size(const RowsetMeta& rs_meta);
     int64_t get_inverted_index_file_szie(const RowsetMeta& rs_meta);
