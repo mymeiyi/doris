@@ -29,6 +29,7 @@
 #include "common/defer.h"
 #include "common/util.h"
 #include "cpp/sync_point.h"
+#include "meta-store/blob_message.h"
 #include "meta-service/meta_service.h"
 #include "meta-store/document_message.h"
 #include "meta-store/keys.h"
@@ -1398,6 +1399,7 @@ TEST(MetaServiceOperationLogTest, UpdateVersionedTabletMeta) {
     constexpr int64_t partition_id = 10003;
     constexpr int64_t tablet_id1 = 10004;
     constexpr int64_t tablet_id2 = 10005;
+    constexpr int64_t schema_version = 0;
 
     {
         // write instance
@@ -1419,6 +1421,22 @@ TEST(MetaServiceOperationLogTest, UpdateVersionedTabletMeta) {
         create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id2);
     }
 
+    // Verify versioned tablet schema keys exist
+    Versionstamp versionstamp0;
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+
+        // Check versioned tablet meta for tablet_id1
+        std::string tablet_schema_key =
+                versioned::meta_schema_key({instance_id, index_id, schema_version});
+        doris::TabletSchemaCloudPB tablet_schema;
+        TxnErrorCode err = versioned::document_get(txn.get(), tablet_schema_key, &tablet_schema,
+                                                   &versionstamp0);
+        ASSERT_EQ(err, TxnErrorCode::TXN_OK);
+        EXPECT_EQ(tablet_schema.disable_auto_compaction(), false);
+    }
+
     // Update tablets
     {
         brpc::Controller cntl;
@@ -1431,6 +1449,7 @@ TEST(MetaServiceOperationLogTest, UpdateVersionedTabletMeta) {
         tablet_meta_info = req.add_tablet_meta_infos();
         tablet_meta_info->set_tablet_id(tablet_id2);
         tablet_meta_info->set_ttl_seconds(3000);
+        tablet_meta_info->set_disable_auto_compaction(true);
         meta_service->update_tablet(&cntl, &req, &resp, nullptr);
         ASSERT_EQ(resp.status().code(), MetaServiceCode::OK);
     }
@@ -1462,6 +1481,31 @@ TEST(MetaServiceOperationLogTest, UpdateVersionedTabletMeta) {
                 versioned::document_get(txn.get(), tablet_meta_key2, &tablet_meta2, &versionstamp2);
         ASSERT_EQ(err, TxnErrorCode::TXN_OK);
         EXPECT_EQ(tablet_meta2.ttl_seconds(), 3000);
+    }
+
+    // Verify versioned tablet schema keys exist
+    Versionstamp versionstamp3;
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+
+        auto schema_key = meta_schema_key({instance_id, index_id, schema_version});
+        ValueBuf val_buf;
+        TxnErrorCode err = cloud::blob_get(txn.get(), schema_key, &val_buf);
+        ASSERT_EQ(err, TxnErrorCode::TXN_OK);
+        doris::TabletSchemaCloudPB schema;
+        ASSERT_TRUE(val_buf.to_pb(&schema));
+        EXPECT_EQ(schema.disable_auto_compaction(), true);
+
+        // Check versioned tablet meta for tablet_id1
+        std::string tablet_schema_key =
+                versioned::meta_schema_key({instance_id, index_id, schema_version});
+        doris::TabletSchemaCloudPB tablet_schema;
+        err = versioned::document_get(txn.get(), tablet_schema_key, &tablet_schema,
+                                                   &versionstamp3);
+        ASSERT_EQ(err, TxnErrorCode::TXN_OK);
+        EXPECT_NE(versionstamp0, versionstamp3);
+        EXPECT_EQ(tablet_schema.disable_auto_compaction(), true);
     }
 
     // Check operation log exists
@@ -2094,7 +2138,9 @@ TEST(MetaServiceOperationLogTest, SchemaChangeLog) {
     }
 
     // Create old tablet
-    { create_tablet(meta_service.get(), table_id, index_id, partition_id, old_tablet_id); }
+    {
+        create_tablet(meta_service.get(), table_id, index_id, partition_id, old_tablet_id);
+    }
 
     auto txn_kv = meta_service->txn_kv();
 
@@ -2584,7 +2630,9 @@ TEST(MetaServiceOperationLogTest, SchemaChangeLogFirstTimeTabletStats) {
     }
 
     // Create old tablet
-    { create_tablet(meta_service.get(), table_id, index_id, partition_id, old_tablet_id); }
+    {
+        create_tablet(meta_service.get(), table_id, index_id, partition_id, old_tablet_id);
+    }
 
     auto txn_kv = meta_service->txn_kv();
 

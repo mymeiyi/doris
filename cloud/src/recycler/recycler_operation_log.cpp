@@ -240,7 +240,30 @@ int OperationLogRecycler::recycle_update_tablet_log(const UpdateTabletLogPB& upd
         std::string tablet_meta_key = versioned::meta_tablet_key({instance_id_, tablet_id});
         keys_to_remove_.emplace_back(encode_versioned_key(tablet_meta_key, versionstamp));
     }
+    DCHECK_EQ(update_tablet_log.index_ids_size(), update_tablet_log.schema_versions_size());
+    for (auto i = 0; i < update_tablet_log.index_ids_size(); ++i) {
+        // Find the previous tablet schema (overwrite) to remove.
+        int64_t index_id = update_tablet_log.index_ids(i);
+        int64_t schema_version = update_tablet_log.schema_versions(i);
+        TabletSchemaCloudPB tablet_schema;
+        Versionstamp versionstamp;
+        TxnErrorCode err = meta_reader.get_tablet_schema(index_id, schema_version, &tablet_schema,
+                                                         &versionstamp);
+        if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
+            // No tablet schema found, nothing to recycle.
+            continue;
+        } else if (err != TxnErrorCode::TXN_OK) {
+            LOG_WARNING("failed to get tablet schema for recycling operation log")
+                    .tag("index_id", index_id)
+                    .tag("schema_version", schema_version)
+                    .tag("error_code", err);
+            return -1;
+        }
 
+        std::string tablet_schema_key =
+                versioned::meta_schema_key({instance_id_, index_id, schema_version});
+        keys_to_remove_.emplace_back(encode_versioned_key(tablet_schema_key, versionstamp));
+    }
     return 0;
 }
 

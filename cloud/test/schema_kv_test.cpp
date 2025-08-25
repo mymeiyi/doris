@@ -770,8 +770,8 @@ TEST(SchemaKVTest, InsertExistedRowsetTest) {
     check_get_tablet(meta_service.get(), 10005, 2);
 }
 
-static void check_schema(MetaServiceProxy* meta_service, int64_t tablet_id,
-                         int32_t schema_version) {
+static void check_schema(MetaServiceProxy* meta_service, int64_t tablet_id, int32_t schema_version,
+                         bool disable_auto_compaction = false) {
     brpc::Controller cntl;
     GetTabletRequest req;
     GetTabletResponse res;
@@ -782,6 +782,7 @@ static void check_schema(MetaServiceProxy* meta_service, int64_t tablet_id,
     EXPECT_TRUE(res.tablet_meta().has_schema()) << tablet_id;
     EXPECT_EQ(res.tablet_meta().schema_version(), schema_version) << tablet_id;
     EXPECT_EQ(res.tablet_meta().schema().column_size(), 10) << tablet_id;
+    EXPECT_EQ(res.tablet_meta().schema().disable_auto_compaction(), disable_auto_compaction);
 };
 
 static void update_tablet(MetaServiceProxy* meta_service, int64_t tablet_id) {
@@ -836,7 +837,7 @@ TEST(AlterSchemaKVTest, AlterDisableAutoCompactionTest) {
         check_get_tablet(meta_service.get(), 10005, 2);
 
         update_tablet(meta_service.get(), 10005);
-        check_schema(meta_service.get(), 10005, 2);
+        check_schema(meta_service.get(), 10005, 2, true);
     }
 
     //case 3 config::write_schema_kv = false, create tablet, config::write_schema_kv = true;
@@ -858,7 +859,7 @@ TEST(AlterSchemaKVTest, AlterDisableAutoCompactionTest) {
         check_get_tablet(meta_service.get(), 10005, 2);
         config::write_schema_kv = true;
         update_tablet(meta_service.get(), 10005);
-        check_schema(meta_service.get(), 10005, 2);
+        check_schema(meta_service.get(), 10005, 2, true);
     }
 
     //case 4 config::write_schema_kv = false, create tablet, config::write_schema_kv = true;
@@ -883,7 +884,7 @@ TEST(AlterSchemaKVTest, AlterDisableAutoCompactionTest) {
         check_get_tablet(meta_service.get(), 10005, 2);
         config::write_schema_kv = true;
         update_tablet(meta_service.get(), 10005);
-        check_schema(meta_service.get(), 10005, 2);
+        check_schema(meta_service.get(), 10005, 2, true);
     }
 }
 

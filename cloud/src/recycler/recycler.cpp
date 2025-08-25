@@ -1585,6 +1585,7 @@ int InstanceRecycler::recycle_tablets(int64_t table_id, int64_t index_id,
     std::vector<std::string> tablet_compact_stats_keys;
     std::vector<std::string> tablet_load_stats_keys;
     std::vector<std::string> versioned_meta_tablet_keys;
+    std::set<int64_t> schema_versions;
     auto recycle_func = [&, this](std::string_view k, std::string_view v) -> int {
         bool use_range_remove = true;
         ++num_scanned;
@@ -1610,6 +1611,9 @@ int InstanceRecycler::recycle_tablets(int64_t table_id, int64_t index_id,
                     versioned::tablet_load_stats_key({instance_id_, tablet_id}));
             versioned_meta_tablet_keys.push_back(
                     versioned::meta_tablet_key({instance_id_, tablet_id}));
+            if (partition_id <= 0) {
+                schema_versions.emplace(tablet_meta_pb.schema_version());
+            }
         }
         TEST_SYNC_POINT_RETURN_WITH_VALUE("recycle_tablet::bypass_check", false);
         sync_executor.add([this, &num_recycled, tid = tablet_id, range_move = use_range_remove,
@@ -1736,6 +1740,14 @@ int InstanceRecycler::recycle_tablets(int64_t table_id, int64_t index_id,
         meta_schema_pb_dictionary_key({instance_id_, index_id}, &schema_dict_key);
         txn->remove(schema_dict_key);
         LOG(WARNING) << "remove schema dict kv, key=" << hex(schema_dict_key);
+        if (is_multi_version) {
+            for (int64_t schema_version : schema_versions) {
+                auto k = versioned::meta_schema_key({instance_id_, index_id, schema_version});
+                // Remove all versions of schema for recycled tablet
+                LOG_INFO("remove versioned schema tablet key").tag("meta_schema_key", hex(k));
+                versioned_remove_all(txn.get(), k);
+            }
+        }
     }
 
     TxnErrorCode err = txn->commit();

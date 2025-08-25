@@ -40,8 +40,10 @@
 #include "cpp/sync_point.h"
 #include "meta-service/meta_service.h"
 #include "meta-store/blob_message.h"
+#include "meta-store/document_message.h"
 #include "meta-store/keys.h"
 #include "meta-store/mem_txn_kv.h"
+#include "meta-store/meta_reader.h"
 #include "meta-store/txn_kv.h"
 #include "meta-store/txn_kv_error.h"
 #include "mock_accessor.h"
@@ -223,6 +225,10 @@ static int create_recycle_rowset(TxnKv* txn_kv, StorageVaultAccessor* accessor,
         meta_schema_key({instance_id, rowset.index_id(), rowset.schema_version()}, &schema_key);
         rowset.tablet_schema().SerializeToString(&schema_val);
         txn->put(schema_key, schema_val);
+        auto versioned_schema_key = versioned::meta_schema_key(
+                {instance_id, rowset.index_id(), rowset.schema_version()});
+        doris::TabletSchemaCloudPB tablet_schema(rowset.tablet_schema());
+        versioned::document_put(txn.get(), versioned_schema_key, std::move(tablet_schema));
     }
     if (txn->commit() != TxnErrorCode::TXN_OK) {
         return -1;
@@ -724,6 +730,14 @@ static int create_tablet(TxnKv* txn_kv, int64_t table_id, int64_t index_id, int6
     auto val = tablet_meta.SerializeAsString();
     auto key = meta_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
     txn->put(key, val);
+    // tablet schema
+    for (int shema_version = 0; shema_version < 2; ++shema_version) {
+        doris::TabletSchemaCloudPB tablet_schema;
+        key = meta_schema_key({instance_id, index_id, shema_version});
+        txn->put(key, tablet_schema.SerializeAsString());
+        key = versioned::meta_schema_key({instance_id, index_id, shema_version});
+        versioned::document_put(txn.get(), key, std::move(tablet_schema));
+    }
     key = stats_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
     txn->put(key, val); // val is not necessary
     key = job_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
@@ -1895,6 +1909,7 @@ TEST(RecyclerTest, recycle_indexes) {
 
     InstanceInfoPB instance;
     instance.set_instance_id(instance_id);
+    instance.set_multi_version_status(MULTI_VERSION_WRITE_ONLY);
     auto obj_info = instance.add_obj_info();
     obj_info->set_id("recycle_indexes");
     obj_info->set_ak(config::test_s3_ak);
@@ -1946,6 +1961,16 @@ TEST(RecyclerTest, recycle_indexes) {
 
     ASSERT_EQ(create_partition_version_kv(txn_kv.get(), table_id, partition_id), 0);
     create_recycle_index(txn_kv.get(), table_id, index_id);
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        TabletSchemaCloudPB schema;
+        MetaReader reader(instance_id);
+        TxnErrorCode err = reader.get_tablet_schema(txn.get(), index_id, 0, &schema, nullptr);
+        ASSERT_EQ(err, TxnErrorCode::TXN_OK);
+        err = reader.get_tablet_schema(txn.get(), index_id, 1, &schema, nullptr);
+        ASSERT_EQ(err, TxnErrorCode::TXN_OK);
+    }
     ASSERT_EQ(recycler.recycle_indexes(), 0);
     ASSERT_EQ(recycler.recycle_tmp_rowsets(), 0); // Recycle tmp rowsets too, since
                                                   // recycle_indexes does not recycle tmp rowsets
@@ -1989,6 +2014,13 @@ TEST(RecyclerTest, recycle_indexes) {
     end_key = meta_schema_key({instance_id, INT64_MAX, 0});
     ASSERT_EQ(txn->get(begin_key, end_key, &it), TxnErrorCode::TXN_OK);
     ASSERT_EQ(it->size(), 0);
+    // versioned meta_schema_key
+    TabletSchemaCloudPB schema;
+    MetaReader reader(instance_id);
+    ASSERT_EQ(reader.get_tablet_schema(txn.get(), index_id, 0, &schema, nullptr),
+              TxnErrorCode::TXN_KEY_NOT_FOUND);
+    ASSERT_EQ(reader.get_tablet_schema(txn.get(), index_id, 1, &schema, nullptr),
+              TxnErrorCode::TXN_KEY_NOT_FOUND);
     // job_tablet_key
     begin_key = job_tablet_key({instance_id, table_id, 0, 0, 0});
     end_key = job_tablet_key({instance_id, table_id + 1, 0, 0, 0});

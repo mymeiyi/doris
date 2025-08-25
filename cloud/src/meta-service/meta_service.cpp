@@ -1114,6 +1114,8 @@ void MetaServiceImpl::update_tablet(::google::protobuf::RpcController* controlle
                             {instance_id, tablet_meta.index_id(), tablet_meta.schema_version()});
                     put_versioned_schema_kv(code, msg, txn.get(), key, schema_pb);
                     if (code != MetaServiceCode::OK) return;
+                    update_tablet_log.add_index_ids(tablet_meta.index_id());
+                    update_tablet_log.add_schema_versions(tablet_meta.schema_version());
                 }
             }
         }

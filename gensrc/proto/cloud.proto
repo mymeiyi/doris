@@ -716,6 +716,8 @@ message DropIndexLogPB {
 
 message UpdateTabletLogPB {
     repeated int64 tablet_ids = 1;
+    repeated int64 index_ids = 2;
+    repeated int64 schema_versions = 3;
 }
 
 message UpdateDeleteBitmapLogPB {
