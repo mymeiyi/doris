@@ -15,17 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import org.apache.doris.regression.suite.ClusterOptions
-
-suite("test_load", "docker") {
-    def options = new ClusterOptions()
-    options.beConfigs += [
-        'enable_java_support=false',
-        'enable_mow_verbose_log=true'
-    ]
-    options.setFeNum(1)
-    options.setBeNum(1)
-    options.cloudMode = true
+suite("test_delete_bitmap_v2", "nonConcurrent") {
+    if (!isCloudMode()) {
+        return
+    }
 
     def configs = [
             // 0: write v1, read v1
@@ -78,47 +71,41 @@ suite("test_load", "docker") {
             ],
     ]
 
-
-    docker(options) {
-        sql """ SET GLOBAL ENABLE_AUTO_ANALYZE = FALSE; """
-
-        for (int i = 0; i < configs.size(); i++) {
-            def config = configs[i]
-            config.each { k, v ->
-                update_all_be_config(k, v)
-            }
-
-            def table_name = "test_load_" + i
-            sql """ drop table if exists ${table_name} force; """
-            sql """
-                CREATE TABLE ${table_name} (
-                    `k` int(11) NOT NULL,
-                    `v` int(11) NOT NULL
-                ) ENGINE=OLAP
-                unique KEY(`k`)
-                DISTRIBUTED BY HASH(`k`) BUCKETS 1
-                PROPERTIES (
-                    "disable_auto_compaction"="true",
-                    "replication_num" = "1"
-                ); 
-            """
-            def tablets = sql_return_maparray """ show tablets from ${table_name} """
-            assertEquals(1, tablets.size())
-            def tablet = tablets[0]
-            logger.info("table: ${table_name}, tablets: ${tablet['TabletId']}" )
-
-            order_qt_select_0 "SELECT '${table_name}';"
-
-            sql """ insert into ${table_name} values(1, 1), (2, 2); """
-            sql """ insert into ${table_name} values(3, 3), (4, 4); """
-            sql """ insert into ${table_name} values(1, 10), (3, 30); """
-            order_qt_select_1 "SELECT * FROM ${table_name};"
-
-            sql """ insert into ${table_name} values(2, 20), (4, 40); """
-            order_qt_select_2 "SELECT * FROM ${table_name};"
-
-            sql """ drop table if exists ${table_name} force; """
+    for (int i = 0; i < configs.size(); i++) {
+        def config = configs[i]
+        config.each { k, v ->
+            update_all_be_config(k, v)
         }
-    }
 
+        def table_name = "test_delete_bitmap_v2_" + i
+        sql """ drop table if exists ${table_name} force; """
+        sql """
+            CREATE TABLE ${table_name} (
+                `k` int(11) NOT NULL,
+                `v` int(11) NOT NULL
+            ) ENGINE=OLAP
+            unique KEY(`k`)
+            DISTRIBUTED BY HASH(`k`) BUCKETS 1
+            PROPERTIES (
+                "disable_auto_compaction"="true",
+                "replication_num" = "1"
+            ); 
+        """
+        def tablets = sql_return_maparray """ show tablets from ${table_name} """
+        assertEquals(1, tablets.size())
+        def tablet = tablets[0]
+        logger.info("table: ${table_name}, tablets: ${tablet['TabletId']}" )
+
+        order_qt_select_0 "SELECT '${table_name}';"
+
+        sql """ insert into ${table_name} values(1, 1), (2, 2); """
+        sql """ insert into ${table_name} values(3, 3), (4, 4); """
+        sql """ insert into ${table_name} values(1, 10), (3, 30); """
+        order_qt_select_1 "SELECT * FROM ${table_name};"
+
+        sql """ insert into ${table_name} values(2, 20), (4, 40); """
+        order_qt_select_2 "SELECT * FROM ${table_name};"
+
+        sql """ drop table if exists ${table_name} force; """
+    }
 }
