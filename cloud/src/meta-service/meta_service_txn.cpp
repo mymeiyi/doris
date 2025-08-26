@@ -2010,6 +2010,21 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
     std::stringstream ss;
     int64_t txn_id = request->txn_id();
     auto sub_txn_infos = request->sub_txn_infos();
+    int64_t db_id;
+    std::map<int64_t, std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>>>
+                sub_txn_to_tmp_rowsets_meta;
+    for (const auto& sub_txn_info : sub_txn_infos) {
+        auto sub_txn_id = sub_txn_info.sub_txn_id();
+        std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>> tmp_rowsets_meta;
+        scan_tmp_rowset(instance_id, sub_txn_id, txn_kv_, code, msg, &db_id, &tmp_rowsets_meta, &stats);
+        if (code != MetaServiceCode::OK) {
+            LOG(WARNING) << "scan_tmp_rowset failed, txn_id=" << txn_id
+                         << ", sub_txn_id=" << sub_txn_id << " code=" << code;
+            return;
+        }
+        sub_txn_to_tmp_rowsets_meta.emplace(sub_txn_id, std::move(tmp_rowsets_meta));
+    }
+    do {
     // Create a readonly txn for scan tmp rowset
     std::unique_ptr<Transaction> txn;
     TxnErrorCode err = txn_kv->create_txn(&txn);
@@ -2030,109 +2045,6 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         stats.del_counter += txn->num_del_keys();
     };
 
-    // Get db id with txn id
-    std::string index_val;
-    const std::string index_key = txn_index_key({instance_id, txn_id});
-    err = txn->get(index_key, &index_val);
-    if (err != TxnErrorCode::TXN_OK) {
-        code = cast_as<ErrCategory::READ>(err);
-        ss << "failed to get db id, txn_id=" << txn_id << " err=" << err;
-        msg = ss.str();
-        LOG(WARNING) << msg;
-        return;
-    }
-
-    TxnIndexPB index_pb;
-    if (!index_pb.ParseFromString(index_val)) {
-        code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-        ss << "failed to parse txn_index_pb, txn_id=" << txn_id;
-        msg = ss.str();
-        LOG(WARNING) << msg;
-        return;
-    }
-
-    DCHECK(index_pb.has_tablet_index() == true);
-    DCHECK(index_pb.tablet_index().has_db_id() == true);
-    int64_t db_id = index_pb.tablet_index().db_id();
-
-    // Get temporary rowsets involved in the txn
-    std::map<int64_t, std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>>>
-            sub_txn_to_tmp_rowsets_meta;
-    for (const auto& sub_txn_info : sub_txn_infos) {
-        auto sub_txn_id = sub_txn_info.sub_txn_id();
-        // This is a range scan
-        MetaRowsetTmpKeyInfo rs_tmp_key_info0 {instance_id, sub_txn_id, 0};
-        MetaRowsetTmpKeyInfo rs_tmp_key_info1 {instance_id, sub_txn_id + 1, 0};
-        std::string rs_tmp_key0;
-        std::string rs_tmp_key1;
-        meta_rowset_tmp_key(rs_tmp_key_info0, &rs_tmp_key0);
-        meta_rowset_tmp_key(rs_tmp_key_info1, &rs_tmp_key1);
-        // Get rowset meta that should be commited
-        //                   tmp_rowset_key -> rowset_meta
-        std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>> tmp_rowsets_meta;
-
-        int num_rowsets = 0;
-        DORIS_CLOUD_DEFER_COPY(rs_tmp_key_info0, rs_tmp_key_info1) {
-            LOG(INFO) << "get tmp rowset meta, txn_id=" << txn_id << ", sub_txn_id=" << sub_txn_id
-                      << " num_rowsets=" << num_rowsets << " range=[" << hex(rs_tmp_key0) << ","
-                      << hex(rs_tmp_key1) << ")";
-        };
-
-        std::unique_ptr<RangeGetIterator> it;
-        do {
-            err = txn->get(rs_tmp_key0, rs_tmp_key1, &it, true);
-            if (err == TxnErrorCode::TXN_TOO_OLD) {
-                err = txn_kv->create_txn(&txn);
-                if (err == TxnErrorCode::TXN_OK) {
-                    err = txn->get(rs_tmp_key0, rs_tmp_key1, &it, true);
-                }
-            }
-            if (err != TxnErrorCode::TXN_OK) {
-                code = cast_as<ErrCategory::READ>(err);
-                ss << "internal error, failed to get tmp rowset while committing, txn_id=" << txn_id
-                   << " err=" << err;
-                msg = ss.str();
-                LOG(WARNING) << msg;
-                return;
-            }
-
-            while (it->has_next()) {
-                auto [k, v] = it->next();
-                LOG(INFO) << "range_get rowset_tmp_key=" << hex(k) << " txn_id=" << txn_id;
-                tmp_rowsets_meta.emplace_back();
-                if (!tmp_rowsets_meta.back().second.ParseFromArray(v.data(), v.size())) {
-                    code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-                    ss << "malformed rowset meta, unable to initialize, txn_id=" << txn_id
-                       << " key=" << hex(k);
-                    msg = ss.str();
-                    LOG(WARNING) << msg;
-                    return;
-                }
-                // Save keys that will be removed later
-                tmp_rowsets_meta.back().first = std::string(k.data(), k.size());
-                ++num_rowsets;
-                if (!it->has_next()) rs_tmp_key0 = k;
-            }
-            rs_tmp_key0.push_back('\x00'); // Update to next smallest key for iteration
-        } while (it->more());
-
-        VLOG_DEBUG << "txn_id=" << txn_id << " sub_txn_id=" << sub_txn_id
-                   << " tmp_rowsets_meta.size()=" << tmp_rowsets_meta.size();
-        sub_txn_to_tmp_rowsets_meta.emplace(sub_txn_id, std::move(tmp_rowsets_meta));
-    }
-    stats.get_bytes += txn->get_bytes();
-    stats.get_counter += txn->num_get_keys();
-    // Create a read/write txn for guarantee consistency
-    txn.reset();
-    err = txn_kv->create_txn(&txn);
-    if (err != TxnErrorCode::TXN_OK) {
-        code = cast_as<ErrCategory::CREATE>(err);
-        ss << "filed to create txn, txn_id=" << txn_id << " err=" << err;
-        msg = ss.str();
-        LOG(WARNING) << msg;
-        return;
-    }
-
     // Get txn info with db_id and txn_id
     std::string info_val; // Will be reused when saving updated txn
     const std::string info_key = txn_info_key({instance_id, db_id, txn_id});
@@ -2140,7 +2052,12 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
     if (err != TxnErrorCode::TXN_OK) {
         code = err == TxnErrorCode::TXN_KEY_NOT_FOUND ? MetaServiceCode::TXN_ID_NOT_FOUND
                                                       : cast_as<ErrCategory::READ>(err);
-        ss << "failed to get txn_info, db_id=" << db_id << " txn_id=" << txn_id << " err=" << err;
+        if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
+            ss << "transaction [" << txn_id << "] not found, db_id=" << db_id;
+        } else {
+            ss << "failed to get txn_info, db_id=" << db_id << " txn_id=" << txn_id
+               << " err=" << err;
+        }
         msg = ss.str();
         LOG(WARNING) << msg;
         return;
@@ -2257,6 +2174,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         return;
     }
     size_t total_versions = version_keys.size();
+        int64_t last_pending_txn_id = 0;
     for (size_t i = 0; i < total_versions; i++) {
         int64_t version;
         if (version_values[i].has_value()) {
@@ -2268,16 +2186,42 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
                 msg = ss.str();
                 return;
             }
+            if (version_pb.pending_txn_ids_size() > 0) {
+                DCHECK(version_pb.pending_txn_ids_size() == 1);
+                last_pending_txn_id = version_pb.pending_txn_ids(0);
+                DCHECK(last_pending_txn_id > 0);
+                break;
+            }
             version = version_pb.version();
         } else {
             version = 1;
         }
         new_versions[version_keys[i]] = version;
+        last_pending_txn_id = 0;
         LOG(INFO) << "xxx get partition_version_key=" << hex(version_keys[i])
                   << " version:" << version << " txn_id=" << txn_id;
     }
     version_keys.clear();
     version_values.clear();
+
+        if (last_pending_txn_id > 0) {
+            stats.get_bytes += txn->get_bytes();
+            stats.get_counter += txn->num_get_keys();
+            txn.reset();
+            TEST_SYNC_POINT_CALLBACK("commit_txn_immediately::advance_last_pending_txn_id",
+                                     &last_pending_txn_id);
+            std::shared_ptr<TxnLazyCommitTask> task =
+                    txn_lazy_committer->submit(instance_id, last_pending_txn_id);
+
+            std::tie(code, msg) = task->wait();
+            if (code != MetaServiceCode::OK) {
+                LOG(WARNING) << "advance_last_txn failed last_txn=" << last_pending_txn_id
+                             << " code=" << code << " msg=" << msg;
+                return;
+            }
+            last_pending_txn_id = 0;
+            continue;
+        }
 
     std::vector<std::pair<std::string, std::string>> rowsets;
     std::unordered_map<int64_t, TabletStats> tablet_stats; // tablet_id -> stats
@@ -2519,7 +2463,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
               << " num_put_keys=" << txn->num_put_keys() << " num_del_keys=" << txn->num_del_keys()
               << " txn_size=" << txn->approximate_bytes() << " txn_id=" << txn_id;
 
-    // Finally we are done...
+        TEST_SYNC_POINT_RETURN_WITH_VOID("commit_txn_with_sub_txn::before_commit", &err, &code);
     err = txn->commit();
     if (err != TxnErrorCode::TXN_OK) {
         if (err == TxnErrorCode::TXN_VALUE_TOO_LARGE || err == TxnErrorCode::TXN_BYTES_TOO_LARGE) {
@@ -2584,6 +2528,9 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
     }
 
     response->mutable_txn_info()->CopyFrom(txn_info);
+        TEST_SYNC_POINT_CALLBACK("commit_txn_with_sub_txn::finish", &code);
+        break;
+    } while (true);
 } // end commit_txn_with_sub_txn
 
 static bool force_txn_lazy_commit() {
