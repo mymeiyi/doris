@@ -1813,6 +1813,7 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
         };
 
         auto store_delete_bitmap = [&](std::string rowset_id) {
+            DCHECK_NE(delete_bitmap_pb.rowset_ids_size(), 0);
             std::string key;
             versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_meta->tablet_id(),
                                                       rowset_id};
@@ -1821,10 +1822,9 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
             DeleteBitmapStoragePB delete_bitmap_storage;
             delete_bitmap_storage.set_store_in_fdb(true);
             *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
-            LOG(INFO) << "sout: store v2, rowset_id=" << rowset_id
-                      << ", delete_bitmap_pb size=" << delete_bitmap_pb.rowset_ids_size()
+            LOG(INFO) << "sout: store v2, rowset_id=" << rowset_id << ", delete_bitmap_pb size="
+                      << delete_bitmap_storage.delete_bitmap().rowset_ids_size()
                       << ", delete_bitmap_storage=" << delete_bitmap_storage.DebugString();
-            DCHECK_NE(delete_bitmap_pb.rowset_ids_size(), 0);
             if (!delete_bitmap_storage.SerializeToString(&val)) {
                 code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
                 msg = "failed to serialize delete bitmap storage";
@@ -1881,6 +1881,13 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
             DCHECK(!cur_rowset_id.empty());
             store_delete_bitmap(cur_rowset_id);
             if (code != MetaServiceCode::OK) return;
+        }
+        err = txn0->commit();
+        if (err != TxnErrorCode::TXN_OK) {
+            code = cast_as<ErrCategory::COMMIT>(err);
+            msg = fmt::format("failed to update delete bitmap, tablet_id={}, err={}",
+                              tablet_idx.tablet_id(), err);
+            return;
         }
     }
 
