@@ -1837,7 +1837,7 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
     err = txn0->commit();
     if (err != TxnErrorCode::TXN_OK) {
         code = cast_as<ErrCategory::COMMIT>(err);
-        msg = fmt::format("failed to update delete bitmap, tablet_id={}, err={}",
+        msg = fmt::format("failed to update versioned delete bitmap, tablet_id={}, err={}",
                           tablet_idx.tablet_id(), err);
         return;
     }

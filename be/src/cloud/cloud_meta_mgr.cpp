@@ -1420,7 +1420,7 @@ Status CloudMetaMgr::prepare_restore_job(const TabletMetaPB& tablet_meta) {
                 if (!pre_rowset_id.empty() && delete_bitmap_pb.rowset_ids_size() > 0) {
                     req.add_delta_rowset_ids(cur_rowset_id);
                     DeleteBitmapStoragePB delete_bitmap_storage;
-                    delete_bitmap_storage.set_store_in_fdb(false);
+                    delete_bitmap_storage.set_store_in_fdb(true);
                     *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
                     *(req.add_delete_bitmap_storages()) = std::move(delete_bitmap_storage);
                 }
@@ -1436,7 +1436,7 @@ Status CloudMetaMgr::prepare_restore_job(const TabletMetaPB& tablet_meta) {
             DCHECK(!cur_rowset_id.empty());
             req.add_delta_rowset_ids(cur_rowset_id);
             DeleteBitmapStoragePB delete_bitmap_storage;
-            delete_bitmap_storage.set_store_in_fdb(false);
+            delete_bitmap_storage.set_store_in_fdb(true);
             *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
             *(req.add_delete_bitmap_storages()) = std::move(delete_bitmap_storage);
         }
