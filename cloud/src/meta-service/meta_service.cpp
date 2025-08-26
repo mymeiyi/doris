@@ -1824,7 +1824,7 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
             LOG(INFO) << "sout: store v2, rowset_id=" << rowset_id
                       << ", delete_bitmap_pb size=" << delete_bitmap_pb.rowset_ids_size()
                       << ", delete_bitmap_storage=" << delete_bitmap_storage.DebugString();
-            CHECK_NE (delete_bitmap_pb.rowset_ids_size() , 0);
+            DCHECK_NE(delete_bitmap_pb.rowset_ids_size(), 0);
             if (!delete_bitmap_storage.SerializeToString(&val)) {
                 code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
                 msg = "failed to serialize delete bitmap storage";
@@ -1859,6 +1859,8 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
 
         for (size_t i = 0; i < delete_bitmap->rowset_ids_size(); ++i) {
             cur_rowset_id = delete_bitmap->rowset_ids(i);
+            LOG(INFO) << "sout: before rowset=" << cur_rowset_id
+                      << ", size=" << delete_bitmap_pb.rowset_ids_size();
             if (cur_rowset_id != pre_rowset_id) {
                 if (!pre_rowset_id.empty()) {
                     // save kv
@@ -1872,6 +1874,8 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
                 DCHECK_EQ(delete_bitmap_pb.segment_delete_bitmaps_size(), 0);
             }
             add_delete_bitmap(delete_bitmap_pb, i);
+            LOG(INFO) << "sout: after rowset=" << cur_rowset_id
+                      << ", size=" << delete_bitmap_pb.rowset_ids_size();
         }
         if (delete_bitmap_pb.rowset_ids_size() > 0) {
             DCHECK(!cur_rowset_id.empty());
