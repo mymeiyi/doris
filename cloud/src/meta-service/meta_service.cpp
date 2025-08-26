@@ -1812,21 +1812,19 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
                     delete_bitmap->segment_delete_bitmaps(index));
         };
 
-        auto store_delete_bitmap = [&]() {
+        auto store_delete_bitmap = [&](std::string rowset_id) {
             std::string key;
             versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_meta->tablet_id(),
-                                                      cur_rowset_id};
+                                                      rowset_id};
             versioned::meta_delete_bitmap_key(key_info, &key);
             std::string val;
             DeleteBitmapStoragePB delete_bitmap_storage;
             delete_bitmap_storage.set_store_in_fdb(true);
             *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
-            LOG(INFO) << "sout: store v2, cur_rowset_id=" << cur_rowset_id
+            LOG(INFO) << "sout: store v2, rowset_id=" << rowset_id
                       << ", delete_bitmap_pb size=" << delete_bitmap_pb.rowset_ids_size()
                       << ", delete_bitmap_storage=" << delete_bitmap_storage.DebugString();
-            if (delete_bitmap_pb.rowset_ids_size() == 0) {
-                return;
-            }
+            CHECK_NE (delete_bitmap_pb.rowset_ids_size() , 0);
             if (!delete_bitmap_storage.SerializeToString(&val)) {
                 code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
                 msg = "failed to serialize delete bitmap storage";
@@ -1862,9 +1860,9 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
         for (size_t i = 0; i < delete_bitmap->rowset_ids_size(); ++i) {
             cur_rowset_id = delete_bitmap->rowset_ids(i);
             if (cur_rowset_id != pre_rowset_id) {
-                if (!pre_rowset_id.empty() && delete_bitmap_pb.rowset_ids_size() > 0) {
+                if (!pre_rowset_id.empty()) {
                     // save kv
-                    store_delete_bitmap();
+                    store_delete_bitmap(pre_rowset_id);
                     if (code != MetaServiceCode::OK) return;
                 }
                 pre_rowset_id = cur_rowset_id;
@@ -1877,10 +1875,7 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
         }
         if (delete_bitmap_pb.rowset_ids_size() > 0) {
             DCHECK(!cur_rowset_id.empty());
-            DeleteBitmapStoragePB delete_bitmap_storage;
-            delete_bitmap_storage.set_store_in_fdb(true);
-            *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
-            store_delete_bitmap();
+            store_delete_bitmap(cur_rowset_id);
             if (code != MetaServiceCode::OK) return;
         }
     }
