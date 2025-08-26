@@ -2755,15 +2755,15 @@ void MetaServiceImpl::commit_txn(::google::protobuf::RpcController* controller,
     }
     RPC_RATE_LIMIT(commit_txn)
 
-    if (request->has_is_txn_load() && request->is_txn_load()) {
-        commit_txn_with_sub_txn(request, response, code, msg, instance_id, stats);
-        return;
-    }
-
     int64_t db_id;
     get_txn_db_id(txn_kv_.get(), instance_id, txn_id, code, msg, &db_id, &stats);
     if (code != MetaServiceCode::OK) {
         LOG(WARNING) << "get_txn_db_id failed, txn_id=" << txn_id << " code=" << code;
+        return;
+    }
+
+    if (request->has_is_txn_load() && request->is_txn_load()) {
+        commit_txn_with_sub_txn(request, response, code, msg, instance_id, db_id, stats);
         return;
     }
 
