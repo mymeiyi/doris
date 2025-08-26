@@ -1093,7 +1093,7 @@ void TabletMeta::_check_mow_rowset_cache_version_size(size_t rowset_cache_versio
         }
         for (const auto& rowset_id : rowset_ids) {
             if (tablet_rowset_ids.find(rowset_id) == tablet_rowset_ids.end()) {
-                ss << rowset_id.to_string() << ", ";
+                ss << rowset_id << ", ";
             }
         }
         // size(rowset_cache_version) <= size(_rs_metas) + size(_stale_rs_metas) + size(_unused_rs)
@@ -1482,7 +1482,7 @@ std::set<std::string> DeleteBitmap::get_rowset_cache_version() {
     std::set<std::string> set;
     std::shared_lock l(_rowset_cache_version_lock);
     for (auto& [k, _] : _rowset_cache_version) {
-        set.insert(k.to_string());
+        set.insert(k.to_syr);
     }
     return set;
 }
