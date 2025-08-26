@@ -1399,8 +1399,47 @@ Status CloudMetaMgr::prepare_restore_job(const TabletMetaPB& tablet_meta) {
     req.set_expiration(config::snapshot_expire_time_sec);
     req.set_action(RestoreJobRequest::PREPARE);
 
+    const DeleteBitmapPB& delete_bitmap = tablet_meta.delete_bitmap();
+    if (delete_bitmap.rowset_ids_size() > 0) {
+        std::string pre_rowset_id = "";
+        std::string cur_rowset_id = "";
+        DeleteBitmapPB delete_bitmap_pb;
+        auto add_delete_bitmap = [&](DeleteBitmapPB& delete_bitmap_pb, int index) {
+            delete_bitmap_pb.add_rowset_ids(delete_bitmap.rowset_ids(index));
+            delete_bitmap_pb.add_segment_ids(delete_bitmap.segment_ids(index));
+            delete_bitmap_pb.add_versions(delete_bitmap.versions(index));
+            delete_bitmap_pb.add_segment_delete_bitmaps(
+                    delete_bitmap.segment_delete_bitmaps(index));
+        };
+        for (int i = 0; i < delete_bitmap.rowset_ids_size(); ++i) {
+            cur_rowset_id = delete_bitmap.rowset_ids(i);
+            if (cur_rowset_id != pre_rowset_id) {
+                if (!pre_rowset_id.empty() && delete_bitmap_pb.rowset_ids_size() > 0) {
+                    req.add_delta_rowset_ids(cur_rowset_id);
+                    DeleteBitmapStoragePB delete_bitmap_storage;
+                    delete_bitmap_storage.set_store_in_fdb(false);
+                    *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
+                    *(req.add_delete_bitmap_storages()) = std::move(delete_bitmap_storage);
+                }
+                pre_rowset_id = cur_rowset_id;
+                DCHECK_EQ(delete_bitmap_pb.rowset_ids_size(), 0);
+                DCHECK_EQ(delete_bitmap_pb.segment_ids_size(), 0);
+                DCHECK_EQ(delete_bitmap_pb.versions_size(), 0);
+                DCHECK_EQ(delete_bitmap_pb.segment_delete_bitmaps_size(), 0);
+            }
+            add_delete_bitmap(delete_bitmap_pb, i);
+        }
+        if (delete_bitmap_pb.rowset_ids_size() > 0) {
+            DCHECK(!cur_rowset_id.empty());
+            req.add_delta_rowset_ids(cur_rowset_id);
+            DeleteBitmapStoragePB delete_bitmap_storage;
+            delete_bitmap_storage.set_store_in_fdb(false);
+            *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
+            *(req.add_delete_bitmap_storages()) = std::move(delete_bitmap_storage);
+        }
+    }
+
     doris_tablet_meta_to_cloud(req.mutable_tablet_meta(), std::move(tablet_meta));
-    req.set_store_version(config::delete_bitmap_store_write_version);
     return retry_rpc("prepare restore job", req, &resp, &MetaService_Stub::prepare_restore_job);
 }
 
