@@ -1826,12 +1826,12 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
             }
         }
         cloud::blob_put(txn0.get(), key, val, 0);
-        LOG_INFO("put delete bitmap key")
+        LOG_INFO("put versioned delete bitmap key")
                 .tag("delete_bitmap_key", hex(key))
                 .tag("tablet_id", tablet_idx.tablet_id())
-                .tag("rowset_id", delete_bitmap->rowset_ids(i))
-                .tag("version", delete_bitmap->versions(i))
-                .tag("segment_id", delete_bitmap->segment_ids(i))
+                .tag("rowset_id", request->delta_rowset_ids(i))
+                .tag("delete_bitmap_num",
+                     request->delete_bitmap_storages(i).delete_bitmap().rowset_ids_size())
                 .tag("delete_bitmap_size", key.size() + val.size());
     }
     err = txn0->commit();
