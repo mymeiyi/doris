@@ -1824,7 +1824,10 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
             LOG(INFO) << "sout: store v2, cur_rowset_id=" << cur_rowset_id
                       << ", delete_bitmap_pb size=" << delete_bitmap_pb.rowset_ids_size()
                       << ", delete_bitmap_storage=" << delete_bitmap_storage.DebugString();
-            if (delete_bitmap_storage.SerializeToString(&val)) {
+            if (delete_bitmap_pb.rowset_ids_size() == 0) {
+                return;
+            }
+            if (!delete_bitmap_storage.SerializeToString(&val)) {
                 code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
                 msg = "failed to serialize delete bitmap storage";
                 return;
