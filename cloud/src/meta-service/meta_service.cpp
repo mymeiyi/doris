@@ -1748,49 +1748,138 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
         return;
     }
 
-    LOG(INFO) << "sout: before put dm v1, tablet_id=" << tablet_meta->tablet_id();
-    DeleteBitmapPB* delete_bitmap = tablet_meta->mutable_delete_bitmap();
-    for (size_t i = 0; i < delete_bitmap->rowset_ids_size(); ++i) {
-        MetaDeleteBitmapInfo key_info {instance_id, tablet_meta->tablet_id(),
-                                       delete_bitmap->rowset_ids(i), delete_bitmap->versions(i),
-                                       delete_bitmap->segment_ids(i)};
-        std::string key;
-        meta_delete_bitmap_key(key_info, &key);
-        auto& val = delete_bitmap->segment_delete_bitmaps(i);
+    auto store_version = request->store_version();
+    bool write_v1 = store_version == 1 || store_version == 3;
+    bool write_v2 = store_version == 2 || store_version == 3;
+    LOG(INFO) << "sout: before put dm v1, tablet_id=" << tablet_meta->tablet_id()
+              << ", store_version=" << store_version;
 
-        if (txn0->approximate_bytes() + key.size() * 3 + val.size() > config::max_txn_commit_byte) {
-            err = txn0->commit();
-            if (err != TxnErrorCode::TXN_OK) {
-                code = cast_as<ErrCategory::COMMIT>(err);
-                msg = fmt::format("failed to update delete bitmap, tablet_id={}, err={}",
-                                  tablet_idx.tablet_id(), err);
-                return;
+    if (write_v1) {
+        DeleteBitmapPB* delete_bitmap = tablet_meta->mutable_delete_bitmap();
+        for (size_t i = 0; i < delete_bitmap->rowset_ids_size(); ++i) {
+            MetaDeleteBitmapInfo key_info {instance_id, tablet_meta->tablet_id(),
+                                           delete_bitmap->rowset_ids(i), delete_bitmap->versions(i),
+                                           delete_bitmap->segment_ids(i)};
+            std::string key;
+            meta_delete_bitmap_key(key_info, &key);
+            auto& val = delete_bitmap->segment_delete_bitmaps(i);
+
+            if (txn0->approximate_bytes() + key.size() * 3 + val.size() >
+                config::max_txn_commit_byte) {
+                err = txn0->commit();
+                if (err != TxnErrorCode::TXN_OK) {
+                    code = cast_as<ErrCategory::COMMIT>(err);
+                    msg = fmt::format("failed to update delete bitmap, tablet_id={}, err={}",
+                                      tablet_idx.tablet_id(), err);
+                    return;
+                }
+                err = txn_kv_->create_txn(&txn0);
+                if (err != TxnErrorCode::TXN_OK) {
+                    code = cast_as<ErrCategory::CREATE>(err);
+                    msg = "failed to init txn";
+                    return;
+                }
             }
-            err = txn_kv_->create_txn(&txn0);
-            if (err != TxnErrorCode::TXN_OK) {
-                code = cast_as<ErrCategory::CREATE>(err);
-                msg = "failed to init txn";
-                return;
-            }
+            txn0->put(key, val);
+            LOG_INFO("put delete bitmap key")
+                    .tag("delete_bitmap_key", hex(key))
+                    .tag("tablet_id", tablet_idx.tablet_id())
+                    .tag("rowset_id", delete_bitmap->rowset_ids(i))
+                    .tag("version", delete_bitmap->versions(i))
+                    .tag("segment_id", delete_bitmap->segment_ids(i))
+                    .tag("delete_bitmap_size", key.size() + val.size());
         }
-        txn0->put(key, val);
-        LOG_INFO("put delete bitmap key")
-                .tag("delete_bitmap_key", hex(key))
-                .tag("tablet_id", tablet_idx.tablet_id())
-                .tag("rowset_id", delete_bitmap->rowset_ids(i))
-                .tag("version", delete_bitmap->versions(i))
-                .tag("segment_id", delete_bitmap->segment_ids(i))
-                .tag("delete_bitmap_size", key.size() + val.size());
-    }
-    err = txn0->commit();
-    if (err != TxnErrorCode::TXN_OK) {
-        code = cast_as<ErrCategory::COMMIT>(err);
-        msg = fmt::format("failed to update delete bitmap, tablet_id={}, err={}",
-                          tablet_idx.tablet_id(), err);
-        return;
+        err = txn0->commit();
+        if (err != TxnErrorCode::TXN_OK) {
+            code = cast_as<ErrCategory::COMMIT>(err);
+            msg = fmt::format("failed to update delete bitmap, tablet_id={}, err={}",
+                              tablet_idx.tablet_id(), err);
+            return;
+        }
     }
 
-    LOG(INFO) << "sout: before put dm v2, tablet_id=" << tablet_meta->tablet_id()
+    if (write_v2) {
+        std::string pre_rowset_id = "";
+        std::string cur_rowset_id = "";
+        DeleteBitmapPB delete_bitmap_pb;
+        DeleteBitmapPB* delete_bitmap = tablet_meta->mutable_delete_bitmap();
+
+        auto add_delete_bitmap = [&](DeleteBitmapPB& delete_bitmap_pb, int index) {
+            delete_bitmap_pb.add_rowset_ids(delete_bitmap->rowset_ids(index));
+            delete_bitmap_pb.add_segment_ids(delete_bitmap->segment_ids(index));
+            delete_bitmap_pb.add_versions(delete_bitmap->versions(index));
+            delete_bitmap_pb.add_segment_delete_bitmaps(
+                    delete_bitmap->segment_delete_bitmaps(index));
+        };
+
+        auto store_delete_bitmap = [&]() {
+            std::string key;
+            versioned::MetaDeleteBitmapInfo key_info {instance_id, tablet_meta->tablet_id(),
+                                                      cur_rowset_id};
+            versioned::meta_delete_bitmap_key(key_info, &key);
+            std::string val;
+            DeleteBitmapStoragePB delete_bitmap_storage;
+            delete_bitmap_storage.set_store_in_fdb(true);
+            *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
+            if (delete_bitmap_storage.SerializeToString(&val)) {
+                code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
+                msg = "failed to serialize delete bitmap storage";
+                return;
+            }
+
+            if (txn0->approximate_bytes() + key.size() * 3 + val.size() >
+                config::max_txn_commit_byte) {
+                cloud::blob_put(txn0.get(), key, val, 0);
+                if (err != TxnErrorCode::TXN_OK) {
+                    code = cast_as<ErrCategory::COMMIT>(err);
+                    msg = fmt::format("failed to update delete bitmap, tablet_id={}, err={}",
+                                      tablet_idx.tablet_id(), err);
+                    return;
+                }
+                err = txn_kv_->create_txn(&txn0);
+                if (err != TxnErrorCode::TXN_OK) {
+                    code = cast_as<ErrCategory::CREATE>(err);
+                    msg = "failed to init txn";
+                    return;
+                }
+            }
+            cloud::blob_put(txn0.get(), key, val, 0);
+            LOG_INFO("put versioned delete bitmap key")
+                    .tag("delete_bitmap_key", hex(key))
+                    .tag("tablet_id", tablet_idx.tablet_id())
+                    .tag("rowset_id", cur_rowset_id)
+                    .tag("delete_bitmap_num",
+                         delete_bitmap_storage.delete_bitmap().rowset_ids_size())
+                    .tag("delete_bitmap_size", key.size() + val.size());
+        };
+
+        for (size_t i = 0; i < delete_bitmap->rowset_ids_size(); ++i) {
+            cur_rowset_id = delete_bitmap->rowset_ids(i);
+            if (cur_rowset_id != pre_rowset_id) {
+                if (!pre_rowset_id.empty() && delete_bitmap_pb.rowset_ids_size() > 0) {
+                    // save kv
+                    store_delete_bitmap();
+                    if (code != MetaServiceCode::OK) return;
+                }
+                pre_rowset_id = cur_rowset_id;
+                DCHECK_EQ(delete_bitmap_pb.rowset_ids_size(), 0);
+                DCHECK_EQ(delete_bitmap_pb.segment_ids_size(), 0);
+                DCHECK_EQ(delete_bitmap_pb.versions_size(), 0);
+                DCHECK_EQ(delete_bitmap_pb.segment_delete_bitmaps_size(), 0);
+            }
+            add_delete_bitmap(delete_bitmap_pb, i);
+        }
+        if (delete_bitmap_pb.rowset_ids_size() > 0) {
+            DCHECK(!cur_rowset_id.empty());
+            DeleteBitmapStoragePB delete_bitmap_storage;
+            delete_bitmap_storage.set_store_in_fdb(true);
+            *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
+            store_delete_bitmap();
+            if (code != MetaServiceCode::OK) return;
+        }
+    }
+
+    /*LOG(INFO) << "sout: before put dm v2, tablet_id=" << tablet_meta->tablet_id()
               << ", size=" << request->delta_rowset_ids_size();
     txn0.reset();
     err = txn_kv_->create_txn(&txn0);
@@ -1843,7 +1932,7 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
         msg = fmt::format("failed to update versioned delete bitmap, tablet_id={}, err={}",
                           tablet_idx.tablet_id(), err);
         return;
-    }
+    }*/
 
     txn0.reset();
     err = txn_kv_->create_txn(&txn0);

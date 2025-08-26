@@ -1399,7 +1399,7 @@ Status CloudMetaMgr::prepare_restore_job(const TabletMetaPB& tablet_meta) {
     req.set_expiration(config::snapshot_expire_time_sec);
     req.set_action(RestoreJobRequest::PREPARE);
 
-    bool write_v2 = config::delete_bitmap_store_write_version == 2 ||
+    /*bool write_v2 = config::delete_bitmap_store_write_version == 2 ||
                     config::delete_bitmap_store_write_version == 3;
     const DeleteBitmapPB& delete_bitmap = tablet_meta.delete_bitmap();
     LOG(INFO) << "sout: prepare_restore_job, size=" << delete_bitmap.rowset_ids_size();
@@ -1443,7 +1443,7 @@ Status CloudMetaMgr::prepare_restore_job(const TabletMetaPB& tablet_meta) {
     }
     DCHECK_EQ(req.delta_rowset_ids_size(), req.delete_bitmap_storages_size());
     LOG(INFO) << "sout: prepare_restore_job, delta size=" << req.delta_rowset_ids_size()
-              << ", dmb size=" << req.delete_bitmap_storages_size();
+              << ", dmb size=" << req.delete_bitmap_storages_size();*/
 
     doris_tablet_meta_to_cloud(req.mutable_tablet_meta(), std::move(tablet_meta));
     return retry_rpc("prepare restore job", req, &resp, &MetaService_Stub::prepare_restore_job);
@@ -1456,6 +1456,7 @@ Status CloudMetaMgr::commit_restore_job(const int64_t tablet_id) {
     req.set_cloud_unique_id(config::cloud_unique_id);
     req.set_tablet_id(tablet_id);
     req.set_action(RestoreJobRequest::COMMIT);
+    req.set_store_version(config::delete_bitmap_store_write_version);
 
     return retry_rpc("commit restore job", req, &resp, &MetaService_Stub::commit_restore_job);
 }

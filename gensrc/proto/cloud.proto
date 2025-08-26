@@ -1293,8 +1293,9 @@ message RestoreJobRequest {
     optional string request_ip = 5;
     optional Action action = 6;
     // 50-51: used for storage v2
-    repeated string delta_rowset_ids = 50;
-    repeated DeleteBitmapStoragePB delete_bitmap_storages = 51;
+    optional int64 store_version = 50;
+    // repeated string delta_rowset_ids = 50;
+    // repeated DeleteBitmapStoragePB delete_bitmap_storages = 51;
 }
 
 message RestoreJobResponse {
