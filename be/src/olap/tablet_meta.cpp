@@ -1085,10 +1085,10 @@ void TabletMeta::_check_mow_rowset_cache_version_size(size_t rowset_cache_versio
         {
             std::lock_guard<std::shared_mutex> wrlock(_meta_lock);
             for (auto& rs_meta : _rs_metas) {
-                tablet_rowset_ids.emplace(rs_meta->rowset_id());
+                tablet_rowset_ids.emplace(rs_meta->rowset_id().to_string());
             }
             for (auto& rs_meta : _stale_rs_metas) {
-                tablet_rowset_ids.emplace(rs_meta->rowset_id());
+                tablet_rowset_ids.emplace(rs_meta->rowset_id().to_string());
             }
         }
         for (const auto& rowset_id : rowset_ids) {
