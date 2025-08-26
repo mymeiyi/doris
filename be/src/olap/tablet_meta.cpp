@@ -1482,7 +1482,7 @@ std::set<std::string> DeleteBitmap::get_rowset_cache_version() {
     std::set<std::string> set;
     std::shared_lock l(_rowset_cache_version_lock);
     for (auto& [k, _] : _rowset_cache_version) {
-        set.insert(k.to_syr);
+        set.insert(k.to_string());
     }
     return set;
 }
