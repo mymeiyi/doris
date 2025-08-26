@@ -1748,6 +1748,7 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
         return;
     }
 
+    LOG(INFO) << "sout: before put dm v1, tablet_id=" << tablet_meta->tablet_id();
     DeleteBitmapPB* delete_bitmap = tablet_meta->mutable_delete_bitmap();
     for (size_t i = 0; i < delete_bitmap->rowset_ids_size(); ++i) {
         MetaDeleteBitmapInfo key_info {instance_id, tablet_meta->tablet_id(),
@@ -1789,6 +1790,8 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
         return;
     }
 
+    LOG(INFO) << "sout: before put dm v2, tablet_id=" << tablet_meta->tablet_id()
+              << ", size=" << request->delta_rowset_ids_size();
     txn0.reset();
     err = txn_kv_->create_txn(&txn0);
     if (err != TxnErrorCode::TXN_OK) {
