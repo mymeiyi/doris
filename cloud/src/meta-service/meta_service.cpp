@@ -1821,6 +1821,9 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
             DeleteBitmapStoragePB delete_bitmap_storage;
             delete_bitmap_storage.set_store_in_fdb(true);
             *(delete_bitmap_storage.mutable_delete_bitmap()) = std::move(delete_bitmap_pb);
+            LOG(INFO) << "sout: store v2, cur_rowset_id=" << cur_rowset_id
+                      << ", delete_bitmap_pb size=" << delete_bitmap_pb.rowset_ids_size()
+                      << ", delete_bitmap_storage=" << delete_bitmap_storage.DebugString();
             if (delete_bitmap_storage.SerializeToString(&val)) {
                 code = MetaServiceCode::PROTOBUF_SERIALIZE_ERR;
                 msg = "failed to serialize delete bitmap storage";
