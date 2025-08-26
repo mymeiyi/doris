@@ -1399,7 +1399,8 @@ Status CloudMetaMgr::prepare_restore_job(const TabletMetaPB& tablet_meta) {
     req.set_expiration(config::snapshot_expire_time_sec);
     req.set_action(RestoreJobRequest::PREPARE);
 
-    bool write_v2 = store_version == 2 || store_version == 3;
+    bool write_v2 = config::delete_bitmap_store_write_version == 2 ||
+                    config::delete_bitmap_store_write_version == 3;
     const DeleteBitmapPB& delete_bitmap = tablet_meta.delete_bitmap();
     LOG(INFO) << "sout: prepare_restore_job, size=" << delete_bitmap.rowset_ids_size();
     if (write_v2 && delete_bitmap.rowset_ids_size() > 0) {
