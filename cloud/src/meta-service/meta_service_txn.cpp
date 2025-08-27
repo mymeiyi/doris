@@ -2076,43 +2076,43 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         }
 
         // TODO: do more check like txn state
-    	DCHECK(txn_info.txn_id() == txn_id);
-    	if (txn_info.status() == TxnStatusPB::TXN_STATUS_ABORTED) {
-        	code = MetaServiceCode::TXN_ALREADY_ABORTED;
-        	ss << "transaction is already aborted: db_id=" << db_id << " txn_id=" << txn_id;
-        	msg = ss.str();
-        	LOG(WARNING) << msg;
-        	return;
-    	}
+        DCHECK(txn_info.txn_id() == txn_id);
+        if (txn_info.status() == TxnStatusPB::TXN_STATUS_ABORTED) {
+            code = MetaServiceCode::TXN_ALREADY_ABORTED;
+            ss << "transaction is already aborted: db_id=" << db_id << " txn_id=" << txn_id;
+            msg = ss.str();
+            LOG(WARNING) << msg;
+            return;
+        }
 
-    	if (txn_info.status() == TxnStatusPB::TXN_STATUS_VISIBLE) {
-        	code = MetaServiceCode::OK;
-        	ss << "transaction is already visible: db_id=" << db_id << " txn_id=" << txn_id;
-        	msg = ss.str();
-        	LOG(INFO) << msg;
-        	response->mutable_txn_info()->CopyFrom(txn_info);
-        	return;
-    	}
+        if (txn_info.status() == TxnStatusPB::TXN_STATUS_VISIBLE) {
+            code = MetaServiceCode::OK;
+            ss << "transaction is already visible: db_id=" << db_id << " txn_id=" << txn_id;
+            msg = ss.str();
+            LOG(INFO) << msg;
+            response->mutable_txn_info()->CopyFrom(txn_info);
+            return;
+        }
 
-    	LOG(INFO) << "txn_id=" << txn_id << " txn_info=" << txn_info.ShortDebugString();
+        LOG(INFO) << "txn_id=" << txn_id << " txn_info=" << txn_info.ShortDebugString();
 
-    	// Prepare rowset meta and new_versions
-    	// Read tablet indexes in batch.
-    	std::map<int64_t, int64_t> tablet_id_to_idx;
-    	std::vector<std::string> tablet_idx_keys;
-    	std::vector<int64_t> partition_ids;
-    	auto idx = 0;
-    	for (auto& [_, tmp_rowsets_meta] : sub_txn_to_tmp_rowsets_meta) {
-        	for (auto& [_, i] : tmp_rowsets_meta) {
-            	auto tablet_id = i.tablet_id();
-            	if (tablet_id_to_idx.count(tablet_id) == 0) {
-                	tablet_id_to_idx.emplace(tablet_id, idx);
-                	tablet_idx_keys.push_back(meta_tablet_idx_key({instance_id, i.tablet_id()}));
-                	partition_ids.push_back(i.partition_id());
-                	idx++;
-            	}
-        	}
-    	}
+        // Prepare rowset meta and new_versions
+        // Read tablet indexes in batch.
+        std::map<int64_t, int64_t> tablet_id_to_idx;
+        std::vector<std::string> tablet_idx_keys;
+        std::vector<int64_t> partition_ids;
+        auto idx = 0;
+        for (auto& [_, tmp_rowsets_meta] : sub_txn_to_tmp_rowsets_meta) {
+            for (auto& [_, i] : tmp_rowsets_meta) {
+                auto tablet_id = i.tablet_id();
+                if (tablet_id_to_idx.count(tablet_id) == 0) {
+                    tablet_id_to_idx.emplace(tablet_id, idx);
+                    tablet_idx_keys.push_back(meta_tablet_idx_key({instance_id, i.tablet_id()}));
+                    partition_ids.push_back(i.partition_id());
+                    idx++;
+                }
+            }
+        }
         std::vector<std::optional<std::string>> tablet_idx_values;
         err = txn->batch_get(&tablet_idx_values, tablet_idx_keys,
                              Transaction::BatchGetOptions(false));
@@ -2188,7 +2188,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
                 if (!version_pb.ParseFromString(version_values[i].value())) {
                     code = MetaServiceCode::PROTOBUF_PARSE_ERR;
                     ss << "failed to parse version pb txn_id=" << txn_id
-                    << " key=" << hex(version_keys[i]);
+                       << " key=" << hex(version_keys[i]);
                     msg = ss.str();
                     return;
                 }
@@ -2467,8 +2467,8 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         LOG(INFO) << "xxx commit_txn put recycle_txn_key key=" << hex(recycle_key)
                   << " txn_id=" << txn_id;
 
-        LOG(INFO) << "commit_txn put_size=" << txn->put_bytes() 
-                  << " del_size=" << txn->delete_bytes() << " num_put_keys=" << txn->num_put_keys() 
+        LOG(INFO) << "commit_txn put_size=" << txn->put_bytes()
+                  << " del_size=" << txn->delete_bytes() << " num_put_keys=" << txn->num_put_keys()
                   << " num_del_keys=" << txn->num_del_keys()
                   << " txn_size=" << txn->approximate_bytes() << " txn_id=" << txn_id;
 
