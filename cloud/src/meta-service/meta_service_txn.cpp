@@ -2005,9 +2005,8 @@ void commit_txn_eventually(
  *    t2: t2_p3(4), t2_p4(4)
  */
 void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse* response,
-                             std::shared_ptr<TxnKv>& txn_kv,
-std::shared_ptr<TxnLazyCommitter>& txn_lazy_committer, MetaServiceCode& code,
-                             std::string& msg, const std::string& instance_id, KVStats& stats) {
+                             std::shared_ptr<TxnKv>& txn_kv, std::shared_ptr<TxnLazyCommitter>& txn_lazy_committer,
+							 MetaServiceCode& code, std::string& msg, const std::string& instance_id, KVStats& stats) {
     std::stringstream ss;
     int64_t txn_id = request->txn_id();
     auto sub_txn_infos = request->sub_txn_infos();
@@ -2026,91 +2025,91 @@ std::shared_ptr<TxnLazyCommitter>& txn_lazy_committer, MetaServiceCode& code,
         sub_txn_to_tmp_rowsets_meta.emplace(sub_txn_id, std::move(tmp_rowsets_meta));
     }
     do {
-    // Create a readonly txn for scan tmp rowset
-    std::unique_ptr<Transaction> txn;
-    TxnErrorCode err = txn_kv->create_txn(&txn);
-    if (err != TxnErrorCode::TXN_OK) {
-        code = cast_as<ErrCategory::CREATE>(err);
-        ss << "filed to create txn, txn_id=" << txn_id << " err=" << err;
-        msg = ss.str();
-        LOG(WARNING) << msg;
-        return;
-    }
-    DORIS_CLOUD_DEFER {
-        if (txn == nullptr) return;
-        stats.get_bytes += txn->get_bytes();
-        stats.put_bytes += txn->put_bytes();
-        stats.del_bytes += txn->delete_bytes();
-        stats.get_counter += txn->num_get_keys();
-        stats.put_counter += txn->num_put_keys();
-        stats.del_counter += txn->num_del_keys();
-    };
+    	// Create a readonly txn for scan tmp rowset
+    	std::unique_ptr<Transaction> txn;
+    	TxnErrorCode err = txn_kv->create_txn(&txn);
+    	if (err != TxnErrorCode::TXN_OK) {
+        	code = cast_as<ErrCategory::CREATE>(err);
+        	ss << "filed to create txn, txn_id=" << txn_id << " err=" << err;
+        	msg = ss.str();
+        	LOG(WARNING) << msg;
+        	return;
+    	}
+    	DORIS_CLOUD_DEFER {
+        	if (txn == nullptr) return;
+        	stats.get_bytes += txn->get_bytes();
+        	stats.put_bytes += txn->put_bytes();
+        	stats.del_bytes += txn->delete_bytes();
+        	stats.get_counter += txn->num_get_keys();
+        	stats.put_counter += txn->num_put_keys();
+        	stats.del_counter += txn->num_del_keys();
+    	};
 
-    // Get txn info with db_id and txn_id
-    std::string info_val; // Will be reused when saving updated txn
-    const std::string info_key = txn_info_key({instance_id, db_id, txn_id});
-    err = txn->get(info_key, &info_val);
-    if (err != TxnErrorCode::TXN_OK) {
-        code = err == TxnErrorCode::TXN_KEY_NOT_FOUND ? MetaServiceCode::TXN_ID_NOT_FOUND
+    	// Get txn info with db_id and txn_id
+    	std::string info_val; // Will be reused when saving updated txn
+    	const std::string info_key = txn_info_key({instance_id, db_id, txn_id});
+    	err = txn->get(info_key, &info_val);
+    	if (err != TxnErrorCode::TXN_OK) {
+        	code = err == TxnErrorCode::TXN_KEY_NOT_FOUND ? MetaServiceCode::TXN_ID_NOT_FOUND
                                                       : cast_as<ErrCategory::READ>(err);
-        if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
-            ss << "transaction [" << txn_id << "] not found, db_id=" << db_id;
-        } else {
-            ss << "failed to get txn_info, db_id=" << db_id << " txn_id=" << txn_id
-               << " err=" << err;
-        }
-        msg = ss.str();
-        LOG(WARNING) << msg;
-        return;
-    }
+        	if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
+            	ss << "transaction [" << txn_id << "] not found, db_id=" << db_id;
+        	} else {
+            	ss << "failed to get txn_info, db_id=" << db_id << " txn_id=" << txn_id
+               	<< " err=" << err;
+        	}
+        	msg = ss.str();
+        	LOG(WARNING) << msg;
+        	return;
+    	}
 
-    TxnInfoPB txn_info;
-    if (!txn_info.ParseFromString(info_val)) {
-        code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-        ss << "failed to parse txn_info, db_id=" << db_id << " txn_id=" << txn_id;
-        msg = ss.str();
-        LOG(WARNING) << msg;
-        return;
-    }
+    	TxnInfoPB txn_info;
+    	if (!txn_info.ParseFromString(info_val)) {
+        	code = MetaServiceCode::PROTOBUF_PARSE_ERR;
+        	ss << "failed to parse txn_info, db_id=" << db_id << " txn_id=" << txn_id;
+        	msg = ss.str();
+        	LOG(WARNING) << msg;
+        	return;
+    	}
 
-    // TODO: do more check like txn state
-    DCHECK(txn_info.txn_id() == txn_id);
-    if (txn_info.status() == TxnStatusPB::TXN_STATUS_ABORTED) {
-        code = MetaServiceCode::TXN_ALREADY_ABORTED;
-        ss << "transaction is already aborted: db_id=" << db_id << " txn_id=" << txn_id;
-        msg = ss.str();
-        LOG(WARNING) << msg;
-        return;
-    }
+    	// TODO: do more check like txn state
+    	DCHECK(txn_info.txn_id() == txn_id);
+    	if (txn_info.status() == TxnStatusPB::TXN_STATUS_ABORTED) {
+        	code = MetaServiceCode::TXN_ALREADY_ABORTED;
+        	ss << "transaction is already aborted: db_id=" << db_id << " txn_id=" << txn_id;
+        	msg = ss.str();
+        	LOG(WARNING) << msg;
+        	return;
+    	}
 
-    if (txn_info.status() == TxnStatusPB::TXN_STATUS_VISIBLE) {
-        code = MetaServiceCode::OK;
-        ss << "transaction is already visible: db_id=" << db_id << " txn_id=" << txn_id;
-        msg = ss.str();
-        LOG(INFO) << msg;
-        response->mutable_txn_info()->CopyFrom(txn_info);
-        return;
-    }
+    	if (txn_info.status() == TxnStatusPB::TXN_STATUS_VISIBLE) {
+        	code = MetaServiceCode::OK;
+        	ss << "transaction is already visible: db_id=" << db_id << " txn_id=" << txn_id;
+        	msg = ss.str();
+        	LOG(INFO) << msg;
+        	response->mutable_txn_info()->CopyFrom(txn_info);
+        	return;
+    	}
 
-    LOG(INFO) << "txn_id=" << txn_id << " txn_info=" << txn_info.ShortDebugString();
+    	LOG(INFO) << "txn_id=" << txn_id << " txn_info=" << txn_info.ShortDebugString();
 
-    // Prepare rowset meta and new_versions
-    // Read tablet indexes in batch.
-    std::map<int64_t, int64_t> tablet_id_to_idx;
-    std::vector<std::string> tablet_idx_keys;
-    std::vector<int64_t> partition_ids;
-    auto idx = 0;
-    for (auto& [_, tmp_rowsets_meta] : sub_txn_to_tmp_rowsets_meta) {
-        for (auto& [_, i] : tmp_rowsets_meta) {
-            auto tablet_id = i.tablet_id();
-            if (tablet_id_to_idx.count(tablet_id) == 0) {
-                tablet_id_to_idx.emplace(tablet_id, idx);
-                tablet_idx_keys.push_back(meta_tablet_idx_key({instance_id, i.tablet_id()}));
-                partition_ids.push_back(i.partition_id());
-                idx++;
-            }
-        }
-    }
+    	// Prepare rowset meta and new_versions
+    	// Read tablet indexes in batch.
+    	std::map<int64_t, int64_t> tablet_id_to_idx;
+    	std::vector<std::string> tablet_idx_keys;
+    	std::vector<int64_t> partition_ids;
+    	auto idx = 0;
+    	for (auto& [_, tmp_rowsets_meta] : sub_txn_to_tmp_rowsets_meta) {
+        	for (auto& [_, i] : tmp_rowsets_meta) {
+            	auto tablet_id = i.tablet_id();
+            	if (tablet_id_to_idx.count(tablet_id) == 0) {
+                	tablet_id_to_idx.emplace(tablet_id, idx);
+                	tablet_idx_keys.push_back(meta_tablet_idx_key({instance_id, i.tablet_id()}));
+                	partition_ids.push_back(i.partition_id());
+                	idx++;
+            	}
+        	}
+    	}
     std::vector<std::optional<std::string>> tablet_idx_values;
     err = txn->batch_get(&tablet_idx_values, tablet_idx_keys, Transaction::BatchGetOptions(false));
     if (err != TxnErrorCode::TXN_OK) {
