@@ -2005,8 +2005,10 @@ void commit_txn_eventually(
  *    t2: t2_p3(4), t2_p4(4)
  */
 void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse* response,
-                             std::shared_ptr<TxnKv>& txn_kv, std::shared_ptr<TxnLazyCommitter>& txn_lazy_committer,
-							 MetaServiceCode& code, std::string& msg, const std::string& instance_id, KVStats& stats) {
+                             std::shared_ptr<TxnKv>& txn_kv,
+                             std::shared_ptr<TxnLazyCommitter>& txn_lazy_committer,
+							 MetaServiceCode& code, std::string& msg,
+                             const std::string& instance_id, KVStats& stats) {
     std::stringstream ss;
     int64_t txn_id = request->txn_id();
     auto sub_txn_infos = request->sub_txn_infos();
@@ -2016,7 +2018,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
     for (const auto& sub_txn_info : sub_txn_infos) {
         auto sub_txn_id = sub_txn_info.sub_txn_id();
         std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>> tmp_rowsets_meta;
-        scan_tmp_rowset(instance_id, sub_txn_id, txn_kv, code, msg, &db_id, &tmp_rowsets_meta, 
+        scan_tmp_rowset(instance_id, sub_txn_id, txn_kv, code, msg, &db_id, &tmp_rowsets_meta,
                         &stats);
         if (code != MetaServiceCode::OK) {
             LOG(WARNING) << "scan_tmp_rowset failed, txn_id=" << txn_id
@@ -2052,7 +2054,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         err = txn->get(info_key, &info_val);
         if (err != TxnErrorCode::TXN_OK) {
             code = err == TxnErrorCode::TXN_KEY_NOT_FOUND ? MetaServiceCode::TXN_ID_NOT_FOUND
-                                                      : cast_as<ErrCategory::READ>(err);
+                                                          : cast_as<ErrCategory::READ>(err);
             if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
                 ss << "transaction [" << txn_id << "] not found, db_id=" << db_id;
             } else {
@@ -2112,7 +2114,8 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         	}
     	}
         std::vector<std::optional<std::string>> tablet_idx_values;
-        err = txn->batch_get(&tablet_idx_values, tablet_idx_keys, Transaction::BatchGetOptions(false));
+        err = txn->batch_get(&tablet_idx_values, tablet_idx_keys,
+                             Transaction::BatchGetOptions(false));
         if (err != TxnErrorCode::TXN_OK) {
             code = cast_as<ErrCategory::READ>(err);
             ss << "failed to get tablet table index ids, err=" << err;
@@ -2137,7 +2140,8 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
             }
             if (!tablet_ids[tablet_id].ParseFromString(tablet_idx_values[i].value())) [[unlikely]] {
                 code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-                ss << "malformed tablet index value tablet_id=" << tablet_id << " txn_id=" << txn_id;
+                ss << "malformed tablet index value tablet_id=" << tablet_id
+                   << " txn_id=" << txn_id;
                 msg = ss.str();
                 LOG(WARNING) << msg;
                 return;
@@ -2156,12 +2160,13 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         for (auto& [tablet_id, i] : tablet_id_to_idx) {
             int64_t table_id = tablet_ids[tablet_id].table_id();
             int64_t partition_id = partition_ids[i];
-            std::string ver_key = partition_version_key({instance_id, db_id, table_id, partition_id});
+            std::string ver_key = 
+                    partition_version_key({instance_id, db_id, table_id, partition_id});
             if (new_versions.count(ver_key) == 0) {
                 new_versions.insert({ver_key, 0});
-                LOG(INFO) << "xxx add a partition_version_key=" << hex(ver_key) << " txn_id=" << txn_id
-                          << ", db_id=" << db_id << ", table_id=" << table_id
-                          << ", partition_id=" << partition_id;
+                LOG(INFO) << "xxx add a partition_version_key=" << hex(ver_key)
+                          << " txn_id=" << txn_id << ", db_id=" << db_id
+                          << ", table_id=" << table_id << ", partition_id=" << partition_id;
                 version_keys.push_back(std::move(ver_key));
             }
         }
@@ -2305,7 +2310,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
 
             txn->put(i.first, ver_val);
             LOG(INFO) << "xxx put partition_version_key=" << hex(i.first) << " version:" << i.second
-                    << " txn_id=" << txn_id;
+                      << " txn_id=" << txn_id;
 
             std::string_view ver_key = i.first;
             ver_key.remove_prefix(1); // Remove key space
@@ -2335,7 +2340,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         for (auto& i : table_id_tablet_ids) {
             std::string ver_key = table_version_key({instance_id, db_id, i.first});
             txn->atomic_add(ver_key, 1);
-            LOG(INFO) << "xxx atomic add table_version_key=" << hex(ver_key) 
+            LOG(INFO) << "xxx atomic add table_version_key=" << hex(ver_key)
                       << " txn_id=" << txn_id;
         }
 
@@ -2430,7 +2435,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
             DCHECK(tablet_ids.count(tablet_id));
             auto& tablet_idx = tablet_ids[tablet_id];
             StatsTabletKeyInfo info {instance_id, tablet_idx.table_id(), tablet_idx.index_id(),
-                                    tablet_idx.partition_id(), tablet_id};
+                                     tablet_idx.partition_id(), tablet_id};
             update_tablet_stats(info, stats);
             if (code != MetaServiceCode::OK) return;
         }
@@ -2462,8 +2467,9 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         LOG(INFO) << "xxx commit_txn put recycle_txn_key key=" << hex(recycle_key)
                   << " txn_id=" << txn_id;
 
-        LOG(INFO) << "commit_txn put_size=" << txn->put_bytes() << " del_size=" << txn->delete_bytes()
-                  << " num_put_keys=" << txn->num_put_keys() << " num_del_keys=" << txn->num_del_keys()
+        LOG(INFO) << "commit_txn put_size=" << txn->put_bytes() 
+                  << " del_size=" << txn->delete_bytes() << " num_put_keys=" << txn->num_put_keys() 
+                  << " num_del_keys=" << txn->num_del_keys()
                   << " txn_size=" << txn->approximate_bytes() << " txn_id=" << txn_id;
 
         TEST_SYNC_POINT_RETURN_WITH_VOID("commit_txn_with_sub_txn::before_commit", &err, &code);
