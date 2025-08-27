@@ -2007,7 +2007,7 @@ void commit_txn_eventually(
 void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse* response,
                              std::shared_ptr<TxnKv>& txn_kv,
                              std::shared_ptr<TxnLazyCommitter>& txn_lazy_committer,
-							 MetaServiceCode& code, std::string& msg,
+                             MetaServiceCode& code, std::string& msg,
                              const std::string& instance_id, KVStats& stats) {
     std::stringstream ss;
     int64_t txn_id = request->txn_id();
@@ -2160,7 +2160,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
         for (auto& [tablet_id, i] : tablet_id_to_idx) {
             int64_t table_id = tablet_ids[tablet_id].table_id();
             int64_t partition_id = partition_ids[i];
-            std::string ver_key = 
+            std::string ver_key =
                     partition_version_key({instance_id, db_id, table_id, partition_id});
             if (new_versions.count(ver_key) == 0) {
                 new_versions.insert({ver_key, 0});
