@@ -1740,7 +1740,7 @@ void MetaServiceImpl::commit_restore_job(::google::protobuf::RpcController* cont
     DCHECK_EQ(tablet_meta->tablet_id(), tablet_idx.tablet_id());
 
     DeleteBitmapPB* delete_bitmap = tablet_meta->mutable_delete_bitmap();
-    auto store_version = request->store_version();
+    auto store_version = request->has_store_version() ? request->store_version() : 1;
     bool write_v1 = store_version == 1 || store_version == 3;
     bool write_v2 = store_version == 2 || store_version == 3;
     if (write_v1 && delete_bitmap->rowset_ids_size() > 0) {
