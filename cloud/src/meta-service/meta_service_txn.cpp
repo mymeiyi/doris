@@ -2005,7 +2005,8 @@ void commit_txn_eventually(
  *    t2: t2_p3(4), t2_p4(4)
  */
 void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse* response,
-                             std::shared_ptr<TxnKv>& txn_kv, MetaServiceCode& code,
+                             std::shared_ptr<TxnKv>& txn_kv,
+std::shared_ptr<TxnLazyCommitter>& txn_lazy_committer, MetaServiceCode& code,
                              std::string& msg, const std::string& instance_id, KVStats& stats) {
     std::stringstream ss;
     int64_t txn_id = request->txn_id();
@@ -2016,7 +2017,7 @@ void commit_txn_with_sub_txn(const CommitTxnRequest* request, CommitTxnResponse*
     for (const auto& sub_txn_info : sub_txn_infos) {
         auto sub_txn_id = sub_txn_info.sub_txn_id();
         std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>> tmp_rowsets_meta;
-        scan_tmp_rowset(instance_id, sub_txn_id, txn_kv_, code, msg, &db_id, &tmp_rowsets_meta, &stats);
+        scan_tmp_rowset(instance_id, sub_txn_id, txn_kv, code, msg, &db_id, &tmp_rowsets_meta, &stats);
         if (code != MetaServiceCode::OK) {
             LOG(WARNING) << "scan_tmp_rowset failed, txn_id=" << txn_id
                          << ", sub_txn_id=" << sub_txn_id << " code=" << code;
@@ -2561,7 +2562,7 @@ void MetaServiceImpl::commit_txn(::google::protobuf::RpcController* controller,
     RPC_RATE_LIMIT(commit_txn)
 
     if (request->has_is_txn_load() && request->is_txn_load()) {
-        commit_txn_with_sub_txn(request, response, txn_kv_, code, msg, instance_id, stats);
+        commit_txn_with_sub_txn(request, response, txn_kv_, txn_lazy_committer_, code, msg, instance_id, stats);
         return;
     }
 
