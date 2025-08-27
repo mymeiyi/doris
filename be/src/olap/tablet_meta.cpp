@@ -1083,7 +1083,7 @@ void TabletMeta::_check_mow_rowset_cache_version_size(size_t rowset_cache_versio
         auto rowset_ids = _delete_bitmap->get_rowset_cache_version();
         std::set<std::string> tablet_rowset_ids;
         {
-            std::lock_guard<std::shared_mutex> wrlock(_meta_lock);
+            std::shared_lock rlock(_meta_lock);
             for (auto& rs_meta : _rs_metas) {
                 tablet_rowset_ids.emplace(rs_meta->rowset_id().to_string());
             }
