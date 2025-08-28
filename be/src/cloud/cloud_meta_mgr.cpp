@@ -1146,10 +1146,11 @@ Status CloudMetaMgr::_read_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t 
     CloudStorageEngine& engine = ExecEnv::GetInstance()->storage_engine().to_cloud();
     std::unique_ptr<ThreadPoolToken> token = engine.sync_delete_bitmap_thread_pool().new_token(
             ThreadPool::ExecutionMode::CONCURRENT);
-
+    bthread::CountdownEvent wait {rowset_ids.size()};
     for (int i = 0; i < rowset_ids.size(); i++) {
         auto& rowset_id = rowset_ids[i];
         if (delete_bitmap_storages[i].store_in_fdb()) {
+            wait.signal();
             DeleteBitmapPB dbm = delete_bitmap_storages[i].delete_bitmap();
             RETURN_IF_ERROR(merge_delete_bitmap(rowset_id, dbm));
         } else {
@@ -1164,11 +1165,13 @@ Status CloudMetaMgr::_read_tablet_delete_bitmap_v2(CloudTablet* tablet, int64_t 
                         result = status;
                     }
                 }
+                wait.signal();
             });
             RETURN_IF_ERROR(submit_st);
         }
     }
     // wait for all finished
+    wait.wait();
     token->wait();
     return result;
 }
