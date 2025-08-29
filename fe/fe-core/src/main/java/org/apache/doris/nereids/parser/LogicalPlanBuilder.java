@@ -587,6 +587,7 @@ import org.apache.doris.nereids.trees.plans.algebra.InlineTable;
 import org.apache.doris.nereids.trees.plans.algebra.OneRowRelation;
 import org.apache.doris.nereids.trees.plans.algebra.SetOperation.Qualifier;
 import org.apache.doris.nereids.trees.plans.commands.AddConstraintCommand;
+import org.apache.doris.nereids.trees.plans.commands.AdminBackupClusterSnapshotCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCancelRebalanceDiskCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCancelRepairTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCheckTabletsCommand;
@@ -7916,6 +7917,17 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
     public LogicalPlan visitAdminCancelRepairTable(DorisParser.AdminCancelRepairTableContext ctx) {
         TableRefInfo tableRefInfo = visitBaseTableRefContext(ctx.baseTableRef());
         return new AdminCancelRepairTableCommand(tableRefInfo);
+    }
+
+    @Override
+    public LogicalPlan visitAdminBackupClusterSnapshot(DorisParser.AdminBackupClusterSnapshotContext ctx) {
+        Map<String, String> properties;
+        if (ctx.propertyClause() != null) {
+            properties = visitPropertyClause(ctx.propertyClause());
+        } else {
+            properties = ImmutableMap.of();
+        }
+        return new AdminBackupClusterSnapshotCommand(properties);
     }
 
     @Override
