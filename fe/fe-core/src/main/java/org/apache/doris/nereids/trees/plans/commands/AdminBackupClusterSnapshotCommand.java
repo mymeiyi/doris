@@ -116,6 +116,8 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
                 } else if (entry.getKey().equalsIgnoreCase(PROP_LABEL)) {
                     label = entry.getValue();
                     iter.remove();
+                } else {
+                    throw new AnalysisException("Unknown property: " + entry.getKey());
                 }
             }
         } catch (NumberFormatException e) {
