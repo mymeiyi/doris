@@ -126,6 +126,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
             hasLog = true;
             outputStream.write(entity.getOpCode(), entity.getData());
         }
+        outputStream.setReadyToFlush();
         outputStream.flush();
         outputStream.close();
 
