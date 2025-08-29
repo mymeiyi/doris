@@ -21,6 +21,10 @@ import java.io.File;
 
 public class Config extends ConfigBase {
 
+    public static String ak = "";
+    public static String sk = "";
+    public static String bucket = "";
+
     @ConfField(description = {"用户自定义配置文件的路径，用于存放 fe_custom.conf。该文件中的配置会覆盖 fe.conf 中的配置",
             "The path of the user-defined configuration file, used to store fe_custom.conf. "
                     + "The configuration in this file will override the configuration in fe.conf"})

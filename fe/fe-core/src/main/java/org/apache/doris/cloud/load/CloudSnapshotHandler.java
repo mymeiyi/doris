@@ -19,7 +19,9 @@ package org.apache.doris.cloud.load;
 
 import com.google.common.collect.Queues;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.snapshot.SnapshotState;
+import org.apache.doris.cloud.storage.RemoteBase;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.util.MasterDaemon;
@@ -39,10 +41,14 @@ public class CloudSnapshotHandler extends MasterDaemon {
 
     private static final Logger LOG = LogManager.getLogger(CloudSnapshotHandler.class);
 
+    public static final String SNAPSHOT_DIR = "/snapshot";
+
     private LinkedBlockingQueue<CleanCopyJobTask> needScheduleJobs = Queues.newLinkedBlockingQueue();
+    private String snapshotDir;
 
     public CloudSnapshotHandler() {
         super("cloud snapshot handler", Config.cloud_snapshot_handler_interval_second * 1000);
+        this.snapshotDir = Config.meta_dir + SNAPSHOT_DIR;
     }
 
     @Override
@@ -68,7 +74,10 @@ public class CloudSnapshotHandler extends MasterDaemon {
         }
     }
 
-    public void snapshot(String snapshotId, String snapshotUrl) throws IOException {
+    public void snapshot(String snapshotId, String snapshotUrl) throws Exception {
+        String prefix = "meiyi";
+        snapshotUrl = prefix + "/snapshot/" + System.currentTimeMillis() + "/";
+        LOG.info("Start to snapshot {}", snapshotUrl);
         SnapshotState snapshotState = new SnapshotState(snapshotId, snapshotUrl);
         long logId = Env.getCurrentEnv().getEditLog().logBeginSnapshot(snapshotState);
         // scan edit logs between imageVersion and logId
@@ -77,11 +86,29 @@ public class CloudSnapshotHandler extends MasterDaemon {
             return;
         }
         if (imageVersion < logId) {
-            scanJournal(imageVersion, logId);
+            scanJournal(imageVersion, logId, snapshotId);
         }
         // use lock to prevent checkpoint
         // upload image files
+        String imageDir = Env.getServingEnv().getImageDir();
         // upload edit log file
+        // ObjStorage objStorage = new ObjStorage(snapshotId, snapshotUrl, imageDir);
+        String imageFileName = "image." + imageVersion;
+        File imageFile = new File(imageDir + imageFileName);
+        if (!imageFile.exists()) {
+            LOG.error("image file does not exist: {}", imageFile.getAbsoluteFile());
+            return;
+        }
+        Cloud.ObjectStoreInfoPB.Provider provider = Cloud.ObjectStoreInfoPB.Provider.COS;
+        String ak = Config.ak;
+        String sk = Config.sk;
+        String bucket = Config.bucket;
+        String endpoint = "cos.ap-beijing.myqcloud.com";
+        String region = "ap-beijing";
+
+        RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(provider, ak, sk, bucket, endpoint, region, prefix);
+        RemoteBase remote = RemoteBase.newInstance(objectInfo);
+        remote.putObject(imageFile, snapshotUrl + "/" + imageFileName);
         // delete edit log
 
         // test load image
@@ -100,7 +127,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
         }
     }
 
-    public synchronized boolean scanJournal(long fromJournalId, long newToJournalId) throws IOException {
+    public synchronized boolean scanJournal(long fromJournalId, long newToJournalId, String snapshotId) throws IOException {
         LOG.info("scan journal id is {}, replay to journal id is {}", fromJournalId, newToJournalId);
         JournalCursor cursor = Env.getCurrentEnv().getEditLog().read(fromJournalId + 1, newToJournalId);
         if (cursor == null) {
@@ -108,7 +135,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
             return false;
         }
 
-        File currentEditFile = new File(Env.getCurrentEnv().getImageDir(), "edits.1");
+        File currentEditFile = new File(snapshotDir, snapshotId);
         currentEditFile.createNewFile();
         EditLogFileOutputStream outputStream = new EditLogFileOutputStream(currentEditFile);
 
