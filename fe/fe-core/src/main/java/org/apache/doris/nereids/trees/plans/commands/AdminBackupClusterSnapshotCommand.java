@@ -112,10 +112,10 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
                 Map.Entry<String, String> entry = iter.next();
                 if (entry.getKey().equalsIgnoreCase(PROP_TTL)) {
                     ttl = Long.valueOf(entry.getValue());
-                    iter.remove();
+                    // iter.remove();
                 } else if (entry.getKey().equalsIgnoreCase(PROP_LABEL)) {
                     label = entry.getValue();
-                    iter.remove();
+                    // iter.remove();
                 } else {
                     throw new AnalysisException("Unknown property: " + entry.getKey());
                 }
@@ -124,9 +124,9 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
             throw new AnalysisException("Invalid property: " + e.getMessage());
         }
 
-        if (!properties.isEmpty()) {
+        /*if (!properties.isEmpty()) {
             throw new AnalysisException("Unknown property: " + properties);
-        }
+        }*/
     }
 
     @Override
