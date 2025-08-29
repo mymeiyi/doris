@@ -30,6 +30,7 @@ import org.apache.commons.lang3.tuple.Triple;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.File;
 import java.io.UnsupportedEncodingException;
 import java.util.Base64;
 import java.util.List;
@@ -135,6 +136,8 @@ public abstract class RemoteBase {
     public abstract Triple<String, String, String> getStsToken() throws DdlException;
 
     public abstract void deleteObjects(List<String> keys) throws DdlException;
+
+    public abstract void putObject(File file, String key) throws DdlException;
 
     public void close() {}
 

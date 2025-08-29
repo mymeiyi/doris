@@ -51,6 +51,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import reactor.core.publisher.Mono;
 
+import java.io.File;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -187,6 +188,11 @@ public class AzureRemote extends RemoteBase {
             LOG.warn("Failed to delete objects for Azure", e);
             throw new DdlException("Failed to delete objects for Azure, Error message=" + e.getMessage());
         }
+    }
+
+    @Override
+    public void putObject(File file, String key) throws DdlException {
+        throw  new DdlException("Not supported");
     }
 
     @Override

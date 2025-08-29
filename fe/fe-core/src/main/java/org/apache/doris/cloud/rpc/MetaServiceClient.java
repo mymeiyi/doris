@@ -492,4 +492,10 @@ public class MetaServiceClient {
         return blockingStub.withDeadlineAfter(Config.meta_service_brpc_timeout_ms, TimeUnit.MILLISECONDS)
                 .createInstance(request);
     }
+
+    public Cloud.BeginSnapshotResponse
+            beginSnapshot(Cloud.BeginSnapshotRequest request) {
+        return blockingStub.withDeadlineAfter(Config.meta_service_brpc_timeout_ms, TimeUnit.MILLISECONDS)
+            .beginSnapshot(request);
+    }
 }
