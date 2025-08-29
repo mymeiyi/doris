@@ -587,6 +587,8 @@ public class Config extends ConfigBase {
             "The interval of load job scheduler, in seconds."})
     public static int load_checker_interval_second = 5;
 
+    public static int cloud_snapshot_handler_interval_second = 600;
+
     @ConfField(description = {"ingestion load job 调度器的执行间隔，单位是秒。",
             "The interval of ingestion load job scheduler, in seconds."})
     public static int ingestion_load_checker_interval_second = 60;
