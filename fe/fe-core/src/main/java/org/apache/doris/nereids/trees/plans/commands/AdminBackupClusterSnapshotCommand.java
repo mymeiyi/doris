@@ -44,13 +44,11 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
 
     public static final String PROP_TTL = "ttl";
     public static final String PROP_LABEL = "label";
-    private static final long DEFAULT_EXPIRATION_MINUTES = 60;
     private static final Logger LOG = LogManager.getLogger(AdminBackupClusterSnapshotCommand.class);
 
     private Map<String, String> properties;
     private long ttl = -1;
     private String label = "";
-    private long expirationMinutes = DEFAULT_EXPIRATION_MINUTES;    // default 60min
 
     /**
      * AdminBackupClusterSnapshotCommand
@@ -67,10 +65,6 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
 
     public String getLabel() {
         return label;
-    }
-
-    public long getExpirationMinutes() {
-        return expirationMinutes;
     }
 
     @Override
