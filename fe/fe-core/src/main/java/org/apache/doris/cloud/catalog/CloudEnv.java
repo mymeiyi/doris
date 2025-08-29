@@ -86,6 +86,7 @@ public class CloudEnv extends Env {
         this.cloudTabletRebalancer = new CloudTabletRebalancer((CloudSystemInfoService) systemInfo);
         this.cacheHotspotMgr = new CacheHotspotManager((CloudSystemInfoService) systemInfo);
         this.upgradeMgr = new CloudUpgradeMgr((CloudSystemInfoService) systemInfo);
+        this.cloudSnapshotHandler = new CloudSnapshotHandler();
     }
 
     public CloudTabletRebalancer getCloudTabletRebalancer() {
@@ -98,6 +99,10 @@ public class CloudEnv extends Env {
 
     public CloudClusterChecker getCloudClusterChecker() {
         return this.cloudClusterCheck;
+    }
+
+    public CloudSnapshotHandler getCloudSnapshotHandler() {
+        return this.cloudSnapshotHandler;
     }
 
     public String getCloudInstanceId() {

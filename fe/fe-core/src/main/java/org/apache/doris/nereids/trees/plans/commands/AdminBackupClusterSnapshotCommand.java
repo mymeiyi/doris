@@ -25,7 +25,10 @@ import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.TabletInvertedIndex;
 import org.apache.doris.catalog.TabletMeta;
+import org.apache.doris.cloud.catalog.CloudEnv;
+import org.apache.doris.cloud.load.CloudSnapshotHandler;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.MarkedCountDownLatch;
@@ -91,6 +94,8 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
     public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
         LOG.info("sout: AdminBackupClusterSnapshotCommand is running");
         validate(ctx);
+        CloudSnapshotHandler cloudSnapshotHandler = ((CloudEnv) ctx.getEnv()).getCloudSnapshotHandler();
+        cloudSnapshotHandler.snapshot("1", "");
         // ctx.getEnv().getTabletChecker().cancelRepairTable(this);
     }
 
@@ -98,7 +103,10 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
      * validate
      */
     public void validate(ConnectContext ctx) throws AnalysisException {
-        if (!Env.getCurrentEnv().getAccessManager().checkGlobalPriv(ConnectContext.get(), PrivPredicate.ADMIN)) {
+        if (!Config.isCloudMode()) {
+            throw new AnalysisException("The sql is illegal in disk mode ");
+        }
+        if (!Env.getCurrentEnv().getAccessManager().checkGlobalPriv(ctx, PrivPredicate.ADMIN)) {
             ErrorReport.reportAnalysisException(ErrorCode.ERR_SPECIFIC_ACCESS_DENIED_ERROR,
                     PrivPredicate.ADMIN.getPrivs().toString());
         }
