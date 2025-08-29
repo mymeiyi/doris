@@ -94,7 +94,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
         // upload edit log file
         // ObjStorage objStorage = new ObjStorage(snapshotId, snapshotUrl, imageDir);
         String imageFileName = "image." + imageVersion;
-        File imageFile = new File(imageDir + imageFileName);
+        File imageFile = new File(imageDir + "/" + imageFileName);
         if (!imageFile.exists()) {
             LOG.error("image file does not exist: {}", imageFile.getAbsoluteFile());
             return;
