@@ -22,6 +22,7 @@ import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.cloud.proto.Cloud;
+import org.apache.doris.cloud.proto.Cloud.SnapshotSwitchStatus;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
@@ -46,9 +47,6 @@ import java.util.List;
  */
 public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand implements ForwardWithSync {
 
-    public static final String PROP_ENABLED = "enabled";
-    public static final String PROP_MAX_RESERVED_SNAPSHOTS = "max_reserved_snapshots";
-    public static final String PROP_SNAPSHOT_INTERVALS = "snapshot_intervals";
     private static final Logger LOG = LogManager.getLogger(AdminShowClusterSnapshotPropertiesCommand.class);
 
     /**
@@ -61,9 +59,12 @@ public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand imple
     @Override
     public ShowResultSetMetaData getMetaData() {
         ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
-        builder.addColumn(new Column(PROP_ENABLED, ScalarType.createVarchar(128)));
-        builder.addColumn(new Column(PROP_MAX_RESERVED_SNAPSHOTS, ScalarType.createVarchar(128)));
-        builder.addColumn(new Column(PROP_SNAPSHOT_INTERVALS, ScalarType.createVarchar(128)));
+        builder.addColumn(new Column("ready", ScalarType.createVarchar(128)));
+        builder.addColumn(new Column(AdminSetClusterSnapshotCommand.PROP_ENABLED, ScalarType.createVarchar(128)));
+        builder.addColumn(
+                new Column(AdminSetClusterSnapshotCommand.PROP_MAX_RESERVED_SNAPSHOTS, ScalarType.createVarchar(128)));
+        builder.addColumn(
+                new Column(AdminSetClusterSnapshotCommand.PROP_SNAPSHOT_INTERVALS, ScalarType.createVarchar(128)));
         return builder.build();
     }
 
@@ -73,7 +74,9 @@ public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand imple
         List<List<String>> rows = new ArrayList<>();
         List<String> row = new ArrayList<>();
         Cloud.GetInstanceResponse response = ((CloudSystemInfoService) Env.getCurrentSystemInfo()).getCloudInstance();
-        row.add(response.getInstance().getSnapshotSwitchStatus().name());
+        Cloud.SnapshotSwitchStatus switchStatus = response.getInstance().getSnapshotSwitchStatus();
+        row.add(String.valueOf(switchStatus != SnapshotSwitchStatus.SNAPSHOT_SWITCH_DISABLED));
+        row.add(String.valueOf(switchStatus == SnapshotSwitchStatus.SNAPSHOT_SWITCH_ON));
         row.add(String.valueOf(response.getInstance().getMaxReservedSnapshot()));
         row.add(String.valueOf(response.getInstance().getMaxReservedSnapshot()));
         rows.add(row);
