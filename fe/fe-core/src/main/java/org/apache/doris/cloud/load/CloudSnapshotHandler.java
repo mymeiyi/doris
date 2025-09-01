@@ -149,7 +149,8 @@ public class CloudSnapshotHandler extends MasterDaemon {
         remote.putObject(imageFile, imageUrl + "/" + imageFileName);
         // edit log
         File snapshotEditLogFile = new File(snapshotDir, snapshotId);
-        remote.putObject(imageFile, imageUrl + "/" + snapshotEditLogFile.getName());
+        remote.putObject(snapshotEditLogFile, imageUrl + "/" + snapshotEditLogFile.getName());
+        snapshotEditLogFile.delete();
     }
 
     public long getImageVersion() throws DdlException {
