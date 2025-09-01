@@ -100,6 +100,18 @@ public class CloudSnapshotHandler extends MasterDaemon {
     }
 
     private Cloud.BeginSnapshotResponse beginSnapshot(CloudSnapshotJob job) throws Exception {
+        if (!Config.ak.isEmpty()) {
+            Cloud.ObjectStoreInfoPB objectStoreInfoPB = Cloud.ObjectStoreInfoPB.newBuilder()
+                    .setProvider(Cloud.ObjectStoreInfoPB.Provider.COS).setEndpoint("cos.ap-beijing.myqcloud.com")
+                    .setRegion("ap-beijing").setBucket(Config.bucket).setPrefix("meiyi").setAk(Config.ak)
+                    .setSk(Config.sk).build();
+            long timestamp = System.currentTimeMillis();
+            Cloud.BeginSnapshotResponse response = Cloud.BeginSnapshotResponse.newBuilder()
+                    .setSnapshotId("test-snapshot-id-" + timestamp)
+                    .setImageUrl(objectStoreInfoPB.getPrefix() + "/snapshot/test-image-url-" + timestamp)
+                    .setObjInfo(objectStoreInfoPB).build();
+            return response;
+        }
         Cloud.BeginSnapshotRequest.Builder builder = Cloud.BeginSnapshotRequest.newBuilder()
                 .setTimeoutSeconds(Config.cloud_snapshot_timeout_seconds).setAutoSnapshot(job.isAuto())
                 .setTtlSeconds(job.getTtl());
