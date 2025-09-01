@@ -28,6 +28,7 @@ import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
+import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.trees.plans.PlanType;
 import org.apache.doris.nereids.trees.plans.visitor.PlanVisitor;
@@ -84,8 +85,8 @@ public class AdminShowClusterSnapshotCommand extends ShowCommand {
             List<String> row = new ArrayList<>(TITLE_NAMES.size());
             row.add(snapshot.getSnapshotId());
             row.add(snapshot.getAncestorId());
-            row.add(String.valueOf(snapshot.getCreateAt()));
-            row.add(String.valueOf(snapshot.getFinishAt()));
+            row.add(TimeUtils.longToTimeStringWithms(snapshot.getCreateAt()));
+            row.add(TimeUtils.longToTimeStringWithms(snapshot.getFinishAt()));
             row.add(snapshot.getImageUrl());
             row.add(String.valueOf(snapshot.getJournalId()));
             row.add(snapshot.getStatus().toString());

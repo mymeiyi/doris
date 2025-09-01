@@ -21,6 +21,8 @@ import org.apache.doris.analysis.StmtType;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.ScalarType;
+import org.apache.doris.cloud.proto.Cloud;
+import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
@@ -33,7 +35,6 @@ import org.apache.doris.qe.ShowResultSet;
 import org.apache.doris.qe.ShowResultSetMetaData;
 import org.apache.doris.qe.StmtExecutor;
 
-import com.google.common.collect.Lists;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -50,10 +51,6 @@ public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand imple
     public static final String PROP_SNAPSHOT_INTERVALS = "snapshot_intervals";
     private static final Logger LOG = LogManager.getLogger(AdminShowClusterSnapshotPropertiesCommand.class);
 
-    private boolean enabled;
-    private long maxReservedSnapshots;
-    private long snapshotIntervals;
-
     /**
      * AdminShowClusterSnapshotPropertiesCommand
      */
@@ -64,8 +61,9 @@ public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand imple
     @Override
     public ShowResultSetMetaData getMetaData() {
         ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
-        builder.addColumn(new Column("property_name", ScalarType.createVarchar(128)));
-        builder.addColumn(new Column("value", ScalarType.createVarchar(128)));
+        builder.addColumn(new Column(PROP_ENABLED, ScalarType.createVarchar(128)));
+        builder.addColumn(new Column(PROP_MAX_RESERVED_SNAPSHOTS, ScalarType.createVarchar(128)));
+        builder.addColumn(new Column(PROP_SNAPSHOT_INTERVALS, ScalarType.createVarchar(128)));
         return builder.build();
     }
 
@@ -73,7 +71,12 @@ public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand imple
     public ShowResultSet doRun(ConnectContext ctx, StmtExecutor executor) throws Exception {
         validate(ctx);
         List<List<String>> rows = new ArrayList<>();
-        rows.add(Lists.newArrayList(PROP_ENABLED, "true"));
+        List<String> row = new ArrayList<>();
+        Cloud.GetInstanceResponse response = ((CloudSystemInfoService) Env.getCurrentSystemInfo()).getCloudInstance();
+        row.add(response.getInstance().getSnapshotSwitchStatus().name());
+        row.add(String.valueOf(response.getInstance().getMaxReservedSnapshot()));
+        row.add(String.valueOf(response.getInstance().getMaxReservedSnapshot()));
+        rows.add(row);
         return new ShowResultSet(getMetaData(), rows);
     }
 
