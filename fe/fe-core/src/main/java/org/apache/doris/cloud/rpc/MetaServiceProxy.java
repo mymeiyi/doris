@@ -432,4 +432,8 @@ public class MetaServiceProxy {
     public Cloud.CreateInstanceResponse createInstance(Cloud.CreateInstanceRequest request) throws RpcException {
         return w.executeRequest((client) -> client.createInstance(request));
     }
+
+    public Cloud.BeginSnapshotResponse beginSnapshot(Cloud.BeginSnapshotRequest request) throws RpcException {
+        return w.executeRequest((client) -> client.beginSnapshot(request));
+    }
 }

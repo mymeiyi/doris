@@ -18,6 +18,7 @@
 package org.apache.doris.nereids.trees.plans.visitor;
 
 import org.apache.doris.nereids.trees.plans.commands.AddConstraintCommand;
+import org.apache.doris.nereids.trees.plans.commands.AdminBackupClusterSnapshotCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCancelRebalanceDiskCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCancelRepairTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCheckTabletsCommand;
@@ -1183,6 +1184,11 @@ public interface CommandVisitor<R, C> {
     default R visitAdminCancelRepairTableCommand(AdminCancelRepairTableCommand adminCancelRepairTableCommand,
                                                      C context) {
         return visitCommand(adminCancelRepairTableCommand, context);
+    }
+
+    default R visitAdminBackupClusterSnapshotCommand(
+            AdminBackupClusterSnapshotCommand adminBackupClusterSnapshotCommand, C context) {
+        return visitCommand(adminBackupClusterSnapshotCommand, context);
     }
 
     default R visitAdminRepairTableCommand(AdminRepairTableCommand adminRepairTableCommand, C context) {

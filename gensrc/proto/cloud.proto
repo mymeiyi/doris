@@ -1916,6 +1916,7 @@ message BeginSnapshotResponse {
     optional MetaServiceResponseStatus status = 1;
     optional string snapshot_id = 2;
     optional string image_url = 3;
+    optional ObjectStoreInfoPB obj_info = 4;
 }
 
 message CommitSnapshotRequest {
