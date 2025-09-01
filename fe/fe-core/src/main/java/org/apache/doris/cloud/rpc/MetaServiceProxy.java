@@ -440,4 +440,8 @@ public class MetaServiceProxy {
     public Cloud.CommitSnapshotResponse commitSnapshot(Cloud.CommitSnapshotRequest request) throws RpcException {
         return w.executeRequest((client) -> client.commitSnapshot(request));
     }
+
+    public Cloud.ListSnapshotResponse listSnapshot(Cloud.ListSnapshotRequest request) throws RpcException {
+        return w.executeRequest((client) -> client.listSnapshot(request));
+    }
 }

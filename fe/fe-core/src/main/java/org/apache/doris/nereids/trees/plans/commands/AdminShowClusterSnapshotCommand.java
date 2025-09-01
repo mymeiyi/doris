@@ -21,8 +21,11 @@ import org.apache.doris.analysis.StmtType;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.ScalarType;
+import org.apache.doris.cloud.proto.Cloud;
+import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.mysql.privilege.PrivPredicate;
@@ -32,6 +35,7 @@ import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.ShowResultSet;
 import org.apache.doris.qe.ShowResultSetMetaData;
 import org.apache.doris.qe.StmtExecutor;
+import org.apache.doris.rpc.RpcException;
 
 import com.google.common.collect.ImmutableList;
 import org.apache.logging.log4j.LogManager;
@@ -43,7 +47,7 @@ import java.util.List;
 /**
  * ADMIN SHOW [FULL] CLUSTER SNAPSHOT;
  */
-public class AdminShowClusterSnapshotCommand extends ShowCommand implements ForwardWithSync {
+public class AdminShowClusterSnapshotCommand extends ShowCommand {
 
     private static final Logger LOG = LogManager.getLogger(AdminShowClusterSnapshotCommand.class);
 
@@ -52,7 +56,7 @@ public class AdminShowClusterSnapshotCommand extends ShowCommand implements Forw
             .add("image_url").add("journal_id").add("state").add("manual")
             .add("ttl").add("label").add("msg").add("count")
             .build();
-    private boolean full = false;
+    private boolean full;
 
     /**
      * AdminShowClusterSnapshotCommand
@@ -75,7 +79,40 @@ public class AdminShowClusterSnapshotCommand extends ShowCommand implements Forw
     public ShowResultSet doRun(ConnectContext ctx, StmtExecutor executor) throws Exception {
         validate(ctx);
         List<List<String>> rows = new ArrayList<>();
+        Cloud.ListSnapshotResponse response = listSnapshot();
+        for (Cloud.SnapshotInfoPB snapshot : response.getSnapshotsList()) {
+            List<String> row = new ArrayList<>(TITLE_NAMES.size());
+            row.add(snapshot.getSnapshotId());
+            row.add(snapshot.getAncestorId());
+            row.add(String.valueOf(snapshot.getCreateAt()));
+            row.add(String.valueOf(snapshot.getFinishAt()));
+            row.add(snapshot.getImageUrl());
+            row.add(String.valueOf(snapshot.getJournalId()));
+            row.add(snapshot.getStatus().toString());
+            row.add(String.valueOf(snapshot.getAutoSnapshot()));
+            row.add(String.valueOf(snapshot.getTtlSeconds()));
+            row.add(snapshot.getSnapshotLabel());
+            row.add(snapshot.getReason());
+            // TODO
+            row.add(String.valueOf(0));
+            rows.add(row);
+        }
         return new ShowResultSet(getMetaData(), rows);
+    }
+
+    private Cloud.ListSnapshotResponse listSnapshot() throws DdlException {
+        try {
+            Cloud.ListSnapshotRequest request = Cloud.ListSnapshotRequest.newBuilder().setIncludeAborted(full)
+                    .build();
+            Cloud.ListSnapshotResponse response = MetaServiceProxy.getInstance().listSnapshot(request);
+            if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
+                LOG.warn("listSnapshot response: {} ", response);
+                throw new DdlException(response.getStatus().getMsg());
+            }
+            return response;
+        } catch (RpcException e) {
+            throw new DdlException(e.getMessage());
+        }
     }
 
     /**
