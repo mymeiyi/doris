@@ -3595,7 +3595,7 @@ public class Config extends ConfigBase {
     public static String doris_tde_algorithm = "PLAINTEXT";
 
     @ConfField
-    public static int cloud_snapshot_handler_interval_second = 600;
+    public static int cloud_snapshot_handler_interval_second = 60;
     @ConfField
     public static long cloud_snapshot_timeout_seconds = 600;
     @ConfField

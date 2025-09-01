@@ -147,6 +147,7 @@ public class CloudEnv extends Env {
             cacheHotspotMgr.start();
         }
         upgradeMgr.start();
+        cloudSnapshotHandler.start();
     }
 
     @Override
