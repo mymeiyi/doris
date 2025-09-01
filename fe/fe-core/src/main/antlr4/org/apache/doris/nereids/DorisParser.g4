@@ -595,6 +595,7 @@ supportedAdminStatement
         PARTITION VERSION properties=propertyClause?                                #adminSetPartitionVersion
     | ADMIN BACKUP CLUSTER SNAPSHOT propertyClause?                                 #adminBackupClusterSnapshot
     | ADMIN SET CLUSTER SNAPSHOT propertyClause?                                    #adminSetClusterSnapshot
+    | ADMIN SHOW CLUSTER SNAPSHOT PROPERTIES                                        #adminShowClusterSnapshotProperties
     ;
 
 supportedRecoverStatement

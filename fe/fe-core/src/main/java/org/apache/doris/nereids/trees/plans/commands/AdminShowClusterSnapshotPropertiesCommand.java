@@ -18,7 +18,9 @@
 package org.apache.doris.nereids.trees.plans.commands;
 
 import org.apache.doris.analysis.StmtType;
+import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.ScalarType;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
@@ -27,41 +29,52 @@ import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.trees.plans.PlanType;
 import org.apache.doris.nereids.trees.plans.visitor.PlanVisitor;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.ShowResultSet;
+import org.apache.doris.qe.ShowResultSetMetaData;
 import org.apache.doris.qe.StmtExecutor;
 
+import com.google.common.collect.Lists;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.Map;
-import java.util.Objects;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * ADMIN SET CLUSTER SNAPSHOT PROPERTIES('enabled' = 'true');
+ * ADMIN SHOW CLUSTER SNAPSHOT PROPERTIES;
  */
-public class AdminSetClusterSnapshotCommand extends Command implements ForwardWithSync {
+public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand implements ForwardWithSync {
 
     public static final String PROP_ENABLED = "enabled";
     public static final String PROP_MAX_RESERVED_SNAPSHOTS = "max_reserved_snapshots";
     public static final String PROP_SNAPSHOT_INTERVALS = "snapshot_intervals";
-    private static final Logger LOG = LogManager.getLogger(AdminSetClusterSnapshotCommand.class);
+    private static final Logger LOG = LogManager.getLogger(AdminShowClusterSnapshotPropertiesCommand.class);
 
-    private Map<String, String> properties;
     private boolean enabled;
     private long maxReservedSnapshots;
     private long snapshotIntervals;
 
     /**
-     * AdminSetClusterSnapshotCommand
+     * AdminShowClusterSnapshotPropertiesCommand
      */
-    public AdminSetClusterSnapshotCommand(Map<String, String> properties) {
-        super(PlanType.ADMIN_SET_CLUSTER_SNAPSHOT_COMMAND);
-        Objects.requireNonNull(properties, "properties is null");
-        this.properties = properties;
+    public AdminShowClusterSnapshotPropertiesCommand() {
+        super(PlanType.ADMIN_SHOW_CLUSTER_SNAPSHOT_PROPERTIES_COMMAND);
     }
 
     @Override
-    public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
+    public ShowResultSetMetaData getMetaData() {
+        ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
+        builder.addColumn(new Column("property_name", ScalarType.createVarchar(128)));
+        builder.addColumn(new Column("value", ScalarType.createVarchar(128)));
+        return builder.build();
+    }
+
+    @Override
+    public ShowResultSet doRun(ConnectContext ctx, StmtExecutor executor) throws Exception {
         validate(ctx);
+        List<List<String>> rows = new ArrayList<>();
+        rows.add(Lists.newArrayList(PROP_ENABLED, "true"));
+        return new ShowResultSet(getMetaData(), rows);
     }
 
     /**
@@ -75,27 +88,11 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
             ErrorReport.reportAnalysisException(ErrorCode.ERR_SPECIFIC_ACCESS_DENIED_ERROR,
                     PrivPredicate.ADMIN.getPrivs().toString());
         }
-
-        for (Map.Entry<String, String> entry : properties.entrySet()) {
-            try {
-                if (entry.getKey().equalsIgnoreCase(PROP_ENABLED)) {
-                    enabled = Boolean.valueOf(entry.getValue());
-                } else if (entry.getKey().equalsIgnoreCase(PROP_MAX_RESERVED_SNAPSHOTS)) {
-                    maxReservedSnapshots = Long.valueOf(entry.getValue());
-                } else if (entry.getKey().equalsIgnoreCase(PROP_SNAPSHOT_INTERVALS)) {
-                    snapshotIntervals = Long.valueOf(entry.getValue());
-                } else {
-                    throw new AnalysisException("Unknown property: " + entry.getKey());
-                }
-            } catch (NumberFormatException e) {
-                throw new AnalysisException("Invalid property: " + entry.getKey());
-            }
-        }
     }
 
     @Override
     public <R, C> R accept(PlanVisitor<R, C> visitor, C context) {
-        return visitor.visitAdminSetClusterSnapshotCommand(this, context);
+        return visitor.visitAdminShowClusterSnapshotPropertiesCommand(this, context);
     }
 
     @Override

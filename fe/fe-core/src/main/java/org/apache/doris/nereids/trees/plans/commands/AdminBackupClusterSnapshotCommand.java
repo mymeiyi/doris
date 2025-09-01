@@ -55,7 +55,7 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
      * AdminBackupClusterSnapshotCommand
      */
     public AdminBackupClusterSnapshotCommand(Map<String, String> properties) {
-        super(PlanType.ADMIN_BACKUP_CLUSTER_COMMAND);
+        super(PlanType.ADMIN_BACKUP_CLUSTER_SNAPSHOT_COMMAND);
         Objects.requireNonNull(properties, "properties is null");
         this.properties = properties;
     }
