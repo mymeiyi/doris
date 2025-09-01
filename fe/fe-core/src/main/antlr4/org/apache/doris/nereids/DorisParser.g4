@@ -596,6 +596,7 @@ supportedAdminStatement
     | ADMIN BACKUP CLUSTER SNAPSHOT propertyClause?                                 #adminBackupClusterSnapshot
     | ADMIN SET CLUSTER SNAPSHOT propertyClause?                                    #adminSetClusterSnapshot
     | ADMIN SHOW CLUSTER SNAPSHOT PROPERTIES                                        #adminShowClusterSnapshotProperties
+    | ADMIN SHOW FULL? CLUSTER SNAPSHOT                                             #adminShowClusterSnapshot
     ;
 
 supportedRecoverStatement
