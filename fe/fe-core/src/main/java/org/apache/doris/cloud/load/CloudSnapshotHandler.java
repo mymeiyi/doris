@@ -88,6 +88,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
     }
 
     private void execute(CloudSnapshotJob job) throws Exception {
+        // 0. begin snapshot
         Cloud.BeginSnapshotResponse response = beginSnapshot(job);
         String snapshotId = response.getSnapshotId();
         String imageUrl = response.getImageUrl();
@@ -97,6 +98,8 @@ public class CloudSnapshotHandler extends MasterDaemon {
         long logId = Env.getCurrentEnv().getEditLog().logBeginSnapshot(snapshotState);
         // 2. upload image
         uploadImage(snapshotId, imageUrl, objInfo, logId);
+        // 3. commit snapshot
+        commitSnapshot(snapshotId, imageUrl, logId);
     }
 
     private Cloud.BeginSnapshotResponse beginSnapshot(CloudSnapshotJob job) throws Exception {
@@ -125,6 +128,20 @@ public class CloudSnapshotHandler extends MasterDaemon {
                 throw new DdlException(response.getStatus().getMsg());
             }
             return response;
+        } catch (RpcException e) {
+            throw new DdlException(e.getMessage());
+        }
+    }
+
+    private void commitSnapshot(String snapshotId, String imageUrl, long logId) throws Exception {
+        try {
+            Cloud.CommitSnapshotRequest request = Cloud.CommitSnapshotRequest.newBuilder().setSnapshotId(snapshotId)
+                    .setImageUrl(imageUrl).setLastJournalId(logId).build();
+            Cloud.CommitSnapshotResponse response = MetaServiceProxy.getInstance().commitSnapshot(request);
+            if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
+                LOG.warn("commitSnapshot response: {} ", response);
+                throw new DdlException(response.getStatus().getMsg());
+            }
         } catch (RpcException e) {
             throw new DdlException(e.getMessage());
         }

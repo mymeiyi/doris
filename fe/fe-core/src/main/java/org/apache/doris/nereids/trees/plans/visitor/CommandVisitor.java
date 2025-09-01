@@ -27,6 +27,7 @@ import org.apache.doris.nereids.trees.plans.commands.AdminCompactTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCopyTabletCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminRebalanceDiskCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminRepairTableCommand;
+import org.apache.doris.nereids.trees.plans.commands.AdminSetClusterSnapshotCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetFrontendConfigCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetPartitionVersionCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetReplicaStatusCommand;
@@ -1189,6 +1190,11 @@ public interface CommandVisitor<R, C> {
     default R visitAdminBackupClusterSnapshotCommand(
             AdminBackupClusterSnapshotCommand adminBackupClusterSnapshotCommand, C context) {
         return visitCommand(adminBackupClusterSnapshotCommand, context);
+    }
+
+    default R visitAdminSetClusterSnapshotCommand(
+            AdminSetClusterSnapshotCommand adminSetClusterSnapshotCommand, C context) {
+        return visitCommand(adminSetClusterSnapshotCommand, context);
     }
 
     default R visitAdminRepairTableCommand(AdminRepairTableCommand adminRepairTableCommand, C context) {

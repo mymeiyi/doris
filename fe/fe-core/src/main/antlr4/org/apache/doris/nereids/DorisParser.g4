@@ -594,6 +594,7 @@ supportedAdminStatement
     | ADMIN SET TABLE name=multipartIdentifier
         PARTITION VERSION properties=propertyClause?                                #adminSetPartitionVersion
     | ADMIN BACKUP CLUSTER SNAPSHOT propertyClause?                                 #adminBackupClusterSnapshot
+    | ADMIN SET CLUSTER SNAPSHOT propertyClause?                                    #adminSetClusterSnapshot
     ;
 
 supportedRecoverStatement
