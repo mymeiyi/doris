@@ -3233,11 +3233,6 @@ public class Config extends ConfigBase {
     @ConfField
     public static boolean enable_cloud_snapshot_version = true;
 
-    @ConfField
-    public static int cloud_snapshot_handler_interval_second = 600;
-    @ConfField
-    public static long cloud_snapshot_timeout_seconds = 600;
-
     // Interval in seconds for checking the status of compute groups (cloud clusters).
     // Compute groups and cloud clusters refer to the same concept.
     @ConfField
@@ -3598,4 +3593,11 @@ public class Config extends ConfigBase {
         "The encryption algorithm used for data, default is AES256, may be set to empty later for KMS to decide"
     })
     public static String doris_tde_algorithm = "PLAINTEXT";
+
+    @ConfField
+    public static int cloud_snapshot_handler_interval_second = 600;
+    @ConfField
+    public static long cloud_snapshot_timeout_seconds = 600;
+    @ConfField
+    public static long cloud_snapshot_ttl_seconds = 43200; // 12 hour
 }

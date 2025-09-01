@@ -133,6 +133,7 @@ public class CloudEnv extends Env {
                 Config.cloud_unique_id, Config.cluster_id, cloudInstanceId);
 
         super.initialize(args);
+        this.cloudSnapshotHandler.initialize();
     }
 
     @Override

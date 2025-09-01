@@ -21,6 +21,7 @@ import org.apache.doris.analysis.StmtType;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cloud.catalog.CloudEnv;
 import org.apache.doris.cloud.load.CloudSnapshotHandler;
+import org.apache.doris.cloud.load.CloudSnapshotJob;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
@@ -47,8 +48,8 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
     private static final Logger LOG = LogManager.getLogger(AdminBackupClusterSnapshotCommand.class);
 
     private Map<String, String> properties;
-    private long ttl = -1;
-    private String label = "";
+    private long ttl = Config.cloud_snapshot_ttl_seconds;
+    private String label;
 
     /**
      * AdminBackupClusterSnapshotCommand
@@ -69,11 +70,9 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
 
     @Override
     public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
-        LOG.info("sout: AdminBackupClusterSnapshotCommand is running");
         validate(ctx);
         CloudSnapshotHandler cloudSnapshotHandler = ((CloudEnv) ctx.getEnv()).getCloudSnapshotHandler();
-        cloudSnapshotHandler.snapshot("1", "");
-        // ctx.getEnv().getTabletChecker().cancelRepairTable(this);
+        cloudSnapshotHandler.submitJob(new CloudSnapshotJob(ttl, label, false));
     }
 
     /**
@@ -88,19 +87,17 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
                     PrivPredicate.ADMIN.getPrivs().toString());
         }
 
-        if (properties == null) {
-            return;
-        }
         try {
             Iterator<Map.Entry<String, String>> iter = properties.entrySet().iterator();
             while (iter.hasNext()) {
                 Map.Entry<String, String> entry = iter.next();
                 if (entry.getKey().equalsIgnoreCase(PROP_TTL)) {
                     ttl = Long.valueOf(entry.getValue());
-                    // iter.remove();
+                    if (ttl <= 0) {
+                        throw new AnalysisException("Invalid property: " + entry.getKey());
+                    }
                 } else if (entry.getKey().equalsIgnoreCase(PROP_LABEL)) {
                     label = entry.getValue();
-                    // iter.remove();
                 } else {
                     throw new AnalysisException("Unknown property: " + entry.getKey());
                 }
@@ -108,10 +105,6 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
         } catch (NumberFormatException e) {
             throw new AnalysisException("Invalid property: " + e.getMessage());
         }
-
-        /*if (!properties.isEmpty()) {
-            throw new AnalysisException("Unknown property: " + properties);
-        }*/
     }
 
     @Override
