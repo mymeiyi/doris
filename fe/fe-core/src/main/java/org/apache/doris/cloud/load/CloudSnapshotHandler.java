@@ -29,7 +29,6 @@ import org.apache.doris.common.Pair;
 import org.apache.doris.common.util.MasterDaemon;
 import org.apache.doris.journal.JournalCursor;
 import org.apache.doris.journal.JournalEntity;
-import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.persist.EditLogFileOutputStream;
 import org.apache.doris.persist.Storage;
 import org.apache.doris.rpc.RpcException;
@@ -82,7 +81,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
             try {
                 execute(job);
             } catch (Exception e) {
-                LOG.warn("Failed clean copy job", e);
+                LOG.warn("cloud snapshot job failed", e);
             }
         }
     }
@@ -100,6 +99,17 @@ public class CloudSnapshotHandler extends MasterDaemon {
     }
 
     private Cloud.BeginSnapshotResponse beginSnapshot(CloudSnapshotJob job) throws Exception {
+        if (!Config.ak.isEmpty()) {
+            Cloud.ObjectStoreInfoPB objectStoreInfoPB = Cloud.ObjectStoreInfoPB.newBuilder()
+                .setProvider(Cloud.ObjectStoreInfoPB.Provider.COS).setEndpoint("cos.ap-beijing.myqcloud.com")
+                .setRegion("ap-beijing").setBucket(Config.bucket).setPrefix("meiyi").setAk(Config.ak).setSk(Config.sk).build();
+            long timestamp = System.currentTimeMillis();
+            Cloud.BeginSnapshotResponse response = Cloud.BeginSnapshotResponse.newBuilder()
+                .setSnapshotId("test-snapshot-id-" + timestamp)
+                .setImageUrl(objectStoreInfoPB.getPrefix() + "/snapshot/test-image-url-" + timestamp)
+                .setObjInfo(objectStoreInfoPB).build();
+            return response;
+        }
         Cloud.BeginSnapshotRequest.Builder builder = Cloud.BeginSnapshotRequest.newBuilder()
                 .setTimeoutSeconds(Config.cloud_snapshot_timeout_seconds).setAutoSnapshot(job.isAuto())
                 .setTtlSeconds(job.getTtl());
@@ -120,11 +130,6 @@ public class CloudSnapshotHandler extends MasterDaemon {
 
     public void uploadImage(String snapshotId, String imageUrl, Cloud.ObjectStoreInfoPB objInfo, long logId) throws Exception {
         LOG.info("Start to snapshotId: {}, imageUrl: {}, logId: {}", snapshotId, imageUrl, logId);
-        // String prefix = "meiyi";
-        // snapshotUrl = prefix + "/snapshot/" + System.currentTimeMillis() + "/";
-        // LOG.info("Start to snapshot {}", snapshotUrl);
-        // SnapshotState snapshotState = new SnapshotState(snapshotId, imageUrl);
-        // long logId = Env.getCurrentEnv().getEditLog().logBeginSnapshot(snapshotState);
         // scan edit logs between imageVersion + 1 and logId
         long imageVersion = getImageVersion();
         if (imageVersion + 1 < logId) {
@@ -139,14 +144,6 @@ public class CloudSnapshotHandler extends MasterDaemon {
             LOG.error("image file does not exist: {}", imageFile.getAbsoluteFile());
             throw new DdlException("image file does not exist: " + imageFile.getAbsoluteFile());
         }
-        Cloud.ObjectStoreInfoPB.Provider provider = Cloud.ObjectStoreInfoPB.Provider.COS;
-        String ak = Config.ak;
-        String sk = Config.sk;
-        String bucket = Config.bucket;
-        String endpoint = "cos.ap-beijing.myqcloud.com";
-        String region = "ap-beijing";
-
-        // RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(provider, ak, sk, bucket, endpoint, region, prefix);
         RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(objInfo);
         RemoteBase remote = RemoteBase.newInstance(objectInfo);
         remote.putObject(imageFile, imageUrl + "/" + imageFileName);
