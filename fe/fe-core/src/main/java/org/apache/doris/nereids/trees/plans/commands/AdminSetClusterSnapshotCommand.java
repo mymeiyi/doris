@@ -41,10 +41,14 @@ import java.util.Objects;
 public class AdminSetClusterSnapshotCommand extends Command implements ForwardWithSync {
 
     public static final String PROP_ENABLED = "enabled";
+    public static final String PROP_MAX_RESERVED_SNAPSHOTS = "max_reserved_snapshots";
+    public static final String PROP_SNAPSHOT_INTERVALS = "snapshot_intervals";
     private static final Logger LOG = LogManager.getLogger(AdminSetClusterSnapshotCommand.class);
 
     private Map<String, String> properties;
     private boolean enabled;
+    private long maxReservedSnapshots;
+    private long snapshotIntervals;
 
     /**
      * AdminBackupClusterSnapshotCommand
@@ -73,10 +77,18 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
         }
 
         for (Map.Entry<String, String> entry : properties.entrySet()) {
-            if (entry.getKey().equalsIgnoreCase(PROP_ENABLED)) {
-                enabled = Boolean.valueOf(entry.getValue());
-            } else {
-                throw new AnalysisException("Unknown property: " + entry.getKey());
+            try {
+                if (entry.getKey().equalsIgnoreCase(PROP_ENABLED)) {
+                    enabled = Boolean.valueOf(entry.getValue());
+                } else if (entry.getKey().equalsIgnoreCase(PROP_MAX_RESERVED_SNAPSHOTS)) {
+                    maxReservedSnapshots = Long.valueOf(entry.getValue());
+                } else if (entry.getKey().equalsIgnoreCase(PROP_SNAPSHOT_INTERVALS)) {
+                    snapshotIntervals = Long.valueOf(entry.getValue());
+                } else {
+                    throw new AnalysisException("Unknown property: " + entry.getKey());
+                }
+            } catch (NumberFormatException e) {
+                throw new AnalysisException("Invalid property: " + entry.getKey());
             }
         }
     }
