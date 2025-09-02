@@ -25,6 +25,7 @@ import org.apache.doris.cloud.CloudWarmUpJob;
 import org.apache.doris.cloud.CloudWarmUpJob.JobState;
 import org.apache.doris.cloud.datasource.CloudInternalCatalog;
 import org.apache.doris.cloud.load.CleanCopyJobScheduler;
+import org.apache.doris.cloud.load.CloudSnapshotHandler;
 import org.apache.doris.cloud.persist.UpdateCloudReplicaInfo;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.proto.Cloud.NodeInfoPB;
@@ -71,6 +72,7 @@ public class CloudEnv extends Env {
     private boolean enableStorageVault;
 
     private CleanCopyJobScheduler cleanCopyJobScheduler;
+    private CloudSnapshotHandler cloudSnapshotHandler;
 
     private String cloudInstanceId;
 
@@ -84,6 +86,7 @@ public class CloudEnv extends Env {
         this.cloudTabletRebalancer = new CloudTabletRebalancer((CloudSystemInfoService) systemInfo);
         this.cacheHotspotMgr = new CacheHotspotManager((CloudSystemInfoService) systemInfo);
         this.upgradeMgr = new CloudUpgradeMgr((CloudSystemInfoService) systemInfo);
+        this.cloudSnapshotHandler = new CloudSnapshotHandler();
     }
 
     public CloudTabletRebalancer getCloudTabletRebalancer() {
@@ -96,6 +99,10 @@ public class CloudEnv extends Env {
 
     public CloudClusterChecker getCloudClusterChecker() {
         return this.cloudClusterCheck;
+    }
+
+    public CloudSnapshotHandler getCloudSnapshotHandler() {
+        return this.cloudSnapshotHandler;
     }
 
     public String getCloudInstanceId() {
@@ -126,6 +133,7 @@ public class CloudEnv extends Env {
                 Config.cloud_unique_id, Config.cluster_id, cloudInstanceId);
 
         super.initialize(args);
+        this.cloudSnapshotHandler.initialize();
     }
 
     @Override
@@ -139,6 +147,7 @@ public class CloudEnv extends Env {
             cacheHotspotMgr.start();
         }
         upgradeMgr.start();
+        cloudSnapshotHandler.start();
     }
 
     @Override
