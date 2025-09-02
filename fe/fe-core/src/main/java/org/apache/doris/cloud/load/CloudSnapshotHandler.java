@@ -19,9 +19,11 @@ package org.apache.doris.cloud.load;
 
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cloud.proto.Cloud;
+import org.apache.doris.cloud.proto.Cloud.SnapshotSwitchStatus;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.cloud.snapshot.SnapshotState;
 import org.apache.doris.cloud.storage.RemoteBase;
+import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.Pair;
@@ -43,6 +45,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 public class CloudSnapshotHandler extends MasterDaemon {
 
     private static final Logger LOG = LogManager.getLogger(CloudSnapshotHandler.class);
+    private CloudSnapshotJob autoSnapshotJob = null;
     private LinkedBlockingQueue<CloudSnapshotJob> needScheduleJobs = Queues.newLinkedBlockingQueue();
     public static final String SNAPSHOT_DIR = "/snapshot";
     private String snapshotDir;
@@ -66,6 +69,33 @@ public class CloudSnapshotHandler extends MasterDaemon {
             process();
         } catch (Throwable e) {
             LOG.warn("Failed to process one round of CloudSnapshot with error message {}", e.getMessage(), e);
+        }
+    }
+
+    public synchronized void setAutoSnapshotJob(boolean enabled, long maxReservedSnapshots, long interval) {
+        if (enabled) {
+            if (this.autoSnapshotJob == null) {
+                this.autoSnapshotJob = new CloudSnapshotJob(true);
+            }
+            if (interval > 0) {
+                this.autoSnapshotJob.setInterval(interval);
+            }
+        } else {
+            this.autoSnapshotJob = null;
+        }
+    }
+
+    public synchronized void refreshAutoSnapshotJob() {
+        Cloud.GetInstanceResponse response = ((CloudSystemInfoService) Env.getCurrentSystemInfo()).getCloudInstance();
+        Cloud.SnapshotSwitchStatus switchStatus = response.getInstance().getSnapshotSwitchStatus();
+        if (switchStatus == SnapshotSwitchStatus.SNAPSHOT_SWITCH_ON
+                && response.getInstance().getMaxReservedSnapshot() > 0) {
+            if (this.autoSnapshotJob == null) {
+                this.autoSnapshotJob = new CloudSnapshotJob(true);
+            }
+            this.autoSnapshotJob.setInterval(response.getInstance().getSnapshotIntervalMinutes());
+        } else {
+            this.autoSnapshotJob = null;
         }
     }
 
@@ -116,8 +146,10 @@ public class CloudSnapshotHandler extends MasterDaemon {
             return response;
         }
         Cloud.BeginSnapshotRequest.Builder builder = Cloud.BeginSnapshotRequest.newBuilder()
-                .setTimeoutSeconds(Config.cloud_snapshot_timeout_seconds).setAutoSnapshot(job.isAuto())
-                .setTtlSeconds(job.getTtl());
+                .setTimeoutSeconds(Config.cloud_snapshot_timeout_seconds).setAutoSnapshot(job.isAuto());
+        if (job.getTtl() > 0) {
+            builder.setTtlSeconds(job.getTtl());
+        }
         if (job.getLabel() != null) {
             builder.setSnapshotLabel(job.getLabel());
         }

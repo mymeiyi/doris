@@ -48,8 +48,8 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
     private static final Logger LOG = LogManager.getLogger(AdminBackupClusterSnapshotCommand.class);
 
     private Map<String, String> properties;
-    private long ttl = Config.cloud_snapshot_ttl_seconds;
-    private String label;
+    private long ttl = 0;
+    private String label = null;
 
     /**
      * AdminBackupClusterSnapshotCommand
@@ -72,7 +72,7 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
     public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
         validate(ctx);
         CloudSnapshotHandler cloudSnapshotHandler = ((CloudEnv) ctx.getEnv()).getCloudSnapshotHandler();
-        cloudSnapshotHandler.submitJob(new CloudSnapshotJob(ttl, label, false));
+        cloudSnapshotHandler.submitJob(new CloudSnapshotJob(false, ttl, label));
     }
 
     /**

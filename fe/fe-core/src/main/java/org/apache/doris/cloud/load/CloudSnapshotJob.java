@@ -24,16 +24,35 @@ public class CloudSnapshotJob  {
 
     private static final Logger LOG = LogManager.getLogger(CloudSnapshotJob.class);
 
+    private boolean auto;
+    // used for manual snapshot
     private long ttl;
     private String label;
-    private boolean auto;
+    // used for auto snapshot
+    private long interval; // minutes
 
-    public CloudSnapshotJob(long ttl, String label, boolean auto) {
+    public CloudSnapshotJob(boolean auto, long ttl, String label) {
+        this.auto = auto;
         this.ttl = ttl;
         this.label = label;
+    }
+
+    public CloudSnapshotJob(boolean auto, long interval) {
+        this.auto = auto;
+        this.interval = interval;
+    }
+
+    public CloudSnapshotJob(boolean auto) {
         this.auto = auto;
     }
 
+    public void setInterval(long interval) {
+        this.interval = interval;
+    }
+
+    public boolean isAuto() {
+        return auto;
+    }
 
     public long getTtl() {
         return ttl;
@@ -43,7 +62,7 @@ public class CloudSnapshotJob  {
         return label;
     }
 
-    public boolean isAuto() {
-        return auto;
+    public long getInterval() {
+        return interval;
     }
 }

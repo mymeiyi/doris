@@ -19,6 +19,8 @@ package org.apache.doris.nereids.trees.plans.commands;
 
 import org.apache.doris.analysis.StmtType;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.cloud.catalog.CloudEnv;
+import org.apache.doris.cloud.load.CloudSnapshotHandler;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.common.AnalysisException;
@@ -40,7 +42,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * ADMIN SET CLUSTER SNAPSHOT PROPERTIES('enabled' = 'true');
+ * ADMIN SET CLUSTER SNAPSHOT PROPERTIES('enabled'='true', 'max_reserved_snapshots'='10', 'snapshot_intervals'='3600');
  */
 public class AdminSetClusterSnapshotCommand extends Command implements ForwardWithSync {
 
@@ -66,18 +68,17 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
     @Override
     public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
         validate(ctx);
+
+        Cloud.AlterInstanceRequest.Builder builder = Cloud.AlterInstanceRequest.newBuilder()
+                .setOp(Cloud.AlterInstanceRequest.Operation.SET_SNAPSHOT_PROPERTY);
         for (Map.Entry<String, String> entry : properties.entrySet()) {
-            Cloud.AlterInstanceRequest.Builder builder = Cloud.AlterInstanceRequest.newBuilder();
-            if (entry.getKey().equalsIgnoreCase(PROP_ENABLED)) {
-                builder.setOp(enabled ? Cloud.AlterInstanceRequest.Operation.SNAPSHOT_SWITCH_ON
-                        : Cloud.AlterInstanceRequest.Operation.SNAPSHOT_SWITCH_OFF);
-            } else {
-                builder.setOp(Cloud.AlterInstanceRequest.Operation.SET_SNAPSHOT_PROPERTY);
-                builder.setName(entry.getKey());
-                builder.setValue(entry.getValue());
-            }
-            alterInstance(builder.build());
+            builder.putProperties(entry.getKey(), entry.getValue());
         }
+        alterInstance(builder.build());
+
+        CloudSnapshotHandler cloudSnapshotHandler = ((CloudEnv) ctx.getEnv()).getCloudSnapshotHandler();
+        cloudSnapshotHandler.setAutoSnapshotJob(enabled, maxReservedSnapshots, snapshotIntervals);
+        cloudSnapshotHandler.refreshAutoSnapshotJob();
     }
 
     /**
@@ -101,8 +102,14 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
                     enabled = Boolean.valueOf(entry.getValue());
                 } else if (entry.getKey().equalsIgnoreCase(PROP_MAX_RESERVED_SNAPSHOTS)) {
                     maxReservedSnapshots = Long.valueOf(entry.getValue());
+                    if (maxReservedSnapshots < 0 || maxReservedSnapshots > 35) {
+                        throw new AnalysisException("property: " + entry.getKey() + " value should in [0-35]");
+                    }
                 } else if (entry.getKey().equalsIgnoreCase(PROP_SNAPSHOT_INTERVALS)) {
                     snapshotIntervals = Long.valueOf(entry.getValue());
+                    if (snapshotIntervals < 60) {
+                        throw new AnalysisException("property: " + entry.getKey() + " value should be greater than 59");
+                    }
                 } else {
                     throw new AnalysisException("Unknown property: " + entry.getKey());
                 }

@@ -3612,6 +3612,4 @@ public class Config extends ConfigBase {
     public static int cloud_snapshot_handler_interval_second = 10;
     @ConfField(mutable = true)
     public static long cloud_snapshot_timeout_seconds = 600;
-    @ConfField(mutable = true)
-    public static long cloud_snapshot_ttl_seconds = 43200; // 12 hour
 }
