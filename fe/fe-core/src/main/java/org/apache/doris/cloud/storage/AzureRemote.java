@@ -51,6 +51,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import reactor.core.publisher.Mono;
 
+import java.io.File;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -186,6 +187,18 @@ public class AzureRemote extends RemoteBase {
         } catch (BlobStorageException e) {
             LOG.warn("Failed to delete objects for Azure", e);
             throw new DdlException("Failed to delete objects for Azure, Error message=" + e.getMessage());
+        }
+    }
+
+    @Override
+    public void putObject(File file, String key) throws DdlException {
+        initClient();
+        try {
+            BlobClient blobClient = client.getBlobClient(key);
+            blobClient.uploadFromFile(file.getAbsolutePath());
+        } catch (BlobStorageException e) {
+            LOG.warn("Failed to put object for Azure", e);
+            throw new DdlException("Failed to put object for Azure, Error message=" + e.getMessage());
         }
     }
 
