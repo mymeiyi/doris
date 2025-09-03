@@ -72,7 +72,7 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
         Cloud.AlterInstanceRequest.Builder builder = Cloud.AlterInstanceRequest.newBuilder()
                 .setOp(Cloud.AlterInstanceRequest.Operation.SET_SNAPSHOT_PROPERTY);
         for (Map.Entry<String, String> entry : properties.entrySet()) {
-            builder.putProperties(entry.getKey(), entry.getValue());
+            builder.putProperties(entry.getKey().toLowerCase(), entry.getValue().toLowerCase());
         }
         alterInstance(builder.build());
 

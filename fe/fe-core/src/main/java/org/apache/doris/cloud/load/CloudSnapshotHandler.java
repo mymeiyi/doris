@@ -69,7 +69,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
         imageDir.mkdirs();
         if (!Config.ak.isEmpty()) {
             lastFinishedAutoSnapshotTime = 0;
-            autoSnapshotInterval = 1;
+            autoSnapshotInterval = 60;
             autoSnapshotJob = new CloudSnapshotJob(true);
             autoSnapshotJobInitialized = true;
         }
@@ -148,10 +148,6 @@ public class CloudSnapshotHandler extends MasterDaemon {
                 LOG.warn("manual snapshot job failed", e);
             }
         }
-        LOG.info("start auto snapshot job: {}, lastFinishedAutoSnapshotTime: {}, autoSnapshotInterval: {}, cond: {}",
-                autoSnapshotJob, lastFinishedAutoSnapshotTime, autoSnapshotInterval,
-                lastFinishedAutoSnapshotTime + autoSnapshotInterval * 60
-                        < System.currentTimeMillis() / 1000);
         if (autoSnapshotJob != null && lastFinishedAutoSnapshotTime + autoSnapshotInterval * 60
                 < System.currentTimeMillis() / 1000) {
             try {
@@ -178,7 +174,6 @@ public class CloudSnapshotHandler extends MasterDaemon {
             commitSnapshot(snapshotId, imageUrl, logId);
             if (job.isAuto()) {
                 lastFinishedAutoSnapshotTime = System.currentTimeMillis() / 1000;
-                LOG.info("update lastFinishedAutoSnapshotTime to {}", lastFinishedAutoSnapshotTime);
             }
             LOG.info("succeed to snapshot for id: {}, imageUrl: {}, logId: {}, auto: {}, label: {}", snapshotId,
                     imageUrl, logId, job.isAuto(), job.getLabel());
