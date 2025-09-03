@@ -148,11 +148,14 @@ public class CloudSnapshotHandler extends MasterDaemon {
                 LOG.warn("manual snapshot job failed", e);
             }
         }
+        LOG.info("start auto snapshot job: {}, lastFinishedAutoSnapshotTime: {}, autoSnapshotInterval: {}, cond: {}",
+                autoSnapshotJob, lastFinishedAutoSnapshotTime, autoSnapshotInterval,
+                lastFinishedAutoSnapshotTime + autoSnapshotInterval * 60
+                        < System.currentTimeMillis() / 1000);
         if (autoSnapshotJob != null && lastFinishedAutoSnapshotTime + autoSnapshotInterval * 60
                 < System.currentTimeMillis() / 1000) {
             try {
                 execute(autoSnapshotJob);
-                lastFinishedAutoSnapshotTime = System.currentTimeMillis() / 1000;
             } catch (Exception e) {
                 LOG.warn("auto snapshot job failed", e);
             }
@@ -173,6 +176,10 @@ public class CloudSnapshotHandler extends MasterDaemon {
             uploadImage(snapshotId, imageUrl, objInfo, logId);
             // 3. commit snapshot
             commitSnapshot(snapshotId, imageUrl, logId);
+            if (job.isAuto()) {
+                lastFinishedAutoSnapshotTime = System.currentTimeMillis() / 1000;
+                LOG.info("update lastFinishedAutoSnapshotTime to {}", lastFinishedAutoSnapshotTime);
+            }
             LOG.info("succeed to snapshot for id: {}, imageUrl: {}, logId: {}, auto: {}, label: {}", snapshotId,
                     imageUrl, logId, job.isAuto(), job.getLabel());
         } catch (Exception e) {
