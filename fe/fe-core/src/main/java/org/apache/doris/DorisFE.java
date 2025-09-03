@@ -315,7 +315,7 @@ public class DorisFE {
         options.addOption("m", "metaversion", true, "Specify the meta version to decode log value");
         options.addOption("r", FeConstants.METADATA_FAILURE_RECOVERY_KEY, false,
                 "Check if the specified metadata recover is valid");
-        options.addOption("cs", "cluster_snapshot", true, "Specify the cluster snapshot json file");
+        options.addOption("cluster_snapshot", true, "Specify the cluster snapshot json file");
         System.out.println("args: " + String.join(" ", args));
 
         CommandLine cmd = null;
@@ -406,7 +406,8 @@ public class DorisFE {
         }
         // cluster snapshot
         String clusterSnapshotFile = null;
-        if (cmd.hasOption("cs") || cmd.hasOption("cluster_snapshot")) {
+        System.out.println("sout: has cluster_snapshot: " + cmd.hasOption("cluster_snapshot"));
+        if (cmd.hasOption("cluster_snapshot")) {
             clusterSnapshotFile = cmd.getOptionValue("cluster_snapshot");
             if (Strings.isNullOrEmpty(clusterSnapshotFile)) {
                 System.err.println("Missing cluster_snapshot file");
