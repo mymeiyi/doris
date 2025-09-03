@@ -122,6 +122,7 @@ public class DorisFE {
         }
 
         CommandLineOptions cmdLineOpts = parseArgs(args);
+        LOG.info("sout: cmdLineOpts: {}", cmdLineOpts);
 
         try {
             // init config
@@ -314,6 +315,7 @@ public class DorisFE {
         options.addOption("m", "metaversion", true, "Specify the meta version to decode log value");
         options.addOption("r", FeConstants.METADATA_FAILURE_RECOVERY_KEY, false,
                 "Check if the specified metadata recover is valid");
+        options.addOption("cs", "cluster_snapshot", true, "Specify the cluster snapshot json file");
 
         CommandLine cmd = null;
         try {
