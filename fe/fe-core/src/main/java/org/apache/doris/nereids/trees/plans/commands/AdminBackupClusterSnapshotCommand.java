@@ -60,14 +60,6 @@ public class AdminBackupClusterSnapshotCommand extends Command implements Forwar
         this.properties = properties;
     }
 
-    public long getTtl() {
-        return ttl;
-    }
-
-    public String getLabel() {
-        return label;
-    }
-
     @Override
     public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
         validate(ctx);
