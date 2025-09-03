@@ -29,6 +29,7 @@ import software.amazon.awssdk.auth.credentials.AwsCredentials;
 import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.exception.SdkException;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.Delete;
@@ -40,9 +41,11 @@ import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
 import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.ObjectIdentifier;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Error;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
+import java.io.File;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
@@ -168,6 +171,20 @@ public class DefaultRemote extends RemoteBase {
         } catch (SdkException e) {
             LOG.warn("Failed to delete objects for S3", e);
             throw new DdlException("Failed to delete objects for S3, Error message=" + e.getMessage());
+        }
+    }
+
+    @Override
+    public void putObject(File file, String key) throws DdlException {
+        initClient();
+        try {
+            PutObjectRequest.Builder requestBuilder = PutObjectRequest.builder().bucket(obj.getBucket())
+                    .key(key);
+            s3Client.putObject(requestBuilder.build(), RequestBody.fromFile(file));
+            LOG.info("Put object for bucket={}, key={}", obj.getBucket(), key);
+        } catch (SdkException e) {
+            LOG.warn("Failed to put object for S3", e);
+            throw new DdlException("Failed to put object for S3, Error message=" + e.getMessage());
         }
     }
 }
