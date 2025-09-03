@@ -67,6 +67,12 @@ public class CloudSnapshotHandler extends MasterDaemon {
             imageDir.delete();
         }
         imageDir.mkdirs();
+        if (!Config.ak.isEmpty()) {
+            lastFinishedAutoSnapshotTime = 0;
+            autoSnapshotInterval = 60;
+            autoSnapshotJob = new CloudSnapshotJob(true);
+            autoSnapshotJobInitialized = true;
+        }
     }
 
     @Override
@@ -215,6 +221,9 @@ public class CloudSnapshotHandler extends MasterDaemon {
     }
 
     private void commitSnapshot(String snapshotId, String imageUrl, long logId) throws Exception {
+        if (!Config.ak.isEmpty()) {
+            return;
+        }
         try {
             Cloud.CommitSnapshotRequest request = Cloud.CommitSnapshotRequest.newBuilder().setSnapshotId(snapshotId)
                     .setImageUrl(imageUrl).setLastJournalId(logId).build();
