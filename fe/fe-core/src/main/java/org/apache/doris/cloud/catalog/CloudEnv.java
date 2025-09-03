@@ -139,7 +139,6 @@ public class CloudEnv extends Env {
         LOG.info("Initializing CloudEnv with cloud_unique_id: {}, cluster_id: {}, cloudInstanceId: {}",
                 Config.cloud_unique_id, Config.cluster_id, cloudInstanceId);
 
-        getClusterSnapshotJson();
         super.initialize(args);
         this.cloudSnapshotHandler.initialize();
     }
