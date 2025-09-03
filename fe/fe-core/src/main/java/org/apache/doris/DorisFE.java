@@ -323,7 +323,7 @@ public class DorisFE {
             cmd = commandLineParser.parse(options, args);
         } catch (final ParseException e) {
             LOG.warn("", e);
-            System.err.println("Failed to parse command line. exit now " + e.getMessage());
+            System.err.println("Failed to parse command line. exit now. error: " + e.getMessage());
             System.exit(-1);
         }
 
@@ -404,6 +404,16 @@ public class DorisFE {
                 System.exit(-1);
             }
         }
+        // cluster snapshot
+        String clusterSnapshotFile = null;
+        if (cmd.hasOption("cs") || cmd.hasOption("cluster_snapshot")) {
+            clusterSnapshotFile = cmd.getOptionValue("cluster_snapshot");
+            if (Strings.isNullOrEmpty(clusterSnapshotFile)) {
+                System.err.println("Missing cluster_snapshot file");
+                System.exit(-1);
+            }
+        }
+        System.out.println("sout: ClusterSnapshot file: " + clusterSnapshotFile);
 
         // helper node is null, means no helper node is specified
         return new CommandLineOptions(false, null, null, "");
