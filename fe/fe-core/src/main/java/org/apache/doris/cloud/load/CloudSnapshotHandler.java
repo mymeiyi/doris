@@ -19,6 +19,7 @@ package org.apache.doris.cloud.load;
 
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cloud.proto.Cloud;
+import org.apache.doris.cloud.proto.Cloud.SnapshotInfoPB;
 import org.apache.doris.cloud.proto.Cloud.SnapshotSwitchStatus;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.cloud.snapshot.SnapshotState;
@@ -51,7 +52,8 @@ public class CloudSnapshotHandler extends MasterDaemon {
     // auto snapshot job
     private CloudSnapshotJob autoSnapshotJob = null;
     private long autoSnapshotInterval; // minute
-    private long lastFinishedAutoSnapshotTime = 0; // second
+    private long lastFinishedAutoSnapshotTime = -1; // second
+    private boolean autoSnapshotJobInitialized = false;
 
     // manual snapshot jobs
     private LinkedBlockingQueue<CloudSnapshotJob> manualSnapshotJobs = Queues.newLinkedBlockingQueue();
@@ -72,9 +74,13 @@ public class CloudSnapshotHandler extends MasterDaemon {
     @Override
     protected void runAfterCatalogReady() {
         try {
+            getLastFinishedAutoSnapshotTime();
+            if (!autoSnapshotJobInitialized) {
+                refreshAutoSnapshotJob();
+            }
             process();
         } catch (Throwable e) {
-            LOG.warn("Failed to process one round of CloudSnapshot with error message {}", e.getMessage(), e);
+            LOG.warn("Failed to process one round of CloudSnapshot", e);
         }
     }
 
@@ -89,6 +95,36 @@ public class CloudSnapshotHandler extends MasterDaemon {
             this.autoSnapshotInterval = response.getInstance().getSnapshotIntervalMinutes();
         } else {
             this.autoSnapshotJob = null;
+        }
+        autoSnapshotJobInitialized = true;
+    }
+
+    private void getLastFinishedAutoSnapshotTime() {
+        if (lastFinishedAutoSnapshotTime >= 0) {
+            return;
+        }
+        try {
+            Cloud.ListSnapshotRequest request = Cloud.ListSnapshotRequest.newBuilder().setIncludeAborted(false)
+                    .build();
+            Cloud.ListSnapshotResponse response = MetaServiceProxy.getInstance().listSnapshot(request);
+            if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
+                LOG.warn("listSnapshot response: {} ", response);
+                return;
+            }
+            for (Cloud.SnapshotInfoPB snapshotInfoPB : response.getSnapshotsList()) {
+                if (!snapshotInfoPB.getAutoSnapshot()) {
+                    continue;
+                }
+                if (snapshotInfoPB.getFinishAt() > lastFinishedAutoSnapshotTime) {
+                    lastFinishedAutoSnapshotTime = snapshotInfoPB.getFinishAt();
+                }
+            }
+            if (lastFinishedAutoSnapshotTime == -1) {
+                lastFinishedAutoSnapshotTime = 0;
+            }
+            LOG.info("lastFinishedAutoSnapshotTime: {}", lastFinishedAutoSnapshotTime);
+        } catch (RpcException e) {
+            LOG.warn("listSnapshot failed", e);
         }
     }
 
