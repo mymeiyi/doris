@@ -49,6 +49,7 @@ import io.netty.util.internal.logging.Log4JLoggerFactory;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
+import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.logging.log4j.LogManager;
@@ -315,8 +316,8 @@ public class DorisFE {
         options.addOption("m", "metaversion", true, "Specify the meta version to decode log value");
         options.addOption("r", FeConstants.METADATA_FAILURE_RECOVERY_KEY, false,
                 "Check if the specified metadata recover is valid");
-        options.addOption("cluster_snapshot", true, "Specify the cluster snapshot json file");
-        System.out.println("args: " + String.join(" ", args));
+        options.addOption("cs", "cluster_snapshot", true, "Specify the cluster snapshot json file");
+        System.out.println("sout: args: " + String.join(" ", args));
 
         CommandLine cmd = null;
         try {
@@ -325,6 +326,12 @@ public class DorisFE {
             LOG.warn("", e);
             System.err.println("Failed to parse command line. exit now. error: " + e.getMessage());
             System.exit(-1);
+        }
+        for (String arg : cmd.getArgs()) {
+            System.out.println("sout: arg: " + arg);
+        }
+        for (Option option : cmd.getOptions()) {
+            System.out.println("sout: option: " + option.getLongOpt() + " , " + option.getValue());
         }
 
         // version
@@ -406,8 +413,9 @@ public class DorisFE {
         }
         // cluster snapshot
         String clusterSnapshotFile = null;
+        System.out.println("sout: has cs: " + cmd.hasOption("cs"));
         System.out.println("sout: has cluster_snapshot: " + cmd.hasOption("cluster_snapshot"));
-        if (cmd.hasOption("cluster_snapshot")) {
+        if (cmd.hasOption("cs") || cmd.hasOption("cluster_snapshot")) {
             clusterSnapshotFile = cmd.getOptionValue("cluster_snapshot");
             if (Strings.isNullOrEmpty(clusterSnapshotFile)) {
                 System.err.println("Missing cluster_snapshot file");
