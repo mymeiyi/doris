@@ -19,8 +19,6 @@ package org.apache.doris.cloud.load;
 
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cloud.proto.Cloud;
-import org.apache.doris.cloud.proto.Cloud.SnapshotInfoPB;
-import org.apache.doris.cloud.proto.Cloud.SnapshotSwitchStatus;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.cloud.snapshot.SnapshotState;
 import org.apache.doris.cloud.storage.RemoteBase;
@@ -80,14 +78,14 @@ public class CloudSnapshotHandler extends MasterDaemon {
             }
             process();
         } catch (Throwable e) {
-            LOG.warn("Failed to process one round of CloudSnapshot", e);
+            LOG.warn("failed to process one round of cloud snapshot", e);
         }
     }
 
     public synchronized void refreshAutoSnapshotJob() {
         Cloud.GetInstanceResponse response = ((CloudSystemInfoService) Env.getCurrentSystemInfo()).getCloudInstance();
         Cloud.SnapshotSwitchStatus switchStatus = response.getInstance().getSnapshotSwitchStatus();
-        if (switchStatus == SnapshotSwitchStatus.SNAPSHOT_SWITCH_ON
+        if (switchStatus == Cloud.SnapshotSwitchStatus.SNAPSHOT_SWITCH_ON
                 && response.getInstance().getMaxReservedSnapshot() > 0) {
             if (this.autoSnapshotJob == null) {
                 this.autoSnapshotJob = new CloudSnapshotJob(true);
@@ -124,7 +122,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
             }
             LOG.info("lastFinishedAutoSnapshotTime: {}", lastFinishedAutoSnapshotTime);
         } catch (RpcException e) {
-            LOG.warn("listSnapshot failed", e);
+            LOG.warn("failed to list snapshot", e);
         }
     }
 
@@ -141,7 +139,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
             try {
                 execute(job);
             } catch (Exception e) {
-                LOG.warn("cloud snapshot job failed", e);
+                LOG.warn("manual snapshot job failed", e);
             }
         }
         if (autoSnapshotJob != null && lastFinishedAutoSnapshotTime + autoSnapshotInterval * 60
@@ -150,7 +148,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
                 execute(autoSnapshotJob);
                 lastFinishedAutoSnapshotTime = System.currentTimeMillis() / 1000;
             } catch (Exception e) {
-                LOG.warn("cloud auto snapshot job failed", e);
+                LOG.warn("auto snapshot job failed", e);
             }
         }
     }
@@ -161,13 +159,26 @@ public class CloudSnapshotHandler extends MasterDaemon {
         String snapshotId = response.getSnapshotId();
         String imageUrl = response.getImageUrl();
         Cloud.ObjectStoreInfoPB objInfo = response.getObjInfo();
-        // 1. write edit log
-        SnapshotState snapshotState = new SnapshotState(snapshotId, imageUrl);
-        long logId = Env.getCurrentEnv().getEditLog().logBeginSnapshot(snapshotState);
-        // 2. upload image
-        uploadImage(snapshotId, imageUrl, objInfo, logId);
-        // 3. commit snapshot
-        commitSnapshot(snapshotId, imageUrl, logId);
+        try {
+            // 1. write edit log
+            SnapshotState snapshotState = new SnapshotState(snapshotId, imageUrl);
+            long logId = Env.getCurrentEnv().getEditLog().logBeginSnapshot(snapshotState);
+            // 2. upload image
+            uploadImage(snapshotId, imageUrl, objInfo, logId);
+            // 3. commit snapshot
+            commitSnapshot(snapshotId, imageUrl, logId);
+            LOG.info("succeed to snapshot for id: {}, imageUrl: {}, logId: {}, auto: {}, label: {}", snapshotId,
+                    imageUrl, logId, job.isAuto(), job.getLabel());
+        } catch (Exception e) {
+            LOG.warn("failed to snapshot for id: {}, imageUrl: {}, auto: {}, label: {}", snapshotId, imageUrl,
+                    job.isAuto(), job.getLabel());
+            // abort snapshot
+            try {
+                abortSnapshot(snapshotId, e.getMessage());
+            } catch (Exception e1) {
+                LOG.warn("failed to abort snapshot for id: {}", snapshotId, e1);
+            }
+        }
     }
 
     private Cloud.BeginSnapshotResponse beginSnapshot(CloudSnapshotJob job) throws Exception {
@@ -219,7 +230,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
 
     private void uploadImage(String snapshotId, String imageUrl, Cloud.ObjectStoreInfoPB objInfo, long logId)
             throws Exception {
-        LOG.info("Start to snapshotId: {}, imageUrl: {}, logId: {}", snapshotId, imageUrl, logId);
+        LOG.info("start to snapshot for id: {}, imageUrl: {}, logId: {}", snapshotId, imageUrl, logId);
         // scan edit logs between imageVersion + 1 and logId
         long imageVersion = getImageVersion();
         if (imageVersion + 1 < logId) {
@@ -290,7 +301,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
                 try {
                     outputStream.close();
                 } catch (IOException ex) {
-                    LOG.warn("failed to close output stream", ex);
+                    LOG.warn("failed to close output stream for id: {}", snapshotId, ex);
                 }
             }
             try {
@@ -298,8 +309,22 @@ public class CloudSnapshotHandler extends MasterDaemon {
                     snapshotEditLogFile.delete();
                 }
             } catch (Exception ex) {
-                LOG.warn("failed to delete snapshot file", ex);
+                LOG.warn("failed to delete snapshot file for id: {}", snapshotId, ex);
             }
+            throw new DdlException(e.getMessage());
+        }
+    }
+
+    private void abortSnapshot(String snapshotId, String reason) throws Exception {
+        try {
+            Cloud.AbortSnapshotRequest request = Cloud.AbortSnapshotRequest.newBuilder().setSnapshotId(snapshotId)
+                    .setReason(reason).build();
+            Cloud.AbortSnapshotResponse response = MetaServiceProxy.getInstance().abortSnapshot(request);
+            if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
+                LOG.warn("abortSnapshot response: {} ", response);
+                throw new DdlException(response.getStatus().getMsg());
+            }
+        } catch (RpcException e) {
             throw new DdlException(e.getMessage());
         }
     }
