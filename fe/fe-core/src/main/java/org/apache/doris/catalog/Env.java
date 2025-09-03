@@ -2205,9 +2205,6 @@ public class Env {
             LOG.info("image does not exist: {}", curFile.getAbsolutePath());
             return;
         }
-        if () {
-
-        }
         replayedJournalId.set(storage.getLatestImageSeq());
         MetaReader.read(curFile, this);
     }
