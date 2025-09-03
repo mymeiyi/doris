@@ -323,6 +323,7 @@ public class DorisFE {
         try {
             cmd = commandLineParser.parse(options, args);
         } catch (final ParseException e) {
+            e.printStackTrace();
             LOG.warn("", e);
             System.err.println("Failed to parse command line. exit now. error: " + e.getMessage());
             System.exit(-1);
