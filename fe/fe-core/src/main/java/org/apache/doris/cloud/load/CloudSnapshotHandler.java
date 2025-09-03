@@ -69,7 +69,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
         imageDir.mkdirs();
         if (!Config.ak.isEmpty()) {
             lastFinishedAutoSnapshotTime = 0;
-            autoSnapshotInterval = 60;
+            autoSnapshotInterval = 1;
             autoSnapshotJob = new CloudSnapshotJob(true);
             autoSnapshotJobInitialized = true;
         }
