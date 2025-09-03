@@ -42,7 +42,6 @@ import org.apache.doris.service.ExecuteEnv;
 import org.apache.doris.service.FeServer;
 import org.apache.doris.service.FrontendOptions;
 
-import com.amazonaws.services.dynamodbv2.xspec.S;
 import com.google.common.base.Charsets;
 import com.google.common.base.Strings;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -50,7 +49,6 @@ import io.netty.util.internal.logging.Log4JLoggerFactory;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.DefaultParser;
-import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.logging.log4j.LogManager;
@@ -193,7 +191,6 @@ public class DorisFE {
             if (cmdLineOpts.getClusterSnapshotPath() != null) {
                 Env.getCurrentEnv().setClusterSnapshotFile(cmdLineOpts.getClusterSnapshotPath());
             }
-            Env.getCurrentEnv().initialize(args);
             // init catalog and wait it be ready
             Env.getCurrentEnv().initialize(args);
             Env.getCurrentEnv().waitForReady();
