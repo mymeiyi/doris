@@ -1109,6 +1109,12 @@ public class Env {
         return imageDir;
     }
 
+    public void setClusterSnapshotFile(String clusterSnapshotFile) throws Exception {
+        throw new Exception("cluster snapshot only support cloud mode");
+    }
+
+    protected void loadClusterSnapshot() throws Exception {}
+
     public void initialize(String[] args) throws Exception {
         // set meta dir first.
         // we already set these variables in constructor. but Catalog is a singleton class.
@@ -1129,6 +1135,8 @@ public class Env {
                     meta.getAbsolutePath());
             throw new Exception(meta.getAbsolutePath() + " does not exist, will exit");
         }
+
+        loadClusterSnapshot();
 
         if (Config.edit_log_type.equalsIgnoreCase("bdb")) {
             File bdbDir = new File(this.bdbDir);

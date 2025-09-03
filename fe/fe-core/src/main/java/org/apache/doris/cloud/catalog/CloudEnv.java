@@ -50,8 +50,12 @@ import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
 
 import java.io.DataInputStream;
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +79,9 @@ public class CloudEnv extends Env {
     private CloudSnapshotHandler cloudSnapshotHandler;
 
     private String cloudInstanceId;
+
+    // private boolean loadClusterSnapshot = false;
+    private String clusterSnapshotFile;
 
     public CloudEnv(boolean isCheckpointCatalog) {
         super(isCheckpointCatalog);
@@ -447,5 +454,42 @@ public class CloudEnv extends Env {
     @Override
     public void modifyFrontendHostName(String srcHost, int srcPort, String destHost) throws DdlException {
         throw new DdlException("Modifying frontend hostname is not supported in cloud mode");
+    }
+
+    @Override
+    public void setClusterSnapshotFile(String clusterSnapshotFile) {
+        this.clusterSnapshotFile = clusterSnapshotFile;
+    }
+
+    @Override
+    protected void loadClusterSnapshot() throws Exception {
+        if (clusterSnapshotFile == null) {
+            return;
+        }
+        LOG.info("load cluster snapshot from file: {}", clusterSnapshotFile);
+        File file = new File(clusterSnapshotFile);
+        if (!file.exists()) {
+            LOG.error("cluster snapshot file {} does not exist", clusterSnapshotFile);
+            System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
+            System.exit(-1);
+        }
+        JSONParser parser = new JSONParser();
+        try (FileReader reader = new FileReader(file)) {
+            Object obj = null;
+            try {
+                obj = parser.parse(reader);
+            } catch (Exception e) {
+                LOG.error("failed to parse cluster snapshot file {}", clusterSnapshotFile);
+                System.err.println("failed to parse cluster snapshot file " + clusterSnapshotFile);
+                System.exit(-1);
+            }
+            if (!(obj instanceof JSONObject)) {
+                LOG.error("cluster snapshot file {} does not exist", clusterSnapshotFile);
+                System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
+                System.exit(-1);
+            }
+            JSONObject jsonObject = (JSONObject) obj;
+            LOG.info("json object: {}", jsonObject.toJSONString());
+        }
     }
 }
