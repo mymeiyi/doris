@@ -42,6 +42,7 @@ import org.apache.doris.service.ExecuteEnv;
 import org.apache.doris.service.FeServer;
 import org.apache.doris.service.FrontendOptions;
 
+import com.amazonaws.services.dynamodbv2.xspec.S;
 import com.google.common.base.Charsets;
 import com.google.common.base.Strings;
 import io.netty.util.internal.logging.InternalLoggerFactory;
@@ -123,7 +124,7 @@ public class DorisFE {
         }
 
         CommandLineOptions cmdLineOpts = parseArgs(args);
-        LOG.info("sout: cmdLineOpts: {}", cmdLineOpts);
+        // LOG.info("sout: cmdLineOpts: {}", cmdLineOpts);
 
         try {
             // init config
@@ -189,6 +190,10 @@ public class DorisFE {
             System.setProperty("software.amazon.awssdk.http.service.impl",
                     "software.amazon.awssdk.http.urlconnection.UrlConnectionSdkHttpService");
 
+            if (cmdLineOpts.getClusterSnapshotPath() != null) {
+                Env.getCurrentEnv().setClusterSnapshotFile(cmdLineOpts.getClusterSnapshotPath());
+            }
+            Env.getCurrentEnv().initialize(args);
             // init catalog and wait it be ready
             Env.getCurrentEnv().initialize(args);
             Env.getCurrentEnv().waitForReady();
@@ -328,12 +333,12 @@ public class DorisFE {
             System.err.println("Failed to parse command line. exit now. error: " + e.getMessage());
             System.exit(-1);
         }
-        for (String arg : cmd.getArgs()) {
+        /*for (String arg : cmd.getArgs()) {
             System.out.println("sout: arg: " + arg);
         }
         for (Option option : cmd.getOptions()) {
             System.out.println("sout: option: " + option.getLongOpt() + " , " + option.getValue());
-        }
+        }*/
 
         // version
         if (cmd.hasOption('v') || cmd.hasOption("version")) {
@@ -413,17 +418,18 @@ public class DorisFE {
             }
         }
         // cluster snapshot
-        String clusterSnapshotFile = null;
-        System.out.println("sout: has cs: " + cmd.hasOption('c'));
+        // String clusterSnapshotFile = null;
+        System.out.println("sout: has c: " + cmd.hasOption('c'));
         System.out.println("sout: has cluster_snapshot: " + cmd.hasOption("cluster_snapshot"));
         if (cmd.hasOption('c') || cmd.hasOption("cluster_snapshot")) {
-            clusterSnapshotFile = cmd.getOptionValue("cluster_snapshot");
+            String clusterSnapshotFile = cmd.getOptionValue("cluster_snapshot");
             if (Strings.isNullOrEmpty(clusterSnapshotFile)) {
                 System.err.println("Missing cluster_snapshot file");
                 System.exit(-1);
             }
+            System.out.println("sout: ClusterSnapshot file: " + clusterSnapshotFile);
+            return new CommandLineOptions(false, null, null, "", clusterSnapshotFile);
         }
-        System.out.println("sout: ClusterSnapshot file: " + clusterSnapshotFile);
 
         // helper node is null, means no helper node is specified
         return new CommandLineOptions(false, null, null, "");
