@@ -316,13 +316,14 @@ public class DorisFE {
         options.addOption("r", FeConstants.METADATA_FAILURE_RECOVERY_KEY, false,
                 "Check if the specified metadata recover is valid");
         options.addOption("cs", "cluster_snapshot", true, "Specify the cluster snapshot json file");
+        System.out.println("args: " + String.join(" ", args));
 
         CommandLine cmd = null;
         try {
             cmd = commandLineParser.parse(options, args);
         } catch (final ParseException e) {
             LOG.warn("", e);
-            System.err.println("Failed to parse command line. exit now");
+            System.err.println("Failed to parse command line. exit now " + e.getMessage());
             System.exit(-1);
         }
 
