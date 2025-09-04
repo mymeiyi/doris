@@ -508,7 +508,7 @@ public class CloudEnv extends Env {
             if (cloneSnapshotDirFile.exists()) {
                 cloneSnapshotDirFile.delete();
             }
-            cloneSnapshotDirFile.createNewFile();
+            cloneSnapshotDirFile.mkdir();
             downloadSnapshot(objInfo, fromSnapshotId, cloneSnapshotDir);
         }
     }
