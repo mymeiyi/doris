@@ -508,6 +508,7 @@ public class CloudEnv extends Env {
 
     private void downloadSnapshot(JSONObject objInfo, String fromSnapshotId) throws Exception {
         try {
+            LOG.info("start to download snapshot from {}", fromSnapshotId);
             String prefix = (String) (objInfo.get("prefix"));
             RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(
                     Cloud.ObjectStoreInfoPB.Provider.valueOf((String) (objInfo.get("provider"))),
@@ -515,6 +516,7 @@ public class CloudEnv extends Env {
                     (String) (objInfo.get("bucket")), (String) (objInfo.get("endpoint")),
                     (String) (objInfo.get("region")),
                     (String) (objInfo.get("prefix")));
+            LOG.info("objInfo: {}", objectInfo);
             RemoteBase remote = RemoteBase.newInstance(objectInfo);
             String key = prefix + "/snapshot/" + fromSnapshotId + "/";
             ListObjectsResult listObjectsResult = remote.listObjects(key);
@@ -526,7 +528,7 @@ public class CloudEnv extends Env {
                 LOG.info("download to local path: {}", localPath);
                 remote.getObject(objectFile.getKey(), localPath);
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
             LOG.error("failed to download snapshot from {}", fromSnapshotId, e);
         }
     }
