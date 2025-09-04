@@ -29,6 +29,9 @@ import org.apache.doris.cloud.load.CloudSnapshotHandler;
 import org.apache.doris.cloud.persist.UpdateCloudReplicaInfo;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.proto.Cloud.NodeInfoPB;
+import org.apache.doris.cloud.storage.ListObjectsResult;
+import org.apache.doris.cloud.storage.ObjectFile;
+import org.apache.doris.cloud.storage.RemoteBase;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
@@ -57,6 +60,7 @@ import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -498,6 +502,27 @@ public class CloudEnv extends Env {
             JSONObject objInfo = (JSONObject) jsonObject.get("obj_info");
             LOG.info("fromInstanceId: {}, fromSnapshotId: {}, instanceId: {}, name: {}, readOnly: {}, objInfo: {}",
                     fromInstanceId, fromSnapshotId, instanceId, name, readOnly, objInfo.toJSONString());
+            downloadSnapshot(objInfo, fromSnapshotId);
+        }
+    }
+
+    private void downloadSnapshot(JSONObject objInfo, String fromSnapshotId) throws Exception {
+        String prefix = (String) (objInfo.get("prefix"));
+        RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(
+                Cloud.ObjectStoreInfoPB.Provider.valueOf((String) (objInfo.get("provider"))),
+                (String) (objInfo.get("ak")), (String) (objInfo.get("sk")),
+                (String) (objInfo.get("bucket")), (String) (objInfo.get("endpoint")), (String) (objInfo.get("region")),
+                (String) (objInfo.get("prefix")));
+        RemoteBase remote = RemoteBase.newInstance(objectInfo);
+        String key = prefix + "/snapshot/" + fromSnapshotId + "/";
+        ListObjectsResult listObjectsResult = remote.listObjects(key);
+        for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
+            LOG.info("objectFile: {}", objectFile.toString());
+            boolean isImage = objectFile.getKey().contains("image");
+            String localPath = "/mnt/disk2/meiyi/deployment/doris_cloud_fe/fe/doris-meta/clone-snapshot/"
+                    + fromSnapshotId + "/" + (isImage ? "image" : "edit_log");
+            LOG.info("download to local path: {}", localPath);
+            remote.getObject(objectFile.getKey(), localPath);
         }
     }
 }
