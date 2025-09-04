@@ -626,7 +626,12 @@ public class CloudEnv extends Env {
                 System.exit(-1);
             }
         }
-        LOG.info("finished replay {} journal from cluster snapshot: {}", count, editLogFile.getAbsolutePath());
+        LOG.info("finished replay {} journal from cluster snapshot: {}, lastLogId: {}", count,
+                editLogFile.getAbsolutePath(), replayedJournalId + count);
         // generate new image
+        String latestImageFilePath = saveImage();
+        replayedJournalId = getReplayedJournalId();
+        LOG.info("save image to {}, replayedJournalId: {}", latestImageFilePath, replayedJournalId);
+        // loadImage(imageDir);
     }
 }

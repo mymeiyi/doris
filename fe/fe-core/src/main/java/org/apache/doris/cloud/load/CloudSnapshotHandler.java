@@ -62,11 +62,17 @@ public class CloudSnapshotHandler extends MasterDaemon {
     }
 
     public void initialize() {
-        File imageDir = new File(this.snapshotDir);
-        if (imageDir.exists()) {
-            imageDir.delete();
+        File snapshotDir = new File(this.snapshotDir);
+        if (snapshotDir.exists()) {
+            if (snapshotDir.isDirectory()) {
+                for (File file : snapshotDir.listFiles()) {
+                    LOG.info("delete snapshot file: {}", file.getAbsolutePath());
+                    file.delete();
+                }
+            }
+            snapshotDir.delete();
         }
-        imageDir.mkdirs();
+        snapshotDir.mkdirs();
         if (!Config.ak.isEmpty()) {
             lastFinishedAutoSnapshotTime = 0;
             autoSnapshotInterval = 60;

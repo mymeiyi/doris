@@ -1172,10 +1172,10 @@ public class Env {
                     selfNode.getPort(), false /* new style */);
         }
 
+        readClusterSnapshot();
         // 3. Load image first and replay edits
         this.editLog = new EditLog(nodeName);
         loadImage(this.imageDir); // load image file
-        readClusterSnapshot();
         editLog.open(); // open bdb env
         this.globalTransactionMgr.setEditLog(editLog);
         this.idGenerator.setEditLog(editLog);
