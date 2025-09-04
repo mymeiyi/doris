@@ -518,8 +518,8 @@ public class CloudEnv extends Env {
                     (String) (objInfo.get("prefix")));
             LOG.info("objInfo: {}", objectInfo);
             RemoteBase remote = RemoteBase.newInstance(objectInfo);
-            String key = prefix + "/snapshot/" + fromSnapshotId + "/";
-            ListObjectsResult listObjectsResult = remote.listObjects(key);
+            String key = "snapshot/" + fromSnapshotId + "/";
+            ListObjectsResult listObjectsResult = remote.listObjects(key, null);
             for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
                 LOG.info("objectFile: {}", objectFile.toString());
                 boolean isImage = objectFile.getKey().contains("image.");
