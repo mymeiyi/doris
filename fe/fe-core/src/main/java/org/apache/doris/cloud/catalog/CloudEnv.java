@@ -507,7 +507,14 @@ public class CloudEnv extends Env {
             this.cloneSnapshotDir = this.metaDir + "/clone-snapshot/";
             File cloneSnapshotDirFile = new File(cloneSnapshotDir);
             if (cloneSnapshotDirFile.exists()) {
+                if (cloneSnapshotDirFile.delete()) {
+                    for (File file1 : cloneSnapshotDirFile.listFiles()) {
+                        LOG.info("delete file: {}", file1.getAbsolutePath());
+                        file1.delete();
+                    }
+                }
                 cloneSnapshotDirFile.delete();
+                LOG.info("delete cloud snapshot directory: {}", cloneSnapshotDirFile.getAbsolutePath());
             }
             cloneSnapshotDirFile.mkdir();
             downloadSnapshot(objInfo, fromSnapshotId, cloneSnapshotDir);
@@ -558,7 +565,7 @@ public class CloudEnv extends Env {
         for (File file : dir.listFiles()) {
             String fileName = file.getName();
             if (fileName.startsWith("image.")) {
-                replayedJournalId = Long.parseLong(fileName.substring(fileName.lastIndexOf(".")));
+                replayedJournalId = Long.parseLong(fileName.substring(fileName.lastIndexOf(".") + 1));
                 MetaReader.read(file, this);
                 LOG.info("finished load image from cluster snapshot: {}, replayedJournalId: {}",
                         file.getAbsolutePath(), replayedJournalId);
