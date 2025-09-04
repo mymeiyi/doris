@@ -353,7 +353,7 @@ public class Env {
     public static final String CLIENT_NODE_HOST_KEY = "CLIENT_NODE_HOST";
     public static final String CLIENT_NODE_PORT_KEY = "CLIENT_NODE_PORT";
 
-    private String metaDir;
+    protected String metaDir;
     private String bdbDir;
     protected String imageDir;
 

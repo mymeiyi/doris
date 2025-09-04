@@ -86,6 +86,7 @@ public class CloudEnv extends Env {
 
     // private boolean loadClusterSnapshot = false;
     private String clusterSnapshotFile;
+    private String cloneSnapshotDir;
 
     public CloudEnv(boolean isCheckpointCatalog) {
         super(isCheckpointCatalog);
@@ -502,14 +503,19 @@ public class CloudEnv extends Env {
             JSONObject objInfo = (JSONObject) jsonObject.get("obj_info");
             LOG.info("fromInstanceId: {}, fromSnapshotId: {}, instanceId: {}, name: {}, readOnly: {}, objInfo: {}",
                     fromInstanceId, fromSnapshotId, instanceId, name, readOnly, objInfo.toJSONString());
-            downloadSnapshot(objInfo, fromSnapshotId);
+            this.cloneSnapshotDir = this.metaDir + "/clone-snapshot/";
+            File cloneSnapshotDirFile = new File(cloneSnapshotDir);
+            if (cloneSnapshotDirFile.exists()) {
+                cloneSnapshotDirFile.delete();
+            }
+            cloneSnapshotDirFile.createNewFile();
+            downloadSnapshot(objInfo, fromSnapshotId, cloneSnapshotDir);
         }
     }
 
-    private void downloadSnapshot(JSONObject objInfo, String fromSnapshotId) throws Exception {
+    private void downloadSnapshot(JSONObject objInfo, String fromSnapshotId, String cloneSnapshotDir) throws Exception {
         try {
             LOG.info("start to download snapshot from {}", fromSnapshotId);
-            String prefix = (String) (objInfo.get("prefix"));
             RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(
                     Cloud.ObjectStoreInfoPB.Provider.valueOf((String) (objInfo.get("provider"))),
                     (String) (objInfo.get("ak")), (String) (objInfo.get("sk")),
@@ -521,11 +527,10 @@ public class CloudEnv extends Env {
             String key = "snapshot/" + fromSnapshotId + "/";
             ListObjectsResult listObjectsResult = remote.listObjects(key, null);
             for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
-                LOG.info("objectFile: {}", objectFile.toString());
-                boolean isImage = objectFile.getKey().contains("image.");
-                String localPath = "/mnt/disk2/meiyi/deployment/doris_cloud_fe/fe/doris-meta/clone-snapshot/"
-                        + fromSnapshotId + "/" + (isImage ? "image" : "edit_log");
-                LOG.info("download to local path: {}", localPath);
+                // boolean isImage = objectFile.getKey().contains("image.");
+                String lastPart = objectFile.getKey().substring(objectFile.getKey().lastIndexOf("/") + 1);
+                String localPath = cloneSnapshotDir + lastPart;
+                LOG.info("objectFile: {}, download to local path: {}", objectFile.toString(), localPath);
                 remote.getObject(objectFile.getKey(), localPath);
             }
         } catch (Throwable e) {
