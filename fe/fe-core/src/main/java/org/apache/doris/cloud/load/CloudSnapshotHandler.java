@@ -260,7 +260,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
         RemoteBase remote = RemoteBase.newInstance(objectInfo);
         remote.putObject(imageFile, imageUrl + "/" + imageFileName);
         // edit log
-        File snapshotEditLogFile = new File(snapshotDir, snapshotId);
+        File snapshotEditLogFile = new File(snapshotDir, "edits." + logId);
         remote.putObject(snapshotEditLogFile, imageUrl + "/" + snapshotEditLogFile.getName());
         snapshotEditLogFile.delete();
     }
