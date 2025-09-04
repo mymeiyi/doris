@@ -564,8 +564,12 @@ public class CloudEnv extends Env {
 
     private static Set<Short> SKIP_OP_TYPES = Sets.newHashSet(
             OperationType.OP_ADD_FRONTEND,
+            OperationType.OP_ADD_FIRST_FRONTEND,
+            OperationType.OP_REMOVE_FRONTEND,
+            OperationType.OP_MODIFY_FRONTEND,
             OperationType.OP_ADD_BACKEND,
             OperationType.OP_DROP_BACKEND,
+            OperationType.OP_MODIFY_BACKEND,
             OperationType.OP_MASTER_INFO_CHANGE,
             OperationType.OP_HEARTBEAT
     );
