@@ -284,7 +284,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
             throw new DdlException("failed to get cursor from " + fromJournalId + " to " + toJournalId);
         }
 
-        File snapshotEditLogFile = new File(snapshotDir, snapshotId);
+        File snapshotEditLogFile = new File(snapshotDir, "edits." + toJournalId);
         if (snapshotEditLogFile.exists()) {
             snapshotEditLogFile.delete();
         }

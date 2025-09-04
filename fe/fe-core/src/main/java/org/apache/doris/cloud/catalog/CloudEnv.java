@@ -37,7 +37,6 @@ import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.MetaNotFoundException;
-import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.io.CountingDataOutputStream;
 import org.apache.doris.common.util.NetUtils;
@@ -57,6 +56,7 @@ import org.apache.doris.system.SystemInfoService.HostInfo;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
+import com.google.common.collect.Sets;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.json.simple.JSONObject;
@@ -68,10 +68,10 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 public class CloudEnv extends Env {
@@ -562,6 +562,14 @@ public class CloudEnv extends Env {
         }
     }
 
+    private static Set<Short> SKIP_OP_TYPES = Sets.newHashSet(
+            OperationType.OP_ADD_FRONTEND,
+            OperationType.OP_ADD_BACKEND,
+            OperationType.OP_DROP_BACKEND,
+            OperationType.OP_MASTER_INFO_CHANGE,
+            OperationType.OP_HEARTBEAT
+    );
+
     protected void readClusterSnapshot() throws IOException, DdlException {
         if (this.cloneSnapshotDir == null) {
             return;
@@ -601,6 +609,9 @@ public class CloudEnv extends Env {
                 // LOG.info("read op code: {}", entity.getOpCode());
                 if (entity.getOpCode() == OperationType.OP_LOCAL_EOF) {
                     break;
+                }
+                if (SKIP_OP_TYPES.contains(entity.getOpCode())) {
+                    continue;
                 }
                 EditLog.loadJournal(this, replayedJournalId + count, entity);
             }
