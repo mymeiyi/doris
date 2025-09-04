@@ -470,7 +470,7 @@ public class CloudEnv extends Env {
         File file = new File(clusterSnapshotFile);
         if (!file.exists()) {
             LOG.error("cluster snapshot file {} does not exist", clusterSnapshotFile);
-            System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
+            // System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
             System.exit(-1);
         }
         JSONParser parser = new JSONParser();
@@ -480,12 +480,12 @@ public class CloudEnv extends Env {
                 obj = parser.parse(reader);
             } catch (Exception e) {
                 LOG.error("failed to parse cluster snapshot file {}", clusterSnapshotFile);
-                System.err.println("failed to parse cluster snapshot file " + clusterSnapshotFile);
+                // System.err.println("failed to parse cluster snapshot file " + clusterSnapshotFile);
                 System.exit(-1);
             }
             if (!(obj instanceof JSONObject)) {
                 LOG.error("cluster snapshot file {} does not exist", clusterSnapshotFile);
-                System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
+                // System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
                 System.exit(-1);
             }
             JSONObject jsonObject = (JSONObject) obj;

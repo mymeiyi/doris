@@ -189,7 +189,8 @@ public class DorisFE {
                     "software.amazon.awssdk.http.urlconnection.UrlConnectionSdkHttpService");
 
             if (cmdLineOpts.getClusterSnapshotPath() != null) {
-                Env.getCurrentEnv().setClusterSnapshotFile(cmdLineOpts.getClusterSnapshotPath());
+                Env.getCurrentEnv()
+                        .setClusterSnapshotFile(dorisHomeDir + "/" + cmdLineOpts.getClusterSnapshotPath().trim());
             }
             // init catalog and wait it be ready
             Env.getCurrentEnv().initialize(args);
@@ -319,7 +320,7 @@ public class DorisFE {
         options.addOption("r", FeConstants.METADATA_FAILURE_RECOVERY_KEY, false,
                 "Check if the specified metadata recover is valid");
         options.addOption("c", "cluster_snapshot", true, "Specify the cluster snapshot json file");
-        System.out.println("sout: args: " + String.join(" ", args));
+        // System.out.println("sout: args: " + String.join(" ", args));
 
         CommandLine cmd = null;
         try {
@@ -416,8 +417,8 @@ public class DorisFE {
         }
         // cluster snapshot
         // String clusterSnapshotFile = null;
-        System.out.println("sout: has c: " + cmd.hasOption('c'));
-        System.out.println("sout: has cluster_snapshot: " + cmd.hasOption("cluster_snapshot"));
+        // System.out.println("sout: has c: " + cmd.hasOption('c'));
+        // System.out.println("sout: has cluster_snapshot: " + cmd.hasOption("cluster_snapshot"));
         if (cmd.hasOption('c') || cmd.hasOption("cluster_snapshot")) {
             String clusterSnapshotFile = cmd.getOptionValue("cluster_snapshot");
             if (Strings.isNullOrEmpty(clusterSnapshotFile)) {
