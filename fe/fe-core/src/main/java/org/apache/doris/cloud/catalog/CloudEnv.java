@@ -522,7 +522,7 @@ public class CloudEnv extends Env {
             ListObjectsResult listObjectsResult = remote.listObjects(key);
             for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
                 LOG.info("objectFile: {}", objectFile.toString());
-                boolean isImage = objectFile.getKey().contains("image");
+                boolean isImage = objectFile.getKey().contains("image.");
                 String localPath = "/mnt/disk2/meiyi/deployment/doris_cloud_fe/fe/doris-meta/clone-snapshot/"
                         + fromSnapshotId + "/" + (isImage ? "image" : "edit_log");
                 LOG.info("download to local path: {}", localPath);
