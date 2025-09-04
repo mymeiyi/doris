@@ -1113,7 +1113,11 @@ public class Env {
         throw new Exception("cluster snapshot only support cloud mode");
     }
 
-    protected void loadClusterSnapshot() throws Exception {}
+    protected void loadClusterSnapshot() throws IOException, DdlException {}
+
+    protected void checkLoadClusterSnapshot(File dir) {}
+
+    protected void readClusterSnapshot() throws IOException, DdlException {}
 
     public void initialize(String[] args) throws Exception {
         // set meta dir first.
@@ -1142,11 +1146,15 @@ public class Env {
             File bdbDir = new File(this.bdbDir);
             if (!bdbDir.exists()) {
                 bdbDir.mkdirs();
+            } else {
+                checkLoadClusterSnapshot(bdbDir);
             }
         }
         File imageDir = new File(this.imageDir);
         if (!imageDir.exists()) {
             imageDir.mkdirs();
+        } else {
+            checkLoadClusterSnapshot(imageDir);
         }
 
         // init plugin manager
@@ -1167,6 +1175,7 @@ public class Env {
         // 3. Load image first and replay edits
         this.editLog = new EditLog(nodeName);
         loadImage(this.imageDir); // load image file
+        readClusterSnapshot();
         editLog.open(); // open bdb env
         this.globalTransactionMgr.setEditLog(editLog);
         this.idGenerator.setEditLog(editLog);

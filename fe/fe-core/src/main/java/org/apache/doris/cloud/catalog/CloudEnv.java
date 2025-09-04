@@ -45,6 +45,7 @@ import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.trees.plans.commands.CancelWarmUpJobCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateStageCommand;
 import org.apache.doris.nereids.trees.plans.commands.DropStageCommand;
+import org.apache.doris.persist.meta.MetaReader;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.system.Frontend;
 import org.apache.doris.system.SystemInfoService.HostInfo;
@@ -467,7 +468,7 @@ public class CloudEnv extends Env {
     }
 
     @Override
-    protected void loadClusterSnapshot() throws Exception {
+    protected void loadClusterSnapshot() throws IOException, DdlException {
         if (clusterSnapshotFile == null) {
             return;
         }
@@ -513,7 +514,8 @@ public class CloudEnv extends Env {
         }
     }
 
-    private void downloadSnapshot(JSONObject objInfo, String fromSnapshotId, String cloneSnapshotDir) throws Exception {
+    private void downloadSnapshot(JSONObject objInfo, String fromSnapshotId, String cloneSnapshotDir)
+            throws IOException {
         try {
             LOG.info("start to download snapshot from {}", fromSnapshotId);
             RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(
@@ -536,5 +538,36 @@ public class CloudEnv extends Env {
         } catch (Throwable e) {
             LOG.error("failed to download snapshot from {}", fromSnapshotId, e);
         }
+    }
+
+    protected void checkLoadClusterSnapshot(File dir) {
+        if (this.cloneSnapshotDir != null) {
+            LOG.error("load from cluster snapshot, directory: {} should be empty", dir.getAbsolutePath());
+            // System.err.println("failed to parse cluster snapshot file " + clusterSnapshotFile);
+            System.exit(-1);
+        }
+    }
+
+    protected void readClusterSnapshot() throws IOException, DdlException {
+        if (this.cloneSnapshotDir == null) {
+            return;
+        }
+        // load image
+        File dir = new File(this.cloneSnapshotDir);
+        long replayedJournalId = 0;
+        for (File file : dir.listFiles()) {
+            String fileName = file.getName();
+            if (fileName.startsWith("image.")) {
+                replayedJournalId = Long.parseLong(fileName.substring(fileName.lastIndexOf(".")));
+                MetaReader.read(file, this);
+                LOG.info("finished load image from cluster snapshot: {}, replayedJournalId: {}",
+                        file.getAbsolutePath(), replayedJournalId);
+                break;
+            } else {
+                // replay
+            }
+        }
+        // replay edit log
+        // generate new image
     }
 }
