@@ -507,22 +507,27 @@ public class CloudEnv extends Env {
     }
 
     private void downloadSnapshot(JSONObject objInfo, String fromSnapshotId) throws Exception {
-        String prefix = (String) (objInfo.get("prefix"));
-        RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(
-                Cloud.ObjectStoreInfoPB.Provider.valueOf((String) (objInfo.get("provider"))),
-                (String) (objInfo.get("ak")), (String) (objInfo.get("sk")),
-                (String) (objInfo.get("bucket")), (String) (objInfo.get("endpoint")), (String) (objInfo.get("region")),
-                (String) (objInfo.get("prefix")));
-        RemoteBase remote = RemoteBase.newInstance(objectInfo);
-        String key = prefix + "/snapshot/" + fromSnapshotId + "/";
-        ListObjectsResult listObjectsResult = remote.listObjects(key);
-        for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
-            LOG.info("objectFile: {}", objectFile.toString());
-            boolean isImage = objectFile.getKey().contains("image");
-            String localPath = "/mnt/disk2/meiyi/deployment/doris_cloud_fe/fe/doris-meta/clone-snapshot/"
-                    + fromSnapshotId + "/" + (isImage ? "image" : "edit_log");
-            LOG.info("download to local path: {}", localPath);
-            remote.getObject(objectFile.getKey(), localPath);
+        try {
+            String prefix = (String) (objInfo.get("prefix"));
+            RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(
+                    Cloud.ObjectStoreInfoPB.Provider.valueOf((String) (objInfo.get("provider"))),
+                    (String) (objInfo.get("ak")), (String) (objInfo.get("sk")),
+                    (String) (objInfo.get("bucket")), (String) (objInfo.get("endpoint")),
+                    (String) (objInfo.get("region")),
+                    (String) (objInfo.get("prefix")));
+            RemoteBase remote = RemoteBase.newInstance(objectInfo);
+            String key = prefix + "/snapshot/" + fromSnapshotId + "/";
+            ListObjectsResult listObjectsResult = remote.listObjects(key);
+            for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
+                LOG.info("objectFile: {}", objectFile.toString());
+                boolean isImage = objectFile.getKey().contains("image");
+                String localPath = "/mnt/disk2/meiyi/deployment/doris_cloud_fe/fe/doris-meta/clone-snapshot/"
+                        + fromSnapshotId + "/" + (isImage ? "image" : "edit_log");
+                LOG.info("download to local path: {}", localPath);
+                remote.getObject(objectFile.getKey(), localPath);
+            }
+        } catch (Exception e) {
+            LOG.error("failed to download snapshot from {}", fromSnapshotId, e);
         }
     }
 }
