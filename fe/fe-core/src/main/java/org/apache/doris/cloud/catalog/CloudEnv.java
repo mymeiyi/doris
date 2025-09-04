@@ -490,6 +490,14 @@ public class CloudEnv extends Env {
             }
             JSONObject jsonObject = (JSONObject) obj;
             LOG.info("json object: {}", jsonObject.toJSONString());
+            String fromInstanceId = (String) jsonObject.get("from_instance_id");
+            String fromSnapshotId = (String) jsonObject.get("from_snapshot_id");
+            String instanceId = (String) jsonObject.get("instance_id");
+            String name = (String) jsonObject.get("name");
+            boolean readOnly = (Boolean) jsonObject.get("is_read_only");
+            JSONObject objInfo = (JSONObject) jsonObject.get("obj_info");
+            LOG.info("fromInstanceId: {}, fromSnapshotId: {}, instanceId: {}, name: {}, readOnly: {}, objInfo: {}",
+                    fromInstanceId, fromSnapshotId, instanceId, name, readOnly, objInfo.toJSONString());
         }
     }
 }
