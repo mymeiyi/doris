@@ -37,14 +37,18 @@ import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.MetaNotFoundException;
+import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.io.CountingDataOutputStream;
 import org.apache.doris.common.util.NetUtils;
 import org.apache.doris.ha.FrontendNodeType;
+import org.apache.doris.journal.JournalEntity;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.trees.plans.commands.CancelWarmUpJobCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateStageCommand;
 import org.apache.doris.nereids.trees.plans.commands.DropStageCommand;
+import org.apache.doris.persist.EditLogFileInputStream;
+import org.apache.doris.persist.OperationType;
 import org.apache.doris.persist.meta.MetaReader;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.system.Frontend;
@@ -57,7 +61,9 @@ import org.apache.logging.log4j.Logger;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 
+import java.io.BufferedInputStream;
 import java.io.DataInputStream;
+import java.io.EOFException;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
@@ -93,7 +99,7 @@ public class CloudEnv extends Env {
         super(isCheckpointCatalog);
         this.cleanCopyJobScheduler = new CleanCopyJobScheduler();
         this.loadManager = ((CloudEnvFactory) EnvFactory.getInstance())
-                                    .createLoadManager(loadJobScheduler, cleanCopyJobScheduler);
+                .createLoadManager(loadJobScheduler, cleanCopyJobScheduler);
         this.cloudClusterCheck = new CloudClusterChecker((CloudSystemInfoService) systemInfo);
         this.cloudInstanceStatusChecker = new CloudInstanceStatusChecker((CloudSystemInfoService) systemInfo);
         this.cloudTabletRebalancer = new CloudTabletRebalancer((CloudSystemInfoService) systemInfo);
@@ -130,7 +136,7 @@ public class CloudEnv extends Env {
     public void initialize(String[] args) throws Exception {
         if (Strings.isNullOrEmpty(Config.cloud_unique_id) && Config.cluster_id == -1) {
             throw new UserException("cluster_id must be specified in fe.conf if deployed "
-                                    + "in cloud mode, because FE should known to which it belongs");
+                    + "in cloud mode, because FE should known to which it belongs");
         }
 
         if (Config.cluster_id != -1) {
@@ -189,7 +195,7 @@ public class CloudEnv extends Env {
         if (!response.hasStatus() || !response.getStatus().hasCode()
                 || response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
             LOG.warn("failed to get cloud cluster due to incomplete response, "
-                    + "cloud_unique_id={}, clusterId={}, response={}",
+                            + "cloud_unique_id={}, clusterId={}, response={}",
                     Config.cloud_unique_id, Config.cloud_sql_server_cluster_id, response);
             return null;
         }
@@ -197,7 +203,7 @@ public class CloudEnv extends Env {
         // Note: get_cluster interface cluster(option -> repeated), so it has at least one cluster.
         if (response.getClusterCount() == 0) {
             LOG.warn("meta service error , return cluster zero, plz check it, "
-                    + "cloud_unique_id={}, clusterId={}, response={}",
+                            + "cloud_unique_id={}, clusterId={}, response={}",
                     Config.cloud_unique_id, Config.cloud_sql_server_cluster_id, response);
             return null;
         }
@@ -210,7 +216,7 @@ public class CloudEnv extends Env {
                 .filter(nodeInfoPB -> nodeInfoPB.getNodeType() != NodeInfoPB.NodeType.FE_OBSERVER).findFirst();
         firstNonObserverNode.ifPresent(nodeInfoPB -> helperNodes.add(new HostInfo(
                 Config.enable_fqdn_mode ? nodeInfoPB.getHost()
-                : nodeInfoPB.getIp(),
+                        : nodeInfoPB.getIp(),
                 nodeInfoPB.getEditLogPort())));
         Preconditions.checkState(helperNodes.size() == 1);
 
@@ -273,7 +279,7 @@ public class CloudEnv extends Env {
 
         LOG.info("current fe's role is {}", type == NodeInfoPB.NodeType.FE_MASTER ? "MASTER" :
                 type == NodeInfoPB.NodeType.FE_FOLLOWER ? "FOLLOWER" :
-                type == NodeInfoPB.NodeType.FE_OBSERVER ? "OBSERVER" : "UNKNOWN");
+                        type == NodeInfoPB.NodeType.FE_OBSERVER ? "OBSERVER" : "UNKNOWN");
         if (type == NodeInfoPB.NodeType.UNKNOWN) {
             LOG.warn("type current not support, please check it");
             System.exit(-1);
@@ -308,7 +314,7 @@ public class CloudEnv extends Env {
                 LOG.debug("current instance does not have a cluster name :{}", clusterName);
             }
             throw new DdlException(String.format("Compute Group %s not exist", clusterName),
-                ErrorCode.ERR_CLOUD_CLUSTER_ERROR);
+                    ErrorCode.ERR_CLOUD_CLUSTER_ERROR);
         }
     }
 
@@ -442,7 +448,7 @@ public class CloudEnv extends Env {
         Frontend frontend = checkFeExist(host, port);
         if (frontend == null) {
             throw new DdlException("frontend does not exist[" + NetUtils
-                .getHostPortInAccessibleFormat(host, port) + "]");
+                    .getHostPortInAccessibleFormat(host, port) + "]");
         }
 
         if (frontend.getRole() != role) {
@@ -507,7 +513,7 @@ public class CloudEnv extends Env {
             this.cloneSnapshotDir = this.metaDir + "/clone-snapshot/";
             File cloneSnapshotDirFile = new File(cloneSnapshotDir);
             if (cloneSnapshotDirFile.exists()) {
-                if (cloneSnapshotDirFile.delete()) {
+                if (cloneSnapshotDirFile.isDirectory()) {
                     for (File file1 : cloneSnapshotDirFile.listFiles()) {
                         LOG.info("delete file: {}", file1.getAbsolutePath());
                         file1.delete();
@@ -559,22 +565,40 @@ public class CloudEnv extends Env {
         if (this.cloneSnapshotDir == null) {
             return;
         }
-        // load image
         File dir = new File(this.cloneSnapshotDir);
         long replayedJournalId = 0;
         for (File file : dir.listFiles()) {
             String fileName = file.getName();
             if (fileName.startsWith("image.")) {
+                // load image
                 replayedJournalId = Long.parseLong(fileName.substring(fileName.lastIndexOf(".") + 1));
                 MetaReader.read(file, this);
                 LOG.info("finished load image from cluster snapshot: {}, replayedJournalId: {}",
                         file.getAbsolutePath(), replayedJournalId);
                 break;
             } else {
-                // replay
+                // replay edit log
+                DataInputStream currentStream = new DataInputStream(
+                        new BufferedInputStream(new EditLogFileInputStream(file)));
+                try {
+                    while (true) {
+                        JournalEntity entity = new JournalEntity();
+                        entity.readFields(currentStream);
+                        LOG.info("read op code: {}", entity.getOpCode());
+                        if (entity.getOpCode() == OperationType.OP_LOCAL_EOF) {
+                            break;
+                        }
+                    }
+                } catch (IOException e) {
+                    LOG.error("failed to replay cluster snapshot edit log", e);
+                    try {
+                        currentStream.close();
+                    } catch (IOException e1) {
+                        LOG.error("failed to close cluster snapshot edit log", e1);
+                    }
+                }
             }
         }
-        // replay edit log
         // generate new image
     }
 }
