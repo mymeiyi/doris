@@ -580,8 +580,8 @@ public class CloudEnv extends Env {
         }
         File dir = new File(this.cloneSnapshotDir);
         File[] files = dir.listFiles();
-        if (files.length != 2) {
-            LOG.error("clone snapshot directory: {} should only contain 2 files", dir.getAbsolutePath());
+        if (files.length == 0 || files.length > 2) {
+            LOG.error("clone snapshot directory: {} contains {} files", dir.getAbsolutePath(), files.length);
             System.exit(-1);
         }
         File imageFile = null;
@@ -594,48 +594,54 @@ public class CloudEnv extends Env {
             }
         }
 
+        CloudSnapshotEnv cloudSnapshotEnv = new CloudSnapshotEnv(false);
         // load image
-        String fileName = imageFile.getName();
-        long replayedJournalId = Long.parseLong(fileName.substring(fileName.lastIndexOf(".") + 1));
-        MetaReader.read(imageFile, this);
-        LOG.info("finished load image from cluster snapshot: {}, replayedJournalId: {}",
-                imageFile.getAbsolutePath(), replayedJournalId);
+        long replayedJournalId = 0;
+        if (imageFile != null) {
+            String fileName = imageFile.getName();
+            replayedJournalId = Long.parseLong(fileName.substring(fileName.lastIndexOf(".") + 1));
+            MetaReader.read(imageFile, cloudSnapshotEnv);
+            LOG.info("finished load image from cluster snapshot: {}, replayedJournalId: {}",
+                    imageFile.getAbsolutePath(), replayedJournalId);
+        }
 
         // replay edit log
-        long count = 0;
-        DataInputStream currentStream = new DataInputStream(
-                new BufferedInputStream(new EditLogFileInputStream(editLogFile)));
-        try {
-            while (true) {
-                JournalEntity entity = new JournalEntity();
-                entity.readFields(currentStream);
-                count++;
-                // LOG.info("read op code: {}", entity.getOpCode());
-                if (entity.getOpCode() == OperationType.OP_LOCAL_EOF) {
-                    break;
-                }
-                if (SKIP_OP_TYPES.contains(entity.getOpCode())) {
-                    continue;
-                }
-                EditLog.loadJournal(this, replayedJournalId + count, entity);
-            }
-        } catch (IOException e) {
+        if (editLogFile != null) {
+            long count = 0;
+            DataInputStream currentStream = new DataInputStream(
+                    new BufferedInputStream(new EditLogFileInputStream(editLogFile)));
             try {
-                currentStream.close();
-            } catch (IOException e1) {
-                LOG.error("failed to close cluster snapshot edit log", e1);
+                while (true) {
+                    JournalEntity entity = new JournalEntity();
+                    entity.readFields(currentStream);
+                    count++;
+                    // LOG.info("read op code: {}", entity.getOpCode());
+                    if (entity.getOpCode() == OperationType.OP_LOCAL_EOF) {
+                        break;
+                    }
+                    if (SKIP_OP_TYPES.contains(entity.getOpCode())) {
+                        continue;
+                    }
+                    EditLog.loadJournal(cloudSnapshotEnv, replayedJournalId + count, entity);
+                }
+            } catch (IOException e) {
+                try {
+                    currentStream.close();
+                } catch (IOException e1) {
+                    LOG.error("failed to close cluster snapshot edit log", e1);
+                }
+                if (!(e instanceof EOFException)) {
+                    LOG.error("failed to replay cluster snapshot edit log", e);
+                    System.exit(-1);
+                }
             }
-            if (!(e instanceof EOFException)) {
-                LOG.error("failed to replay cluster snapshot edit log", e);
-                System.exit(-1);
-            }
+            LOG.info("finished replay {} journal from cluster snapshot: {}, lastLogId: {}", count,
+                    editLogFile.getAbsolutePath(), replayedJournalId + count);
         }
-        LOG.info("finished replay {} journal from cluster snapshot: {}, lastLogId: {}", count,
-                editLogFile.getAbsolutePath(), replayedJournalId + count);
+
         // generate new image
-        String latestImageFilePath = saveImage();
-        replayedJournalId = getReplayedJournalId();
+        String latestImageFilePath = cloudSnapshotEnv.saveImage();
+        replayedJournalId = cloudSnapshotEnv.getReplayedJournalId();
         LOG.info("save image to {}, replayedJournalId: {}", latestImageFilePath, replayedJournalId);
-        // loadImage(imageDir);
     }
 }
