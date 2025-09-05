@@ -488,8 +488,7 @@ public class CloudEnv extends Env {
 
         CloneSnapshotState cloneSnapshotState = null;
         try {
-            cloneSnapshotState = new ObjectMapper().readValue(clusterSnapshotFile,
-                    CloneSnapshotState.class);
+            cloneSnapshotState = new ObjectMapper().readValue(file, CloneSnapshotState.class);
         } catch (Exception e) {
             LOG.error("failed to parse cluster snapshot file {}", clusterSnapshotFile, e);
             System.exit(-1);
