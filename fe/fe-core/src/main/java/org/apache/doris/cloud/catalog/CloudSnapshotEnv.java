@@ -22,7 +22,6 @@ import org.apache.doris.common.io.CountingDataOutputStream;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.DataInputStream;
 import java.io.IOException;
 
 public class CloudSnapshotEnv extends CloudEnv {
@@ -45,21 +44,9 @@ public class CloudSnapshotEnv extends CloudEnv {
         return checksum;
     }
 
-    /*@Override
-    public long loadMasterInfo(DataInputStream dis, long checksum) throws IOException {
-        LOG.info("skip replay masterInfo from image");
+    @Override
+    public long saveBackends(CountingDataOutputStream dos, long checksum) throws IOException {
+        LOG.info("skip save backends");
         return checksum;
     }
-
-    @Override
-    public long loadFrontends(DataInputStream dis, long checksum) throws IOException {
-        LOG.info("skip replay frontends from image");
-        return checksum;
-    }
-
-    @Override
-    public long loadBackends(DataInputStream dis, long checksum) throws IOException {
-        LOG.info("skip loading backends from image");
-        return checksum;
-    }*/
 }

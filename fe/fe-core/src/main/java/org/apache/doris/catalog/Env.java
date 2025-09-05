@@ -2263,6 +2263,9 @@ public class Env {
     }
 
     public long loadFrontends(DataInputStream dis, long checksum) throws IOException {
+        if (this instanceof CloudEnv) {
+            ((CloudEnv)this).loadFrontends(dis, checksum);
+        }
         int size = dis.readInt();
         long newChecksum = checksum ^ size;
         for (int i = 0; i < size; i++) {
