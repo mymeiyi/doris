@@ -31,7 +31,7 @@ public class CloudSnapshotEnv extends CloudEnv {
         super(isCheckpointCatalog);
     }
 
-    @Override
+    /*@Override
     public long loadMasterInfo(DataInputStream dis, long checksum) throws IOException {
         LOG.info("skip replay masterInfo from image");
         return checksum;
@@ -47,5 +47,5 @@ public class CloudSnapshotEnv extends CloudEnv {
     public long loadBackends(DataInputStream dis, long checksum) throws IOException {
         LOG.info("skip loading backends from image");
         return checksum;
-    }
+    }*/
 }
