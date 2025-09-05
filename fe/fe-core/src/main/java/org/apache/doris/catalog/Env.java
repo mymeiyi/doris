@@ -1160,7 +1160,7 @@ public class Env {
                     selfNode.getPort(), false /* new style */);
         }
 
-        handleClusterSnapshot();
+        cloneClusterSnapshot();
 
         // 3. Load image first and replay edits
         this.editLog = new EditLog(nodeName);
