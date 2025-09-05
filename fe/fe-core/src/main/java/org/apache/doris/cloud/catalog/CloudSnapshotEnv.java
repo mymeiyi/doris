@@ -17,6 +17,8 @@
 
 package org.apache.doris.cloud.catalog;
 
+import org.apache.doris.common.io.CountingDataOutputStream;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -29,6 +31,18 @@ public class CloudSnapshotEnv extends CloudEnv {
 
     public CloudSnapshotEnv(boolean isCheckpointCatalog) {
         super(isCheckpointCatalog);
+    }
+
+    @Override
+    public long saveMasterInfo(CountingDataOutputStream dos, long checksum) throws IOException {
+        LOG.info("skip save masterInfo");
+        return checksum;
+    }
+
+    @Override
+    public long saveFrontends(CountingDataOutputStream dos, long checksum) throws IOException {
+        LOG.info("skip save frontends");
+        return checksum;
     }
 
     /*@Override
