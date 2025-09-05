@@ -20,7 +20,7 @@ package org.apache.doris.nereids.trees.plans.commands;
 import org.apache.doris.analysis.StmtType;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cloud.catalog.CloudEnv;
-import org.apache.doris.cloud.load.CloudSnapshotHandler;
+import org.apache.doris.cloud.snapshot.CloudSnapshotHandler;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.common.AnalysisException;

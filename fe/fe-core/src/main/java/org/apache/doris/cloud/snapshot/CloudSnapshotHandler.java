@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-package org.apache.doris.cloud.load;
+package org.apache.doris.cloud.snapshot;
 
 import org.apache.doris.catalog.Env;
+import org.apache.doris.cloud.load.CloudSnapshotJob;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
-import org.apache.doris.cloud.snapshot.SnapshotState;
 import org.apache.doris.cloud.storage.RemoteBase;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.common.Config;

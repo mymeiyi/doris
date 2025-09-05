@@ -25,7 +25,7 @@ import org.apache.doris.cloud.CloudWarmUpJob;
 import org.apache.doris.cloud.CloudWarmUpJob.JobState;
 import org.apache.doris.cloud.datasource.CloudInternalCatalog;
 import org.apache.doris.cloud.load.CleanCopyJobScheduler;
-import org.apache.doris.cloud.load.CloudSnapshotHandler;
+import org.apache.doris.cloud.snapshot.CloudSnapshotHandler;
 import org.apache.doris.cloud.persist.UpdateCloudReplicaInfo;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.proto.Cloud.NodeInfoPB;
