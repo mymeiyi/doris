@@ -38,6 +38,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Constructor;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public class CloudSnapshotHandler extends MasterDaemon {
@@ -355,7 +356,10 @@ public class CloudSnapshotHandler extends MasterDaemon {
 
     // ==== for clone cluster snapshot ====
     public void cloneClusterSnapshot(String clusterSnapshotFile, String metaDir) throws Exception {
-        CloudSnapshotToolBase cloudSnapshotTool = new CloudSnapshotTool();
+        Class<CloudSnapshotToolBase> theClass = (Class<CloudSnapshotToolBase>) Class.forName(
+                Config.cloud_snapshot_tool_class);
+        Constructor<CloudSnapshotToolBase> constructor = theClass.getDeclaredConstructor();
+        CloudSnapshotToolBase cloudSnapshotTool = constructor.newInstance();
         cloudSnapshotTool.cloneClusterSnapshot(clusterSnapshotFile, metaDir);
     }
 }
