@@ -78,7 +78,7 @@ public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand {
         row.add(String.valueOf(switchStatus != SnapshotSwitchStatus.SNAPSHOT_SWITCH_DISABLED));
         row.add(String.valueOf(switchStatus == SnapshotSwitchStatus.SNAPSHOT_SWITCH_ON));
         row.add(String.valueOf(response.getInstance().getMaxReservedSnapshot()));
-        row.add(String.valueOf(response.getInstance().getSnapshotIntervalMinutes()));
+        row.add(String.valueOf(response.getInstance().getSnapshotIntervalSeconds()));
         List<List<String>> rows = new ArrayList<>();
         rows.add(row);
         return new ShowResultSet(getMetaData(), rows);

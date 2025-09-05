@@ -49,7 +49,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
 
     // auto snapshot job
     private CloudSnapshotJob autoSnapshotJob = null;
-    private long autoSnapshotInterval; // minute
+    private long autoSnapshotInterval; // seconds
     private long lastFinishedAutoSnapshotTime = -1; // second
     private boolean autoSnapshotJobInitialized = false;
 
@@ -102,7 +102,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
             if (this.autoSnapshotJob == null) {
                 this.autoSnapshotJob = new CloudSnapshotJob(true);
             }
-            this.autoSnapshotInterval = response.getInstance().getSnapshotIntervalMinutes();
+            this.autoSnapshotInterval = response.getInstance().getSnapshotIntervalSeconds();
         } else {
             this.autoSnapshotJob = null;
         }

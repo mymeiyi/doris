@@ -106,8 +106,8 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
                     }
                 } else if (entry.getKey().equalsIgnoreCase(PROP_SNAPSHOT_INTERVALS)) {
                     snapshotIntervals = Long.valueOf(entry.getValue());
-                    if (snapshotIntervals < 60) {
-                        throw new AnalysisException("property: " + entry.getKey() + " value should be greater than 59");
+                    if (snapshotIntervals < 3600) {
+                        throw new AnalysisException("property: " + entry.getKey() + " value minimum is 3600 seconds");
                     }
                 } else {
                     throw new AnalysisException("Unknown property: " + entry.getKey());
