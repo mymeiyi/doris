@@ -50,8 +50,11 @@ import org.apache.http.HttpStatus;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import reactor.core.publisher.Mono;
+import software.amazon.awssdk.core.exception.SdkException;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -200,6 +203,11 @@ public class AzureRemote extends RemoteBase {
             LOG.warn("Failed to put object for Azure", e);
             throw new DdlException("Failed to put object for Azure, Error message=" + e.getMessage());
         }
+    }
+
+    @Override
+    public void getObject(String key, String file) throws DdlException {
+        throw new DdlException("Unsupported operation");
     }
 
     @Override

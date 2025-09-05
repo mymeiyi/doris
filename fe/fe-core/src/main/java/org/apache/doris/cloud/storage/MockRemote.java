@@ -83,6 +83,11 @@ public class MockRemote extends RemoteBase {
         throw new DdlException("Put object for Mock is unsupported");
     }
 
+    @Override
+    public void getObject(String key, String file) throws DdlException {
+        throw new DdlException("Get object for Mock is unsupported");
+    }
+
     private ListObjectsResult listObjectsInner(String prefix, String continuationToken) throws DdlException {
         List<ObjectFile> objectFiles = new ArrayList<>();
         for (ObjectFile objectFile : objects.values()) {

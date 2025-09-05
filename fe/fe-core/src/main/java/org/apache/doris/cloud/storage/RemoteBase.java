@@ -32,6 +32,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.File;
 import java.io.UnsupportedEncodingException;
+import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
 
@@ -138,6 +139,8 @@ public abstract class RemoteBase {
     public abstract void deleteObjects(List<String> keys) throws DdlException;
 
     public abstract void putObject(File file, String key) throws DdlException;
+
+    public abstract void getObject(String key, String file) throws DdlException;
 
     public void close() {}
 

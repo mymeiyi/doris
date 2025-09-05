@@ -20,7 +20,7 @@ package org.apache.doris.nereids.trees.plans.commands;
 import org.apache.doris.analysis.StmtType;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.cloud.catalog.CloudEnv;
-import org.apache.doris.cloud.load.CloudSnapshotHandler;
+import org.apache.doris.cloud.snapshot.CloudSnapshotHandler;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.common.AnalysisException;
@@ -106,8 +106,8 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
                     }
                 } else if (entry.getKey().equalsIgnoreCase(PROP_SNAPSHOT_INTERVALS)) {
                     snapshotIntervals = Long.valueOf(entry.getValue());
-                    if (snapshotIntervals < 60) {
-                        throw new AnalysisException("property: " + entry.getKey() + " value should be greater than 59");
+                    if (snapshotIntervals < 3600) {
+                        throw new AnalysisException("property: " + entry.getKey() + " value minimum is 3600 seconds");
                     }
                 } else {
                     throw new AnalysisException("Unknown property: " + entry.getKey());

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-package org.apache.doris.cloud.load;
+package org.apache.doris.cloud.snapshot;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
