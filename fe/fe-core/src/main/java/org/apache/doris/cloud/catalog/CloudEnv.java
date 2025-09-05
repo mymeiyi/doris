@@ -61,14 +61,11 @@ import com.google.common.base.Strings;
 import com.google.common.collect.Sets;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.json.simple.JSONObject;
-import org.json.simple.parser.JSONParser;
 
 import java.io.BufferedInputStream;
 import java.io.DataInputStream;
 import java.io.EOFException;
 import java.io.File;
-import java.io.FileReader;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -491,11 +488,10 @@ public class CloudEnv extends Env {
 
         CloneSnapshotState cloneSnapshotState = null;
         try {
-            ObjectMapper objectMapper = new ObjectMapper();
-            cloneSnapshotState = objectMapper.readValue(clusterSnapshotFile,
+            cloneSnapshotState = new ObjectMapper().readValue(clusterSnapshotFile,
                     CloneSnapshotState.class);
         } catch (Exception e) {
-            LOG.error("failed to parse cluster snapshot file {}", clusterSnapshotFile);
+            LOG.error("failed to parse cluster snapshot file {}", clusterSnapshotFile, e);
             System.exit(-1);
         }
 
