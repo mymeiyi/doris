@@ -33,7 +33,7 @@ import org.apache.doris.cloud.datasource.CloudInternalCatalog;
 import org.apache.doris.cloud.load.CleanCopyJobScheduler;
 import org.apache.doris.cloud.load.CloudBrokerLoadJob;
 import org.apache.doris.cloud.load.CloudLoadManager;
-import org.apache.doris.cloud.snapshot.CloudRoutineLoadManager;
+import org.apache.doris.cloud.load.CloudRoutineLoadManager;
 import org.apache.doris.cloud.qe.CloudCoordinator;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.cloud.transaction.CloudGlobalTransactionMgr;
