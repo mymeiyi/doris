@@ -21,6 +21,13 @@ import java.io.File;
 
 public class Config extends ConfigBase {
 
+    @ConfField
+    public static String ak = "";
+    @ConfField
+    public static String sk = "";
+    @ConfField
+    public static String bucket = "";
+
     @ConfField(description = {"用户自定义配置文件的路径，用于存放 fe_custom.conf。该文件中的配置会覆盖 fe.conf 中的配置",
             "The path of the user-defined configuration file, used to store fe_custom.conf. "
                     + "The configuration in this file will override the configuration in fe.conf"})
@@ -3600,4 +3607,9 @@ public class Config extends ConfigBase {
         "The encryption algorithm used for data, default is AES256, may be set to empty later for KMS to decide"
     })
     public static String doris_tde_algorithm = "PLAINTEXT";
+
+    @ConfField
+    public static int cloud_snapshot_handler_interval_second = 10;
+    @ConfField(mutable = true)
+    public static long cloud_snapshot_timeout_seconds = 600;
 }
