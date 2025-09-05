@@ -483,7 +483,12 @@ public class CloudEnv extends Env {
     }
 
     @Override
-    protected void loadClusterSnapshot() throws IOException {
+    protected void handleClusterSnapshot() throws IOException, DdlException {
+        loadClusterSnapshot();
+        readClusterSnapshot();
+    }
+
+    private void loadClusterSnapshot() throws IOException {
         if (clusterSnapshotFile == null) {
             return;
         }
@@ -539,20 +544,7 @@ public class CloudEnv extends Env {
         }
     }
 
-    private static Set<Short> SKIP_OP_TYPES = Sets.newHashSet(
-            /*OperationType.OP_ADD_FRONTEND,
-            OperationType.OP_ADD_FIRST_FRONTEND,
-            OperationType.OP_REMOVE_FRONTEND,
-            OperationType.OP_MODIFY_FRONTEND,
-            OperationType.OP_ADD_BACKEND,
-            OperationType.OP_DROP_BACKEND,
-            OperationType.OP_MODIFY_BACKEND,
-            OperationType.OP_MASTER_INFO_CHANGE,
-            OperationType.OP_HEARTBEAT*/
-    );
-
-    @Override
-    protected void readClusterSnapshot() throws IOException, DdlException {
+    private void readClusterSnapshot() throws IOException, DdlException {
         if (this.cloneSnapshotDir == null) {
             return;
         }
@@ -596,9 +588,6 @@ public class CloudEnv extends Env {
                     // LOG.info("read op code: {}", entity.getOpCode());
                     if (entity.getOpCode() == OperationType.OP_LOCAL_EOF) {
                         break;
-                    }
-                    if (SKIP_OP_TYPES.contains(entity.getOpCode())) {
-                        continue;
                     }
                     EditLog.loadJournal(cloudSnapshotEnv, replayedJournalId + count, entity);
                 }

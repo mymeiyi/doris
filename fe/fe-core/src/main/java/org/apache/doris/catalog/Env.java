@@ -1131,8 +1131,6 @@ public class Env {
             throw new Exception(meta.getAbsolutePath() + " does not exist, will exit");
         }
 
-        loadClusterSnapshot();
-
         if (Config.edit_log_type.equalsIgnoreCase("bdb")) {
             File bdbDir = new File(this.bdbDir);
             if (!bdbDir.exists()) {
@@ -1163,7 +1161,8 @@ public class Env {
                     selfNode.getPort(), false /* new style */);
         }
 
-        readClusterSnapshot();
+        handleClusterSnapshot();
+
         // 3. Load image first and replay edits
         this.editLog = new EditLog(nodeName);
         loadImage(this.imageDir); // load image file
@@ -7415,8 +7414,6 @@ public class Env {
 
     protected void checkLoadClusterSnapshot(File dir) {}
 
-    protected void loadClusterSnapshot() throws IOException {}
-
-    protected void readClusterSnapshot() throws IOException, DdlException {}
+    protected void handleClusterSnapshot() throws IOException, DdlException {}
 }
 
