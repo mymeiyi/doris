@@ -58,7 +58,6 @@ import org.apache.doris.system.SystemInfoService.HostInfo;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
-import com.google.common.collect.Sets;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -70,7 +69,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 public class CloudEnv extends Env {
@@ -91,7 +89,6 @@ public class CloudEnv extends Env {
 
     private String cloudInstanceId;
 
-    // private boolean loadClusterSnapshot = false;
     private String clusterSnapshotFile;
     private String cloneSnapshotDir;
 
@@ -477,26 +474,26 @@ public class CloudEnv extends Env {
     protected void checkLoadClusterSnapshot(File dir) {
         if (this.cloneSnapshotDir != null) {
             LOG.error("load from cluster snapshot, directory: {} should be empty", dir.getAbsolutePath());
-            // System.err.println("failed to parse cluster snapshot file " + clusterSnapshotFile);
             System.exit(-1);
         }
     }
 
     @Override
-    protected void handleClusterSnapshot() throws IOException, DdlException {
-        loadClusterSnapshot();
-        readClusterSnapshot();
-    }
-
-    private void loadClusterSnapshot() throws IOException {
+    protected void handleClusterSnapshot() throws Exception {
         if (clusterSnapshotFile == null) {
             return;
         }
+        CloneSnapshotState cloneSnapshotState = parseClusterSnapshotFile();
+        createCloneSnapshotDir();
+        downloadImage(cloneSnapshotState);
+        loadSnapshotImage();
+    }
+
+    private CloneSnapshotState parseClusterSnapshotFile() {
         LOG.info("load cluster snapshot from file: {}", clusterSnapshotFile);
         File file = new File(clusterSnapshotFile);
         if (!file.exists()) {
             LOG.error("cluster snapshot file {} does not exist", clusterSnapshotFile);
-            // System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
             System.exit(-1);
         }
 
@@ -507,47 +504,47 @@ public class CloudEnv extends Env {
             LOG.error("failed to parse cluster snapshot file {}", clusterSnapshotFile, e);
             System.exit(-1);
         }
+        return cloneSnapshotState;
+    }
 
+    private void createCloneSnapshotDir() {
         this.cloneSnapshotDir = this.metaDir + "/clone-snapshot/";
-        File cloneSnapshotDirFile = new File(cloneSnapshotDir);
+        File cloneSnapshotDirFile = new File(this.cloneSnapshotDir);
         if (cloneSnapshotDirFile.exists()) {
             if (cloneSnapshotDirFile.isDirectory()) {
-                for (File file1 : cloneSnapshotDirFile.listFiles()) {
-                    LOG.info("delete file: {}", file1.getAbsolutePath());
-                    file1.delete();
+                for (File f : cloneSnapshotDirFile.listFiles()) {
+                    LOG.info("delete file: {}", f.getAbsolutePath());
+                    f.delete();
                 }
             }
             cloneSnapshotDirFile.delete();
             LOG.info("delete cloud snapshot directory: {}", cloneSnapshotDirFile.getAbsolutePath());
         }
         cloneSnapshotDirFile.mkdir();
-
-        downloadSnapshot(cloneSnapshotState.getObjInfo(), cloneSnapshotState.getFromSnapshotId(), cloneSnapshotDir);
     }
 
-    private void downloadSnapshot(RemoteBase.ObjectInfo objectInfo, String fromSnapshotId, String cloneSnapshotDir)
-            throws IOException {
+    private void downloadImage(CloneSnapshotState cloneSnapshotState) throws Exception {
+        String fromSnapshotId = cloneSnapshotState.getFromSnapshotId();
+        RemoteBase.ObjectInfo objectInfo = cloneSnapshotState.getObjInfo();
         try {
-            LOG.info("start to download snapshot from {}", fromSnapshotId);
-            LOG.info("objInfo: {}", objectInfo);
+            LOG.info("start to download snapshot id: {}", fromSnapshotId);
             RemoteBase remote = RemoteBase.newInstance(objectInfo);
+            // TODO fix
             String key = "snapshot/" + fromSnapshotId + "/";
             ListObjectsResult listObjectsResult = remote.listObjects(key, null);
             for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
                 String lastPart = objectFile.getKey().substring(objectFile.getKey().lastIndexOf("/") + 1);
                 String localPath = cloneSnapshotDir + lastPart;
-                LOG.info("objectFile: {}, download to local path: {}", objectFile.toString(), localPath);
+                LOG.info("download objectFile: {}  to local path: {}", objectFile.toString(), localPath);
                 remote.getObject(objectFile.getKey(), localPath);
             }
-        } catch (Throwable e) {
-            LOG.error("failed to download snapshot from {}", fromSnapshotId, e);
+        } catch (Exception e) {
+            LOG.error("failed to download snapshot id: {}", fromSnapshotId, e);
+            throw e;
         }
     }
 
-    private void readClusterSnapshot() throws IOException, DdlException {
-        if (this.cloneSnapshotDir == null) {
-            return;
-        }
+    private void loadSnapshotImage() throws IOException, DdlException {
         File dir = new File(this.cloneSnapshotDir);
         File[] files = dir.listFiles();
         if (files.length == 0 || files.length > 2) {
@@ -585,7 +582,6 @@ public class CloudEnv extends Env {
                     JournalEntity entity = new JournalEntity();
                     entity.readFields(currentStream);
                     count++;
-                    // LOG.info("read op code: {}", entity.getOpCode());
                     if (entity.getOpCode() == OperationType.OP_LOCAL_EOF) {
                         break;
                     }

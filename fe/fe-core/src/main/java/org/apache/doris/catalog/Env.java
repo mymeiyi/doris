@@ -7414,6 +7414,6 @@ public class Env {
 
     protected void checkLoadClusterSnapshot(File dir) {}
 
-    protected void handleClusterSnapshot() throws IOException, DdlException {}
+    protected void handleClusterSnapshot() throws Exception {}
 }
 
