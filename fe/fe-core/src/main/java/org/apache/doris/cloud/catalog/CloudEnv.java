@@ -487,6 +487,7 @@ public class CloudEnv extends Env {
         createCloneSnapshotDir();
         downloadImage(cloneSnapshotState);
         loadSnapshotImage();
+        deleteCloneSnapshotDir();
     }
 
     private CloneSnapshotState parseClusterSnapshotFile() {
@@ -510,37 +511,23 @@ public class CloudEnv extends Env {
     private void createCloneSnapshotDir() {
         this.cloneSnapshotDir = this.metaDir + "/clone-snapshot/";
         File cloneSnapshotDirFile = new File(this.cloneSnapshotDir);
-        if (cloneSnapshotDirFile.exists()) {
-            if (cloneSnapshotDirFile.isDirectory()) {
-                for (File f : cloneSnapshotDirFile.listFiles()) {
-                    LOG.info("delete file: {}", f.getAbsolutePath());
-                    f.delete();
-                }
-            }
-            cloneSnapshotDirFile.delete();
-            LOG.info("delete cloud snapshot directory: {}", cloneSnapshotDirFile.getAbsolutePath());
-        }
+        deleteCloneSnapshotDir();
         cloneSnapshotDirFile.mkdir();
     }
 
     private void downloadImage(CloneSnapshotState cloneSnapshotState) throws Exception {
         String fromSnapshotId = cloneSnapshotState.getFromSnapshotId();
         RemoteBase.ObjectInfo objectInfo = cloneSnapshotState.getObjInfo();
-        try {
-            LOG.info("start to download snapshot id: {}", fromSnapshotId);
-            RemoteBase remote = RemoteBase.newInstance(objectInfo);
-            // TODO fix
-            String key = "snapshot/" + fromSnapshotId + "/";
-            ListObjectsResult listObjectsResult = remote.listObjects(key, null);
-            for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
-                String lastPart = objectFile.getKey().substring(objectFile.getKey().lastIndexOf("/") + 1);
-                String localPath = cloneSnapshotDir + lastPart;
-                LOG.info("download objectFile: {}  to local path: {}", objectFile.toString(), localPath);
-                remote.getObject(objectFile.getKey(), localPath);
-            }
-        } catch (Exception e) {
-            LOG.error("failed to download snapshot id: {}", fromSnapshotId, e);
-            throw e;
+        LOG.info("start to download snapshot id: {}", fromSnapshotId);
+        RemoteBase remote = RemoteBase.newInstance(objectInfo);
+        // TODO fix
+        String key = "snapshot/" + fromSnapshotId + "/";
+        ListObjectsResult listObjectsResult = remote.listObjects(key, null);
+        for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
+            String lastPart = objectFile.getKey().substring(objectFile.getKey().lastIndexOf("/") + 1);
+            String localPath = cloneSnapshotDir + lastPart;
+            LOG.info("download objectFile: {}  to local path: {}", objectFile.toString(), localPath);
+            remote.getObject(objectFile.getKey(), localPath);
         }
     }
 
@@ -606,5 +593,19 @@ public class CloudEnv extends Env {
         String latestImageFilePath = cloudSnapshotEnv.saveImage();
         replayedJournalId = cloudSnapshotEnv.getReplayedJournalId();
         LOG.info("save image to {}, replayedJournalId: {}", latestImageFilePath, replayedJournalId);
+    }
+
+    private void deleteCloneSnapshotDir() {
+        File cloneSnapshotDirFile = new File(this.cloneSnapshotDir);
+        if (cloneSnapshotDirFile.exists()) {
+            if (cloneSnapshotDirFile.isDirectory()) {
+                for (File f : cloneSnapshotDirFile.listFiles()) {
+                    LOG.info("delete file: {}", f.getAbsolutePath());
+                    f.delete();
+                }
+            }
+            cloneSnapshotDirFile.delete();
+            LOG.info("delete cloud snapshot directory: {}", cloneSnapshotDirFile.getAbsolutePath());
+        }
     }
 }
