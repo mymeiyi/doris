@@ -1110,16 +1110,6 @@ public class Env {
         return imageDir;
     }
 
-    public void setClusterSnapshotFile(String clusterSnapshotFile) throws Exception {
-        throw new Exception("cluster snapshot only support cloud mode");
-    }
-
-    protected void loadClusterSnapshot() throws IOException, DdlException {}
-
-    protected void checkLoadClusterSnapshot(File dir) {}
-
-    protected void readClusterSnapshot() throws IOException, DdlException {}
-
     public void initialize(String[] args) throws Exception {
         // set meta dir first.
         // we already set these variables in constructor. but Catalog is a singleton class.
@@ -7418,5 +7408,15 @@ public class Env {
     public List<String> getAllAliveSessionIds() {
         return new ArrayList<>(aliveSessionSet);
     }
+
+    public void setClusterSnapshotFile(String clusterSnapshotFile) throws Exception {
+        throw new Exception("cluster snapshot only support cloud mode");
+    }
+
+    protected void checkLoadClusterSnapshot(File dir) {}
+
+    protected void loadClusterSnapshot() throws IOException {}
+
+    protected void readClusterSnapshot() throws IOException, DdlException {}
 }
 

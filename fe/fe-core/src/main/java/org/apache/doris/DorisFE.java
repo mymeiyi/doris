@@ -122,7 +122,6 @@ public class DorisFE {
         }
 
         CommandLineOptions cmdLineOpts = parseArgs(args);
-        // LOG.info("sout: cmdLineOpts: {}", cmdLineOpts);
 
         try {
             // init config
@@ -320,23 +319,15 @@ public class DorisFE {
         options.addOption("r", FeConstants.METADATA_FAILURE_RECOVERY_KEY, false,
                 "Check if the specified metadata recover is valid");
         options.addOption("c", "cluster_snapshot", true, "Specify the cluster snapshot json file");
-        // System.out.println("sout: args: " + String.join(" ", args));
 
         CommandLine cmd = null;
         try {
             cmd = commandLineParser.parse(options, args);
         } catch (final ParseException e) {
-            e.printStackTrace();
             LOG.warn("", e);
-            System.err.println("Failed to parse command line. exit now. error: " + e.getMessage());
+            System.err.println("Failed to parse command line. exit now");
             System.exit(-1);
         }
-        /*for (String arg : cmd.getArgs()) {
-            System.out.println("sout: arg: " + arg);
-        }
-        for (Option option : cmd.getOptions()) {
-            System.out.println("sout: option: " + option.getLongOpt() + " , " + option.getValue());
-        }*/
 
         // version
         if (cmd.hasOption('v') || cmd.hasOption("version")) {
@@ -416,16 +407,12 @@ public class DorisFE {
             }
         }
         // cluster snapshot
-        // String clusterSnapshotFile = null;
-        // System.out.println("sout: has c: " + cmd.hasOption('c'));
-        // System.out.println("sout: has cluster_snapshot: " + cmd.hasOption("cluster_snapshot"));
         if (cmd.hasOption('c') || cmd.hasOption("cluster_snapshot")) {
             String clusterSnapshotFile = cmd.getOptionValue("cluster_snapshot");
             if (Strings.isNullOrEmpty(clusterSnapshotFile)) {
                 System.err.println("Missing cluster_snapshot file");
                 System.exit(-1);
             }
-            System.out.println("sout: ClusterSnapshot file: " + clusterSnapshotFile);
             return new CommandLineOptions(false, null, null, "", clusterSnapshotFile);
         }
 

@@ -138,8 +138,7 @@ void begin_rpc(std::string_view func_name, brpc::Controller* ctrl, const Request
                   << " original_client_ip=" << req->request_ip() << " table_id=" << req->table_id()
                   << " tablet_id=" << req->tablet_id() << " lock_id=" << req->lock_id()
                   << " initiator=" << req->initiator()
-                  << " delete_bitmap_size=" << req->segment_delete_bitmaps_size()
-                  << " delta_delete_bitmap_size=" << req->delete_bitmap_storages_size();
+                  << " delete_bitmap_size=" << req->segment_delete_bitmaps_size();
     } else if constexpr (std::is_same_v<Request, GetDeleteBitmapRequest>) {
         LOG(INFO) << "begin " << func_name << " remote_caller=" << ctrl->remote_side()
                   << " original_client_ip=" << req->request_ip()
