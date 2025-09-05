@@ -55,6 +55,7 @@ import org.apache.doris.clone.DynamicPartitionScheduler;
 import org.apache.doris.clone.TabletChecker;
 import org.apache.doris.clone.TabletScheduler;
 import org.apache.doris.clone.TabletSchedulerStat;
+import org.apache.doris.cloud.catalog.CloudEnv;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.ConfigBase;
@@ -353,7 +354,7 @@ public class Env {
     public static final String CLIENT_NODE_HOST_KEY = "CLIENT_NODE_HOST";
     public static final String CLIENT_NODE_PORT_KEY = "CLIENT_NODE_PORT";
 
-    private String metaDir;
+    protected String metaDir;
     private String bdbDir;
     protected String imageDir;
 
@@ -1109,6 +1110,16 @@ public class Env {
         return imageDir;
     }
 
+    public void setClusterSnapshotFile(String clusterSnapshotFile) throws Exception {
+        throw new Exception("cluster snapshot only support cloud mode");
+    }
+
+    protected void loadClusterSnapshot() throws IOException, DdlException {}
+
+    protected void checkLoadClusterSnapshot(File dir) {}
+
+    protected void readClusterSnapshot() throws IOException, DdlException {}
+
     public void initialize(String[] args) throws Exception {
         // set meta dir first.
         // we already set these variables in constructor. but Catalog is a singleton class.
@@ -1130,15 +1141,21 @@ public class Env {
             throw new Exception(meta.getAbsolutePath() + " does not exist, will exit");
         }
 
+        loadClusterSnapshot();
+
         if (Config.edit_log_type.equalsIgnoreCase("bdb")) {
             File bdbDir = new File(this.bdbDir);
             if (!bdbDir.exists()) {
                 bdbDir.mkdirs();
+            } else {
+                checkLoadClusterSnapshot(bdbDir);
             }
         }
         File imageDir = new File(this.imageDir);
         if (!imageDir.exists()) {
             imageDir.mkdirs();
+        } else {
+            checkLoadClusterSnapshot(imageDir);
         }
 
         // init plugin manager
@@ -1156,6 +1173,7 @@ public class Env {
                     selfNode.getPort(), false /* new style */);
         }
 
+        readClusterSnapshot();
         // 3. Load image first and replay edits
         this.editLog = new EditLog(nodeName);
         loadImage(this.imageDir); // load image file

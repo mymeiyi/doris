@@ -62,11 +62,17 @@ public class CloudSnapshotHandler extends MasterDaemon {
     }
 
     public void initialize() {
-        File imageDir = new File(this.snapshotDir);
-        if (imageDir.exists()) {
-            imageDir.delete();
+        File snapshotDir = new File(this.snapshotDir);
+        if (snapshotDir.exists()) {
+            if (snapshotDir.isDirectory()) {
+                for (File file : snapshotDir.listFiles()) {
+                    LOG.info("delete snapshot file: {}", file.getAbsolutePath());
+                    file.delete();
+                }
+            }
+            snapshotDir.delete();
         }
-        imageDir.mkdirs();
+        snapshotDir.mkdirs();
         if (!Config.ak.isEmpty()) {
             lastFinishedAutoSnapshotTime = 0;
             autoSnapshotInterval = 60;
@@ -158,16 +164,22 @@ public class CloudSnapshotHandler extends MasterDaemon {
         }
     }
 
-    private void execute(CloudSnapshotJob job) throws Exception {
-        // 0. begin snapshot
-        Cloud.BeginSnapshotResponse response = beginSnapshot(job);
-        String snapshotId = response.getSnapshotId();
-        String imageUrl = response.getImageUrl();
-        Cloud.ObjectStoreInfoPB objInfo = response.getObjInfo();
+    private void execute(CloudSnapshotJob job) {
+        String snapshotId = null;
+        String imageUrl = null;
         try {
-            // 1. write edit log
-            SnapshotState snapshotState = new SnapshotState(snapshotId, imageUrl);
-            long logId = Env.getCurrentEnv().getEditLog().logBeginSnapshot(snapshotState);
+            // 0. begin snapshot
+            long logId;
+            Cloud.ObjectStoreInfoPB objInfo;
+            synchronized (Env.getCurrentEnv().getEditLog()) {
+                Cloud.BeginSnapshotResponse response = beginSnapshot(job);
+                snapshotId = response.getSnapshotId();
+                imageUrl = response.getImageUrl();
+                objInfo = response.getObjInfo();
+                // 1. write edit log
+                SnapshotState snapshotState = new SnapshotState(snapshotId, imageUrl);
+                logId = Env.getCurrentEnv().getEditLog().logBeginSnapshot(snapshotState);
+            }
             // 2. upload image
             uploadImage(snapshotId, imageUrl, objInfo, logId);
             // 3. commit snapshot
@@ -179,10 +191,12 @@ public class CloudSnapshotHandler extends MasterDaemon {
                     imageUrl, logId, job.isAuto(), job.getLabel());
         } catch (Exception e) {
             LOG.warn("failed to snapshot for id: {}, imageUrl: {}, auto: {}, label: {}", snapshotId, imageUrl,
-                    job.isAuto(), job.getLabel());
+                    job.isAuto(), job.getLabel(), e);
             // abort snapshot
             try {
-                abortSnapshot(snapshotId, e.getMessage());
+                if (snapshotId != null) {
+                    abortSnapshot(snapshotId, e.getMessage());
+                }
             } catch (Exception e1) {
                 LOG.warn("failed to abort snapshot for id: {}", snapshotId, e1);
             }
@@ -260,7 +274,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
         RemoteBase remote = RemoteBase.newInstance(objectInfo);
         remote.putObject(imageFile, imageUrl + "/" + imageFileName);
         // edit log
-        File snapshotEditLogFile = new File(snapshotDir, snapshotId);
+        File snapshotEditLogFile = new File(snapshotDir, "edits." + logId);
         remote.putObject(snapshotEditLogFile, imageUrl + "/" + snapshotEditLogFile.getName());
         snapshotEditLogFile.delete();
     }
@@ -284,7 +298,7 @@ public class CloudSnapshotHandler extends MasterDaemon {
             throw new DdlException("failed to get cursor from " + fromJournalId + " to " + toJournalId);
         }
 
-        File snapshotEditLogFile = new File(snapshotDir, snapshotId);
+        File snapshotEditLogFile = new File(snapshotDir, "edits." + toJournalId);
         if (snapshotEditLogFile.exists()) {
             snapshotEditLogFile.delete();
         }

@@ -29,6 +29,9 @@ import org.apache.doris.cloud.load.CloudSnapshotHandler;
 import org.apache.doris.cloud.persist.UpdateCloudReplicaInfo;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.proto.Cloud.NodeInfoPB;
+import org.apache.doris.cloud.storage.ListObjectsResult;
+import org.apache.doris.cloud.storage.ObjectFile;
+import org.apache.doris.cloud.storage.RemoteBase;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
@@ -38,24 +41,37 @@ import org.apache.doris.common.UserException;
 import org.apache.doris.common.io.CountingDataOutputStream;
 import org.apache.doris.common.util.NetUtils;
 import org.apache.doris.ha.FrontendNodeType;
+import org.apache.doris.journal.JournalEntity;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.trees.plans.commands.CancelWarmUpJobCommand;
 import org.apache.doris.nereids.trees.plans.commands.CreateStageCommand;
 import org.apache.doris.nereids.trees.plans.commands.DropStageCommand;
+import org.apache.doris.persist.EditLog;
+import org.apache.doris.persist.EditLogFileInputStream;
+import org.apache.doris.persist.OperationType;
+import org.apache.doris.persist.meta.MetaReader;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.system.Frontend;
 import org.apache.doris.system.SystemInfoService.HostInfo;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
+import com.google.common.collect.Sets;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
 
+import java.io.BufferedInputStream;
 import java.io.DataInputStream;
+import java.io.EOFException;
+import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 public class CloudEnv extends Env {
@@ -76,11 +92,15 @@ public class CloudEnv extends Env {
 
     private String cloudInstanceId;
 
+    // private boolean loadClusterSnapshot = false;
+    private String clusterSnapshotFile;
+    private String cloneSnapshotDir;
+
     public CloudEnv(boolean isCheckpointCatalog) {
         super(isCheckpointCatalog);
         this.cleanCopyJobScheduler = new CleanCopyJobScheduler();
         this.loadManager = ((CloudEnvFactory) EnvFactory.getInstance())
-                                    .createLoadManager(loadJobScheduler, cleanCopyJobScheduler);
+                .createLoadManager(loadJobScheduler, cleanCopyJobScheduler);
         this.cloudClusterCheck = new CloudClusterChecker((CloudSystemInfoService) systemInfo);
         this.cloudInstanceStatusChecker = new CloudInstanceStatusChecker((CloudSystemInfoService) systemInfo);
         this.cloudTabletRebalancer = new CloudTabletRebalancer((CloudSystemInfoService) systemInfo);
@@ -117,7 +137,7 @@ public class CloudEnv extends Env {
     public void initialize(String[] args) throws Exception {
         if (Strings.isNullOrEmpty(Config.cloud_unique_id) && Config.cluster_id == -1) {
             throw new UserException("cluster_id must be specified in fe.conf if deployed "
-                                    + "in cloud mode, because FE should known to which it belongs");
+                    + "in cloud mode, because FE should known to which it belongs");
         }
 
         if (Config.cluster_id != -1) {
@@ -176,7 +196,7 @@ public class CloudEnv extends Env {
         if (!response.hasStatus() || !response.getStatus().hasCode()
                 || response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
             LOG.warn("failed to get cloud cluster due to incomplete response, "
-                    + "cloud_unique_id={}, clusterId={}, response={}",
+                            + "cloud_unique_id={}, clusterId={}, response={}",
                     Config.cloud_unique_id, Config.cloud_sql_server_cluster_id, response);
             return null;
         }
@@ -184,7 +204,7 @@ public class CloudEnv extends Env {
         // Note: get_cluster interface cluster(option -> repeated), so it has at least one cluster.
         if (response.getClusterCount() == 0) {
             LOG.warn("meta service error , return cluster zero, plz check it, "
-                    + "cloud_unique_id={}, clusterId={}, response={}",
+                            + "cloud_unique_id={}, clusterId={}, response={}",
                     Config.cloud_unique_id, Config.cloud_sql_server_cluster_id, response);
             return null;
         }
@@ -197,7 +217,7 @@ public class CloudEnv extends Env {
                 .filter(nodeInfoPB -> nodeInfoPB.getNodeType() != NodeInfoPB.NodeType.FE_OBSERVER).findFirst();
         firstNonObserverNode.ifPresent(nodeInfoPB -> helperNodes.add(new HostInfo(
                 Config.enable_fqdn_mode ? nodeInfoPB.getHost()
-                : nodeInfoPB.getIp(),
+                        : nodeInfoPB.getIp(),
                 nodeInfoPB.getEditLogPort())));
         Preconditions.checkState(helperNodes.size() == 1);
 
@@ -260,7 +280,7 @@ public class CloudEnv extends Env {
 
         LOG.info("current fe's role is {}", type == NodeInfoPB.NodeType.FE_MASTER ? "MASTER" :
                 type == NodeInfoPB.NodeType.FE_FOLLOWER ? "FOLLOWER" :
-                type == NodeInfoPB.NodeType.FE_OBSERVER ? "OBSERVER" : "UNKNOWN");
+                        type == NodeInfoPB.NodeType.FE_OBSERVER ? "OBSERVER" : "UNKNOWN");
         if (type == NodeInfoPB.NodeType.UNKNOWN) {
             LOG.warn("type current not support, please check it");
             System.exit(-1);
@@ -295,7 +315,7 @@ public class CloudEnv extends Env {
                 LOG.debug("current instance does not have a cluster name :{}", clusterName);
             }
             throw new DdlException(String.format("Compute Group %s not exist", clusterName),
-                ErrorCode.ERR_CLOUD_CLUSTER_ERROR);
+                    ErrorCode.ERR_CLOUD_CLUSTER_ERROR);
         }
     }
 
@@ -429,7 +449,7 @@ public class CloudEnv extends Env {
         Frontend frontend = checkFeExist(host, port);
         if (frontend == null) {
             throw new DdlException("frontend does not exist[" + NetUtils
-                .getHostPortInAccessibleFormat(host, port) + "]");
+                    .getHostPortInAccessibleFormat(host, port) + "]");
         }
 
         if (frontend.getRole() != role) {
@@ -447,5 +467,181 @@ public class CloudEnv extends Env {
     @Override
     public void modifyFrontendHostName(String srcHost, int srcPort, String destHost) throws DdlException {
         throw new DdlException("Modifying frontend hostname is not supported in cloud mode");
+    }
+
+    @Override
+    public void setClusterSnapshotFile(String clusterSnapshotFile) {
+        this.clusterSnapshotFile = clusterSnapshotFile;
+    }
+
+    @Override
+    protected void loadClusterSnapshot() throws IOException, DdlException {
+        if (clusterSnapshotFile == null) {
+            return;
+        }
+        LOG.info("load cluster snapshot from file: {}", clusterSnapshotFile);
+        File file = new File(clusterSnapshotFile);
+        if (!file.exists()) {
+            LOG.error("cluster snapshot file {} does not exist", clusterSnapshotFile);
+            // System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
+            System.exit(-1);
+        }
+        JSONParser parser = new JSONParser();
+        try (FileReader reader = new FileReader(file)) {
+            Object obj = null;
+            try {
+                obj = parser.parse(reader);
+            } catch (Exception e) {
+                LOG.error("failed to parse cluster snapshot file {}", clusterSnapshotFile);
+                // System.err.println("failed to parse cluster snapshot file " + clusterSnapshotFile);
+                System.exit(-1);
+            }
+            if (!(obj instanceof JSONObject)) {
+                LOG.error("cluster snapshot file {} does not exist", clusterSnapshotFile);
+                // System.err.println("cluster snapshot file " + clusterSnapshotFile + " does not exist");
+                System.exit(-1);
+            }
+            JSONObject jsonObject = (JSONObject) obj;
+            LOG.info("json object: {}", jsonObject.toJSONString());
+            String fromInstanceId = (String) jsonObject.get("from_instance_id");
+            String fromSnapshotId = (String) jsonObject.get("from_snapshot_id");
+            String instanceId = (String) jsonObject.get("instance_id");
+            String name = (String) jsonObject.get("name");
+            boolean readOnly = (Boolean) jsonObject.get("is_read_only");
+            JSONObject objInfo = (JSONObject) jsonObject.get("obj_info");
+            LOG.info("fromInstanceId: {}, fromSnapshotId: {}, instanceId: {}, name: {}, readOnly: {}, objInfo: {}",
+                    fromInstanceId, fromSnapshotId, instanceId, name, readOnly, objInfo.toJSONString());
+            this.cloneSnapshotDir = this.metaDir + "/clone-snapshot/";
+            File cloneSnapshotDirFile = new File(cloneSnapshotDir);
+            if (cloneSnapshotDirFile.exists()) {
+                if (cloneSnapshotDirFile.isDirectory()) {
+                    for (File file1 : cloneSnapshotDirFile.listFiles()) {
+                        LOG.info("delete file: {}", file1.getAbsolutePath());
+                        file1.delete();
+                    }
+                }
+                cloneSnapshotDirFile.delete();
+                LOG.info("delete cloud snapshot directory: {}", cloneSnapshotDirFile.getAbsolutePath());
+            }
+            cloneSnapshotDirFile.mkdir();
+            downloadSnapshot(objInfo, fromSnapshotId, cloneSnapshotDir);
+        }
+    }
+
+    private void downloadSnapshot(JSONObject objInfo, String fromSnapshotId, String cloneSnapshotDir)
+            throws IOException {
+        try {
+            LOG.info("start to download snapshot from {}", fromSnapshotId);
+            RemoteBase.ObjectInfo objectInfo = new RemoteBase.ObjectInfo(
+                    Cloud.ObjectStoreInfoPB.Provider.valueOf((String) (objInfo.get("provider"))),
+                    (String) (objInfo.get("ak")), (String) (objInfo.get("sk")),
+                    (String) (objInfo.get("bucket")), (String) (objInfo.get("endpoint")),
+                    (String) (objInfo.get("region")),
+                    (String) (objInfo.get("prefix")));
+            LOG.info("objInfo: {}", objectInfo);
+            RemoteBase remote = RemoteBase.newInstance(objectInfo);
+            String key = "snapshot/" + fromSnapshotId + "/";
+            ListObjectsResult listObjectsResult = remote.listObjects(key, null);
+            for (ObjectFile objectFile : listObjectsResult.getObjectInfoList()) {
+                // boolean isImage = objectFile.getKey().contains("image.");
+                String lastPart = objectFile.getKey().substring(objectFile.getKey().lastIndexOf("/") + 1);
+                String localPath = cloneSnapshotDir + lastPart;
+                LOG.info("objectFile: {}, download to local path: {}", objectFile.toString(), localPath);
+                remote.getObject(objectFile.getKey(), localPath);
+            }
+        } catch (Throwable e) {
+            LOG.error("failed to download snapshot from {}", fromSnapshotId, e);
+        }
+    }
+
+    protected void checkLoadClusterSnapshot(File dir) {
+        if (this.cloneSnapshotDir != null) {
+            LOG.error("load from cluster snapshot, directory: {} should be empty", dir.getAbsolutePath());
+            // System.err.println("failed to parse cluster snapshot file " + clusterSnapshotFile);
+            System.exit(-1);
+        }
+    }
+
+    private static Set<Short> SKIP_OP_TYPES = Sets.newHashSet(
+            OperationType.OP_ADD_FRONTEND,
+            OperationType.OP_ADD_FIRST_FRONTEND,
+            OperationType.OP_REMOVE_FRONTEND,
+            OperationType.OP_MODIFY_FRONTEND,
+            OperationType.OP_ADD_BACKEND,
+            OperationType.OP_DROP_BACKEND,
+            OperationType.OP_MODIFY_BACKEND,
+            OperationType.OP_MASTER_INFO_CHANGE,
+            OperationType.OP_HEARTBEAT
+    );
+
+    protected void readClusterSnapshot() throws IOException, DdlException {
+        if (this.cloneSnapshotDir == null) {
+            return;
+        }
+        File dir = new File(this.cloneSnapshotDir);
+        File[] files = dir.listFiles();
+        if (files.length == 0 || files.length > 2) {
+            LOG.error("clone snapshot directory: {} contains {} files", dir.getAbsolutePath(), files.length);
+            System.exit(-1);
+        }
+        File imageFile = null;
+        File editLogFile = null;
+        for (File file : dir.listFiles()) {
+            if (file.getName().startsWith("image.")) {
+                imageFile = file;
+            } else {
+                editLogFile = file;
+            }
+        }
+
+        CloudSnapshotEnv cloudSnapshotEnv = new CloudSnapshotEnv(false);
+        // load image
+        long replayedJournalId = 0;
+        if (imageFile != null) {
+            String fileName = imageFile.getName();
+            replayedJournalId = Long.parseLong(fileName.substring(fileName.lastIndexOf(".") + 1));
+            MetaReader.read(imageFile, cloudSnapshotEnv);
+            LOG.info("finished load image from cluster snapshot: {}, replayedJournalId: {}",
+                    imageFile.getAbsolutePath(), replayedJournalId);
+        }
+
+        // replay edit log
+        if (editLogFile != null) {
+            long count = 0;
+            DataInputStream currentStream = new DataInputStream(
+                    new BufferedInputStream(new EditLogFileInputStream(editLogFile)));
+            try {
+                while (true) {
+                    JournalEntity entity = new JournalEntity();
+                    entity.readFields(currentStream);
+                    count++;
+                    // LOG.info("read op code: {}", entity.getOpCode());
+                    if (entity.getOpCode() == OperationType.OP_LOCAL_EOF) {
+                        break;
+                    }
+                    if (SKIP_OP_TYPES.contains(entity.getOpCode())) {
+                        continue;
+                    }
+                    EditLog.loadJournal(cloudSnapshotEnv, replayedJournalId + count, entity);
+                }
+            } catch (IOException e) {
+                try {
+                    currentStream.close();
+                } catch (IOException e1) {
+                    LOG.error("failed to close cluster snapshot edit log", e1);
+                }
+                if (!(e instanceof EOFException)) {
+                    LOG.error("failed to replay cluster snapshot edit log", e);
+                    System.exit(-1);
+                }
+            }
+            LOG.info("finished replay {} journal from cluster snapshot: {}, lastLogId: {}", count,
+                    editLogFile.getAbsolutePath(), replayedJournalId + count);
+        }
+
+        // generate new image
+        String latestImageFilePath = cloudSnapshotEnv.saveImage();
+        replayedJournalId = cloudSnapshotEnv.getReplayedJournalId();
+        LOG.info("save image to {}, replayedJournalId: {}", latestImageFilePath, replayedJournalId);
     }
 }
