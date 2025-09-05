@@ -3609,6 +3609,8 @@ public class Config extends ConfigBase {
     public static String doris_tde_algorithm = "PLAINTEXT";
 
     @ConfField
+    public static String cloud_snapshot_handler_class = "org.apache.doris.cloud.snapshot.CloudSnapshotHandlerInterface";
+    @ConfField
     public static int cloud_snapshot_handler_interval_second = 10;
     @ConfField(mutable = true)
     public static long cloud_snapshot_timeout_seconds = 600;

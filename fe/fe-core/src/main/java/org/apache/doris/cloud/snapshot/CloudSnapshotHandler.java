@@ -352,4 +352,10 @@ public class CloudSnapshotHandler extends MasterDaemon {
             throw new DdlException(e.getMessage());
         }
     }
+
+    // ==== for clone cluster snapshot ====
+    public void cloneClusterSnapshot(String clusterSnapshotFile, String metaDir) throws Exception {
+        CloudSnapshotToolBase cloudSnapshotTool = new CloudSnapshotTool();
+        cloudSnapshotTool.cloneClusterSnapshot(clusterSnapshotFile, metaDir);
+    }
 }

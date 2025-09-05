@@ -1135,14 +1135,14 @@ public class Env {
             if (!bdbDir.exists()) {
                 bdbDir.mkdirs();
             } else {
-                checkLoadClusterSnapshot(bdbDir);
+                checkClusterSnapshot(bdbDir);
             }
         }
         File imageDir = new File(this.imageDir);
         if (!imageDir.exists()) {
             imageDir.mkdirs();
         } else {
-            checkLoadClusterSnapshot(imageDir);
+            checkClusterSnapshot(imageDir);
         }
 
         // init plugin manager
@@ -7411,8 +7411,8 @@ public class Env {
         throw new Exception("cluster snapshot only support cloud mode");
     }
 
-    protected void checkLoadClusterSnapshot(File dir) {}
+    protected void checkClusterSnapshot(File dir) {}
 
-    protected void handleClusterSnapshot() throws Exception {}
+    protected void cloneClusterSnapshot() throws Exception {}
 }
 
