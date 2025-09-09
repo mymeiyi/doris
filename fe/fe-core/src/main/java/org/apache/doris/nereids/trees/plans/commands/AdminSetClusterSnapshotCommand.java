@@ -42,19 +42,20 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * ADMIN SET CLUSTER SNAPSHOT PROPERTIES('enabled'='true', 'max_reserved_snapshots'='10', 'snapshot_intervals'='3600');
+ * ADMIN SET CLUSTER SNAPSHOT PROPERTIES('enabled'='true', 'max_reserved_snapshots'='10',
+ * 'snapshot_interval_seconds'='3600');
  */
 public class AdminSetClusterSnapshotCommand extends Command implements ForwardWithSync {
 
     public static final String PROP_ENABLED = "enabled";
     public static final String PROP_MAX_RESERVED_SNAPSHOTS = "max_reserved_snapshots";
-    public static final String PROP_SNAPSHOT_INTERVALS = "snapshot_intervals";
+    public static final String PROP_SNAPSHOT_INTERVAL_SECONDS = "snapshot_interval_seconds";
     private static final Logger LOG = LogManager.getLogger(AdminSetClusterSnapshotCommand.class);
 
     private Map<String, String> properties;
     private boolean enabled;
     private long maxReservedSnapshots;
-    private long snapshotIntervals;
+    private long snapshotIntervalSeconds;
 
     /**
      * AdminSetClusterSnapshotCommand
@@ -70,6 +71,7 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
         validate(ctx);
 
         Cloud.AlterInstanceRequest.Builder builder = Cloud.AlterInstanceRequest.newBuilder()
+                .setInstanceId(((CloudEnv) Env.getCurrentEnv()).getCloudInstanceId())
                 .setOp(Cloud.AlterInstanceRequest.Operation.SET_SNAPSHOT_PROPERTY);
         for (Map.Entry<String, String> entry : properties.entrySet()) {
             builder.putProperties(entry.getKey().toLowerCase(), entry.getValue().toLowerCase());
@@ -104,9 +106,9 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
                     if (maxReservedSnapshots < 0 || maxReservedSnapshots > 35) {
                         throw new AnalysisException("property: " + entry.getKey() + " value should in [0-35]");
                     }
-                } else if (entry.getKey().equalsIgnoreCase(PROP_SNAPSHOT_INTERVALS)) {
-                    snapshotIntervals = Long.valueOf(entry.getValue());
-                    if (snapshotIntervals < 3600) {
+                } else if (entry.getKey().equalsIgnoreCase(PROP_SNAPSHOT_INTERVAL_SECONDS)) {
+                    snapshotIntervalSeconds = Long.valueOf(entry.getValue());
+                    if (snapshotIntervalSeconds < 3600) {
                         throw new AnalysisException("property: " + entry.getKey() + " value minimum is 3600 seconds");
                     }
                 } else {

@@ -232,7 +232,8 @@ public class CloudSnapshotHandlerImplementation extends CloudSnapshotHandler {
             return response;
         }
         Cloud.BeginSnapshotRequest.Builder builder = Cloud.BeginSnapshotRequest.newBuilder()
-                .setTimeoutSeconds(Config.cloud_snapshot_timeout_seconds).setAutoSnapshot(job.isAuto());
+                .setCloudUniqueId(Config.cloud_unique_id).setTimeoutSeconds(Config.cloud_snapshot_timeout_seconds)
+                .setAutoSnapshot(job.isAuto());
         if (job.getTtl() > 0) {
             builder.setTtlSeconds(job.getTtl());
         }
@@ -256,8 +257,9 @@ public class CloudSnapshotHandlerImplementation extends CloudSnapshotHandler {
             return;
         }
         try {
-            Cloud.CommitSnapshotRequest request = Cloud.CommitSnapshotRequest.newBuilder().setSnapshotId(snapshotId)
-                    .setImageUrl(imageUrl).setLastJournalId(logId).build();
+            Cloud.CommitSnapshotRequest request = Cloud.CommitSnapshotRequest.newBuilder()
+                    .setCloudUniqueId(Config.cloud_unique_id).setSnapshotId(snapshotId).setImageUrl(imageUrl)
+                    .setLastJournalId(logId).build();
             Cloud.CommitSnapshotResponse response = MetaServiceProxy.getInstance().commitSnapshot(request);
             if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
                 LOG.warn("commitSnapshot response: {} ", response);
@@ -366,8 +368,8 @@ public class CloudSnapshotHandlerImplementation extends CloudSnapshotHandler {
 
     private void abortSnapshot(String snapshotId, String reason) throws Exception {
         try {
-            Cloud.AbortSnapshotRequest request = Cloud.AbortSnapshotRequest.newBuilder().setSnapshotId(snapshotId)
-                    .setReason(reason).build();
+            Cloud.AbortSnapshotRequest request = Cloud.AbortSnapshotRequest.newBuilder()
+                    .setCloudUniqueId(Config.cloud_unique_id).setSnapshotId(snapshotId).setReason(reason).build();
             Cloud.AbortSnapshotResponse response = MetaServiceProxy.getInstance().abortSnapshot(request);
             if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
                 LOG.warn("abortSnapshot response: {} ", response);

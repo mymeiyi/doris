@@ -59,13 +59,14 @@ public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand {
 
     @Override
     public ShowResultSetMetaData getMetaData() {
+        String[] columnNames = new String[] {PROP_READY,
+                AdminSetClusterSnapshotCommand.PROP_ENABLED,
+                AdminSetClusterSnapshotCommand.PROP_MAX_RESERVED_SNAPSHOTS,
+                AdminSetClusterSnapshotCommand.PROP_SNAPSHOT_INTERVAL_SECONDS};
         ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
-        builder.addColumn(new Column(PROP_READY, ScalarType.createVarchar(-1)));
-        builder.addColumn(new Column(AdminSetClusterSnapshotCommand.PROP_ENABLED, ScalarType.createVarchar(-1)));
-        builder.addColumn(
-                new Column(AdminSetClusterSnapshotCommand.PROP_MAX_RESERVED_SNAPSHOTS, ScalarType.createVarchar(-1)));
-        builder.addColumn(
-                new Column(AdminSetClusterSnapshotCommand.PROP_SNAPSHOT_INTERVALS, ScalarType.createVarchar(-1)));
+        for (String columnName : columnNames) {
+            builder.addColumn(new Column(columnName, ScalarType.createVarchar(-1)));
+        }
         return builder.build();
     }
 

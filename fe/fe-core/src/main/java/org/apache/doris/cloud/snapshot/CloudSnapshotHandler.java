@@ -28,12 +28,28 @@ import org.apache.doris.rpc.RpcException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.lang.reflect.Constructor;
+
 public class CloudSnapshotHandler extends MasterDaemon {
 
     private static final Logger LOG = LogManager.getLogger(CloudSnapshotHandler.class);
 
     public CloudSnapshotHandler() {
         super("cloud snapshot handler", Config.cloud_snapshot_handler_interval_second * 1000);
+    }
+
+    public static CloudSnapshotHandler getInstance() {
+        try {
+            Class<CloudSnapshotHandler> theClass = (Class<CloudSnapshotHandler>) Class.forName(
+                    Config.cloud_snapshot_handler_class);
+            Constructor<CloudSnapshotHandler> constructor = theClass.getDeclaredConstructor();
+            return constructor.newInstance();
+        } catch (Exception e) {
+            LOG.error("failed to create cloud snapshot handler, class name: {}", Config.cloud_snapshot_handler_class,
+                    e);
+            System.exit(-1);
+            return null;
+        }
     }
 
     public void initialize() {
@@ -59,8 +75,8 @@ public class CloudSnapshotHandler extends MasterDaemon {
 
     public Cloud.ListSnapshotResponse listSnapshot(boolean includeAborted) throws DdlException {
         try {
-            Cloud.ListSnapshotRequest request = Cloud.ListSnapshotRequest.newBuilder().setIncludeAborted(includeAborted)
-                    .build();
+            Cloud.ListSnapshotRequest request = Cloud.ListSnapshotRequest.newBuilder()
+                    .setCloudUniqueId(Config.cloud_unique_id).setIncludeAborted(includeAborted).build();
             Cloud.ListSnapshotResponse response = MetaServiceProxy.getInstance().listSnapshot(request);
             if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
                 LOG.warn("listSnapshot response: {} ", response);

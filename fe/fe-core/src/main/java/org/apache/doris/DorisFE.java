@@ -188,8 +188,7 @@ public class DorisFE {
                     "software.amazon.awssdk.http.urlconnection.UrlConnectionSdkHttpService");
 
             if (cmdLineOpts.getClusterSnapshotPath() != null) {
-                Env.getCurrentEnv()
-                        .setClusterSnapshotFile(dorisHomeDir + "/" + cmdLineOpts.getClusterSnapshotPath().trim());
+                Env.getCurrentEnv().setClusterSnapshotFile(dorisHomeDir + "/" + cmdLineOpts.getClusterSnapshotPath());
             }
             // init catalog and wait it be ready
             Env.getCurrentEnv().initialize(args);
@@ -413,7 +412,7 @@ public class DorisFE {
                 System.err.println("Missing cluster_snapshot file");
                 System.exit(-1);
             }
-            return new CommandLineOptions(false, null, null, "", clusterSnapshotFile);
+            return new CommandLineOptions(false, null, null, "", clusterSnapshotFile.trim());
         }
 
         // helper node is null, means no helper node is specified

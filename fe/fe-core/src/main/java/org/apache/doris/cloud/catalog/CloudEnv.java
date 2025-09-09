@@ -54,7 +54,6 @@ import org.apache.logging.log4j.Logger;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Constructor;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -90,7 +89,7 @@ public class CloudEnv extends Env {
         this.cloudTabletRebalancer = new CloudTabletRebalancer((CloudSystemInfoService) systemInfo);
         this.cacheHotspotMgr = new CacheHotspotManager((CloudSystemInfoService) systemInfo);
         this.upgradeMgr = new CloudUpgradeMgr((CloudSystemInfoService) systemInfo);
-        createCloudSnapshotHandler();
+        this.cloudSnapshotHandler = CloudSnapshotHandler.getInstance();
     }
 
     public CloudTabletRebalancer getCloudTabletRebalancer() {
@@ -468,22 +467,8 @@ public class CloudEnv extends Env {
 
     @Override
     protected void cloneClusterSnapshot() throws Exception {
-        if (this.clusterSnapshotFile == null) {
-            return;
-        }
-        this.cloudSnapshotHandler.cloneSnapshot(this.clusterSnapshotFile);
-    }
-
-    private void createCloudSnapshotHandler() {
-        try {
-            Class<CloudSnapshotHandler> theClass = (Class<CloudSnapshotHandler>) Class.forName(
-                    Config.cloud_snapshot_handler_class);
-            Constructor<CloudSnapshotHandler> constructor = theClass.getDeclaredConstructor();
-            this.cloudSnapshotHandler = constructor.newInstance();
-        } catch (Exception e) {
-            LOG.error("failed to create cloud snapshot handler, class name: {}", Config.cloud_snapshot_handler_class,
-                    e);
-            System.exit(-1);
+        if (this.clusterSnapshotFile != null) {
+            this.cloudSnapshotHandler.cloneSnapshot(this.clusterSnapshotFile);
         }
     }
 }
