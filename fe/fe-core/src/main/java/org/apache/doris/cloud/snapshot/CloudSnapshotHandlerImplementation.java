@@ -73,6 +73,12 @@ public class CloudSnapshotHandlerImplementation extends CloudSnapshotHandler {
     public void initialize() {
         this.snapshotDir = Config.meta_dir + SNAPSHOT_DIR;
         createDir(this.snapshotDir);
+        if (!Config.ak.isEmpty()) {
+            lastFinishedAutoSnapshotTime = 0;
+            autoSnapshotInterval = 3600;
+            autoSnapshotJob = new CloudSnapshotJob(true);
+            autoSnapshotJobInitialized = true;
+        }
     }
 
     @Override
@@ -213,6 +219,18 @@ public class CloudSnapshotHandlerImplementation extends CloudSnapshotHandler {
     }
 
     private Cloud.BeginSnapshotResponse beginSnapshot(CloudSnapshotJob job) throws Exception {
+        if (!Config.ak.isEmpty()) {
+            Cloud.ObjectStoreInfoPB objectStoreInfoPB = Cloud.ObjectStoreInfoPB.newBuilder()
+                    .setProvider(Cloud.ObjectStoreInfoPB.Provider.COS).setEndpoint("cos.ap-beijing.myqcloud.com")
+                    .setRegion("ap-beijing").setBucket(Config.bucket).setPrefix("meiyi").setAk(Config.ak)
+                    .setSk(Config.sk).build();
+            long timestamp = System.currentTimeMillis();
+            Cloud.BeginSnapshotResponse response = Cloud.BeginSnapshotResponse.newBuilder()
+                    .setSnapshotId("test-snapshot-id-" + timestamp)
+                    .setImageUrl(objectStoreInfoPB.getPrefix() + "/snapshot/test-image-url-" + timestamp)
+                    .setObjInfo(objectStoreInfoPB).build();
+            return response;
+        }
         Cloud.BeginSnapshotRequest.Builder builder = Cloud.BeginSnapshotRequest.newBuilder()
                 .setTimeoutSeconds(Config.cloud_snapshot_timeout_seconds).setAutoSnapshot(job.isAuto());
         if (job.getTtl() > 0) {
@@ -234,6 +252,9 @@ public class CloudSnapshotHandlerImplementation extends CloudSnapshotHandler {
     }
 
     private void commitSnapshot(String snapshotId, String imageUrl, long logId) throws Exception {
+        if (!Config.ak.isEmpty()) {
+            return;
+        }
         try {
             Cloud.CommitSnapshotRequest request = Cloud.CommitSnapshotRequest.newBuilder().setSnapshotId(snapshotId)
                     .setImageUrl(imageUrl).setLastJournalId(logId).build();
