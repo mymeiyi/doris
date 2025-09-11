@@ -466,27 +466,38 @@ Status GroupCommitTable::_finish_group_commit_load(int64_t db_id, int64_t table_
         TLoadTxnCommitResult result;
         TNetworkAddress master_addr = _exec_env->cluster_info()->master_fe_addr;
         int retry_times = 0;
-        while (retry_times < config::mow_stream_load_commit_retry_times) {
-            LOG(INFO) << "sout: begin to commit txn for group commit, label=" << label
-                      << ", txn_id=" << txn_id << ", retry_times=" << retry_times;
-            st = ThriftRpcHelper::rpc<FrontendServiceClient>(
-                    master_addr.hostname, master_addr.port,
-                    [&request, &result](FrontendServiceConnection& client) {
-                        client->loadTxnCommit(result, request);
-                    },
-                    config::txn_commit_rpc_timeout_ms);
-            result_status = Status::create(result.status);
-            // DELETE_BITMAP_LOCK_ERROR will be retried
-            if (result_status.ok() || !result_status.is<ErrorCode::DELETE_BITMAP_LOCK_ERROR>()) {
-                break;
-            }
-            LOG_WARNING("Failed to commit txn on group commit")
-                    .tag("label", label)
-                    .tag("txn_id", txn_id)
-                    .tag("retry_times", retry_times)
-                    .error(result_status);
-            retry_times++;
+        std::unique_ptr<doris::ThreadPool> _thread_pool;
+        static_cast<void>(ThreadPoolBuilder("StreamLoadExecutorPool")
+                                  .set_min_threads(10)
+                                  .set_max_threads(10)
+                                  .build(&_thread_pool));
+        for (int i = 0; i < 5; i++) {
+            auto commit_st = _thread_pool->submit_func([&, this] {
+                while (retry_times < config::mow_stream_load_commit_retry_times) {
+                    LOG(INFO) << "sout: begin to commit txn for group commit, label=" << label
+                              << ", txn_id=" << txn_id << ", retry_times=" << retry_times << i;
+                    st = ThriftRpcHelper::rpc<FrontendServiceClient>(
+                            master_addr.hostname, master_addr.port,
+                            [&request, &result](FrontendServiceConnection& client) {
+                                client->loadTxnCommit(result, request);
+                            },
+                            config::txn_commit_rpc_timeout_ms);
+                    result_status = Status::create(result.status);
+                    // DELETE_BITMAP_LOCK_ERROR will be retried
+                    if (result_status.ok() ||
+                        !result_status.is<ErrorCode::DELETE_BITMAP_LOCK_ERROR>()) {
+                        break;
+                    }
+                    LOG_WARNING("Failed to commit txn on group commit")
+                            .tag("label", label)
+                            .tag("txn_id", txn_id)
+                            .tag("retry_times", retry_times)
+                            .error(result_status);
+                    retry_times++;
+                }
+            });
         }
+
         DBUG_EXECUTE_IF("LoadBlockQueue._finish_group_commit_load.commit_success_and_rpc_error",
                         { result_status = Status::InternalError("commit_success_and_rpc_error"); });
     } else {
