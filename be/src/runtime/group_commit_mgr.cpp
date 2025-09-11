@@ -439,6 +439,8 @@ Status GroupCommitTable::_finish_group_commit_load(int64_t db_id, int64_t table_
     DBUG_EXECUTE_IF("LoadBlockQueue._finish_group_commit_load.load_error",
                     { status = Status::InternalError("load_error"); });
     if (status.ok()) {
+        LOG(INFO) << "sout: begin to commit txn for group commit, label=" << label
+                  << ", txn_id=" << txn_id;
         DBUG_EXECUTE_IF("LoadBlockQueue._finish_group_commit_load.commit_error", {
             status = Status::InternalError("LoadBlockQueue._finish_group_commit_load.commit_error");
         });
@@ -465,6 +467,8 @@ Status GroupCommitTable::_finish_group_commit_load(int64_t db_id, int64_t table_
         TNetworkAddress master_addr = _exec_env->cluster_info()->master_fe_addr;
         int retry_times = 0;
         while (retry_times < config::mow_stream_load_commit_retry_times) {
+            LOG(INFO) << "sout: begin to commit txn for group commit, label=" << label
+                      << ", txn_id=" << txn_id << ", retry_times=" << retry_times;
             st = ThriftRpcHelper::rpc<FrontendServiceClient>(
                     master_addr.hostname, master_addr.port,
                     [&request, &result](FrontendServiceConnection& client) {

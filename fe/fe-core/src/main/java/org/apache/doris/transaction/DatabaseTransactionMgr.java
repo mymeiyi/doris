@@ -795,6 +795,14 @@ public class DatabaseTransactionMgr {
 
         // before state transform
         transactionState.beforeStateTransform(TransactionStatus.COMMITTED);
+        while (DebugPointUtil.isEnable("DatabaseTransactionMgr.commitTransaction.sleep")) {
+            try {
+                LOG.info("sout: DatabaseTransactionMgr.commitTransaction.sleep, txnId: {}", transactionId);
+                Thread.sleep(1000);
+            } catch (Exception e) {
+                LOG.warn("transaction commit wait interrupted", e);
+            }
+        }
         // transaction state transform
         boolean txnOperated = false;
         writeLock();
@@ -2166,12 +2174,15 @@ public class DatabaseTransactionMgr {
         if (LOG.isDebugEnabled()) {
             LOG.debug("txn_id={}, partition to version={}", transactionState.getTransactionId(),
                     partitionToVersionMap);
+            LOG.info("sout: txn_id={}, partition to version={}", transactionState.getTransactionId(),
+                    partitionToVersionMap);
         }
         for (Entry<Partition, Long> entry : partitionToVersionMap.entrySet()) {
             Partition partition = entry.getKey();
             long version = entry.getValue();
             partition.setNextVersion(version + 1);
             LOG.debug("set partition={}, next_version={}", partition.getId(), version + 1);
+            LOG.info("sout: set partition={}, next_version={}", partition.getId(), version + 1);
         }
     }
 
