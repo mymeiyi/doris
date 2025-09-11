@@ -472,7 +472,7 @@ Status GroupCommitTable::_finish_group_commit_load(int64_t db_id, int64_t table_
                                   .set_max_threads(10)
                                   .build(&thread_pool));
         for (int i = 0; i < 5; i++) {
-            auto commit_st = thread_pool->submit_func([&, this] {
+            auto commit_st = thread_pool->submit_func([&] {
                 while (retry_times < config::mow_stream_load_commit_retry_times) {
                     LOG(INFO) << "sout: begin to commit txn for group commit, label=" << label
                               << ", txn_id=" << txn_id << ", retry_times=" << retry_times << i;
