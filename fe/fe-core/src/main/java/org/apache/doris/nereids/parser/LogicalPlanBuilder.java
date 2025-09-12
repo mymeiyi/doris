@@ -595,6 +595,7 @@ import org.apache.doris.nereids.trees.plans.commands.AdminCheckTabletsCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCleanTrashCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCompactTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCopyTabletCommand;
+import org.apache.doris.nereids.trees.plans.commands.AdminDropClusterSnapshotCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminRebalanceDiskCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminRepairTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetClusterSnapshotCommand;
@@ -7974,6 +7975,12 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
             DorisParser.AdminShowClusterSnapshotContext ctx) {
         boolean full = ctx.FULL() != null;
         return new AdminShowClusterSnapshotCommand(full);
+    }
+
+    @Override
+    public LogicalPlan visitAdminDropClusterSnapshot(
+            DorisParser.AdminDropClusterSnapshotContext ctx) {
+        return new AdminDropClusterSnapshotCommand(ctx.identifier().getText());
     }
 
     @Override

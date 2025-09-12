@@ -103,7 +103,8 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
                     enabled = Boolean.valueOf(entry.getValue());
                 } else if (entry.getKey().equalsIgnoreCase(PROP_MAX_RESERVED_SNAPSHOTS)) {
                     maxReservedSnapshots = Long.valueOf(entry.getValue());
-                    if (maxReservedSnapshots < 0 || maxReservedSnapshots > Config.cloud_auto_snapshot_max_reversed_num) {
+                    if (maxReservedSnapshots < 0
+                            || maxReservedSnapshots > Config.cloud_auto_snapshot_max_reversed_num) {
                         throw new AnalysisException("property: " + entry.getKey() + " value should in [0-"
                                 + Config.cloud_auto_snapshot_max_reversed_num + "]");
                     }
