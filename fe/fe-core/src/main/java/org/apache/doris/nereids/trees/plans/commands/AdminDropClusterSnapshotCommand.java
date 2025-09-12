@@ -37,6 +37,7 @@ import org.apache.logging.log4j.Logger;
  */
 public class AdminDropClusterSnapshotCommand extends Command implements ForwardWithSync {
 
+    private static final String SNAPSHOT_ID = "snapshot_id";
     private static final Logger LOG = LogManager.getLogger(AdminDropClusterSnapshotCommand.class);
 
     private String key;
@@ -71,11 +72,11 @@ public class AdminDropClusterSnapshotCommand extends Command implements ForwardW
                     PrivPredicate.ADMIN.getPrivs().toString());
         }
 
-        if (key.equalsIgnoreCase("snapshot_id")) {
-            throw new AnalysisException("Where clause should be snapshot_id = \"xxxx\"");
+        if (key == null || !key.equalsIgnoreCase(SNAPSHOT_ID)) {
+            throw new AnalysisException("Where clause should be " + SNAPSHOT_ID + " = \"xxxx\"");
         }
         if (value == null || value.isEmpty()) {
-            throw new AnalysisException("snapshot_id can not be empty");
+            throw new AnalysisException(SNAPSHOT_ID + " value can not be empty");
         }
     }
 
