@@ -19,8 +19,6 @@ package org.apache.doris.nereids.trees.plans.commands;
 
 import org.apache.doris.analysis.StmtType;
 import org.apache.doris.catalog.Env;
-import org.apache.doris.cloud.catalog.CloudEnv;
-import org.apache.doris.cloud.snapshot.CloudSnapshotHandler;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
@@ -34,9 +32,6 @@ import org.apache.doris.qe.StmtExecutor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.Map;
-import java.util.Objects;
-
 /**
  * ADMIN DROP CLUSTER SNAPSHOT WHERE id='323741';
  */
@@ -44,22 +39,24 @@ public class AdminDropClusterSnapshotCommand extends Command implements ForwardW
 
     private static final Logger LOG = LogManager.getLogger(AdminDropClusterSnapshotCommand.class);
 
-    private String snapshotId;
+    private String key;
+    private String value;
 
     /**
      * AdminDropClusterSnapshotCommand
      */
-    public AdminDropClusterSnapshotCommand(String snapshotId) {
+    public AdminDropClusterSnapshotCommand(String kye, String value) {
         super(PlanType.ADMIN_DROP_CLUSTER_SNAPSHOT_COMMAND);
-        Objects.requireNonNull(snapshotId, "id is null");
-        this.snapshotId = snapshotId;
+        // Objects.requireNonNull(snapshotId, "id is null");
+        this.key = key;
+        this.value = value;
     }
 
     @Override
     public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
         validate(ctx);
         // dropSnapshot();
-        LOG.info("sout: Admin Drop Cluster Snapshot Command: {}", snapshotId);
+        LOG.info("sout: Admin Drop Cluster Snapshot Command: key: {}, val: {}", key, value);
     }
 
     /**
@@ -72,6 +69,13 @@ public class AdminDropClusterSnapshotCommand extends Command implements ForwardW
         if (!Env.getCurrentEnv().getAccessManager().checkGlobalPriv(ctx, PrivPredicate.ADMIN)) {
             ErrorReport.reportAnalysisException(ErrorCode.ERR_SPECIFIC_ACCESS_DENIED_ERROR,
                     PrivPredicate.ADMIN.getPrivs().toString());
+        }
+
+        if (key.equalsIgnoreCase("snapshot_id")) {
+            throw new AnalysisException("Where clause should be snapshot_id = \"xxxx\"");
+        }
+        if (value == null || value.isEmpty()) {
+            throw new AnalysisException("snapshot_id can not be empty");
         }
     }
 

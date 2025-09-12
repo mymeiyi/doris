@@ -7980,7 +7980,9 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
     @Override
     public LogicalPlan visitAdminDropClusterSnapshot(
             DorisParser.AdminDropClusterSnapshotContext ctx) {
-        return new AdminDropClusterSnapshotCommand(ctx.identifier().getText());
+        String key = ctx.key == null ? null : stripQuotes(ctx.key.getText());
+        String value = ctx.value == null ? null : stripQuotes(ctx.value.getText());
+        return new AdminDropClusterSnapshotCommand(key, value);
     }
 
     @Override
