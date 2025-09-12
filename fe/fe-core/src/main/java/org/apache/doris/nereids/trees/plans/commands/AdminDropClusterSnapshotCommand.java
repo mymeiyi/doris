@@ -45,7 +45,7 @@ public class AdminDropClusterSnapshotCommand extends Command implements ForwardW
     /**
      * AdminDropClusterSnapshotCommand
      */
-    public AdminDropClusterSnapshotCommand(String kye, String value) {
+    public AdminDropClusterSnapshotCommand(String key, String value) {
         super(PlanType.ADMIN_DROP_CLUSTER_SNAPSHOT_COMMAND);
         // Objects.requireNonNull(snapshotId, "id is null");
         this.key = key;
