@@ -694,6 +694,21 @@ public class SchemaTable extends Table {
                             .column("CTIME", ScalarType.createType(PrimitiveType.DATETIMEV2))
                             .column("MTIME", ScalarType.createType(PrimitiveType.DATETIMEV2))
                             .build()))
+            .put("snapshots",
+                    new SchemaTable(SystemIdGenerator.getNextId(), "snapshots", TableType.SCHEMA,
+                        builder().column("ID", ScalarType.createStringType())
+                            .column("ANCESTOR", ScalarType.createStringType())
+                            .column("CREATE_AT", ScalarType.createType(PrimitiveType.DATETIMEV2))
+                            .column("FINISH_AT", ScalarType.createType(PrimitiveType.DATETIMEV2))
+                            .column("IMAGE_URL", ScalarType.createStringType())
+                            .column("JOURNAL_ID", ScalarType.createType(PrimitiveType.BIGINT))
+                            .column("STATE", ScalarType.createStringType())
+                            .column("MANUAL", ScalarType.createType(PrimitiveType.BOOLEAN))
+                            .column("TTL", ScalarType.createType(PrimitiveType.BIGINT))
+                            .column("LABEL", ScalarType.createStringType())
+                            .column("MSG", ScalarType.createStringType())
+                            .column("COUNT", ScalarType.createType(PrimitiveType.BIGINT))
+                            .build()))
             .build();
 
     private boolean fetchAllFe = false;
