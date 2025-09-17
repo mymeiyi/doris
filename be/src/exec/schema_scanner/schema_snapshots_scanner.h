@@ -19,7 +19,6 @@
 
 #include <gen_cpp/FrontendService_types.h>
 #include <gen_cpp/olap_file.pb.h>
-#include "gen_cpp/cloud.pb.h"
 
 #include <vector>
 
@@ -32,12 +31,12 @@ namespace vectorized {
 class Block;
 } // namespace vectorized
 
-class SchemaEncryptionKeysScanner : public SchemaScanner {
-    ENABLE_FACTORY_CREATOR(SchemaEncryptionKeysScanner);
+class SchemaSnapshotsScanner : public SchemaScanner {
+    ENABLE_FACTORY_CREATOR(SchemaSnapshotsScanner);
 
 public:
-    SchemaEncryptionKeysScanner();
-    ~SchemaEncryptionKeysScanner() override;
+    SchemaSnapshotsScanner();
+    ~SchemaSnapshotsScanner() override;
 
     Status start(RuntimeState* state) override;
     Status get_next_block_internal(vectorized::Block* block, bool* eos) override;
@@ -45,7 +44,6 @@ public:
 private:
     Status _fill_block_impl(vectorized::Block* block);
 
-    std::vector<cloud::SnapshotInfoPB> _snapshots;
     static std::vector<SchemaScanner::ColumnDesc> _s_tbls_columns;
 };
 
