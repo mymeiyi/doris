@@ -137,8 +137,21 @@ Status SchemaSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
                     column_value = snapshot.has_image_url() ? snapshot.image_url() : "";
                     break;
                 case 6:
-                    // TODO
-                    column_value = snapshot.has_status() ? "" : "";
+                    column_value = "";
+                    if (snapshot.has_status()) {
+                        if (snapshot.status() == cloud::SnapshotStatus::SNAPSHOT_PREPARE) {
+                            column_value = "SNAPSHOT_PREPARE";
+                        } else if (snapshot.status() == cloud::SnapshotStatus::SNAPSHOT_NORMAL) {
+                            column_value = "SNAPSHOT_NORMAL";
+                        } else if (snapshot.status() == cloud::SnapshotStatus::SNAPSHOT_ABORTED) {
+                            column_value = "SNAPSHOT_ABORTED";
+                        } else {
+                            return Status::InternalError("Unknown snapshot status: ",
+                                                         std::to_string(snapshot.status()));
+                        }
+                    }
+                    LOG(INFO) << "sout: snapshot status: " << column_value << ", "
+                              << std::to_string(snapshot.status());
                     break;
                 case 9:
                     column_value = snapshot.has_snapshot_label() ? snapshot.snapshot_label() : "";
