@@ -57,6 +57,7 @@ import org.apache.doris.cloud.catalog.CloudReplica;
 import org.apache.doris.cloud.catalog.CloudTablet;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.proto.Cloud.CommitTxnResponse;
+import org.apache.doris.cloud.proto.Cloud.SnapshotStatus;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.AnalysisException;
@@ -4569,6 +4570,21 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         try {
             for (Cloud.SnapshotInfoPB snapshotInfoPB : ((CloudEnv) Env.getCurrentEnv()).getCloudSnapshotHandler()
                     .listSnapshot(true).getSnapshotsList()) {
+                result.addToSnapshots(new TSnapshot().setSnapshotPb(snapshotInfoPB.toByteArray()));
+            }
+            for (int i = 0; i < 10; i++) {
+                Cloud.SnapshotInfoPB snapshotInfoPB = Cloud.SnapshotInfoPB.newBuilder()
+                        .setSnapshotId(String.valueOf(new Random().nextInt(1000000)))
+                        .setAncestorId("acc_" + i)
+                        .setCreateAt(System.currentTimeMillis() / 1000)
+                        .setFinishAt(System.currentTimeMillis() / 1000)
+                        .setImageUrl("image_" + i)
+                        .setJournalId(new Random().nextInt(10000))
+                        .setStatus(SnapshotStatus.SNAPSHOT_NORMAL)
+                        .setAutoSnapshot(i % 2 == 0)
+                        .setTtlSeconds(3600)
+                        .setSnapshotLabel("label_" + i)
+                        .build();
                 result.addToSnapshots(new TSnapshot().setSnapshotPb(snapshotInfoPB.toByteArray()));
             }
             return result;
