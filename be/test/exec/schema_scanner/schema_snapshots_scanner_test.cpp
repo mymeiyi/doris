@@ -25,12 +25,12 @@
 
 namespace doris {
 
-class ScheamSnapshptsScannerTest : public testing::Test {
+class SchemaSnapshotsScannerTest : public testing::Test {
     void SetUp() override {}
     void TearDown() override {}
 };
 
-TEST_F(ScheamSnapshptsScannerTest, test_get_next_block_internal) {
+TEST_F(SchemaSnapshotsScannerTest, test_get_next_block_internal) {
     SchemaSnapshotsScanner scanner;
     auto& snapshots = scanner._snapshots;
     doris::cloud::SnapshotInfoPB snapshot;
