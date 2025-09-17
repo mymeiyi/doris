@@ -19,6 +19,7 @@
 
 #include <gen_cpp/FrontendService_types.h>
 #include <gen_cpp/olap_file.pb.h>
+#include "gen_cpp/cloud.pb.h"
 
 #include <vector>
 
@@ -44,6 +45,7 @@ public:
 private:
     Status _fill_block_impl(vectorized::Block* block);
 
+    std::vector<doris::cloud::SnapshotInfoPB> _snapshots;
     static std::vector<SchemaScanner::ColumnDesc> _s_tbls_columns;
 };
 

@@ -169,4 +169,12 @@ Status SchemaHelper::get_master_keys(const std::string& ip, const int32_t port,
             });
 }
 
+Status SchemaHelper::list_snapshot(const std::string& ip, const int32_t port,
+                                   const TListSnapshotRequest& request,
+                                   TListSnapshotResult* result) {
+    return ThriftRpcHelper::rpc<FrontendServiceClient>(
+            ip, port, [&request, &result](FrontendServiceConnection& client) {
+                client->listSnapshot(*result, request);
+            });
+}
 } // namespace doris

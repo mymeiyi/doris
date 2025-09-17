@@ -1763,4 +1763,6 @@ service FrontendService {
     TGetEncryptionKeysResult getEncryptionKeys(1: TGetEncryptionKeysRequest request)
 
     TGetTableTDEInfoResult getTableTDEInfo(1: TGetTableTDEInfoRequest request)
+
+    TListSnapshotResult listSnapshot(1: TListSnapshotRequest request)
 }

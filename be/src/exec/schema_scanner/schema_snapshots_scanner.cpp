@@ -70,12 +70,12 @@ Status SchemaSnapshotsScanner::start(RuntimeState* state) {
     TListSnapshotRequest request;
     TListSnapshotResult result;
     RETURN_IF_ERROR(SchemaHelper::list_snapshot(*(_param->common_param->ip),
-                                                  _param->common_param->port, request, &result));
+                                                _param->common_param->port, request, &result));
     RETURN_IF_ERROR(Status::create(result.status));
     _snapshots.reserve(result.snapshots.size());
     for (const auto& tk : result.snapshots) {
         cloud::SnapshotInfoPB pb;
-        if (!pb.ParseFromString(tk.key_pb)) {
+        if (!pb.ParseFromString(tk.snapshot_pb)) {
             return Status::InternalError("Parse snapshot info error, binary=",
                                          apache::thrift::ThriftDebugString(tk));
         }
@@ -94,7 +94,7 @@ Status SchemaSnapshotsScanner::get_next_block_internal(vectorized::Block* block,
     }
 
     *eos = true;
-    if (_master_keys.empty()) {
+    if (_snapshots.empty()) {
         return Status::OK();
     }
 
@@ -104,8 +104,7 @@ Status SchemaSnapshotsScanner::get_next_block_internal(vectorized::Block* block,
 Status SchemaSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
     SCOPED_TIMER(_fill_block_timer);
 
-    const auto& encryption_keys = _master_keys;
-    size_t row_num = encryption_keys.size();
+    size_t row_num = _snapshots.size();
     if (row_num == 0) {
         return Status::OK();
     }
@@ -122,54 +121,30 @@ Status SchemaSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
         std::vector<DateV2Value<DateTimeV2ValueType>> date_vals(row_num);
 
         for (size_t row_idx = 0; row_idx < row_num; ++row_idx) {
-            const auto& encryption_key = encryption_keys[row_idx];
+            const auto& snapshot = _snapshots[row_idx];
             std::string& column_value = column_values[row_idx];
             std::string tmp_str;
 
             if (col_desc.type == TYPE_STRING) {
                 switch (col_idx) {
                 case 0:
-                    column_value = encryption_key.has_id() ? encryption_key.id() : "";
+                    column_value = snapshot.has_snapshot_id() ? snapshot.snapshot_id() : "";
                     break;
-                case 2:
-                    column_value = encryption_key.has_parent_id() ? encryption_key.parent_id() : "";
+                case 1:
+                    column_value = snapshot.has_ancestor_id() ? snapshot.ancestor_id() : "";
                     break;
                 case 4:
-                    if (!encryption_key.has_type()) {
-                        break;
-                    }
-                    switch (encryption_key.type()) {
-                    case doris::EncryptionKeyTypePB::DATA_KEY:
-                        column_value = "DATA KEY";
-                        break;
-                    case doris::EncryptionKeyTypePB::MASTER_KEY:
-                        column_value = "MASTER KEY";
-                        break;
-                    }
-                    break;
-                case 5:
-                    if (!encryption_key.has_algorithm()) {
-                        break;
-                    }
-                    switch (encryption_key.algorithm()) {
-                    case doris::EncryptionAlgorithmPB::PLAINTEXT:
-                        column_value = "";
-                        break;
-                    case doris::EncryptionAlgorithmPB::AES_256_CTR:
-                        column_value = "AES_256_CTR";
-                        break;
-                    case doris::EncryptionAlgorithmPB::SM4_128_CTR:
-                        column_value = "SM4_128_CTR";
-                        break;
-                    }
+                    column_value = snapshot.has_image_url() ? snapshot.image_url() : "";
                     break;
                 case 6:
-                    column_value = encryption_key.has_iv_base64() ? encryption_key.iv_base64() : "";
+                    // TODO
+                    column_value = snapshot.has_status() ? "" : "";
                     break;
-                case 7:
-                    column_value = encryption_key.has_ciphertext_base64()
-                                           ? encryption_key.ciphertext_base64()
-                                           : "";
+                case 9:
+                    column_value = snapshot.has_snapshot_label() ? snapshot.snapshot_label() : "";
+                    break;
+                case 10:
+                    column_value = snapshot.has_reason() ? snapshot.reason() : "";
                     break;
                 }
 
@@ -178,33 +153,40 @@ Status SchemaSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
                 datas[row_idx] = &str_refs[row_idx];
             } else if (col_desc.type == TYPE_INT) {
                 switch (col_idx) {
-                case 1:
-                    int_vals[row_idx] = encryption_key.has_version() ? encryption_key.version() : 0;
-                    break;
-                case 3:
-                    int_vals[row_idx] = encryption_key.has_parent_version()
-                                                ? encryption_key.parent_version()
-                                                : 0;
+                case 11:
+                    // TODO
+                    int_vals[row_idx] = 0;
                     break;
                 }
                 datas[row_idx] = &int_vals[row_idx];
             } else if (col_desc.type == TYPE_BIGINT) {
                 switch (col_idx) {
+                case 5:
+                    int64_vals[row_idx] = snapshot.has_journal_id() ? snapshot.journal_id() : 0;
+                    break;
                 case 8:
-                    int64_vals[row_idx] = encryption_key.has_crc32() ? encryption_key.crc32() : 0;
+                    int64_vals[row_idx] = snapshot.has_ttl_seconds() ? snapshot.ttl_seconds() : 0;
                     break;
                 }
                 datas[row_idx] = &int64_vals[row_idx];
             } else if (col_desc.type == TYPE_DATETIMEV2) {
                 switch (col_idx) {
-                case 9:
-                    date_vals[row_idx].from_unixtime(encryption_key.ctime() / 1000, "UTC");
+                case 2:
+                    date_vals[row_idx].from_unixtime(snapshot.create_at(), "UTC");
                     break;
-                case 10:
-                    date_vals[row_idx].from_unixtime(encryption_key.mtime() / 1000, "UTC");
+                case 3:
+                    date_vals[row_idx].from_unixtime(snapshot.finish_at(), "UTC");
                     break;
                 }
                 datas[row_idx] = &date_vals[row_idx];
+            } else if (col_desc.type == TYPE_BOOLEAN) {
+                switch (col_idx) {
+                case 7:
+                    bool_vals[row_idx] =
+                            snapshot.has_auto_snapshot() ? snapshot.auto_snapshot() : false;
+                    break;
+                }
+                datas[row_idx] = &bool_vals[row_idx];
             }
         }
         RETURN_IF_ERROR(fill_dest_column_for_range(block, col_idx, datas));
