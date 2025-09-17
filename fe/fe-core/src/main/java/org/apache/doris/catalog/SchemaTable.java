@@ -18,6 +18,7 @@
 package org.apache.doris.catalog;
 
 import org.apache.doris.analysis.SchemaTableType;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.SystemIdGenerator;
 import org.apache.doris.thrift.TSchemaTable;
 import org.apache.doris.thrift.TTableDescriptor;
@@ -693,6 +694,21 @@ public class SchemaTable extends Table {
                             .column("CRC", ScalarType.createType(PrimitiveType.BIGINT))
                             .column("CTIME", ScalarType.createType(PrimitiveType.DATETIMEV2))
                             .column("MTIME", ScalarType.createType(PrimitiveType.DATETIMEV2))
+                            .build()))
+            .put("snapshots",
+                    new SchemaTable(SystemIdGenerator.getNextId(), "snapshots", TableType.SCHEMA,
+                        builder().column("ID", ScalarType.createStringType())
+                            .column("ANCESTOR", ScalarType.createStringType())
+                            .column("CREATE_AT", ScalarType.createType(PrimitiveType.DATETIMEV2))
+                            .column("FINISH_AT", ScalarType.createType(PrimitiveType.DATETIMEV2))
+                            .column("IMAGE_URL", ScalarType.createStringType())
+                            .column("JOURNAL_ID", ScalarType.createType(PrimitiveType.BIGINT))
+                            .column("STATE", ScalarType.createStringType())
+                            .column("MANUAL", ScalarType.createType(PrimitiveType.BOOLEAN))
+                            .column("TTL", ScalarType.createType(PrimitiveType.BIGINT))
+                            .column("LABEL", ScalarType.createStringType())
+                            .column("MSG", ScalarType.createStringType())
+                            .column("COUNT", ScalarType.createType(PrimitiveType.INT))
                             .build()))
             .build();
 
