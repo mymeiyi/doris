@@ -182,10 +182,10 @@ Status SchemaSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
             } else if (col_desc.type == TYPE_DATETIMEV2) {
                 switch (col_idx) {
                 case 2:
-                    date_vals[row_idx].from_unixtime(snapshot.create_at(), "UTC");
+                    date_vals[row_idx].from_unixtime(snapshot.create_at(), _timezone_obj);
                     break;
                 case 3:
-                    date_vals[row_idx].from_unixtime(snapshot.finish_at(), "UTC");
+                    date_vals[row_idx].from_unixtime(snapshot.finish_at(), _timezone_obj);
                     break;
                 }
                 datas[row_idx] = &date_vals[row_idx];
