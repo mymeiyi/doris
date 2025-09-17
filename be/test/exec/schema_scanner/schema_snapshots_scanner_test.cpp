@@ -58,7 +58,7 @@ TEST_F(SchemaSnapshotsScannerTest, test_get_next_block_internal) {
     auto st = scanner._fill_block_impl(data_block.get());
     ASSERT_EQ(Status::OK(), st);
     ASSERT_EQ(2, data_block->rows());
-    LOG(INFO) << data_block->dump_data();
+    std::cout << data_block->dump_data();
 }
 
 } // namespace doris
