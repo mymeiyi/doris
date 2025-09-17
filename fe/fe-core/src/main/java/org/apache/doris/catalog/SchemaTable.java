@@ -695,7 +695,7 @@ public class SchemaTable extends Table {
                             .column("CTIME", ScalarType.createType(PrimitiveType.DATETIMEV2))
                             .column("MTIME", ScalarType.createType(PrimitiveType.DATETIMEV2))
                             .build()))
-            /*.put("snapshots",
+            .put("snapshots",
                     new SchemaTable(SystemIdGenerator.getNextId(), "snapshots", TableType.SCHEMA,
                         builder().column("ID", ScalarType.createStringType())
                             .column("ANCESTOR", ScalarType.createStringType())
@@ -709,10 +709,10 @@ public class SchemaTable extends Table {
                             .column("LABEL", ScalarType.createStringType())
                             .column("MSG", ScalarType.createStringType())
                             .column("COUNT", ScalarType.createType(PrimitiveType.INT))
-                            .build()))*/
+                            .build()))
             .build();
 
-    static {
+    /*static {
         if (Config.isCloudMode()) {
             TABLE_MAP.put("snapshots",
                     new SchemaTable(SystemIdGenerator.getNextId(), "snapshots", TableType.SCHEMA,
@@ -730,7 +730,7 @@ public class SchemaTable extends Table {
                                     .column("COUNT", ScalarType.createType(PrimitiveType.INT))
                                     .build()));
         }
-    }
+    }*/
 
     private boolean fetchAllFe = false;
 
