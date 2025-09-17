@@ -4561,11 +4561,9 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         if (LOG.isDebugEnabled()) {
             LOG.debug("receive listSnapshot request: {}, backend: {}", request, clientAddr);
         }
-        TListSnapshotResult result = new TListSnapshotResult();
-        TStatus status = new TStatus();
-        result.setStatus(status);
+        TStatus status = new TStatus(TStatusCode.OK);
+        TListSnapshotResult result = new TListSnapshotResult().setStatus(status);
         if (!Config.isCloudMode()) {
-            status.setStatusCode(TStatusCode.OK);
             return result;
         }
         try {
@@ -4573,13 +4571,11 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                     .listSnapshot(true).getSnapshotsList()) {
                 result.addToSnapshots(new TSnapshot().setSnapshotPb(snapshotInfoPB.toByteArray()));
             }
-            status.setStatusCode(TStatusCode.OK);
             return result;
         } catch (DdlException e) {
             status.setStatusCode(TStatusCode.INTERNAL_ERROR);
             status.addToErrorMsgs(e.getMessage());
             return result;
         }
-
     }
 }
