@@ -41,14 +41,15 @@ TEST_F(SchemaSnapshotsScannerTest, test_get_next_block_internal) {
         doris::cloud::SnapshotInfoPB snapshot;
         snapshot.set_snapshot_id("232ds");
         snapshot.set_ancestor_id("dnjg6-d");
-        snapshot.set_create_at(1758094);
-        snapshot.set_finish_at(1758794);
+        snapshot.set_create_at(1758094212);
+        snapshot.set_finish_at(1758794324);
         snapshot.set_image_url("image_dadas1");
         snapshot.set_journal_id(21424);
         snapshot.set_status(cloud::SnapshotStatus::SNAPSHOT_PREPARE);
         snapshot.set_auto_snapshot(true);
         snapshot.set_ttl_seconds(3600);
         snapshot.set_snapshot_label("label");
+        snapshot.set_reason("reason");
         snapshots.push_back(snapshot);
     }
 
