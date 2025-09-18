@@ -31,7 +31,7 @@ class SchemaClusterSnapshotsScannerTest : public testing::Test {
 };
 
 TEST_F(SchemaClusterSnapshotsScannerTest, test_get_next_block_internal) {
-    SchemaSnapshotsScanner scanner;
+    SchemaClusterSnapshotsScanner scanner;
     auto& snapshots = scanner._snapshots;
     {
         doris::cloud::SnapshotInfoPB snapshot;

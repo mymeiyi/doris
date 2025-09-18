@@ -18,7 +18,6 @@
 package org.apache.doris.catalog;
 
 import org.apache.doris.analysis.SchemaTableType;
-import org.apache.doris.common.Config;
 import org.apache.doris.common.SystemIdGenerator;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.Slot;
@@ -723,8 +722,8 @@ public class SchemaTable extends Table {
                                     .column("P99_DURATION", ScalarType.createType(PrimitiveType.BIGINT),
                                             SchemaTableAggregateType.MAX, false)
                                     .build(), true))
-            .put("snapshots",
-                    new SchemaTable(SystemIdGenerator.getNextId(), "snapshots", TableType.SCHEMA,
+            .put("cluster_snapshots",
+                    new SchemaTable(SystemIdGenerator.getNextId(), "cluster_snapshots", TableType.SCHEMA,
                         builder().column("ID", ScalarType.createStringType())
                             .column("ANCESTOR", ScalarType.createStringType())
                             .column("CREATE_AT", ScalarType.createType(PrimitiveType.DATETIMEV2))
@@ -737,6 +736,13 @@ public class SchemaTable extends Table {
                             .column("LABEL", ScalarType.createStringType())
                             .column("MSG", ScalarType.createStringType())
                             .column("COUNT", ScalarType.createType(PrimitiveType.INT))
+                            .build()))
+            .put("cluster_snapshot_properties",
+                    new SchemaTable(SystemIdGenerator.getNextId(), "cluster_snapshot_properties", TableType.SCHEMA,
+                        builder().column("READY", ScalarType.createType(PrimitiveType.BOOLEAN))
+                            .column("ENABLED", ScalarType.createType(PrimitiveType.BOOLEAN))
+                            .column("MAX_RESERVED_SNAPSHOTS", ScalarType.createType(PrimitiveType.INT))
+                            .column("SNAPSHOT_INTERVAL_SECONDS", ScalarType.createType(PrimitiveType.BIGINT))
                             .build()))
             .build();
 
