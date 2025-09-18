@@ -55,6 +55,7 @@ import org.apache.doris.cloud.catalog.CloudEnv;
 import org.apache.doris.cloud.catalog.CloudPartition;
 import org.apache.doris.cloud.catalog.CloudReplica;
 import org.apache.doris.cloud.catalog.CloudTablet;
+import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.proto.Cloud.CommitTxnResponse;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.cluster.ClusterNamespace;
@@ -207,6 +208,8 @@ import org.apache.doris.thrift.TInitExternalCtlMetaRequest;
 import org.apache.doris.thrift.TInitExternalCtlMetaResult;
 import org.apache.doris.thrift.TInvalidateFollowerStatsCacheRequest;
 import org.apache.doris.thrift.TListPrivilegesResult;
+import org.apache.doris.thrift.TListSnapshotRequest;
+import org.apache.doris.thrift.TListSnapshotResult;
 import org.apache.doris.thrift.TListTableMetadataNameIdsResult;
 import org.apache.doris.thrift.TListTableStatusResult;
 import org.apache.doris.thrift.TLoadTxn2PCRequest;
@@ -258,6 +261,7 @@ import org.apache.doris.thrift.TShowUserRequest;
 import org.apache.doris.thrift.TShowUserResult;
 import org.apache.doris.thrift.TShowVariableRequest;
 import org.apache.doris.thrift.TShowVariableResult;
+import org.apache.doris.thrift.TSnapshot;
 import org.apache.doris.thrift.TSnapshotLoaderReportRequest;
 import org.apache.doris.thrift.TSnapshotType;
 import org.apache.doris.thrift.TStatus;
@@ -4549,5 +4553,29 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         TGetTableTDEInfoResult result = new TGetTableTDEInfoResult();
         result.setAlgorithm(tdeAlgorithm).setStatus(status);
         return result;
+    }
+
+    @Override
+    public TListSnapshotResult listSnapshot(TListSnapshotRequest request) throws TException {
+        String clientAddr = getClientAddrAsString();
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("receive listSnapshot request: {}, backend: {}", request, clientAddr);
+        }
+        TStatus status = new TStatus(TStatusCode.OK);
+        TListSnapshotResult result = new TListSnapshotResult().setStatus(status);
+        if (!Config.isCloudMode()) {
+            return result;
+        }
+        try {
+            for (Cloud.SnapshotInfoPB snapshotInfoPB : ((CloudEnv) Env.getCurrentEnv()).getCloudSnapshotHandler()
+                    .listSnapshot(true).getSnapshotsList()) {
+                result.addToSnapshots(new TSnapshot().setSnapshotPb(snapshotInfoPB.toByteArray()));
+            }
+            return result;
+        } catch (DdlException e) {
+            status.setStatusCode(TStatusCode.INTERNAL_ERROR);
+            status.addToErrorMsgs(e.getMessage());
+            return result;
+        }
     }
 }

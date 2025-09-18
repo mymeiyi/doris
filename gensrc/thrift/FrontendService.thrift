@@ -1644,6 +1644,18 @@ struct TGetTableTDEInfoResult {
     2: optional AgentService.TEncryptionAlgorithm algorithm
 }
 
+struct TSnapshot {
+    1: optional binary snapshot_pb;
+}
+
+struct TListSnapshotRequest {
+}
+
+struct TListSnapshotResult {
+    1: optional Status.TStatus status
+    2: optional list<TSnapshot> snapshots
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1: TGetDbsParams params)
     TGetTablesResult getTableNames(1: TGetTablesParams params)
@@ -1750,4 +1762,6 @@ service FrontendService {
     TGetEncryptionKeysResult getEncryptionKeys(1: TGetEncryptionKeysRequest request)
 
     TGetTableTDEInfoResult getTableTDEInfo(1: TGetTableTDEInfoRequest request)
+
+    TListSnapshotResult listSnapshot(1: TListSnapshotRequest request)
 }

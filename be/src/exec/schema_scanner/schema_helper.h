@@ -101,6 +101,10 @@ public:
     static Status get_master_keys(const std::string& ip, const int32_t port,
                                   const TGetEncryptionKeysRequest& request,
                                   TGetEncryptionKeysResult* result);
+
+    static Status list_snapshot(const std::string& ip, const int32_t port,
+                                const TListSnapshotRequest& request,
+                                TListSnapshotResult* result);
 };
 
 } // namespace doris
