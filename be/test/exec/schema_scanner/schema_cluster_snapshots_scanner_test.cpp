@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "exec/schema_scanner/schema_snapshots_scanner.h"
+#include "exec/schema_scanner/schema_cluster_snapshots_scanner.h"
 
 #include <gen_cpp/FrontendService_types.h>
 #include <gen_cpp/olap_file.pb.h>
@@ -25,12 +25,12 @@
 
 namespace doris {
 
-class SchemaSnapshotsScannerTest : public testing::Test {
+class SchemaClusterSnapshotsScannerTest : public testing::Test {
     void SetUp() override {}
     void TearDown() override {}
 };
 
-TEST_F(SchemaSnapshotsScannerTest, test_get_next_block_internal) {
+TEST_F(SchemaClusterSnapshotsScannerTest, test_get_next_block_internal) {
     SchemaSnapshotsScanner scanner;
     auto& snapshots = scanner._snapshots;
     {

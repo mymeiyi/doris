@@ -32,12 +32,12 @@ namespace vectorized {
 class Block;
 } // namespace vectorized
 
-class SchemaSnapshotsScanner : public SchemaScanner {
-    ENABLE_FACTORY_CREATOR(SchemaSnapshotsScanner);
+class SchemaClusterSnapshotsScanner : public SchemaScanner {
+    ENABLE_FACTORY_CREATOR(SchemaClusterSnapshotsScanner);
 
 public:
-    SchemaSnapshotsScanner();
-    ~SchemaSnapshotsScanner() override;
+    SchemaClusterSnapshotsScanner();
+    ~SchemaClusterSnapshotsScanner() override;
 
     Status start(RuntimeState* state) override;
     Status get_next_block_internal(vectorized::Block* block, bool* eos) override;

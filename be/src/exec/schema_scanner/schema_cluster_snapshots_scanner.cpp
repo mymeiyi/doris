@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "exec/schema_scanner/schema_snapshots_scanner.h"
+#include "exec/schema_scanner/schema_cluster_snapshots_scanner.h"
 
 #include <gen_cpp/Descriptors_types.h>
 #include <gen_cpp/FrontendService_types.h>
@@ -29,7 +29,6 @@
 #include "cloud/cloud_storage_engine.h"
 #include "common/status.h"
 #include "exec/schema_scanner/schema_helper.h"
-#include "exec/schema_scanner/schema_scanner_helper.h"
 #include "olap/storage_engine.h"
 #include "runtime/define_primitive_type.h"
 #include "runtime/exec_env.h"
@@ -44,7 +43,7 @@ namespace vectorized {
 class Block;
 } // namespace vectorized
 
-std::vector<SchemaScanner::ColumnDesc> SchemaSnapshotsScanner::_s_tbls_columns = {
+std::vector<SchemaScanner::ColumnDesc> SchemaClusterSnapshotsScanner::_s_tbls_columns = {
         {"ID", TYPE_STRING, sizeof(StringRef), true},
         {"ANCESTOR", TYPE_STRING, sizeof(StringRef), true},
         {"CREATE_AT", TYPE_DATETIMEV2, sizeof(DateTimeV2ValueType), true},
@@ -59,12 +58,12 @@ std::vector<SchemaScanner::ColumnDesc> SchemaSnapshotsScanner::_s_tbls_columns =
         {"COUNT", TYPE_INT, sizeof(int32_t), true},
 };
 
-SchemaSnapshotsScanner::SchemaSnapshotsScanner()
+SchemaClusterSnapshotsScanner::SchemaClusterSnapshotsScanner()
         : SchemaScanner(_s_tbls_columns, TSchemaTableType::SCH_CLUSTER_SNAPSHOTS) {}
 
-SchemaSnapshotsScanner::~SchemaSnapshotsScanner() {}
+SchemaClusterSnapshotsScanner::~SchemaClusterSnapshotsScanner() {}
 
-Status SchemaSnapshotsScanner::start(RuntimeState* state) {
+Status SchemaClusterSnapshotsScanner::start(RuntimeState* state) {
     if (!_is_init) {
         return Status::InternalError("used before initialized.");
     }
@@ -72,11 +71,10 @@ Status SchemaSnapshotsScanner::start(RuntimeState* state) {
         return Status::InternalError("only support cloud mode");
     }
 
-    return ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().list_snapshot(
-            _snapshots);
+    return ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().list_snapshot(_snapshots);
 }
 
-Status SchemaSnapshotsScanner::get_next_block_internal(vectorized::Block* block, bool* eos) {
+Status SchemaClusterSnapshotsScanner::get_next_block_internal(vectorized::Block* block, bool* eos) {
     if (!_is_init) {
         return Status::InternalError("call this before initial.");
     }
@@ -92,7 +90,7 @@ Status SchemaSnapshotsScanner::get_next_block_internal(vectorized::Block* block,
     return _fill_block_impl(block);
 }
 
-Status SchemaSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
+Status SchemaClusterSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
     SCOPED_TIMER(_fill_block_timer);
     size_t row_num = _snapshots.size();
     if (row_num == 0) {
