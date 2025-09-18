@@ -18,17 +18,17 @@
 package org.apache.doris.nereids.trees.plans.visitor;
 
 import org.apache.doris.nereids.trees.plans.commands.AddConstraintCommand;
-import org.apache.doris.nereids.trees.plans.commands.AdminBackupClusterSnapshotCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCancelRebalanceDiskCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCancelRepairTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCheckTabletsCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCleanTrashCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCompactTableCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminCopyTabletCommand;
+import org.apache.doris.nereids.trees.plans.commands.AdminCreateClusterSnapshotCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminDropClusterSnapshotCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminRebalanceDiskCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminRepairTableCommand;
-import org.apache.doris.nereids.trees.plans.commands.AdminSetClusterSnapshotCommand;
+import org.apache.doris.nereids.trees.plans.commands.AdminSetAutoClusterSnapshotCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetFrontendConfigCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetPartitionVersionCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetReplicaStatusCommand;
@@ -1195,14 +1195,14 @@ public interface CommandVisitor<R, C> {
         return visitCommand(adminCancelRepairTableCommand, context);
     }
 
-    default R visitAdminBackupClusterSnapshotCommand(
-            AdminBackupClusterSnapshotCommand adminBackupClusterSnapshotCommand, C context) {
-        return visitCommand(adminBackupClusterSnapshotCommand, context);
+    default R visitAdminCreateClusterSnapshotCommand(
+            AdminCreateClusterSnapshotCommand adminCreateClusterSnapshotCommand, C context) {
+        return visitCommand(adminCreateClusterSnapshotCommand, context);
     }
 
-    default R visitAdminSetClusterSnapshotCommand(
-            AdminSetClusterSnapshotCommand adminSetClusterSnapshotCommand, C context) {
-        return visitCommand(adminSetClusterSnapshotCommand, context);
+    default R visitAdminSetAutoClusterSnapshotCommand(
+            AdminSetAutoClusterSnapshotCommand adminSetAutoClusterSnapshotCommand, C context) {
+        return visitCommand(adminSetAutoClusterSnapshotCommand, context);
     }
 
     default R visitAdminShowClusterSnapshotPropertiesCommand(

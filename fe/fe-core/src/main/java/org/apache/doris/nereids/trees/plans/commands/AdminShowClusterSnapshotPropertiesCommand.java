@@ -47,6 +47,7 @@ import java.util.List;
  */
 public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand {
 
+    public static final String PROP_ENABLED = "enabled";
     public static final String PROP_READY = "ready";
     private static final Logger LOG = LogManager.getLogger(AdminShowClusterSnapshotPropertiesCommand.class);
 
@@ -59,10 +60,9 @@ public class AdminShowClusterSnapshotPropertiesCommand extends ShowCommand {
 
     @Override
     public ShowResultSetMetaData getMetaData() {
-        String[] columnNames = new String[] {PROP_READY,
-                AdminSetClusterSnapshotCommand.PROP_ENABLED,
-                AdminSetClusterSnapshotCommand.PROP_MAX_RESERVED_SNAPSHOTS,
-                AdminSetClusterSnapshotCommand.PROP_SNAPSHOT_INTERVAL_SECONDS};
+        String[] columnNames = new String[] {PROP_READY, PROP_ENABLED,
+                AdminSetAutoClusterSnapshotCommand.PROP_MAX_RESERVED_SNAPSHOTS,
+                AdminSetAutoClusterSnapshotCommand.PROP_SNAPSHOT_INTERVAL_SECONDS};
         ShowResultSetMetaData.Builder builder = ShowResultSetMetaData.builder();
         for (String columnName : columnNames) {
             builder.addColumn(new Column(columnName, ScalarType.createVarchar(-1)));

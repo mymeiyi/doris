@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Test;
 import java.util.HashMap;
 import java.util.Map;
 
-public class AdminSetClusterSnapshotCommandTest {
+public class AdminCreateClusterSnapshotCommandTest {
     @Mocked
     private Env env;
     @Mocked
@@ -71,10 +71,9 @@ public class AdminSetClusterSnapshotCommandTest {
         runBefore();
         Config.deploy_mode = "";
         Map<String, String> properties = new HashMap<>();
-        properties.put("enabled", "true");
-        properties.put("max_reserved_snapshots", "10");
-        properties.put("snapshot_interval_seconds", "3600");
-        AdminSetClusterSnapshotCommand command = new AdminSetClusterSnapshotCommand(properties);
+        properties.put("ttl", "3600");
+        properties.put("label", "test_s_label");
+        AdminCreateClusterSnapshotCommand command = new AdminCreateClusterSnapshotCommand(properties);
         Assertions.assertThrows(AnalysisException.class, () -> command.validate(connectContext),
                 "The sql is illegal in disk mode");
 
@@ -83,48 +82,18 @@ public class AdminSetClusterSnapshotCommandTest {
 
         // test invalid property
         properties.put("a", "test_s_label");
-        AdminSetClusterSnapshotCommand command1 = new AdminSetClusterSnapshotCommand(properties);
+        AdminCreateClusterSnapshotCommand command1 = new AdminCreateClusterSnapshotCommand(properties);
         Assertions.assertThrows(AnalysisException.class, () -> command1.validate(connectContext), "Unknown property");
         properties.remove("a");
 
-        // test invalid max_reserved_snapshots
-        properties.put("max_reserved_snapshots", "a");
-        AdminSetClusterSnapshotCommand command2 = new AdminSetClusterSnapshotCommand(properties);
-        Assertions.assertThrows(AnalysisException.class, () -> command2.validate(connectContext),
-                "Invalid value");
+        // test invalid ttl
+        properties.put("ttl", "a");
+        AdminCreateClusterSnapshotCommand command2 = new AdminCreateClusterSnapshotCommand(properties);
+        Assertions.assertThrows(AnalysisException.class, () -> command2.validate(connectContext), "Invalid value");
 
-        properties.put("max_reserved_snapshots", "-1");
-        AdminSetClusterSnapshotCommand command3 = new AdminSetClusterSnapshotCommand(properties);
-        Assertions.assertThrows(AnalysisException.class, () -> command3.validate(connectContext),
-                "value should in");
-
-        properties.put("max_reserved_snapshots", "40");
-        AdminSetClusterSnapshotCommand command4 = new AdminSetClusterSnapshotCommand(properties);
-        Assertions.assertThrows(AnalysisException.class, () -> command4.validate(connectContext),
-                "value should in");
-        properties.put("max_reserved_snapshots", "1");
-
-        // test invalid snapshot_interval_seconds
-        properties.put("snapshot_interval_seconds", "a");
-        AdminSetClusterSnapshotCommand command5 = new AdminSetClusterSnapshotCommand(properties);
-        Assertions.assertThrows(AnalysisException.class, () -> command5.validate(connectContext),
-                "Invalid value");
-
-        properties.put("snapshot_interval_seconds", "1000");
-        AdminSetClusterSnapshotCommand command6 = new AdminSetClusterSnapshotCommand(properties);
-        Assertions.assertThrows(AnalysisException.class, () -> command6.validate(connectContext),
-                "value minimum is");
-        properties.put("snapshot_interval_seconds", "3600");
-
-        // test invalid enabled
-        properties.put("enabled", "ab");
-        AdminSetClusterSnapshotCommand command7 = new AdminSetClusterSnapshotCommand(properties);
-        Assertions.assertThrows(AnalysisException.class, () -> command7.validate(connectContext),
-                "Invalid value");
-
-        properties.put("enabled", "false");
-        AdminSetClusterSnapshotCommand command8 = new AdminSetClusterSnapshotCommand(properties);
-        Assertions.assertDoesNotThrow(() -> command8.validate(connectContext));
+        properties.put("ttl", "0");
+        AdminCreateClusterSnapshotCommand command3 = new AdminCreateClusterSnapshotCommand(properties);
+        Assertions.assertThrows(AnalysisException.class, () -> command3.validate(connectContext), "Invalid value");
     }
 
     @Test
@@ -147,7 +116,7 @@ public class AdminSetClusterSnapshotCommandTest {
         Config.deploy_mode = "cloud";
 
         Map<String, String> properties = new HashMap<>();
-        AdminSetClusterSnapshotCommand command = new AdminSetClusterSnapshotCommand(properties);
+        AdminCreateClusterSnapshotCommand command = new AdminCreateClusterSnapshotCommand(properties);
         Assertions.assertThrows(AnalysisException.class, () -> command.validate(connectContext),
                 "Access denied; you need (at least one of) the (ADMIN) privilege(s) for this operation");
     }

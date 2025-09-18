@@ -42,26 +42,23 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * ADMIN SET CLUSTER SNAPSHOT PROPERTIES('enabled'='true', 'max_reserved_snapshots'='10',
- * 'snapshot_interval_seconds'='3600');
+ * ADMIN SET AUTO CLUSTER SNAPSHOT PROPERTIES('max_reserved_snapshots'='10', 'snapshot_interval_seconds'='3600');
  */
-public class AdminSetClusterSnapshotCommand extends Command implements ForwardWithSync {
+public class AdminSetAutoClusterSnapshotCommand extends Command implements ForwardWithSync {
 
-    public static final String PROP_ENABLED = "enabled";
     public static final String PROP_MAX_RESERVED_SNAPSHOTS = "max_reserved_snapshots";
     public static final String PROP_SNAPSHOT_INTERVAL_SECONDS = "snapshot_interval_seconds";
-    private static final Logger LOG = LogManager.getLogger(AdminSetClusterSnapshotCommand.class);
+    private static final Logger LOG = LogManager.getLogger(AdminSetAutoClusterSnapshotCommand.class);
 
     private Map<String, String> properties;
-    private boolean enabled;
     private long maxReservedSnapshots;
     private long snapshotIntervalSeconds;
 
     /**
-     * AdminSetClusterSnapshotCommand
+     * AdminSetAutoClusterSnapshotCommand
      */
-    public AdminSetClusterSnapshotCommand(Map<String, String> properties) {
-        super(PlanType.ADMIN_SET_CLUSTER_SNAPSHOT_COMMAND);
+    public AdminSetAutoClusterSnapshotCommand(Map<String, String> properties) {
+        super(PlanType.ADMIN_SET_AUTO_CLUSTER_SNAPSHOT_COMMAND);
         Objects.requireNonNull(properties, "properties is null");
         this.properties = properties;
     }
@@ -99,16 +96,7 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
         }
         for (Map.Entry<String, String> entry : properties.entrySet()) {
             try {
-                if (entry.getKey().equalsIgnoreCase(PROP_ENABLED)) {
-                    if (entry.getValue().equalsIgnoreCase("true")) {
-                        enabled = true;
-                    } else if (entry.getValue().equalsIgnoreCase("false")) {
-                        enabled = false;
-                    } else {
-                        throw new AnalysisException(
-                                "Invalid value: " + entry.getValue() + " of property: " + entry.getKey());
-                    }
-                } else if (entry.getKey().equalsIgnoreCase(PROP_MAX_RESERVED_SNAPSHOTS)) {
+                if (entry.getKey().equalsIgnoreCase(PROP_MAX_RESERVED_SNAPSHOTS)) {
                     maxReservedSnapshots = Long.valueOf(entry.getValue());
                     if (maxReservedSnapshots < 0
                             || maxReservedSnapshots > Config.cloud_auto_snapshot_max_reversed_num) {
@@ -132,7 +120,7 @@ public class AdminSetClusterSnapshotCommand extends Command implements ForwardWi
 
     @Override
     public <R, C> R accept(PlanVisitor<R, C> visitor, C context) {
-        return visitor.visitAdminSetClusterSnapshotCommand(this, context);
+        return visitor.visitAdminSetAutoClusterSnapshotCommand(this, context);
     }
 
     @Override
