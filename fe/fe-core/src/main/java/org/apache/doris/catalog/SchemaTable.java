@@ -741,7 +741,7 @@ public class SchemaTable extends Table {
                     new SchemaTable(SystemIdGenerator.getNextId(), "cluster_snapshot_properties", TableType.SCHEMA,
                         builder().column("READY", ScalarType.createType(PrimitiveType.BOOLEAN))
                             .column("ENABLED", ScalarType.createType(PrimitiveType.BOOLEAN))
-                            .column("MAX_RESERVED_SNAPSHOTS", ScalarType.createType(PrimitiveType.INT))
+                            .column("MAX_RESERVED_SNAPSHOTS", ScalarType.createType(PrimitiveType.BIGINT))
                             .column("SNAPSHOT_INTERVAL_SECONDS", ScalarType.createType(PrimitiveType.BIGINT))
                             .build()))
             .build();

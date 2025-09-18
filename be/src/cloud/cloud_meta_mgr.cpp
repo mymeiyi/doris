@@ -2074,7 +2074,7 @@ Status CloudMetaMgr::create_empty_rowset_for_hole(CloudTablet* tablet, int64_t v
     return Status::OK();
 }
 
-Status CloudMetaMgr::list_snapshot(std::vector<doris::cloud::SnapshotInfoPB>& snapshots) {
+Status CloudMetaMgr::list_snapshot(std::vector<SnapshotInfoPB>& snapshots) {
     ListSnapshotRequest req;
     ListSnapshotResponse res;
     req.set_cloud_unique_id(config::cloud_unique_id);
@@ -2083,6 +2083,19 @@ Status CloudMetaMgr::list_snapshot(std::vector<doris::cloud::SnapshotInfoPB>& sn
     for (auto& snapshot : snapshots) {
         snapshots.emplace_back(snapshot);
     }
+    return Status::OK();
+}
+
+Status CloudMetaMgr::get_snapshot_properties(SnapshotSwitchStatus& switch_status,
+                                             intint64_t max_reserved_snapshots,
+                                             int64_t& snapshot_interval_seconds) {
+    GetInstanceRequest req;
+    GetInstanceResponse res;
+    req.set_cloud_unique_id(config::cloud_unique_id);
+    RETURN_IF_ERROR(retry_rpc("get snapshot properties", req, &res, &MetaService_Stub::get_instance));
+    switch_status = res.instance().snapshot_switch_status();
+    max_reserved_snapshots = res.instance().max_reserved_snapshot();
+    snapshot_interval_seconds = res.instance().snapshot_interval_seconds();
     return Status::OK();
 }
 #include "common/compile_check_end.h"

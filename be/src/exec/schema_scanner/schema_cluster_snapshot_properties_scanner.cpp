@@ -46,7 +46,7 @@ class Block;
 std::vector<SchemaScanner::ColumnDesc> SchemaClusterSnapshotPropertiesScanner::_s_tbls_columns = {
         {"READY", TYPE_BOOLEAN, sizeof(int8_t), true},
         {"ENABLED", TYPE_BOOLEAN, sizeof(int8_t), true},
-        {"MAX_RESERVED_SNAPSHOTS", TYPE_INT, sizeof(int32_t), true},
+        {"MAX_RESERVED_SNAPSHOTS", TYPE_BIGINT, sizeof(int64_t), true},
         {"SNAPSHOT_INTERVAL_SECONDS", TYPE_BIGINT, sizeof(int64_t), true},
 };
 
@@ -63,7 +63,8 @@ Status SchemaClusterSnapshotPropertiesScanner::start(RuntimeState* state) {
         return Status::InternalError("only support cloud mode");
     }
 
-    return ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().list_snapshot(_snapshots);
+    return Status::OK();
+    // return ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().list_snapshot(_snapshots);
 }
 
 Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorized::Block* block, bool* eos) {
