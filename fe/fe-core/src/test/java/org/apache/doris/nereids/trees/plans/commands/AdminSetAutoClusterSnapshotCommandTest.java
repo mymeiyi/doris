@@ -71,7 +71,6 @@ public class AdminSetAutoClusterSnapshotCommandTest {
         runBefore();
         Config.deploy_mode = "";
         Map<String, String> properties = new HashMap<>();
-        properties.put("enabled", "true");
         properties.put("max_reserved_snapshots", "10");
         properties.put("snapshot_interval_seconds", "3600");
         AdminSetAutoClusterSnapshotCommand command = new AdminSetAutoClusterSnapshotCommand(properties);
@@ -115,16 +114,6 @@ public class AdminSetAutoClusterSnapshotCommandTest {
         Assertions.assertThrows(AnalysisException.class, () -> command6.validate(connectContext),
                 "value minimum is");
         properties.put("snapshot_interval_seconds", "3600");
-
-        // test invalid enabled
-        properties.put("enabled", "ab");
-        AdminSetAutoClusterSnapshotCommand command7 = new AdminSetAutoClusterSnapshotCommand(properties);
-        Assertions.assertThrows(AnalysisException.class, () -> command7.validate(connectContext),
-                "Invalid value");
-
-        properties.put("enabled", "false");
-        AdminSetAutoClusterSnapshotCommand command8 = new AdminSetAutoClusterSnapshotCommand(properties);
-        Assertions.assertDoesNotThrow(() -> command8.validate(connectContext));
     }
 
     @Test

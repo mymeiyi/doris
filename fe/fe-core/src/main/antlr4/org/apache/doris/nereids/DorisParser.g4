@@ -603,8 +603,6 @@ supportedAdminStatement
         PARTITION VERSION properties=propertyClause?                                #adminSetPartitionVersion
     | ADMIN CREATE CLUSTER SNAPSHOT propertyClause?                                 #adminCreateClusterSnapshot
     | ADMIN SET AUTO CLUSTER SNAPSHOT propertyClause?                               #adminSetAutoClusterSnapshot
-    | ADMIN SHOW CLUSTER SNAPSHOT PROPERTIES                                        #adminShowClusterSnapshotProperties
-    | ADMIN SHOW FULL? CLUSTER SNAPSHOT                                             #adminShowClusterSnapshot
     | ADMIN DROP CLUSTER SNAPSHOT WHERE (key=identifier) EQ (value=STRING_LITERAL)  #adminDropClusterSnapshot
     ;
 

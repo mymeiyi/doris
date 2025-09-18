@@ -34,8 +34,6 @@ import org.apache.doris.nereids.trees.plans.commands.AdminSetPartitionVersionCom
 import org.apache.doris.nereids.trees.plans.commands.AdminSetReplicaStatusCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetReplicaVersionCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetTableStatusCommand;
-import org.apache.doris.nereids.trees.plans.commands.AdminShowClusterSnapshotCommand;
-import org.apache.doris.nereids.trees.plans.commands.AdminShowClusterSnapshotPropertiesCommand;
 import org.apache.doris.nereids.trees.plans.commands.AlterCatalogCommentCommand;
 import org.apache.doris.nereids.trees.plans.commands.AlterCatalogPropertiesCommand;
 import org.apache.doris.nereids.trees.plans.commands.AlterCatalogRenameCommand;
@@ -1203,16 +1201,6 @@ public interface CommandVisitor<R, C> {
     default R visitAdminSetAutoClusterSnapshotCommand(
             AdminSetAutoClusterSnapshotCommand adminSetAutoClusterSnapshotCommand, C context) {
         return visitCommand(adminSetAutoClusterSnapshotCommand, context);
-    }
-
-    default R visitAdminShowClusterSnapshotPropertiesCommand(
-            AdminShowClusterSnapshotPropertiesCommand adminShowClusterSnapshotPropertiesCommand, C context) {
-        return visitCommand(adminShowClusterSnapshotPropertiesCommand, context);
-    }
-
-    default R visitAdminShowClusterSnapshotCommand(
-            AdminShowClusterSnapshotCommand adminShowClusterSnapshotCommand, C context) {
-        return visitCommand(adminShowClusterSnapshotCommand, context);
     }
 
     default R visitAdminDropClusterSnapshotCommand(

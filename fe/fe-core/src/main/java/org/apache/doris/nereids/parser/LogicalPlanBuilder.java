@@ -606,8 +606,6 @@ import org.apache.doris.nereids.trees.plans.commands.AdminSetPartitionVersionCom
 import org.apache.doris.nereids.trees.plans.commands.AdminSetReplicaStatusCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetReplicaVersionCommand;
 import org.apache.doris.nereids.trees.plans.commands.AdminSetTableStatusCommand;
-import org.apache.doris.nereids.trees.plans.commands.AdminShowClusterSnapshotCommand;
-import org.apache.doris.nereids.trees.plans.commands.AdminShowClusterSnapshotPropertiesCommand;
 import org.apache.doris.nereids.trees.plans.commands.AlterCatalogCommentCommand;
 import org.apache.doris.nereids.trees.plans.commands.AlterCatalogPropertiesCommand;
 import org.apache.doris.nereids.trees.plans.commands.AlterCatalogRenameCommand;
@@ -8002,19 +8000,6 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
             properties = ImmutableMap.of();
         }
         return new AdminSetAutoClusterSnapshotCommand(properties);
-    }
-
-    @Override
-    public LogicalPlan visitAdminShowClusterSnapshotProperties(
-            DorisParser.AdminShowClusterSnapshotPropertiesContext ctx) {
-        return new AdminShowClusterSnapshotPropertiesCommand();
-    }
-
-    @Override
-    public LogicalPlan visitAdminShowClusterSnapshot(
-            DorisParser.AdminShowClusterSnapshotContext ctx) {
-        boolean full = ctx.FULL() != null;
-        return new AdminShowClusterSnapshotCommand(full);
     }
 
     @Override
