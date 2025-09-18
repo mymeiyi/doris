@@ -25,13 +25,14 @@
 #include <cstdint>
 #include <string>
 
+#include "cloud/cloud_meta_mgr.h"
 #include "cloud/cloud_storage_engine.h"
 #include "common/status.h"
 #include "exec/schema_scanner/schema_helper.h"
 #include "exec/schema_scanner/schema_scanner_helper.h"
 #include "olap/storage_engine.h"
-#include "runtime/exec_env.h"
 #include "runtime/define_primitive_type.h"
+#include "runtime/exec_env.h"
 #include "runtime/runtime_state.h"
 #include "util/url_coding.h"
 #include "vec/common/string_ref.h"
@@ -69,9 +70,10 @@ Status SchemaSnapshotsScanner::start(RuntimeState* state) {
         return Status::InternalError("used before initialized.");
     }
 
-    // auto& s = ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr();
+    return ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().list_snapshot(
+            _snapshots);
 
-    TListSnapshotRequest request;
+    /*TListSnapshotRequest request;
     TListSnapshotResult result;
     RETURN_IF_ERROR(SchemaHelper::list_snapshot(*(_param->common_param->ip),
                                                 _param->common_param->port, request, &result));
@@ -85,7 +87,7 @@ Status SchemaSnapshotsScanner::start(RuntimeState* state) {
         }
         _snapshots.emplace_back(std::move(pb));
     }
-    return Status::OK();
+    return Status::OK();*/
 }
 
 Status SchemaSnapshotsScanner::get_next_block_internal(vectorized::Block* block, bool* eos) {
@@ -142,7 +144,7 @@ Status SchemaSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
     }
     // create_at
     {
-        std::vector<VecDateTimeValue> srcs(row_num);
+        std::vector<DateV2Value<DateTimeV2ValueType>> srcs(row_num);
         for (int i = 0; i < row_num; ++i) {
             if (_snapshots[i].has_create_at()) {
                 int64_t value = _snapshots[i].create_at();
@@ -156,7 +158,7 @@ Status SchemaSnapshotsScanner::_fill_block_impl(vectorized::Block* block) {
     }
     // finish_at
     {
-        std::vector<VecDateTimeValue> srcs(row_num);
+        std::vector<DateV2Value<DateTimeV2ValueType>> srcs(row_num);
         for (int i = 0; i < row_num; ++i) {
             if (_snapshots[i].has_finish_at()) {
                 int64_t value = _snapshots[i].finish_at();

@@ -161,6 +161,8 @@ public:
                                         RowsetMetaSharedPtr prev_rowset_meta,
                                         RowsetSharedPtr* rowset);
 
+    Status list_snapshot(std::vector<doris::cloud::SnapshotInfoPB>& snapshots);
+
 private:
     bool sync_tablet_delete_bitmap_by_cache(CloudTablet* tablet, int64_t old_max_version,
                                             std::ranges::range auto&& rs_metas,
