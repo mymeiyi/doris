@@ -246,7 +246,7 @@ std::unique_ptr<SchemaScanner> SchemaScanner::create(TSchemaTableType::type type
         return SchemaSqlBlockRuleStatusScanner::create_unique();
     case TSchemaTableType::SCH_ENCRYPTION_KEYS:
         return SchemaEncryptionKeysScanner::create_unique();
-    case TSchemaTableType::SCH_SNAPSHOTS:
+    case TSchemaTableType::SCH_CLUSTER_SNAPSHOTS:
         return SchemaSnapshotsScanner::create_unique();
     default:
         return SchemaDummyScanner::create_unique();

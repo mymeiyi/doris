@@ -60,7 +60,7 @@ std::vector<SchemaScanner::ColumnDesc> SchemaSnapshotsScanner::_s_tbls_columns =
 };
 
 SchemaSnapshotsScanner::SchemaSnapshotsScanner()
-        : SchemaScanner(_s_tbls_columns, TSchemaTableType::SCH_SNAPSHOTS) {}
+        : SchemaScanner(_s_tbls_columns, TSchemaTableType::SCH_CLUSTER_SNAPSHOTS) {}
 
 SchemaSnapshotsScanner::~SchemaSnapshotsScanner() {}
 
