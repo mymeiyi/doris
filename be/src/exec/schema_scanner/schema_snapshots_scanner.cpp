@@ -68,6 +68,9 @@ Status SchemaSnapshotsScanner::start(RuntimeState* state) {
     if (!_is_init) {
         return Status::InternalError("used before initialized.");
     }
+    if (!config::is_cloud_mode()) {
+        return Status::InternalError("only support cloud mode");
+    }
 
     return ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().list_snapshot(
             _snapshots);
