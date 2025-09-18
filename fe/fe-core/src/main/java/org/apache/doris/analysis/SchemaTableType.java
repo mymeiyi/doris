@@ -101,7 +101,8 @@ public enum SchemaTableType {
     SQL_BLOCK_RULE_STATUS("SQL_BLOCK_RULE_STATUS", "SQL_BLOCK_RULE_STATUS",
             TSchemaTableType.SCH_SQL_BLOCK_RULE_STATUS),
     SCH_ENCRYPTION_KEYS("ENCRYPTION_KEYS", "ENCRYPTION_KEYS",
-                          TSchemaTableType.SCH_ENCRYPTION_KEYS);
+                          TSchemaTableType.SCH_ENCRYPTION_KEYS),
+    SCH_SNAPSHOTS("SNAPSHOTS", "SNAPSHOTS", TSchemaTableType.SCH_SNAPSHOTS);
 
     private static final String dbName = "INFORMATION_SCHEMA";
 

@@ -351,7 +351,7 @@ static std::string debug_info(const Request& req) {
         return fmt::format(" table_id={}, lock_id={}", req.table_id(), req.lock_id());
     } else if constexpr (is_any_v<Request, GetTabletRequest>) {
         return fmt::format(" tablet_id={}", req.tablet_id());
-    } else if constexpr (is_any_v<Request, GetObjStoreInfoRequest>) {
+    } else if constexpr (is_any_v<Request, GetObjStoreInfoRequest, ListSnapshotRequest>) {
         return "";
     } else if constexpr (is_any_v<Request, CreateRowsetRequest>) {
         return fmt::format(" tablet_id={}", req.rowset_meta().tablet_id());
@@ -2071,6 +2071,18 @@ Status CloudMetaMgr::create_empty_rowset_for_hole(CloudTablet* tablet, int64_t v
     }
     (*rowset)->set_hole_rowset(true);
 
+    return Status::OK();
+}
+
+Status CloudMetaMgr::list_snapshot(std::vector<doris::cloud::SnapshotInfoPB>& snapshots) {
+    ListSnapshotRequest req;
+    ListSnapshotResponse res;
+    req.set_cloud_unique_id(config::cloud_unique_id);
+    req.set_include_aborted(true);
+    RETURN_IF_ERROR(retry_rpc("list snapshot", req, &res, &MetaService_Stub::list_snapshot));
+    for (auto& snapshot : snapshots) {
+        snapshots.emplace_back(snapshot);
+    }
     return Status::OK();
 }
 #include "common/compile_check_end.h"
