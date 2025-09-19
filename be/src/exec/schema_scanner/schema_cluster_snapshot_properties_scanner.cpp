@@ -82,12 +82,21 @@ Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorize
 
 Status SchemaClusterSnapshotPropertiesScanner::_fill_block_impl(vectorized::Block* block) {
     SCOPED_TIMER(_fill_block_timer);
+    /*vectorized::Block cur_block = vectorized::Block::create_unique();
+    for (int i = 0; i < _s_tbls_columns.size(); ++i) {
+        auto data_type = vectorized::DataTypeFactory::instance().create_data_type(
+                _s_tbls_columns[i].type, true);
+        cur_block->insert(vectorized::ColumnWithTypeAndName(data_type->create_column(), data_type,
+                                                            _s_tbls_columns[i].name));
+    }
+    cur_block->reserve(1);*/
+
     bool ready = _switch_status != cloud::SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED;
     bool enabled = _switch_status == cloud::SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON;
     SchemaScannerHelper::insert_bool_value(0, ready, block);
     SchemaScannerHelper::insert_bool_value(1, enabled, block);
-    SchemaScannerHelper::insert_int64_value(0, _max_reserved_snapshots, block);
-    SchemaScannerHelper::insert_int64_value(0, _snapshot_interval_seconds, block);
+    SchemaScannerHelper::insert_int64_value(2, _max_reserved_snapshots, block);
+    SchemaScannerHelper::insert_int64_value(3, _snapshot_interval_seconds, block);
 
     /*std::vector<void*> datas(1);
     // ready
