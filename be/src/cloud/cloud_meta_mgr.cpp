@@ -2196,7 +2196,8 @@ Status CloudMetaMgr::get_snapshot_properties(SnapshotSwitchStatus& switch_status
     GetInstanceRequest req;
     GetInstanceResponse res;
     req.set_cloud_unique_id(config::cloud_unique_id);
-    RETURN_IF_ERROR(retry_rpc("get snapshot properties", req, &res, &MetaService_Stub::get_instance));
+    RETURN_IF_ERROR(
+            retry_rpc("get snapshot properties", req, &res, &MetaService_Stub::get_instance));
     switch_status = res.instance().has_snapshot_switch_status()
                             ? res.instance().snapshot_switch_status()
                             : SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED;
