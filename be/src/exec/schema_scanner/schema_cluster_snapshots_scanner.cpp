@@ -17,11 +17,6 @@
 
 #include "exec/schema_scanner/schema_cluster_snapshots_scanner.h"
 
-#include <gen_cpp/Descriptors_types.h>
-#include <gen_cpp/FrontendService_types.h>
-#include <gen_cpp/olap_file.pb.h>
-#include <thrift/protocol/TDebugProtocol.h>
-
 #include <cstdint>
 #include <string>
 
@@ -32,9 +27,7 @@
 #include "olap/storage_engine.h"
 #include "runtime/define_primitive_type.h"
 #include "runtime/exec_env.h"
-#include "util/url_coding.h"
 #include "vec/common/string_ref.h"
-#include "vec/core/block.h"
 
 namespace doris {
 #include "common/compile_check_begin.h"
