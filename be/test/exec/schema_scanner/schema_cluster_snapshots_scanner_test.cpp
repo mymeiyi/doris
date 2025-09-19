@@ -19,6 +19,7 @@
 
 #include <gtest/gtest.h>
 
+#include "vec/columns/column_string.h"
 #include "vec/core/block.h"
 
 namespace doris {
@@ -57,7 +58,10 @@ TEST_F(SchemaClusterSnapshotsScannerTest, test_get_next_block_internal) {
     auto st = scanner._fill_block_impl(data_block.get());
     ASSERT_EQ(Status::OK(), st);
     ASSERT_EQ(2, data_block->rows());
-    std::cout << data_block->dump_data();
+
+    auto col = data_block->safe_get_by_position(0);
+    auto v = (*col.column)[1].get<vectorized::String>();
+    EXPECT_EQ(v, "232ds");
 }
 
 } // namespace doris

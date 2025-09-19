@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "vec/core/block.h"
+#include "vec/core/types.h"
 
 namespace doris {
 
@@ -40,7 +41,10 @@ TEST_F(SchemaClusterSnapshotPropertiesScannerTest, test_get_next_block_internal)
     auto st = scanner._fill_block_impl(data_block.get());
     ASSERT_EQ(Status::OK(), st);
     ASSERT_EQ(1, data_block->rows());
-    std::cout << data_block->dump_data();
+
+    auto col = data_block->safe_get_by_position(2);
+    auto v = (*col.column)[0].get<vectorized::Int64>();
+    EXPECT_EQ(v, 30);
 }
 
 } // namespace doris

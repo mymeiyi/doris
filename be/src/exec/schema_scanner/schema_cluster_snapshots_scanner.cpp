@@ -89,9 +89,9 @@ Status SchemaClusterSnapshotsScanner::_fill_block_impl(vectorized::Block* block)
     if (row_num == 0) {
         return Status::OK();
     }
+
     std::vector<void*> datas(row_num);
     std::vector<StringRef> strs(row_num);
-
     // snapshot_id
     {
         for (int i = 0; i < row_num; ++i) {
