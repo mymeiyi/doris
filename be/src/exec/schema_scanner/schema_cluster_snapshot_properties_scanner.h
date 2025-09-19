@@ -41,7 +41,7 @@ public:
 private:
     Status _fill_block_impl(vectorized::Block* block);
     static std::vector<SchemaScanner::ColumnDesc> _s_tbls_columns;
-    doris::cloud::SnapshotSwitchStatus _switch_status;
+    cloud::SnapshotSwitchStatus _switch_status;
     int64_t _max_reserved_snapshots;
     int64_t _snapshot_interval_seconds;
 };

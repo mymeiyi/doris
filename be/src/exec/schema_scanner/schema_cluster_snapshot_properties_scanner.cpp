@@ -18,22 +18,15 @@
 #include "exec/schema_scanner/schema_cluster_snapshot_properties_scanner.h"
 
 #include <gen_cpp/Descriptors_types.h>
-#include <gen_cpp/FrontendService_types.h>
-#include <gen_cpp/olap_file.pb.h>
-#include <thrift/protocol/TDebugProtocol.h>
 
 #include <cstdint>
 
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/cloud_storage_engine.h"
-#include "common/status.h"
 #include "exec/schema_scanner/schema_helper.h"
 #include "exec/schema_scanner/schema_scanner_helper.h"
 #include "olap/storage_engine.h"
-#include "runtime/define_primitive_type.h"
 #include "runtime/exec_env.h"
-#include "util/url_coding.h"
-#include "vec/common/string_ref.h"
 #include "vec/core/block.h"
 
 namespace doris {
@@ -82,45 +75,12 @@ Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorize
 
 Status SchemaClusterSnapshotPropertiesScanner::_fill_block_impl(vectorized::Block* block) {
     SCOPED_TIMER(_fill_block_timer);
-    /*vectorized::Block cur_block = vectorized::Block::create_unique();
-    for (int i = 0; i < _s_tbls_columns.size(); ++i) {
-        auto data_type = vectorized::DataTypeFactory::instance().create_data_type(
-                _s_tbls_columns[i].type, true);
-        cur_block->insert(vectorized::ColumnWithTypeAndName(data_type->create_column(), data_type,
-                                                            _s_tbls_columns[i].name));
-    }
-    cur_block->reserve(1);*/
-
     bool ready = _switch_status != cloud::SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED;
     bool enabled = _switch_status == cloud::SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON;
     SchemaScannerHelper::insert_bool_value(0, ready, block);
     SchemaScannerHelper::insert_bool_value(1, enabled, block);
     SchemaScannerHelper::insert_int64_value(2, _max_reserved_snapshots, block);
     SchemaScannerHelper::insert_int64_value(3, _snapshot_interval_seconds, block);
-
-    /*std::vector<void*> datas(1);
-    // ready
-    {
-        int8_t ready = _switch_status == SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED ? 0 : 1;
-        datas[0] = ready;
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 0, datas));
-    }
-    // enabled
-    {
-        int8_t enabled = _switch_status == SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON ? 0 : 1;
-        datas[0] = enabled;
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 1, datas));
-    }
-    // max_reserved_snapshots
-    {
-        datas[0] = _max_reserved_snapshots;
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 2, datas));
-    }
-    // snapshot_interval_seconds
-    {
-        datas[0] = _max_reserved_snapshots;
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 3, datas));
-    }*/
     return Status::OK();
 }
 
