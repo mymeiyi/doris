@@ -17,8 +17,6 @@
 
 #include "exec/schema_scanner/schema_cluster_snapshot_properties_scanner.h"
 
-#include <gen_cpp/Descriptors_types.h>
-
 #include <cstdint>
 
 #include "cloud/cloud_meta_mgr.h"
