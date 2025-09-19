@@ -351,7 +351,8 @@ static std::string debug_info(const Request& req) {
         return fmt::format(" table_id={}, lock_id={}", req.table_id(), req.lock_id());
     } else if constexpr (is_any_v<Request, GetTabletRequest>) {
         return fmt::format(" tablet_id={}", req.tablet_id());
-    } else if constexpr (is_any_v<Request, GetObjStoreInfoRequest, ListSnapshotRequest>) {
+    } else if constexpr (is_any_v<Request, GetObjStoreInfoRequest, ListSnapshotRequest,
+                                  GetInstanceRequest>) {
         return "";
     } else if constexpr (is_any_v<Request, CreateRowsetRequest>) {
         return fmt::format(" tablet_id={}", req.rowset_meta().tablet_id());
@@ -2093,9 +2094,14 @@ Status CloudMetaMgr::get_snapshot_properties(SnapshotSwitchStatus& switch_status
     GetInstanceResponse res;
     req.set_cloud_unique_id(config::cloud_unique_id);
     RETURN_IF_ERROR(retry_rpc("get snapshot properties", req, &res, &MetaService_Stub::get_instance));
-    switch_status = res.instance().snapshot_switch_status();
-    max_reserved_snapshots = res.instance().max_reserved_snapshot();
-    snapshot_interval_seconds = res.instance().snapshot_interval_seconds();
+    switch_status = res.instance().has_snapshot_switch_status()
+                            ? res.instance().snapshot_switch_status()
+                            : SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED;
+    max_reserved_snapshots =
+            res.instance().has_max_reserved_snapshot() ? res.instance().max_reserved_snapshot() : 0;
+    snapshot_interval_seconds = res.instance().has_snapshot_interval_seconds()
+                                        ? res.instance().snapshot_interval_seconds()
+                                        : 3600;
     return Status::OK();
 }
 #include "common/compile_check_end.h"

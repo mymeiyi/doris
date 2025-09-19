@@ -93,7 +93,7 @@ Status SchemaClusterSnapshotPropertiesScanner::_fill_block_impl(vectorized::Bloc
     {
         int8_t enabled = _switch_status == SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON ? 0 : 1;
         datas[0] = enabled;
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 0, datas));
+        RETURN_IF_ERROR(fill_dest_column_for_range(block, 1, datas));
     }
     // max_reserved_snapshots
     {
