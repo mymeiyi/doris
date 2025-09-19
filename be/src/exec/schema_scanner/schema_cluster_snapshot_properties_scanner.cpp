@@ -28,6 +28,7 @@
 #include "cloud/cloud_storage_engine.h"
 #include "common/status.h"
 #include "exec/schema_scanner/schema_helper.h"
+#include "exec/schema_scanner/schema_scanner_helper.h"
 #include "olap/storage_engine.h"
 #include "runtime/define_primitive_type.h"
 #include "runtime/exec_env.h"
@@ -82,8 +83,8 @@ Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorize
 
 Status SchemaClusterSnapshotPropertiesScanner::_fill_block_impl(vectorized::Block* block) {
     SCOPED_TIMER(_fill_block_timer);
-    bool ready = _switch_status != SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED;
-    bool enabled = _switch_status == SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON;
+    bool ready = _switch_status != cloud::SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED;
+    bool enabled = _switch_status == cloud::SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON;
     SchemaScannerHelper::insert_bool_value(0, ready, block);
     SchemaScannerHelper::insert_bool_value(1, enabled, block);
     SchemaScannerHelper::insert_int64_value(0, _max_reserved_snapshots, block);
