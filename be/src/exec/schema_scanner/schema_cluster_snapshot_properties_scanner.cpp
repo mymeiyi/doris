@@ -63,9 +63,8 @@ Status SchemaClusterSnapshotPropertiesScanner::start(RuntimeState* state) {
         return Status::InternalError("only support cloud mode");
     }
 
-    RETURN_IF_ERROR(
-            ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().get_snapshot_properties(
-                    _switch_status, _max_reserved_snapshots, _snapshot_interval_seconds));
+    return ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().get_snapshot_properties(
+            _switch_status, _max_reserved_snapshots, _snapshot_interval_seconds);
 }
 
 Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorized::Block* block,
