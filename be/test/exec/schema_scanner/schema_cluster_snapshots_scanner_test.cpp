@@ -19,6 +19,8 @@
 
 #include <gtest/gtest.h>
 
+#include "vec/core/block.h"
+
 namespace doris {
 
 class SchemaClusterSnapshotsScannerTest : public testing::Test {
