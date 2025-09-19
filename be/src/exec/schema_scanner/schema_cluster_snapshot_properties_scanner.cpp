@@ -82,7 +82,14 @@ Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorize
 
 Status SchemaClusterSnapshotPropertiesScanner::_fill_block_impl(vectorized::Block* block) {
     SCOPED_TIMER(_fill_block_timer);
-    std::vector<void*> datas(1);
+    bool ready = _switch_status != SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED;
+    bool enabled = _switch_status == SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON;
+    SchemaScannerHelper::insert_bool_value(0, ready, block);
+    SchemaScannerHelper::insert_bool_value(1, enabled, block);
+    SchemaScannerHelper::insert_int64_value(0, _max_reserved_snapshots, block);
+    SchemaScannerHelper::insert_int64_value(0, _snapshot_interval_seconds, block);
+
+    /*std::vector<void*> datas(1);
     // ready
     {
         int8_t ready = _switch_status == SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED ? 0 : 1;
@@ -104,22 +111,7 @@ Status SchemaClusterSnapshotPropertiesScanner::_fill_block_impl(vectorized::Bloc
     {
         datas[0] = _max_reserved_snapshots;
         RETURN_IF_ERROR(fill_dest_column_for_range(block, 3, datas));
-    }
-    /*
-    // auto_snapshot
-    {
-        std::vector<int8_t> srcs(row_num);
-        for (int i = 0; i < row_num; ++i) {
-            if (_snapshots[i].has_auto_snapshot()) {
-                srcs[i] = _snapshots[i].auto_snapshot() ? 1 : 0;
-                datas[i] = srcs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 7, datas));
-    }
-    */
+    }*/
     return Status::OK();
 }
 
