@@ -15,46 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#include "exec/schema_scanner/schema_cluster_snapshots_scanner.h"
+#include "exec/schema_scanner/schema_cluster_snapshot_properties_scanner.h"
 
 #include <gtest/gtest.h>
 
 namespace doris {
 
-class SchemaClusterSnapshotsScannerTest : public testing::Test {
+class SchemaClusterSnapshotPropertiesScannerTest : public testing::Test {
     void SetUp() override {}
     void TearDown() override {}
 };
 
-TEST_F(SchemaClusterSnapshotsScannerTest, test_get_next_block_internal) {
-    SchemaClusterSnapshotsScanner scanner;
-    auto& snapshots = scanner._snapshots;
-    {
-        doris::cloud::SnapshotInfoPB snapshot;
-        snapshots.push_back(snapshot);
-    }
-    {
-        doris::cloud::SnapshotInfoPB snapshot;
-        snapshot.set_snapshot_id("232ds");
-        snapshot.set_ancestor_id("dnjg6-d");
-        snapshot.set_create_at(1758095486);
-        snapshot.set_finish_at(1758095486);
-        snapshot.set_image_url("image_dadas1");
-        snapshot.set_journal_id(21424);
-        snapshot.set_status(cloud::SnapshotStatus::SNAPSHOT_PREPARE);
-        snapshot.set_auto_snapshot(true);
-        snapshot.set_ttl_seconds(3600);
-        snapshot.set_snapshot_label("label");
-        snapshot.set_reason("reason");
-        snapshots.push_back(snapshot);
-    }
+TEST_F(SchemaClusterSnapshotPropertiesScannerTest, test_get_next_block_internal) {
+    SchemaClusterSnapshotPropertiesScanner scanner;
+    scanner._switch_status = cloud::SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON;
+    scanner._max_reserved_snapshots = 30;
+    scanner._snapshot_interval_seconds = 3600;
 
     auto data_block = vectorized::Block::create_unique();
     scanner._init_block(data_block.get());
 
     auto st = scanner._fill_block_impl(data_block.get());
     ASSERT_EQ(Status::OK(), st);
-    ASSERT_EQ(2, data_block->rows());
+    ASSERT_EQ(1, data_block->rows());
     std::cout << data_block->dump_data();
 }
 
