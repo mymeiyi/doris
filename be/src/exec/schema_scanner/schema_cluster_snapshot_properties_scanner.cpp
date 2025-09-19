@@ -23,7 +23,6 @@
 #include <thrift/protocol/TDebugProtocol.h>
 
 #include <cstdint>
-#include <string>
 
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/cloud_storage_engine.h"
@@ -63,11 +62,13 @@ Status SchemaClusterSnapshotPropertiesScanner::start(RuntimeState* state) {
         return Status::InternalError("only support cloud mode");
     }
 
-    return Status::OK();
-    // return ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().list_snapshot(_snapshots);
+    RETURN_IF_ERROR(
+            ExecEnv::GetInstance()->storage_engine().to_cloud().meta_mgr().get_snapshot_properties(
+                    _switch_status, _max_reserved_snapshots, _snapshot_interval_seconds));
 }
 
-Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorized::Block* block, bool* eos) {
+Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorized::Block* block,
+                                                                       bool* eos) {
     if (!_is_init) {
         return Status::InternalError("call this before initial.");
     }
@@ -76,130 +77,35 @@ Status SchemaClusterSnapshotPropertiesScanner::get_next_block_internal(vectorize
     }
 
     *eos = true;
-    /*if (_snapshots.empty()) {
-        return Status::OK();
-    }*/
-
     return _fill_block_impl(block);
 }
 
 Status SchemaClusterSnapshotPropertiesScanner::_fill_block_impl(vectorized::Block* block) {
     SCOPED_TIMER(_fill_block_timer);
-    /*size_t row_num = _snapshots.size();
-    if (row_num == 0) {
-        return Status::OK();
-    }
-    std::vector<void*> datas(row_num);
-    std::vector<StringRef> strs(row_num);
-
-    // snapshot_id
+    std::vector<void*> datas(1);
+    // ready
     {
-        for (int i = 0; i < row_num; ++i) {
-            auto& snapshot = _snapshots[i];
-            if (snapshot.has_snapshot_id()) {
-                strs[i] = StringRef(snapshot.snapshot_id().c_str(), snapshot.snapshot_id().size());
-                datas[i] = strs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
+        int8_t ready = _switch_status == SnapshotSwitchStatus::SNAPSHOT_SWITCH_DISABLED ? 0 : 1;
+        datas[0] = ready;
         RETURN_IF_ERROR(fill_dest_column_for_range(block, 0, datas));
     }
-    // ancestor_id
+    // enabled
     {
-        for (int i = 0; i < row_num; ++i) {
-            auto& snapshot = _snapshots[i];
-            if (snapshot.has_ancestor_id()) {
-                strs[i] = StringRef(snapshot.ancestor_id().c_str(), snapshot.ancestor_id().size());
-                datas[i] = strs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 1, datas));
+        int8_t enabled = _switch_status == SnapshotSwitchStatus::SNAPSHOT_SWITCH_ON ? 0 : 1;
+        datas[0] = enabled;
+        RETURN_IF_ERROR(fill_dest_column_for_range(block, 0, datas));
     }
-    // create_at
+    // max_reserved_snapshots
     {
-        std::vector<DateV2Value<DateTimeV2ValueType>> srcs(row_num);
-        for (int i = 0; i < row_num; ++i) {
-            if (_snapshots[i].has_create_at()) {
-                int64_t value = _snapshots[i].create_at();
-                srcs[i].from_unixtime(value, _timezone_obj);
-                datas[i] = srcs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
+        datas[0] = _max_reserved_snapshots;
         RETURN_IF_ERROR(fill_dest_column_for_range(block, 2, datas));
     }
-    // finish_at
+    // snapshot_interval_seconds
     {
-        std::vector<DateV2Value<DateTimeV2ValueType>> srcs(row_num);
-        for (int i = 0; i < row_num; ++i) {
-            if (_snapshots[i].has_finish_at()) {
-                int64_t value = _snapshots[i].finish_at();
-                srcs[i].from_unixtime(value, _timezone_obj);
-                datas[i] = srcs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
+        datas[0] = _max_reserved_snapshots;
         RETURN_IF_ERROR(fill_dest_column_for_range(block, 3, datas));
     }
-    // image_url
-    {
-        for (int i = 0; i < row_num; ++i) {
-            auto& snapshot = _snapshots[i];
-            if (snapshot.has_image_url()) {
-                strs[i] = StringRef(snapshot.image_url().c_str(), snapshot.image_url().size());
-                datas[i] = strs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 4, datas));
-    }
-    // journal_id
-    {
-        std::vector<int64_t> srcs(row_num);
-        for (int i = 0; i < row_num; ++i) {
-            if (_snapshots[i].has_journal_id()) {
-                srcs[i] = _snapshots[i].journal_id();
-                datas[i] = srcs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 5, datas));
-    }
-    // status
-    {
-        std::string prepare_status = "SNAPSHOT_PREPARE";
-        std::string normal_status = "SNAPSHOT_NORMAL";
-        std::string aborted_status = "SNAPSHOT_ABORTED";
-        for (int i = 0; i < row_num; ++i) {
-            auto& snapshot = _snapshots[i];
-            if (snapshot.has_status()) {
-                auto status = snapshot.status();
-                std::string* value;
-                if (status == cloud::SnapshotStatus::SNAPSHOT_PREPARE) {
-                    value = &prepare_status;
-                } else if (status == cloud::SnapshotStatus::SNAPSHOT_NORMAL) {
-                    value = &normal_status;
-                } else if (status == cloud::SnapshotStatus::SNAPSHOT_ABORTED) {
-                    value = &aborted_status;
-                } else {
-                    return Status::InternalError("Unknown snapshot status: ",
-                                                 std::to_string(status));
-                }
-                strs[i] = StringRef(value->c_str(), value->size());
-                datas[i] = strs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 6, datas));
-    }
+    /*
     // auto_snapshot
     {
         std::vector<int8_t> srcs(row_num);
@@ -213,51 +119,7 @@ Status SchemaClusterSnapshotPropertiesScanner::_fill_block_impl(vectorized::Bloc
         }
         RETURN_IF_ERROR(fill_dest_column_for_range(block, 7, datas));
     }
-    // ttl_seconds
-    {
-        std::vector<int64_t> srcs(row_num);
-        for (int i = 0; i < row_num; ++i) {
-            if (_snapshots[i].has_ttl_seconds()) {
-                srcs[i] = _snapshots[i].ttl_seconds();
-                datas[i] = srcs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 8, datas));
-    }
-    // label
-    {
-        for (int i = 0; i < row_num; ++i) {
-            auto& snapshot = _snapshots[i];
-            if (snapshot.has_snapshot_label()) {
-                strs[i] = StringRef(snapshot.snapshot_label().c_str(),
-                                    snapshot.snapshot_label().size());
-                datas[i] = strs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 9, datas));
-    }
-    // reason
-    {
-        for (int i = 0; i < row_num; ++i) {
-            auto& snapshot = _snapshots[i];
-            if (snapshot.has_reason()) {
-                strs[i] = StringRef(snapshot.reason().c_str(), snapshot.reason().size());
-                datas[i] = strs.data() + i;
-            } else {
-                datas[i] = nullptr;
-            }
-        }
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 10, datas));
-    }
-    // TODO count
-    {
-        std::vector<void*> null_datas(row_num, nullptr);
-        RETURN_IF_ERROR(fill_dest_column_for_range(block, 11, null_datas));
-    }*/
+    */
     return Status::OK();
 }
 

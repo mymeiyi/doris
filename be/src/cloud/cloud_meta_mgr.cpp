@@ -2087,7 +2087,7 @@ Status CloudMetaMgr::list_snapshot(std::vector<SnapshotInfoPB>& snapshots) {
 }
 
 Status CloudMetaMgr::get_snapshot_properties(SnapshotSwitchStatus& switch_status,
-                                             intint64_t max_reserved_snapshots,
+                                             int64_t& max_reserved_snapshots,
                                              int64_t& snapshot_interval_seconds) {
     GetInstanceRequest req;
     GetInstanceResponse res;
