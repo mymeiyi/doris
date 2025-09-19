@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <gen_cpp/cloud.pb.h>
+
 #include "common/status.h"
 #include "exec/schema_scanner.h"
 
