@@ -67,7 +67,7 @@ public class AdminSetClusterSnapshotFeatureSwitchCommandTest {
     public void testValidateNormal() throws Exception {
         runBefore();
         Config.deploy_mode = "";
-        AdminSetClusterSnapshotFeatureSwitchCommand command = new AdminSetClusterSnapshotFeatureSwitchCommand(true);
+        AdminSetClusterSnapshotFeatureSwitchCommand command = new AdminSetClusterSnapshotFeatureSwitchCommand("on");
         Assertions.assertThrows(AnalysisException.class, () -> command.validate(connectContext),
                 "The sql is illegal in disk mode");
 
@@ -76,7 +76,7 @@ public class AdminSetClusterSnapshotFeatureSwitchCommandTest {
         Assertions.assertDoesNotThrow(() -> command.validate(connectContext));
 
         // switch off
-        AdminSetClusterSnapshotFeatureSwitchCommand command1 = new AdminSetClusterSnapshotFeatureSwitchCommand(false);
+        AdminSetClusterSnapshotFeatureSwitchCommand command1 = new AdminSetClusterSnapshotFeatureSwitchCommand("OFF");
         Assertions.assertDoesNotThrow(() -> command1.validate(connectContext));
     }
 
@@ -99,7 +99,7 @@ public class AdminSetClusterSnapshotFeatureSwitchCommandTest {
         };
         Config.deploy_mode = "cloud";
 
-        AdminSetClusterSnapshotFeatureSwitchCommand command = new AdminSetClusterSnapshotFeatureSwitchCommand(true);
+        AdminSetClusterSnapshotFeatureSwitchCommand command = new AdminSetClusterSnapshotFeatureSwitchCommand("ON");
         Assertions.assertThrows(AnalysisException.class, () -> command.validate(connectContext),
                 "Access denied; you need (at least one of) the (ADMIN) privilege(s) for this operation");
     }
