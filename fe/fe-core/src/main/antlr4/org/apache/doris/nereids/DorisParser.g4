@@ -604,7 +604,7 @@ supportedAdminStatement
     | ADMIN CREATE CLUSTER SNAPSHOT propertyClause?                                 #adminCreateClusterSnapshot
     | ADMIN SET AUTO CLUSTER SNAPSHOT propertyClause?                               #adminSetAutoClusterSnapshot
     | ADMIN DROP CLUSTER SNAPSHOT WHERE (key=identifier) EQ (value=STRING_LITERAL)  #adminDropClusterSnapshot
-    | ADMIN SET CLUSTER SNAPSHOT FEATURE (value=STRING_LITERAL)                     #adminSetClusterSnapshotFeatureSwitch
+    | ADMIN SET CLUSTER SNAPSHOT FEATURE (value=identifier)                         #adminSetClusterSnapshotFeatureSwitch
     ;
 
 supportedRecoverStatement
