@@ -43,14 +43,15 @@ public class AdminSetClusterSnapshotFeatureSwitchCommand extends Command impleme
     public static final String PROP_ENABLED = "enabled";
     private static final Logger LOG = LogManager.getLogger(AdminSetClusterSnapshotFeatureSwitchCommand.class);
 
+    private String value;
     private boolean on;
 
     /**
      * AdminSetClusterSnapshotFeatureSwitchCommand
      */
-    public AdminSetClusterSnapshotFeatureSwitchCommand(boolean on) {
+    public AdminSetClusterSnapshotFeatureSwitchCommand(String value) {
         super(PlanType.ADMIN_SET_CLUSTER_SNAPSHOT_FEATURE_SWITCH_COMMAND);
-        this.on = on;
+        this.value = value;
     }
 
     @Override
@@ -75,6 +76,13 @@ public class AdminSetClusterSnapshotFeatureSwitchCommand extends Command impleme
         if (!Env.getCurrentEnv().getAccessManager().checkGlobalPriv(ctx, PrivPredicate.ADMIN)) {
             ErrorReport.reportAnalysisException(ErrorCode.ERR_SPECIFIC_ACCESS_DENIED_ERROR,
                     PrivPredicate.ADMIN.getPrivs().toString());
+        }
+        if (this.value.equalsIgnoreCase("on")) {
+            this.on = true;
+        } else if (this.value.equalsIgnoreCase("off")) {
+            this.on = false;
+        } else {
+            throw new AnalysisException("command should be ADMIN SET CLUSTER SNAPSHOT FEATURE [ON | OFF];");
         }
     }
 

@@ -8006,7 +8006,8 @@ public class LogicalPlanBuilder extends DorisParserBaseVisitor<Object> {
     @Override
     public LogicalPlan visitAdminSetClusterSnapshotFeatureSwitch(
             DorisParser.AdminSetClusterSnapshotFeatureSwitchContext ctx) {
-        return new AdminSetClusterSnapshotFeatureSwitchCommand(ctx.ON() != null);
+        String value = ctx.value == null ? null : stripQuotes(ctx.value.getText());
+        return new AdminSetClusterSnapshotFeatureSwitchCommand(value);
     }
 
     @Override
