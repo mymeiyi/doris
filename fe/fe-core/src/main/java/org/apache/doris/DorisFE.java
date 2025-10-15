@@ -188,7 +188,14 @@ public class DorisFE {
                     "software.amazon.awssdk.http.urlconnection.UrlConnectionSdkHttpService");
 
             if (cmdLineOpts.getClusterSnapshotPath() != null) {
-                Env.getCurrentEnv().setClusterSnapshotFile(dorisHomeDir + "/" + cmdLineOpts.getClusterSnapshotPath());
+                if (cmdLineOpts.getClusterSnapshotPath().startsWith("/")) {
+                    // absolute path
+                    Env.getCurrentEnv().setClusterSnapshotFile(cmdLineOpts.getClusterSnapshotPath());
+                } else {
+                    // relative path
+                    Env.getCurrentEnv()
+                            .setClusterSnapshotFile(dorisHomeDir + "/" + cmdLineOpts.getClusterSnapshotPath());
+                }
             }
             // init catalog and wait it be ready
             Env.getCurrentEnv().initialize(args);
@@ -318,6 +325,11 @@ public class DorisFE {
         options.addOption("r", FeConstants.METADATA_FAILURE_RECOVERY_KEY, false,
                 "Check if the specified metadata recover is valid");
         options.addOption("c", "cluster_snapshot", true, "Specify the cluster snapshot json file");
+
+        for (String arg : args) {
+            LOG.info("arg: {}", arg);
+            System.out.println("arg: " + arg);
+        }
 
         CommandLine cmd = null;
         try {

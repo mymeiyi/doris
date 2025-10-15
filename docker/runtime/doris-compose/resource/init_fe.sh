@@ -97,8 +97,19 @@ run_fe() {
 }
 
 start_cloud_fe() {
+    echo $CLUSTER_SNAPSHOT >> /tmp/1.log
+    if [ "${CLUSTER_SNAPSHOT}" != "" ]; then
+        fe_daemon &
+        run_fe -c $CLUSTER_SNAPSHOT
+        printf '1'
+        echo "1" >> /tmp/1.log
+        return
+    fi
+
     if [ -f "$REGISTER_FILE" ]; then
         fe_daemon &
+        printf '2'
+        echo "2" >> /tmp/1.log
         run_fe
         return
     fi
@@ -110,6 +121,8 @@ start_cloud_fe() {
         touch $REGISTER_FILE
 
         fe_daemon &
+        printf '3'
+        echo "3" >> /tmp/1.log
         run_fe
 
         return
@@ -174,6 +187,8 @@ start_cloud_fe() {
     touch $REGISTER_FILE
 
     fe_daemon &
+    printf '4'
+    echo "4" >> /tmp/1.log
     run_fe
 }
 

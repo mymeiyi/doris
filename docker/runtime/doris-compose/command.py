@@ -218,6 +218,7 @@ class SimpleCommand(Command):
         for_all, related_nodes, related_node_num = get_ids_related_nodes(
             cluster, args.fe_id, args.be_id, args.ms_id, args.recycle_id,
             args.fdb_id)
+        LOG.info("run command simple")
         utils.exec_docker_compose_command(cluster.get_compose_file(),
                                           self.command,
                                           options=self.options,
@@ -293,6 +294,32 @@ class StopCommand(SimpleCommand):
         be_ids = [node.id for node in related_nodes if node.is_be()]
         if not cluster.is_host_network():
             wait_service(False, args.wait_timeout, cluster, fe_ids, be_ids)
+        return cluster, related_nodes
+
+
+class RollbackSnapshotCommand(StartBaseCommand):
+
+    def __init__(self, command):
+        super().__init__(command, "Rollback Snapshot command. "),
+
+    def add_parser(self, args_parsers):
+        parser = super().add_parser(args_parsers)
+        parser.add_argument("--cluster_snapshot", default="", help="Specify cluster_snapshot json file.")
+        return parser
+
+    def run(self, args):
+        # drop
+        self.command = "restart"
+        LOG.info("Rollback Snapshot command: {}".format(args))
+        cluster_snapshot = getattr(args, "cluster_snapshot", "")
+        LOG.info("args: {}".format(cluster_snapshot))
+        self.options += ["--cluster_snapshot", cluster_snapshot]
+        cluster, related_nodes = super().run(args)
+        self.command = "rollback_snapshot"
+        # fe_ids = [node.id for node in related_nodes if node.is_fe()]
+        # be_ids = [node.id for node in related_nodes if node.is_be()]
+        # if not cluster.is_host_network():
+        #     wait_service(False, args.wait_timeout, cluster, fe_ids, be_ids)
         return cluster, related_nodes
 
 
@@ -538,6 +565,7 @@ class UpCommand(Command):
             )
 
     def run(self, args):
+        LOG.info("run command, args: {}".format(args))
         if not args.NAME:
             raise Exception("Need specific not empty cluster name")
         for_all = True
@@ -685,6 +713,7 @@ class UpCommand(Command):
             related_nodes = None
 
         output_real_time = args.start and not args.detach
+        LOG.info("run command up")
         utils.exec_docker_compose_command(cluster.get_compose_file(),
                                           "up",
                                           options,
@@ -926,6 +955,7 @@ class DownCommand(Command):
                     options = ["-v", "--remove-orphans"]
                     if not stop_grace:
                         options.extend(["-t", "1"])
+                    LOG.info("run command down")
                     utils.exec_docker_compose_command(compose_file,
                                                       "down",
                                                       options=options)
@@ -967,6 +997,7 @@ class DownCommand(Command):
                 #utils.exec_docker_compose_command(cluster.get_compose_file(),
                 #                                  "stop",
                 #                                  nodes=[node])
+                LOG.info("run command down")
                 utils.exec_docker_compose_command(cluster.get_compose_file(),
                                                   "rm", ["-s", "-v", "-f"],
                                                   nodes=[node])
@@ -1504,4 +1535,6 @@ ALL_COMMANDS = [
     InfoCommand("info"),
     ListCommand("ls"),
     AddRWPermCommand("add-rw-perm"),
+    # CloneSnapshotCommand("clone_snapshot"),
+    RollbackSnapshotCommand("rollback_snapshot"),
 ]

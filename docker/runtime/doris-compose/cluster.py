@@ -398,6 +398,7 @@ class Node(object):
             "SQL_MODE_NODE_MGR": 1 if self.cluster.sql_mode_node_mgr else 0,
             "TDE_AK": self.get_tde_ak(),
             "TDE_SK": self.get_tde_sk(),
+            'CLUSTER_SNAPSHOT': '/mnt/disk2/meiyi/clion_workspace/doris_master2/cluster_snapshot.json',
         }
 
         if self.cluster.is_cloud:

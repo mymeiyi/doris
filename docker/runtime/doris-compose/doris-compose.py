@@ -23,6 +23,8 @@ import sys
 import traceback
 import utils
 
+LOG = utils.get_logger()
+
 
 def parse_args():
     ap = argparse.ArgumentParser(description="")
@@ -47,6 +49,7 @@ def run(args, disable_log_stdout, help):
 
 if __name__ == '__main__':
     args, help = parse_args()
+    # LOG.info("after call parse args: {}".format(args))
     verbose = getattr(args, "verbose", False)
     if verbose:
         utils.set_log_verbose()
