@@ -598,6 +598,15 @@ class SuiteCluster {
         waitHbChanged()
     }
 
+    void rollbackSnapshotFrontends(String clusterSnapshotJson, int... indices) {
+        String op = "rollback_snapshot --cluster_snapshot " + clusterSnapshotJson + " --wait-timeout " + START_WAIT_TIMEOUT;
+//        runFrontendsCmd(START_WAIT_TIMEOUT + 5, cmd, indices)
+        def cmd = op + ' ' + name + ' --fe-id ' + indices.join(' ')
+        runCmd(cmd, timeoutSecond)
+        waitHbChanged()
+        // runFrontendsCmd(START_WAIT_TIMEOUT + 5, "restart --wait-timeout ${START_WAIT_TIMEOUT}".toString(), indices)
+    }
+
     // indices start from 1, not 0
     // if not specific be indices, then stop all backends
     void stopBackends(int... indices) {
@@ -747,6 +756,7 @@ class SuiteCluster {
         if (outBuf.toString().size() == 0) {
             throw new Exception(String.format('doris compose output is empty, err: %s', errBuf.toString()))
         }
+        logger.info('before parse: {}', outBuf.toString())
         def object = (Map<String, Object>) parser.parseText(outBuf.toString())
         if (object.get('code') != 0) {
             throw new Exception(String.format('Code: %s != 0, err: %s', object.get('code'), object.get('err')))

@@ -579,6 +579,20 @@ class FE(Node):
                 envs["IS_FE_FOLLOWER"] = 1
         envs["MY_QUERY_PORT"] = self.meta["ports"]["query_port"]
         envs["MY_EDITLOG_PORT"] = self.meta["ports"]["edit_log_port"]
+        # TODO add cluster snapshot here
+        LOG.info("self path: {}".format(self.get_path()))
+        # envs["CLUSTER_SNAPSHOT"] = self.get_path() + "/" + "cluster_snapshot.json"
+        envs["CLUSTER_SNAPSHOT"] = "cluster_snapshot.json"
+        # if 'cluster_snapshot' in self.meta:
+        #     envs["CLUSTER_SNAPSHOT"] = self.meta['cluster_snapshot']
+        #     LOG.info("set env for cluster snapshot: {}".format(envs["CLUSTER_SNAPSHOT"]))
+        # else:
+        #     LOG.info("set env for cluster snapshot")
+
+        # LOG.info("set env for cluster snapshot: {}".format(self.cluster_snapshot))
+        # if self.cluster_snapshot != '':
+        #     LOG.info("set env for cluster snapshot 2: {}".format(self.cluster_snapshot))
+        #     envs["CLUSTER_SNAPSHOT"] = self.cluster_snapshot
         return envs
 
     def get_default_named_ports(self):

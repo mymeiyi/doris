@@ -93,12 +93,35 @@ run_fe() {
     export DORIS_TDE_AK=${TDE_AK}
     export DORIS_TDE_SK=${TDE_SK}
     health_log "run start_fe.sh"
-    bash $DORIS_HOME/bin/start_fe.sh --daemon $@ | tee -a $DORIS_HOME/log/fe.out
+    echo "${DORIS_HOME}/bin/start_fe.sh --daemon ${@}" >> /opt/apache-doris/fe/log/1.log
+    bash $DORIS_HOME/bin/start_fe.sh --daemon ${@} | tee -a $DORIS_HOME/log/fe.out
 }
 
 start_cloud_fe() {
+    echo "---------------" >> /opt/apache-doris/fe/log/1.log
+    cluster_snapshot_param=""
+    echo $DORIS_HOME >> /opt/apache-doris/fe/log/1.log
+    echo "${DORIS_HOME}/conf/cluster_snapshot.json" >> /opt/apache-doris/fe/log/1.log
+    if [ -f "${DORIS_HOME}/conf/cluster_snapshot.json" ]; then
+        echo "cluster_snapshot exists" >> /opt/apache-doris/fe/log/1.log
+        cluster_snapshot_param="conf/cluster_snapshot.json"
+        echo $cluster_snapshot_param >> /opt/apache-doris/fe/log/1.log
+    else
+        echo "cluster_snapshot not exists" >> /opt/apache-doris/fe/log/1.log
+    fi
+#    echo $CLUSTER_SNAPSHOT >> /opt/apache-doris/fe/log/1.log
+    if [ "${cluster_snapshot_param}" != "" ]; then
+        fe_daemon &
+        run_fe --cluster_snapshot $cluster_snapshot_param
+        printf '1'
+        echo "1" >> /opt/apache-doris/fe/log/1.log
+        return
+    fi
+
     if [ -f "$REGISTER_FILE" ]; then
         fe_daemon &
+        printf '2'
+        echo "2" >> /opt/apache-doris/fe/log/1.log
         run_fe
         return
     fi
@@ -110,6 +133,8 @@ start_cloud_fe() {
         touch $REGISTER_FILE
 
         fe_daemon &
+        printf '3'
+        echo "3" >> /opt/apache-doris/fe/log/1.log
         run_fe
 
         return
@@ -174,6 +199,8 @@ start_cloud_fe() {
     touch $REGISTER_FILE
 
     fe_daemon &
+    printf '4'
+    echo "4" >> /opt/apache-doris/fe/log/1.log
     run_fe
 }
 
