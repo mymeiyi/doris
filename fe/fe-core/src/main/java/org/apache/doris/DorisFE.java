@@ -188,7 +188,14 @@ public class DorisFE {
                     "software.amazon.awssdk.http.urlconnection.UrlConnectionSdkHttpService");
 
             if (cmdLineOpts.getClusterSnapshotPath() != null) {
-                Env.getCurrentEnv().setClusterSnapshotFile(dorisHomeDir + "/" + cmdLineOpts.getClusterSnapshotPath());
+                if (cmdLineOpts.getClusterSnapshotPath().startsWith("/")) {
+                    // absolute path
+                    Env.getCurrentEnv().setClusterSnapshotFile(cmdLineOpts.getClusterSnapshotPath());
+                } else {
+                    // relative path
+                    Env.getCurrentEnv()
+                            .setClusterSnapshotFile(dorisHomeDir + "/" + cmdLineOpts.getClusterSnapshotPath());
+                }
             }
             // init catalog and wait it be ready
             Env.getCurrentEnv().initialize(args);
@@ -319,12 +326,26 @@ public class DorisFE {
                 "Check if the specified metadata recover is valid");
         options.addOption("c", "cluster_snapshot", true, "Specify the cluster snapshot json file");
 
+        for (String arg : args) {
+            LOG.info("arg: {}", arg);
+            System.out.println("arg: " + arg);
+        }
+
         CommandLine cmd = null;
         try {
             cmd = commandLineParser.parse(options, args);
         } catch (final ParseException e) {
-            LOG.warn("", e);
+            e.printStackTrace();
+            LOG.warn("Failed to parse command line", e);
             System.err.println("Failed to parse command line. exit now");
+            for (int i = 0; i < 10000; i++) {
+                System.err.println(".");
+                try {
+                    Thread.sleep(10000);
+                } catch (InterruptedException ignored) {
+                    // do nothing
+                }
+            }
             System.exit(-1);
         }
 
