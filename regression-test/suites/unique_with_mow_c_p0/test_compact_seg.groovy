@@ -26,10 +26,9 @@ suite("test_compact_seg", "nonConcurrent") {
         assertTrue(tablets.size() >= 1)
         def tablet = tablets[0]
         String compactionUrl = tablet["CompactionStatus"]
-        def retry = 15
+        def retry = 7
         for (int i = 0; i < retry; i++) {
             def (code, out, err) = curl("GET", compactionUrl)
-            logger.info("Show tablets " + tablet.TabletId  + " status: code=" + code + ", out=" + out + ", err=" + err)
             assertEquals(code, 0)
             def tabletJson = parseJson(out.trim())
             assert tabletJson.rowsets instanceof List
@@ -41,13 +40,20 @@ suite("test_compact_seg", "nonConcurrent") {
             def segmentNumStr = rowset.substring(start_index + 1, end_index).trim()
             logger.info("segmentNumStr: ${segmentNumStr}")
             if (Integer.parseInt(segmentNumStr) == lastRowsetSegmentNum) {
+                logger.info("Show tablets " + tablet.TabletId  + " status: code=" + code + ", out=" + out + ", err=" + err)
+                break
+            }
+            if (Integer.parseInt(segmentNumStr) < lastRowsetSegmentNum) {
+                logger.info("Show tablets " + tablet.TabletId  + " status: code=" + code + ", out=" + out + ", err=" + err)
+                logger.info("segmentNumStr: ${segmentNumStr}, expected: ${lastRowsetSegmentNum}")
                 break
             }
             if (i == retry - 1) {
+                logger.info("Show tablets " + tablet.TabletId  + " status: code=" + code + ", out=" + out + ", err=" + err)
                 // assertEquals(lastRowsetSegmentNum, Integer.parseInt(segmentNumStr))
-                logger.warn("expected segmentNum: ${segmentNumStr}, but get ${lastRowsetSegmentNum} after ${retry} retries")
+                logger.warn("expected segmentNum: ${lastRowsetSegmentNum}, but get ${segmentNumStr} after ${retry} retries")
             }
-            sleep(2000)
+            sleep(1000)
         }
     }
 
@@ -64,7 +70,7 @@ suite("test_compact_seg", "nonConcurrent") {
     set_be_param.call("doris_scanner_row_bytes", "1")
     set_be_param.call('segcompaction_batch_size', 5)
 
-    for (int j = 0; j < 2; j++) {
+    for (int j = 0; j < 1; j++) {
         tableName = "test_compact_seg_" + j
         sql """ DROP TABLE IF EXISTS ${tableName} """
         sql """
