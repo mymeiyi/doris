@@ -1066,7 +1066,7 @@ public class InternalCatalog implements CatalogIf<Database> {
         }
     }
 
-    public void eraseTableDropBackendReplicas(OlapTable olapTable, boolean isReplay) {
+    public void eraseTableDropBackendReplicas(long dbId, OlapTable olapTable, boolean isReplay) {
         if (isReplay || Env.isCheckpointThread()) {
             return;
         }
