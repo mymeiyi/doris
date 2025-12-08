@@ -757,7 +757,8 @@ Status CloudMetaMgr::sync_tablet_rowsets_unlocked(CloudTablet* tablet,
                           << ", version=[" << cloud_rs_meta_pb.start_version() << '-'
                           << cloud_rs_meta_pb.end_version() << ']'
                           << ", rowset_id=" << cloud_rs_meta_pb.rowset_id_v2()
-                          << ", new_rowset_id=" << rowset->rowset_id();
+                          << ", new_rowset_id=" << rowset->rowset_id()
+                          << ", meta_id=" << rs_meta->rowset_id();
                 rowsets.push_back(std::move(rowset));
             }
             if (!rowsets.empty()) {

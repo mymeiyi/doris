@@ -238,6 +238,8 @@ void RowsetMeta::_init() {
         _rowset_id.init(_rowset_meta_pb.rowset_id());
     } else {
         _rowset_id.init(_rowset_meta_pb.rowset_id_v2());
+        LOG(INFO) << "sout: init rowset_id=" << _rowset_id
+                  << ", v2=" << _rowset_meta_pb.rowset_id_v2();
     }
     update_metadata_size();
 }
