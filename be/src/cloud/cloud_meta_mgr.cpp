@@ -736,6 +736,11 @@ Status CloudMetaMgr::sync_tablet_rowsets_unlocked(CloudTablet* tablet,
                         {cloud_rs_meta_pb.start_version(), cloud_rs_meta_pb.end_version()});
                 if (existed_rowset &&
                     existed_rowset->rowset_id().to_string() == cloud_rs_meta_pb.rowset_id_v2()) {
+                    LOG(INFO) << "rowset exist, tablet_id=" << cloud_rs_meta_pb.tablet_id()
+                              << ", version=[" << cloud_rs_meta_pb.start_version() << '-'
+                              << cloud_rs_meta_pb.end_version() << ']'
+                              << ", rowset_id=" << cloud_rs_meta_pb.rowset_id_v2()
+                              << ", existed_rowset=" << existed_rowset->rowset_id().to_string();
                     continue; // Same rowset, skip it
                 }
                 RowsetMetaPB meta_pb = cloud_rowset_meta_to_doris(cloud_rs_meta_pb);
@@ -748,6 +753,11 @@ Status CloudMetaMgr::sync_tablet_rowsets_unlocked(CloudTablet* tablet,
                     LOG_WARNING("create rowset").tag("status", s);
                     return s;
                 }
+                LOG(INFO) << "create rowset, tablet_id=" << cloud_rs_meta_pb.tablet_id()
+                          << ", version=[" << cloud_rs_meta_pb.start_version() << '-'
+                          << cloud_rs_meta_pb.end_version() << ']'
+                          << ", rowset_id=" << cloud_rs_meta_pb.rowset_id_v2()
+                          << ", new_rowset_id=" << rowset->rowset_id();
                 rowsets.push_back(std::move(rowset));
             }
             if (!rowsets.empty()) {
