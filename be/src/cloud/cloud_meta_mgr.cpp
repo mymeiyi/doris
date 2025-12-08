@@ -730,7 +730,8 @@ Status CloudMetaMgr::sync_tablet_rowsets_unlocked(CloudTablet* tablet,
             for (const auto& cloud_rs_meta_pb : resp.rowset_meta()) {
                 VLOG_DEBUG << "get rowset meta, tablet_id=" << cloud_rs_meta_pb.tablet_id()
                            << ", version=[" << cloud_rs_meta_pb.start_version() << '-'
-                           << cloud_rs_meta_pb.end_version() << ']';
+                           << cloud_rs_meta_pb.end_version() << ']'
+                           << ", rowset_id=" << cloud_rs_meta_pb.rowset_id_v2();
                 auto existed_rowset = tablet->get_rowset_by_version(
                         {cloud_rs_meta_pb.start_version(), cloud_rs_meta_pb.end_version()});
                 if (existed_rowset &&
