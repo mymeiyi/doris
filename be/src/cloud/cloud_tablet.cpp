@@ -388,7 +388,7 @@ void CloudTablet::add_rowsets(std::vector<RowsetSharedPtr> to_add, bool version_
     auto add_rowsets_directly = [=, this](std::vector<RowsetSharedPtr>& rowsets) {
         for (auto& rs : rowsets) {
             VLOG_DEBUG << "add_rowset tablet_id=" << tablet_id()
-                       << " rowset_id: " << rs->rowset_meta().rowset_id();
+                       << " rowset_id: " << rs->rowset_id();
             if (warmup_delta_data) {
 #ifndef BE_TEST
                 bool warm_up_state_updated = false;
