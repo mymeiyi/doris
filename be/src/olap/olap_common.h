@@ -493,6 +493,8 @@ struct RowsetId {
             from_hex(&high, rowset_id_str.substr(0, 16));
             from_hex(&middle, rowset_id_str.substr(16, 16));
             from_hex(&low, rowset_id_str.substr(32, 16));
+            LOG(INFO) << "sout: rowset_id=" << rowset_id_str << ", high=" << high
+                      << ", middle=" << middle << ", low=" << low;
             init(high >> 56, high & LOW_56_BITS, middle, low);
         }
     }
