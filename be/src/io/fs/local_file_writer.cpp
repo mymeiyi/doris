@@ -89,6 +89,14 @@ LocalFileWriter::~LocalFileWriter() {
 }
 
 Status LocalFileWriter::close(bool non_block) {
+    std::string stateStr = "OPEN";
+    if (_state == State::ASYNC_CLOSING) {
+        stateStr = "ASYNC_CLOSING";
+    } else if (_state == State::CLOSED) {
+        stateStr = "CLOSED";
+    }
+    LOG(INFO) << "sout: Closing LocalFileWriter for file: " << _path.native()
+              << ", non_block: " << non_block << ", state: " << stateStr << ", sync=" << _sync_data;
     if (_state == State::CLOSED) {
         return Status::InternalError("LocalFileWriter already closed, file path {}",
                                      _path.native());
@@ -209,6 +217,8 @@ Status LocalFileWriter::_finalize() {
 
 Status LocalFileWriter::_close(bool sync) {
     auto fd_reclaim_func = [&](Status st) {
+        LOG(INFO) << "sout: inner close LocalFileWriter for file: " << _path.native()
+                  << ", sync=" << sync << ", status=" << st;
         if (_fd > 0 && 0 != ::close(_fd)) {
             return localfs_error(errno, fmt::format("failed to {}, along with failed to close {}",
                                                     st, _path.native()));

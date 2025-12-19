@@ -423,6 +423,7 @@ Status BetaRowsetWriter::_load_noncompacted_segment(segment_v2::SegmentSharedPtr
     }
     auto path =
             local_segment_path(_context.tablet_path, _context.rowset_id.to_string(), segment_id);
+    LOG(INFO) << "sout: load segment path: " << path;
     io::FileReaderOptions reader_options {
             .cache_type =
                     _context.write_file_cache
@@ -438,6 +439,19 @@ Status BetaRowsetWriter::_load_noncompacted_segment(segment_v2::SegmentSharedPtr
         LOG(WARNING) << "failed to open segment. " << path << ":" << s;
         return s;
     }
+    /*{
+        StorageReadOptions opts;
+        std::unique_ptr<segment_v2::ColumnIterator> column_iterator;
+        RETURN_IF_ERROR(segment->new_column_iterator(target_column, column_iterator.get(), &opts));
+        segment_v2::ColumnIteratorOptions opt {
+                .use_page_cache = !config::disable_storage_page_cache,
+                .file_reader = segment->file_reader().get(),
+                .stats = stats,
+                .io_ctx = io::IOContext {.reader_type = ReaderType::READER_QUERY,
+                                         .file_cache_stats = &stats->file_cache_stats},
+        };
+        RETURN_IF_ERROR((*column_iterator)->init(opt));
+    }*/
     return Status::OK();
 }
 
@@ -468,6 +482,7 @@ Status BetaRowsetWriter::_find_longest_consecutive_small_segment(
             if (segid == _segcompacted_point) {
                 // skip large segments at the front
                 auto dst_seg_id = _num_segcompacted.load();
+                LOG(INFO) << "sout: segcompaction skip large segment id: " << segid;
                 RETURN_IF_ERROR(_rename_compacted_segment_plain(_segcompacted_point++));
                 if (_segcompaction_worker->need_convert_delete_bitmap()) {
                     _segcompaction_worker->convert_segment_delete_bitmap(
@@ -499,6 +514,11 @@ Status BetaRowsetWriter::_find_longest_consecutive_small_segment(
         VLOG_DEBUG << "only one candidate segment";
         auto src_seg_id = _segcompacted_point.load();
         auto dst_seg_id = _num_segcompacted.load();
+
+        /*segment_v2::SegmentSharedPtr segment;
+        LOG(INFO) << "sout: only 1 segment id: " << src_seg_id;
+        RETURN_IF_ERROR(_load_noncompacted_segment(segment, src_seg_id));*/
+
         RETURN_IF_ERROR(_rename_compacted_segment_plain(_segcompacted_point++));
         if (_segcompaction_worker->need_convert_delete_bitmap()) {
             _segcompaction_worker->convert_segment_delete_bitmap(
@@ -525,6 +545,8 @@ Status BetaRowsetWriter::_rename_compacted_segments(int64_t begin, int64_t end) 
     auto dst_seg_path = local_segment_path(_context.tablet_path, _context.rowset_id.to_string(),
                                            _num_segcompacted);
     ret = rename(src_seg_path.c_str(), dst_seg_path.c_str());
+    LOG(INFO) << "sout: rename " << src_seg_path << " to " << dst_seg_path
+              << ", _num_segcompacted=" << _num_segcompacted;
     if (ret) {
         return Status::Error<ROWSET_RENAME_FILE_FAILED>(
                 "failed to rename {} to {}. ret:{}, errno:{}", src_seg_path, dst_seg_path, ret,
@@ -557,8 +579,8 @@ Status BetaRowsetWriter::_rename_compacted_segment_plain(uint32_t seg_id) {
             local_segment_path(_context.tablet_path, _context.rowset_id.to_string(), seg_id);
     auto dst_seg_path = local_segment_path(_context.tablet_path, _context.rowset_id.to_string(),
                                            _num_segcompacted);
-    VLOG_DEBUG << "segcompaction skip this segment. rename " << src_seg_path << " to "
-               << dst_seg_path;
+    LOG(INFO) << "sout: segcompaction skip this segment. rename " << src_seg_path << " to "
+              << dst_seg_path;
     {
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
         DCHECK_EQ(_segid_statistics_map.find(seg_id) == _segid_statistics_map.end(), false);
@@ -568,6 +590,7 @@ Status BetaRowsetWriter::_rename_compacted_segment_plain(uint32_t seg_id) {
         _segid_statistics_map.emplace(_num_segcompacted, org);
         _clear_statistics_for_deleting_segments_unsafe(seg_id, seg_id);
     }
+    // RETURN_IF_ERROR(io::global_local_filesystem()->copy_path(src_seg_path, dst_seg_path));
     int ret = rename(src_seg_path.c_str(), dst_seg_path.c_str());
     if (ret) {
         return Status::Error<ROWSET_RENAME_FILE_FAILED>(
@@ -729,9 +752,14 @@ Status BetaRowsetWriter::_segcompaction_rename_last_segments() {
     }
     // currently we only rename remaining segments to reduce wait time
     // so that transaction can be committed ASAP
-    VLOG_DEBUG << "segcompaction last few segments";
+    // sleep(2);
+    LOG(INFO) << "sout: segcompaction last few segments after sleep 2";
     for (int32_t segid = _segcompacted_point; segid < _num_segment; segid++) {
         auto dst_segid = _num_segcompacted.load();
+
+        /*segment_v2::SegmentSharedPtr segment;
+        LOG(INFO) << "sout: handle last few segments: " << segid;
+        RETURN_IF_ERROR(_load_noncompacted_segment(segment, segid));*/
         RETURN_IF_ERROR(_rename_compacted_segment_plain(_segcompacted_point++));
         if (_segcompaction_worker->need_convert_delete_bitmap()) {
             _segcompaction_worker->convert_segment_delete_bitmap(
@@ -855,7 +883,9 @@ Status BaseBetaRowsetWriter::_close_file_writers() {
 }
 
 Status BetaRowsetWriter::_close_file_writers() {
+    LOG(INFO) << "sout: BetaRowsetWriter::_close_file_writers called." << rowset_id();
     RETURN_IF_ERROR(BaseBetaRowsetWriter::_close_file_writers());
+    LOG(INFO) << "sout: BetaRowsetWriter::_close_file_writers called 2. " << rowset_id();
     // if _segment_start_id is not zero, that means it's a transient rowset writer for
     // MoW partial update, don't need to do segment compaction.
     if (_segment_start_id == 0) {

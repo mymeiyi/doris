@@ -136,6 +136,9 @@ Status PageIO::read_and_decompress_page_(const PageReadOptions& opts, PageHandle
     VLOG_DEBUG << fmt::format("Reading page {}:{}:{}", cache_key.fname, cache_key.fsize,
                               cache_key.offset);
     if (opts.use_page_cache && cache && cache->lookup(cache_key, &cache_handle, opts.type)) {
+        LOG(INFO) << "sout: use_page_cache, find path=" << opts.file_reader->path().native()
+                  << ", offset=" << opts.page_pointer.offset
+                  << ", fsize=" << opts.file_reader->size();
         // we find page in cache, use it
         *handle = PageHandle(std::move(cache_handle));
         opts.stats->cached_pages_num++;
@@ -169,7 +172,10 @@ Status PageIO::read_and_decompress_page_(const PageReadOptions& opts, PageHandle
         size_t bytes_read = 0;
         RETURN_IF_ERROR(opts.file_reader->read_at(opts.page_pointer.offset, page_slice, &bytes_read,
                                                   &opts.io_ctx));
-        DCHECK_EQ(bytes_read, page_size);
+        LOG(INFO) << "sout: read page, offset=" << opts.page_pointer.offset
+                  << ", bytes_read=" << bytes_read << ", expected_bytes=" << page_size
+                  << ", file=" << opts.file_reader->path().native();
+        CHECK_EQ(bytes_read, page_size);
         opts.stats->compressed_bytes_read += page_size;
     }
 
@@ -182,8 +188,9 @@ Status PageIO::read_and_decompress_page_(const PageReadOptions& opts, PageHandle
         TEST_INJECTION_POINT_CALLBACK("PageIO::read_and_decompress_page:crc_failure_inj", &ctx);
         if (expect != actual) {
             return Status::Corruption(
-                    "Bad page: checksum mismatch (actual={} vs expect={}), file={}", actual, expect,
-                    opts.file_reader->path().native());
+                    "Bad page: checksum mismatch (actual={} vs expect={}), file={}, page_size={}, "
+                    "page_slice_size={}, offset={}",
+                    actual, expect, opts.file_reader->path().native(), page_size, page_slice.size, opts.page_pointer.offset);
         }
     }
 
@@ -255,6 +262,7 @@ Status PageIO::read_and_decompress_page_(const PageReadOptions& opts, PageHandle
         // insert this page into cache and return the cache handle
         cache->insert(cache_key, page.get(), &cache_handle, opts.type, opts.kept_in_memory);
         *handle = PageHandle(std::move(cache_handle));
+        LOG(INFO) << "sout: use_page_cache, write path=" << opts.file_reader->path().native();
     } else {
         *handle = PageHandle(page.get());
     }

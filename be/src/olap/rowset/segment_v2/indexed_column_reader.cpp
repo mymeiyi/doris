@@ -192,9 +192,12 @@ Status IndexedColumnIterator::seek_to_ordinal(ordinal_t idx) {
             KeyCoderTraits<FieldType::OLAP_FIELD_TYPE_UNSIGNED_BIGINT>::full_encode_ascending(&idx,
                                                                                               &key);
             RETURN_IF_ERROR(_ordinal_iter.seek_at_or_before(key));
+            LOG(INFO) << "sout: idx=" << idx
+                      << ", current_page_pointer=" << _ordinal_iter.current_page_pointer();
             RETURN_IF_ERROR(_read_data_page(_ordinal_iter.current_page_pointer()));
             _current_iter = &_ordinal_iter;
         } else {
+            LOG(INFO) << "sout: idx=" << idx << ", sole_data_page=" << _reader->_sole_data_page;
             RETURN_IF_ERROR(_read_data_page(_reader->_sole_data_page));
         }
     }
