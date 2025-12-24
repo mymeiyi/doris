@@ -250,6 +250,8 @@ import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonWriter;
 import org.apache.commons.lang3.reflect.TypeUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -285,6 +287,7 @@ import java.util.zip.GZIPOutputStream;
  * See the following "GuavaTableAdapter" and "GuavaMultimapAdapter" for example.
  */
 public class GsonUtils {
+    private static final Logger LOG = LogManager.getLogger(GsonUtils.class);
     // runtime adapter for class "Type"
     private static RuntimeTypeAdapterFactory<org.apache.doris.catalog.Type> columnTypeAdapterFactory
             = RuntimeTypeAdapterFactory
@@ -532,9 +535,11 @@ public class GsonUtils {
                 .registerSubtype(LocalTablet.class, LocalTablet.class.getSimpleName())
                 .registerSubtype(CloudTablet.class, CloudTablet.class.getSimpleName());
         if (Config.isNotCloudMode()) {
+            LOG.info("sout: 1 register LocalTablet as default Tablet subtype");
             tabletTypeAdapterFactory.registerDefaultSubtype(LocalTablet.class);
             tabletTypeAdapterFactory.registerCompatibleSubtype(LocalTablet.class, Tablet.class.getSimpleName());
         } else {
+            LOG.info("sout: 2 register LocalTablet as default Tablet subtype");
             // compatible with old cloud code.
             tabletTypeAdapterFactory.registerDefaultSubtype(CloudTablet.class);
         }
