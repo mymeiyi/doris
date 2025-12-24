@@ -77,7 +77,7 @@ public class UnitTestUtil {
         Replica replica3 = new Replica(replicaId + 2, backendId + 2, ReplicaState.NORMAL, version, 0);
 
         // tablet
-        Tablet tablet = new Tablet(tabletId);
+        Tablet tablet = new LocalTablet(tabletId);
 
         // index
         MaterializedIndex index = new MaterializedIndex(indexId, IndexState.NORMAL);
