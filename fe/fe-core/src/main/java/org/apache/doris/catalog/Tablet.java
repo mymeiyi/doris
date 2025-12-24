@@ -23,9 +23,7 @@ import org.apache.doris.clone.TabletSchedCtx.Priority;
 import org.apache.doris.cloud.catalog.CloudReplica;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.FeConstants;
-import org.apache.doris.common.Pair;
 import org.apache.doris.common.UserException;
-import org.apache.doris.common.lock.MonitoredReentrantReadWriteLock;
 import org.apache.doris.resource.Tag;
 import org.apache.doris.system.Backend;
 import org.apache.doris.system.SystemInfoService;
@@ -42,7 +40,6 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -118,13 +115,6 @@ public class Tablet extends MetaObject {
     @SerializedName(value = "ic", alternate = {"isConsistent"})
     private boolean isConsistent;
 
-    // cooldown conf
-    @SerializedName(value = "cri", alternate = {"cooldownReplicaId"})
-    private long cooldownReplicaId = -1;
-    @SerializedName(value = "ctm", alternate = {"cooldownTerm"})
-    private long cooldownTerm = -1;
-    private MonitoredReentrantReadWriteLock cooldownConfLock = new MonitoredReentrantReadWriteLock();
-
     // last time that the tablet checker checks this tablet.
     // no need to persist
     private long lastStatusCheckTime = -1;
@@ -183,25 +173,6 @@ public class Tablet extends MetaObject {
         return isConsistent;
     }
 
-    public void setCooldownConf(long cooldownReplicaId, long cooldownTerm) {
-        cooldownConfLock.writeLock().lock();
-        this.cooldownReplicaId = cooldownReplicaId;
-        this.cooldownTerm = cooldownTerm;
-        cooldownConfLock.writeLock().unlock();
-    }
-
-    public long getCooldownReplicaId() {
-        return cooldownReplicaId;
-    }
-
-    public Pair<Long, Long> getCooldownConf() {
-        cooldownConfLock.readLock().lock();
-        try {
-            return Pair.of(cooldownReplicaId, cooldownTerm);
-        } finally {
-            cooldownConfLock.readLock().unlock();
-        }
-    }
 
     protected boolean isLatestReplicaAndDeleteOld(Replica newReplica) {
         boolean delete = false;
@@ -498,17 +469,7 @@ public class Tablet extends MetaObject {
     }
 
     public long getRemoteDataSize() {
-        // if CooldownReplicaId is not init
-        if (cooldownReplicaId <= 0) {
-            return 0;
-        }
-        for (Replica r : replicas) {
-            if (r.getId() == cooldownReplicaId) {
-                return r.getRemoteDataSize();
-            }
-        }
-        // return replica with max remoteDataSize
-        return replicas.stream().max(Comparator.comparing(Replica::getRemoteDataSize)).get().getRemoteDataSize();
+        return 0;
     }
 
     public long getRowCount(boolean singleReplica) {
