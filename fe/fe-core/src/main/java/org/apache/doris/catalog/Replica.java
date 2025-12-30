@@ -99,8 +99,6 @@ public class Replica {
     private int schemaHash = -1;
     @SerializedName(value = "ds", alternate = {"dataSize"})
     private volatile long dataSize = 0;
-    @SerializedName(value = "rds", alternate = {"remoteDataSize"})
-    private volatile long remoteDataSize = 0;
     @SerializedName(value = "rc", alternate = {"rowCount"})
     private volatile long rowCount = 0;
     @SerializedName(value = "st", alternate = {"state"})
@@ -129,14 +127,6 @@ public class Replica {
     @Getter
     @SerializedName(value = "lss", alternate = {"localSegmentSize"})
     private Long localSegmentSize = 0L;
-    @Setter
-    @Getter
-    @SerializedName(value = "ris", alternate = {"remoteInvertedIndexSize"})
-    private Long remoteInvertedIndexSize = 0L;
-    @Setter
-    @Getter
-    @SerializedName(value = "rss", alternate = {"remoteSegmentSize"})
-    private Long remoteSegmentSize = 0L;
 
     private volatile long totalVersionCount = -1;
     private volatile long visibleVersionCount = -1;
@@ -145,9 +135,6 @@ public class Replica {
 
     // bad means this Replica is unrecoverable, and we will delete it
     private boolean bad = false;
-
-    private TUniqueId cooldownMetaId;
-    private long cooldownTerm = -1;
 
     // A replica version should increase monotonically,
     // but backend may missing some versions due to disk failure or bugs.
@@ -226,7 +213,6 @@ public class Replica {
         this.schemaHash = schemaHash;
 
         this.dataSize = dataSize;
-        this.remoteDataSize = remoteDataSize;
         this.rowCount = rowCount;
         this.state = state;
         if (this.state == null) {
@@ -289,11 +275,33 @@ public class Replica {
     }
 
     public long getRemoteDataSize() {
-        return remoteDataSize;
+        return 0;
     }
 
     public void setRemoteDataSize(long remoteDataSize) {
-        this.remoteDataSize = remoteDataSize;
+        if (remoteDataSize > 0) {
+            throw new UnsupportedOperationException("setRemoteDataSize is not supported in Replica");
+        }
+    }
+
+    public Long getRemoteInvertedIndexSize() {
+        return 0L;
+    }
+
+    public void setRemoteInvertedIndexSize(long remoteInvertedIndexSize) {
+        if (remoteInvertedIndexSize > 0) {
+            throw new UnsupportedOperationException("setRemoteInvertedIndexSize is not supported in Replica");
+        }
+    }
+
+    public Long getRemoteSegmentSize() {
+        return 0L;
+    }
+
+    public void setRemoteSegmentSize(long remoteSegmentSize) {
+        if (remoteSegmentSize > 0) {
+            throw new UnsupportedOperationException("setRemoteSegmentSize is not supported in Replica");
+        }
     }
 
     public long getRowCount() {
@@ -353,19 +361,19 @@ public class Replica {
     }
 
     public TUniqueId getCooldownMetaId() {
-        return cooldownMetaId;
+        return null;
     }
 
     public void setCooldownMetaId(TUniqueId cooldownMetaId) {
-        this.cooldownMetaId = cooldownMetaId;
+        throw new UnsupportedOperationException("setCooldownMetaId is not supported in Replica");
     }
 
     public long getCooldownTerm() {
-        return cooldownTerm;
+        return -1;
     }
 
     public void setCooldownTerm(long cooldownTerm) {
-        this.cooldownTerm = cooldownTerm;
+        throw new UnsupportedOperationException("setCooldownTerm is not supported in Replica");
     }
 
     public boolean needFurtherRepair() {
