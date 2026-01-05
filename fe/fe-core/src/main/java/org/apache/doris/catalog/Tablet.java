@@ -89,9 +89,6 @@ public class Tablet extends MetaObject {
         // this tablet recent write failed, then increase its sched priority
         public boolean hasRecentLoadFailed;
 
-        // this tablet want to add new replica, but not found target backend.
-        public boolean noPathForNewReplica;
-
         public TabletHealth() {
             status = null; // don't set for balance task
             priority = TabletSchedCtx.Priority.NORMAL;
@@ -99,7 +96,6 @@ public class Tablet extends MetaObject {
             needFurtherRepairReplicaId = -1L;
             hasAliveAndVersionIncomplete = false;
             hasRecentLoadFailed = false;
-            noPathForNewReplica = false;
         }
     }
 
@@ -115,16 +111,6 @@ public class Tablet extends MetaObject {
     // last time that the tablet checker checks this tablet.
     // no need to persist
     private long lastStatusCheckTime = -1;
-
-    // last time for load data fail
-    private long lastLoadFailedTime = -1;
-
-    // if tablet want to add a new replica, but cann't found any backend to locate the new replica.
-    // then mark this tablet. For later repair, even try and try to repair this tablet, sched will always fail.
-    // For example, 1 tablet contains 3 replicas, if 1 backend is dead, then tablet's healthy status
-    // is REPLICA_MISSING. But since no other backend can held the new replica, then sched always fail.
-    // So don't increase this tablet's sched priority if it has no path for new replica.
-    private long lastTimeNoPathForNewReplica = -1;
 
     public Tablet() {
         this(0L, new ArrayList<>());
@@ -671,9 +657,6 @@ public class Tablet extends MetaObject {
     }
 
     private void initTabletHealth(TabletHealth tabletHealth) {
-        long endTime = System.currentTimeMillis() - Config.tablet_recent_load_failed_second * 1000L;
-        tabletHealth.hasRecentLoadFailed = lastLoadFailedTime > endTime;
-        tabletHealth.noPathForNewReplica = lastTimeNoPathForNewReplica > endTime;
     }
 
     private boolean isReplicaAndBackendAlive(Replica replica, Backend backend, Set<String> hosts) {
@@ -867,17 +850,5 @@ public class Tablet extends MetaObject {
 
     public void setLastStatusCheckTime(long lastStatusCheckTime) {
         this.lastStatusCheckTime = lastStatusCheckTime;
-    }
-
-    public long getLastLoadFailedTime() {
-        return lastLoadFailedTime;
-    }
-
-    public void setLastLoadFailedTime(long lastLoadFailedTime) {
-        this.lastLoadFailedTime = lastLoadFailedTime;
-    }
-
-    public void setLastTimeNoPathForNewReplica(long lastTimeNoPathForNewReplica) {
-        this.lastTimeNoPathForNewReplica = lastTimeNoPathForNewReplica;
     }
 }
