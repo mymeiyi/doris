@@ -28,12 +28,20 @@ import org.apache.logging.log4j.Logger;
 public class LocalReplica extends Replica {
     private static final Logger LOG = LogManager.getLogger(LocalReplica.class);
 
+    @SerializedName(value = "bid", alternate = {"backendId"})
+    private long backendId;
     @SerializedName(value = "rds", alternate = {"remoteDataSize"})
     private volatile long remoteDataSize = 0;
     @SerializedName(value = "ris", alternate = {"remoteInvertedIndexSize"})
     private Long remoteInvertedIndexSize = 0L;
     @SerializedName(value = "rss", alternate = {"remoteSegmentSize"})
     private Long remoteSegmentSize = 0L;
+
+    // the last load failed version
+    @SerializedName(value = "lfv", alternate = {"lastFailedVersion"})
+    private long lastFailedVersion = -1L;
+    // not serialized, not very important
+    private long lastFailedTimestamp = 0;
 
     private TUniqueId cooldownMetaId;
     private long cooldownTerm = -1;
@@ -99,19 +107,69 @@ public class LocalReplica extends Replica {
     // the new replica's version is -1 and last failed version is -1
     public LocalReplica(long replicaId, long backendId, int schemaHash, ReplicaState state) {
         super(replicaId, backendId, schemaHash, state);
+        this.backendId = backendId;
     }
 
     // for create tablet and restore
     public LocalReplica(long replicaId, long backendId, ReplicaState state, long version, int schemaHash) {
         super(replicaId, backendId, state, version, schemaHash);
+        this.backendId = backendId;
     }
 
     public LocalReplica(long replicaId, long backendId, long version, int schemaHash, long dataSize,
             long remoteDataSize, long rowCount, ReplicaState state, long lastFailedVersion, long lastSuccessVersion) {
         super(replicaId, backendId, version, schemaHash, dataSize, remoteDataSize, rowCount, state, lastFailedVersion,
                 lastSuccessVersion);
+        this.backendId = backendId;
+        this.lastFailedVersion = lastFailedVersion;
+        if (this.lastFailedVersion > 0) {
+            this.lastFailedTimestamp = System.currentTimeMillis();
+        }
         this.remoteDataSize = remoteDataSize;
     }
+
+    @Override
+    public long getBackendId() {
+        return this.backendId;
+    }
+
+    @Override
+    protected long getBackendIdValue() {
+        return this.backendId;
+    }
+
+    // just for ut
+    @Override
+    public void setBackendId(long backendId) {
+        this.backendId = backendId;
+    }
+
+    @Override
+    public long getLastFailedVersion() {
+        return lastFailedVersion;
+    }
+
+    @Override
+    public long getLastFailedTimestamp() {
+        return lastFailedTimestamp;
+    }
+
+    @Override
+    protected void setLastFailedVersionAndTimestamp(long lastFailedVersion, long lastFailedTimestamp) {
+        this.lastFailedVersion = lastFailedVersion;
+        this.lastFailedTimestamp = lastFailedTimestamp;
+    }
+
+    @Override
+    protected void setLastFailedVersion(long lastFailedVersion) {
+        this.lastFailedVersion = lastFailedVersion;
+    }
+
+    @Override
+    protected void setLastFailedTimestamp(long lastFailedTimestamp) {
+        this.lastFailedTimestamp = lastFailedTimestamp;
+    }
+
 
     @Override
     public long getRemoteDataSize() {

@@ -86,8 +86,6 @@ public class Replica {
 
     @SerializedName(value = "id")
     private long id;
-    @SerializedName(value = "bid", alternate = {"backendId"})
-    private long backendId;
     // the version could be queried
     @SerializedName(value = "v", alternate = {"version"})
     private volatile long version;
@@ -99,11 +97,6 @@ public class Replica {
     @SerializedName(value = "st", alternate = {"state"})
     private volatile ReplicaState state;
 
-    // the last load failed version
-    @SerializedName(value = "lfv", alternate = {"lastFailedVersion"})
-    private long lastFailedVersion = -1L;
-    // not serialized, not very important
-    private long lastFailedTimestamp = 0;
     // the last load successful version
     @SerializedName(value = "lsv", alternate = {"lastSuccessVersion"})
     private long lastSuccessVersion = -1L;
@@ -146,7 +139,6 @@ public class Replica {
                        long lastFailedVersion,
                        long lastSuccessVersion) {
         this.id = replicaId;
-        this.backendId = backendId;
         this.version = version;
         this.schemaHash = schemaHash;
 
@@ -155,10 +147,6 @@ public class Replica {
         this.state = state;
         if (this.state == null) {
             this.state = ReplicaState.NORMAL;
-        }
-        this.lastFailedVersion = lastFailedVersion;
-        if (this.lastFailedVersion > 0) {
-            this.lastFailedTimestamp = System.currentTimeMillis();
         }
         if (lastSuccessVersion < this.version) {
             this.lastSuccessVersion = this.version;
@@ -196,12 +184,15 @@ public class Replica {
     }
 
     public long getBackendId() throws UserException {
-        return this.backendId;
+        return -1L;
     }
 
-    // just for ut
+    protected long getBackendIdValue() {
+        return -1L;
+    }
+
     public void setBackendId(long backendId) {
-        this.backendId = backendId;
+        throw new UnsupportedOperationException("setBackendId is not supported in Replica");
     }
 
     public long getDataSize() {
@@ -267,11 +258,11 @@ public class Replica {
     }
 
     public long getLastFailedVersion() {
-        return lastFailedVersion;
+        return -1;
     }
 
     public long getLastFailedTimestamp() {
-        return lastFailedTimestamp;
+        return 0;
     }
 
     public long getLastSuccessVersion() {
@@ -352,7 +343,7 @@ public class Replica {
     }
 
     public synchronized void updateVersion(long newVersion) {
-        updateReplicaVersion(newVersion, this.lastFailedVersion, this.lastSuccessVersion);
+        updateReplicaVersion(newVersion, getLastFailedVersion(), this.lastSuccessVersion);
     }
 
     public synchronized void updateVersionWithFailed(
@@ -362,7 +353,7 @@ public class Replica {
 
     public synchronized void adminUpdateVersionInfo(Long version, Long lastFailedVersion, Long lastSuccessVersion,
             long updateTime) {
-        long oldLastFailedVersion = this.lastFailedVersion;
+        long oldLastFailedVersion = getLastFailedVersion();
         if (version != null) {
             this.version = version;
         }
@@ -370,29 +361,36 @@ public class Replica {
             this.lastSuccessVersion = lastSuccessVersion;
         }
         if (lastFailedVersion != null) {
-            if (this.lastFailedVersion < lastFailedVersion) {
-                this.lastFailedTimestamp = updateTime;
+            if (getLastFailedVersion() < lastFailedVersion) {
+                setLastFailedTimestamp(updateTime);
             }
-            this.lastFailedVersion = lastFailedVersion;
+            setLastFailedVersion(lastFailedVersion);
         }
-        if (this.lastFailedVersion < this.version) {
-            this.lastFailedVersion = -1;
-            this.lastFailedTimestamp  = -1;
+        if (getLastFailedVersion() < this.version) {
+            setLastFailedVersionAndTimestamp(-1, -1);
         }
-        if (this.lastFailedVersion > 0
-                && this.lastSuccessVersion > this.lastFailedVersion) {
+        if (getLastFailedVersion() > 0
+                && this.lastSuccessVersion > getLastFailedVersion()) {
             this.lastSuccessVersion = this.version;
         }
         if (this.lastSuccessVersion < this.version) {
             this.lastSuccessVersion = this.version;
         }
-        if (oldLastFailedVersion < 0 && this.lastFailedVersion > 0) {
+        if (oldLastFailedVersion < 0 && getLastFailedVersion() > 0) {
             LOG.info("change replica last failed version from '< 0' to '> 0', replica {}, old last failed version {}",
                     this, oldLastFailedVersion);
-        } else if (oldLastFailedVersion > 0 && this.lastFailedVersion < 0) {
+        } else if (oldLastFailedVersion > 0 && getLastFailedVersion() < 0) {
             LOG.info("change replica last failed version from '> 0' to '< 0', replica {}, old last failed version {}",
                     this, oldLastFailedVersion);
         }
+    }
+
+    protected void setLastFailedVersion(long lastFailedVersion) {
+        throw new UnsupportedOperationException("setLastFailedVersion is not supported in Replica");
+    }
+
+    protected void setLastFailedTimestamp(long lastFailedTimestamp) {
+        throw new UnsupportedOperationException("setLastFailedTimestamp is not supported in Replica");
     }
 
     /* last failed version:  LFV
@@ -436,12 +434,12 @@ public class Replica {
             // to update replica. Finally, it find the newer version(5) is lower than replica version(6) in fe.
             if (LOG.isDebugEnabled()) {
                 LOG.debug("replica {} on backend {}'s new version {} is lower than meta version {},"
-                        + "not to continue to update replica", id, backendId, newVersion, this.version);
+                        + "not to continue to update replica", id, getBackendIdValue(), newVersion, this.version);
             }
             return;
         }
 
-        long oldLastFailedVersion = this.lastFailedVersion;
+        long oldLastFailedVersion = getLastFailedVersion();
 
         this.version = newVersion;
 
@@ -451,7 +449,7 @@ public class Replica {
         }
 
         // case 1:
-        if (this.lastSuccessVersion <= this.lastFailedVersion) {
+        if (this.lastSuccessVersion <= getLastFailedVersion()) {
             this.lastSuccessVersion = this.version;
         }
 
@@ -464,11 +462,11 @@ public class Replica {
             }
         }
 
-        if (lastFailedVersion != this.lastFailedVersion) {
+        if (lastFailedVersion != getLastFailedVersion()) {
             // Case 2:
-            if (lastFailedVersion > this.lastFailedVersion || lastFailedVersion < 0) {
-                this.lastFailedVersion = lastFailedVersion;
-                this.lastFailedTimestamp = lastFailedVersion > 0 ? System.currentTimeMillis() : -1L;
+            if (lastFailedVersion > getLastFailedVersion() || lastFailedVersion < 0) {
+                setLastFailedVersionAndTimestamp(lastFailedVersion,
+                        lastFailedVersion > 0 ? System.currentTimeMillis() : -1L);
             }
 
             this.lastSuccessVersion = this.version;
@@ -483,9 +481,8 @@ public class Replica {
         }
 
         // Case 4:
-        if (this.version >= this.lastFailedVersion) {
-            this.lastFailedVersion = -1;
-            this.lastFailedTimestamp = -1;
+        if (this.version >= getLastFailedVersion()) {
+            setLastFailedVersionAndTimestamp(-1, -1);
             if (this.version < this.lastSuccessVersion) {
                 this.version = this.lastSuccessVersion;
             }
@@ -495,13 +492,17 @@ public class Replica {
             LOG.debug("after update {}", this.toString());
         }
 
-        if (oldLastFailedVersion < 0 && this.lastFailedVersion > 0) {
+        if (oldLastFailedVersion < 0 && getLastFailedVersion() > 0) {
             LOG.info("change replica last failed version from '< 0' to '> 0', replica {}, old last failed version {}",
                     this, oldLastFailedVersion);
-        } else if (oldLastFailedVersion > 0 && this.lastFailedVersion < 0) {
+        } else if (oldLastFailedVersion > 0 && getLastFailedVersion() < 0) {
             LOG.info("change replica last failed version from '> 0' to '< 0', replica {}, old last failed version {}",
                     this, oldLastFailedVersion);
         }
+    }
+
+    protected void setLastFailedVersionAndTimestamp(long lastFailedVersion, long lastFailedTimestamp) {
+        throw new UnsupportedOperationException("setLastFailedVersionAndTimestamp is not supported in Replica");
     }
 
     public synchronized void updateLastFailedVersion(long lastFailedVersion) {
@@ -592,7 +593,7 @@ public class Replica {
         StringBuilder strBuffer = new StringBuilder("[replicaId=");
         strBuffer.append(id);
         strBuffer.append(", BackendId=");
-        strBuffer.append(backendId);
+        strBuffer.append(getBackendIdValue());
         strBuffer.append(", version=");
         strBuffer.append(version);
         strBuffer.append(", dataSize=");
@@ -600,11 +601,11 @@ public class Replica {
         strBuffer.append(", rowCount=");
         strBuffer.append(rowCount);
         strBuffer.append(", lastFailedVersion=");
-        strBuffer.append(lastFailedVersion);
+        strBuffer.append(getLastFailedVersion());
         strBuffer.append(", lastSuccessVersion=");
         strBuffer.append(lastSuccessVersion);
         strBuffer.append(", lastFailedTimestamp=");
-        strBuffer.append(lastFailedTimestamp);
+        strBuffer.append(getLastFailedTimestamp());
         strBuffer.append(", schemaHash=");
         strBuffer.append(schemaHash);
         strBuffer.append(", state=");
@@ -619,9 +620,9 @@ public class Replica {
         StringBuilder strBuffer = new StringBuilder("[replicaId=");
         strBuffer.append(id);
         strBuffer.append(", backendId=");
-        strBuffer.append(backendId);
+        strBuffer.append(getBackendIdValue());
         if (checkBeAlive) {
-            Backend backend = Env.getCurrentSystemInfo().getBackend(backendId);
+            Backend backend = Env.getCurrentSystemInfo().getBackend(getBackendIdValue());
             if (backend == null) {
                 strBuffer.append(", backend=null");
             } else {
@@ -634,17 +635,17 @@ public class Replica {
         }
         strBuffer.append(", version=");
         strBuffer.append(version);
-        if (lastFailedVersion > 0) {
+        if (getLastFailedVersion() > 0) {
             strBuffer.append(", lastFailedVersion=");
-            strBuffer.append(lastFailedVersion);
+            strBuffer.append(getLastFailedVersion());
             strBuffer.append(", lastSuccessVersion=");
             strBuffer.append(lastSuccessVersion);
             strBuffer.append(", lastFailedTimestamp=");
-            strBuffer.append(lastFailedTimestamp);
+            strBuffer.append(getLastFailedTimestamp());
         }
         if (isBad()) {
             strBuffer.append(", isBad=true");
-            Backend backend = Env.getCurrentSystemInfo().getBackend(backendId);
+            Backend backend = Env.getCurrentSystemInfo().getBackend(getBackendIdValue());
             if (backend != null && getPathHash() != -1) {
                 DiskInfo diskInfo = backend.getDisks().values().stream()
                         .filter(disk -> disk.getPathHash() == getPathHash())
@@ -674,12 +675,12 @@ public class Replica {
 
         Replica replica = (Replica) obj;
         return (id == replica.id)
-                && (backendId == replica.backendId)
+                && (getBackendIdValue() == replica.getBackendIdValue())
                 && (version == replica.version)
                 && (dataSize == replica.dataSize)
                 && (rowCount == replica.rowCount)
                 && (state.equals(replica.state))
-                && (lastFailedVersion == replica.lastFailedVersion)
+                && (getLastFailedVersion() == replica.getLastFailedVersion())
                 && (lastSuccessVersion == replica.lastSuccessVersion);
     }
 
@@ -770,7 +771,7 @@ public class Replica {
     }
 
     public boolean isScheduleAvailable() {
-        return Env.getCurrentSystemInfo().checkBackendScheduleAvailable(backendId)
+        return Env.getCurrentSystemInfo().checkBackendScheduleAvailable(getBackendIdValue())
             && !isUserDrop();
     }
 
