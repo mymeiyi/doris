@@ -207,6 +207,11 @@ public class LocalTablet extends Tablet {
     }
 
     @Override
+    public long getLastTimeNoPathForNewReplica() {
+        return lastTimeNoPathForNewReplica;
+    }
+
+    @Override
     public void setLastTimeNoPathForNewReplica(long lastTimeNoPathForNewReplica) {
         this.lastTimeNoPathForNewReplica = lastTimeNoPathForNewReplica;
     }

@@ -798,7 +798,7 @@ public class Tablet extends MetaObject {
     private void initTabletHealth(TabletHealth tabletHealth) {
         long endTime = System.currentTimeMillis() - Config.tablet_recent_load_failed_second * 1000L;
         tabletHealth.hasRecentLoadFailed = getLastLoadFailedTime() > endTime;
-        tabletHealth.noPathForNewReplica = getLastLoadFailedTime() > endTime;
+        tabletHealth.noPathForNewReplica = getLastTimeNoPathForNewReplica() > endTime;
     }
 
     public boolean readyToBeRepaired(SystemInfoService infoService, TabletSchedCtx.Priority priority) {
@@ -815,6 +815,10 @@ public class Tablet extends MetaObject {
 
     public void setLastLoadFailedTime(long lastLoadFailedTime) {
         throw new UnsupportedOperationException("not support setLastLoadFailedTime in Tablet");
+    }
+
+    public long getLastTimeNoPathForNewReplica() {
+        return -1;
     }
 
     public void setLastTimeNoPathForNewReplica(long lastTimeNoPathForNewReplica) {
