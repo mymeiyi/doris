@@ -99,6 +99,8 @@ import java.util.stream.Collectors;
  *
  * Case 2:
  *  A new Backend is added to the cluster. Replicas should be transfer to that host to balance the cluster load.
+ *
+ * Only used in local mode.
  */
 public class TabletScheduler extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(TabletScheduler.class);

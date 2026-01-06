@@ -62,6 +62,7 @@ import java.util.stream.Collectors;
 /*
  * This checker is responsible for checking all unhealthy tablets.
  * It does not responsible for any scheduler of tablet repairing or balance
+ * Only used in local mode.
  */
 public class TabletChecker extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(TabletChecker.class);

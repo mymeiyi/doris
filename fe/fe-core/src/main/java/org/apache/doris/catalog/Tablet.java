@@ -113,10 +113,6 @@ public class Tablet extends MetaObject {
     @SerializedName(value = "ic", alternate = {"isConsistent"})
     private boolean isConsistent;
 
-    // last time that the tablet checker checks this tablet.
-    // no need to persist
-    private long lastStatusCheckTime = -1;
-
     // last time for load data fail
     private long lastLoadFailedTime = -1;
 
@@ -823,63 +819,12 @@ public class Tablet extends MetaObject {
         return tabletHealth;
     }
 
-    /**
-     * check if this tablet is ready to be repaired, based on priority.
-     * VERY_HIGH: repair immediately
-     * HIGH:    delay Config.tablet_repair_delay_factor_second * 1;
-     * NORMAL:  delay Config.tablet_repair_delay_factor_second * 2;
-     * LOW:     delay Config.tablet_repair_delay_factor_second * 3;
-     */
     public boolean readyToBeRepaired(SystemInfoService infoService, TabletSchedCtx.Priority priority) {
-        if (FeConstants.runningUnitTest) {
-            return true;
-        }
-
-        if (priority == Priority.VERY_HIGH) {
-            return true;
-        }
-
-        boolean allBeAliveOrDecommissioned = true;
-        for (Replica replica : replicas) {
-            Backend backend = infoService.getBackend(replica.getBackendIdWithoutException());
-            if (backend == null || (!backend.isAlive() && !backend.isDecommissioned())) {
-                allBeAliveOrDecommissioned = false;
-                break;
-            }
-        }
-
-        if (allBeAliveOrDecommissioned) {
-            return true;
-        }
-
-        long currentTime = System.currentTimeMillis();
-
-        // first check, wait for next round
-        if (lastStatusCheckTime == -1) {
-            lastStatusCheckTime = currentTime;
-            return false;
-        }
-
-        boolean ready = false;
-        switch (priority) {
-            case HIGH:
-                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 1;
-                break;
-            case NORMAL:
-                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 2;
-                break;
-            case LOW:
-                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 3;
-                break;
-            default:
-                break;
-        }
-
-        return ready;
+        throw new UnsupportedOperationException("not support readyToBeRepaired in Tablet");
     }
 
     public void setLastStatusCheckTime(long lastStatusCheckTime) {
-        this.lastStatusCheckTime = lastStatusCheckTime;
+        throw new UnsupportedOperationException("not support setLastStatusCheckTime in Tablet");
     }
 
     public long getLastLoadFailedTime() {

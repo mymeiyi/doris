@@ -17,7 +17,13 @@
 
 package org.apache.doris.catalog;
 
+import org.apache.doris.clone.TabletSchedCtx;
+import org.apache.doris.clone.TabletSchedCtx.Priority;
+import org.apache.doris.common.Config;
+import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.Pair;
+import org.apache.doris.system.Backend;
+import org.apache.doris.system.SystemInfoService;
 
 import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
@@ -34,6 +40,10 @@ public class LocalTablet extends Tablet {
     @SerializedName(value = "ctm", alternate = {"cooldownTerm"})
     private long cooldownTerm = -1;
     private final Object cooldownConfLock = new Object();
+
+    // last time that the tablet checker checks this tablet.
+    // no need to persist
+    private long lastStatusCheckTime = -1;
 
     public LocalTablet() {
     }
@@ -76,5 +86,66 @@ public class LocalTablet extends Tablet {
         }
         // return replica with max remoteDataSize
         return replicas.stream().max(Comparator.comparing(Replica::getRemoteDataSize)).get().getRemoteDataSize();
+    }
+
+    /**
+     * check if this tablet is ready to be repaired, based on priority.
+     * VERY_HIGH: repair immediately
+     * HIGH:    delay Config.tablet_repair_delay_factor_second * 1;
+     * NORMAL:  delay Config.tablet_repair_delay_factor_second * 2;
+     * LOW:     delay Config.tablet_repair_delay_factor_second * 3;
+     */
+    @Override
+    public boolean readyToBeRepaired(SystemInfoService infoService, TabletSchedCtx.Priority priority) {
+        if (FeConstants.runningUnitTest) {
+            return true;
+        }
+
+        if (priority == Priority.VERY_HIGH) {
+            return true;
+        }
+
+        boolean allBeAliveOrDecommissioned = true;
+        for (Replica replica : replicas) {
+            Backend backend = infoService.getBackend(replica.getBackendIdWithoutException());
+            if (backend == null || (!backend.isAlive() && !backend.isDecommissioned())) {
+                allBeAliveOrDecommissioned = false;
+                break;
+            }
+        }
+
+        if (allBeAliveOrDecommissioned) {
+            return true;
+        }
+
+        long currentTime = System.currentTimeMillis();
+
+        // first check, wait for next round
+        if (lastStatusCheckTime == -1) {
+            lastStatusCheckTime = currentTime;
+            return false;
+        }
+
+        boolean ready = false;
+        switch (priority) {
+            case HIGH:
+                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 1;
+                break;
+            case NORMAL:
+                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 2;
+                break;
+            case LOW:
+                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 3;
+                break;
+            default:
+                break;
+        }
+
+        return ready;
+    }
+
+    @Override
+    public void setLastStatusCheckTime(long lastStatusCheckTime) {
+        this.lastStatusCheckTime = lastStatusCheckTime;
     }
 }

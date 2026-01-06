@@ -60,6 +60,7 @@ import java.util.stream.IntStream;
 
 /**
  * ColocateTableBalancer is responsible for tablets' repair and balance of colocated tables.
+ * Only used in local mode.
  */
 public class ColocateTableCheckerAndBalancer extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(ColocateTableCheckerAndBalancer.class);
