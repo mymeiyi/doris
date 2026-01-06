@@ -474,6 +474,61 @@ public class Tablet extends MetaObject {
     }
 
     /**
+     * check if this tablet is ready to be repaired, based on priority.
+     * VERY_HIGH: repair immediately
+     * HIGH:    delay Config.tablet_repair_delay_factor_second * 1;
+     * NORMAL:  delay Config.tablet_repair_delay_factor_second * 2;
+     * LOW:     delay Config.tablet_repair_delay_factor_second * 3;
+     */
+    public boolean readyToBeRepaired(SystemInfoService infoService, TabletSchedCtx.Priority priority) {
+        if (FeConstants.runningUnitTest) {
+            return true;
+        }
+
+        if (priority == Priority.VERY_HIGH) {
+            return true;
+        }
+
+        boolean allBeAliveOrDecommissioned = true;
+        for (Replica replica : replicas) {
+            Backend backend = infoService.getBackend(replica.getBackendIdWithoutException());
+            if (backend == null || (!backend.isAlive() && !backend.isDecommissioned())) {
+                allBeAliveOrDecommissioned = false;
+                break;
+            }
+        }
+
+        if (allBeAliveOrDecommissioned) {
+            return true;
+        }
+
+        long currentTime = System.currentTimeMillis();
+
+        // first check, wait for next round
+        if (getLastStatusCheckTime() == -1) {
+            setLastStatusCheckTime(currentTime);
+            return false;
+        }
+
+        boolean ready = false;
+        switch (priority) {
+            case HIGH:
+                ready = currentTime - getLastStatusCheckTime() > Config.tablet_repair_delay_factor_second * 1000 * 1;
+                break;
+            case NORMAL:
+                ready = currentTime - getLastStatusCheckTime() > Config.tablet_repair_delay_factor_second * 1000 * 2;
+                break;
+            case LOW:
+                ready = currentTime - getLastStatusCheckTime() > Config.tablet_repair_delay_factor_second * 1000 * 3;
+                break;
+            default:
+                break;
+        }
+
+        return ready;
+    }
+
+    /**
      * A replica is healthy only if
      * 1. the backend is available
      * 2. replica version is caught up, and last failed version is -1
@@ -801,8 +856,8 @@ public class Tablet extends MetaObject {
         tabletHealth.noPathForNewReplica = getLastTimeNoPathForNewReplica() > endTime;
     }
 
-    public boolean readyToBeRepaired(SystemInfoService infoService, TabletSchedCtx.Priority priority) {
-        throw new UnsupportedOperationException("not support readyToBeRepaired in Tablet");
+    protected long getLastStatusCheckTime() {
+        return -1;
     }
 
     public void setLastStatusCheckTime(long lastStatusCheckTime) {
@@ -817,7 +872,7 @@ public class Tablet extends MetaObject {
         throw new UnsupportedOperationException("not support setLastLoadFailedTime in Tablet");
     }
 
-    public long getLastTimeNoPathForNewReplica() {
+    protected long getLastTimeNoPathForNewReplica() {
         return -1;
     }
 

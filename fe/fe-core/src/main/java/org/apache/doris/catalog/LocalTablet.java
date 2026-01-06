@@ -17,28 +17,13 @@
 
 package org.apache.doris.catalog;
 
-import org.apache.doris.clone.TabletSchedCtx;
-import org.apache.doris.clone.TabletSchedCtx.Priority;
-import org.apache.doris.common.Config;
-import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.Pair;
-import org.apache.doris.resource.Tag;
-import org.apache.doris.system.Backend;
-import org.apache.doris.system.SystemInfoService;
 
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
 import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 public class LocalTablet extends Tablet {
     private static final Logger LOG = LogManager.getLogger(LocalTablet.class);
@@ -135,60 +120,9 @@ public class LocalTablet extends Tablet {
         return replicas.stream().max(Comparator.comparing(Replica::getRemoteDataSize)).get().getRemoteDataSize();
     }
 
-    /**
-     * check if this tablet is ready to be repaired, based on priority.
-     * VERY_HIGH: repair immediately
-     * HIGH:    delay Config.tablet_repair_delay_factor_second * 1;
-     * NORMAL:  delay Config.tablet_repair_delay_factor_second * 2;
-     * LOW:     delay Config.tablet_repair_delay_factor_second * 3;
-     */
     @Override
-    public boolean readyToBeRepaired(SystemInfoService infoService, TabletSchedCtx.Priority priority) {
-        if (FeConstants.runningUnitTest) {
-            return true;
-        }
-
-        if (priority == Priority.VERY_HIGH) {
-            return true;
-        }
-
-        boolean allBeAliveOrDecommissioned = true;
-        for (Replica replica : replicas) {
-            Backend backend = infoService.getBackend(replica.getBackendIdWithoutException());
-            if (backend == null || (!backend.isAlive() && !backend.isDecommissioned())) {
-                allBeAliveOrDecommissioned = false;
-                break;
-            }
-        }
-
-        if (allBeAliveOrDecommissioned) {
-            return true;
-        }
-
-        long currentTime = System.currentTimeMillis();
-
-        // first check, wait for next round
-        if (lastStatusCheckTime == -1) {
-            lastStatusCheckTime = currentTime;
-            return false;
-        }
-
-        boolean ready = false;
-        switch (priority) {
-            case HIGH:
-                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 1;
-                break;
-            case NORMAL:
-                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 2;
-                break;
-            case LOW:
-                ready = currentTime - lastStatusCheckTime > Config.tablet_repair_delay_factor_second * 1000 * 3;
-                break;
-            default:
-                break;
-        }
-
-        return ready;
+    protected long getLastStatusCheckTime() {
+        return lastStatusCheckTime;
     }
 
     @Override
@@ -207,7 +141,7 @@ public class LocalTablet extends Tablet {
     }
 
     @Override
-    public long getLastTimeNoPathForNewReplica() {
+    protected long getLastTimeNoPathForNewReplica() {
         return lastTimeNoPathForNewReplica;
     }
 
