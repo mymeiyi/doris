@@ -75,6 +75,18 @@ public class LocalReplica extends Replica {
 
     private long lastReportVersion = 0;
 
+    /* Decommission a backend B, steps are as follow:
+     * 1. wait peer backends catchup with B;
+     * 2. B change state to DECOMMISSION, set preWatermarkTxnId. B can load data now.
+     * 3. wait txn before preWatermarkTxnId finished, set postWatermarkTxnId. B can't load data now.
+     * 4. wait txn before postWatermarkTxnId finished, delete B.
+     *
+     * notice: preWatermarkTxnId and postWatermarkTxnId are used to delete this replica.
+     *
+     */
+    private long preWatermarkTxnId = -1;
+    private long postWatermarkTxnId = -1;
+
     public LocalReplica() {
         super();
     }
@@ -222,6 +234,26 @@ public class LocalReplica extends Replica {
     @Override
     public void setUserDropTime(long userDropTime) {
         this.userDropTime = userDropTime;
+    }
+
+    @Override
+    public void setPreWatermarkTxnId(long preWatermarkTxnId) {
+        this.preWatermarkTxnId = preWatermarkTxnId;
+    }
+
+    @Override
+    public long getPreWatermarkTxnId() {
+        return preWatermarkTxnId;
+    }
+
+    @Override
+    public void setPostWatermarkTxnId(long postWatermarkTxnId) {
+        this.postWatermarkTxnId = postWatermarkTxnId;
+    }
+
+    @Override
+    public long getPostWatermarkTxnId() {
+        return postWatermarkTxnId;
     }
 
     @Override

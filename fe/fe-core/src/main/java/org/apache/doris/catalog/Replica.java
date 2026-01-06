@@ -123,20 +123,6 @@ public class Replica {
     // bad means this Replica is unrecoverable, and we will delete it
     private boolean bad = false;
 
-    /* Decommission a backend B, steps are as follow:
-     * 1. wait peer backends catchup with B;
-     * 2. B change state to DECOMMISSION, set preWatermarkTxnId. B can load data now.
-     * 3. wait txn before preWatermarkTxnId finished, set postWatermarkTxnId. B can't load data now.
-     * 4. wait txn before postWatermarkTxnId finished, delete B.
-     *
-     * notice: preWatermarkTxnId and postWatermarkTxnId are used to delete this replica.
-     *
-     */
-    private long preWatermarkTxnId = -1;
-    private long postWatermarkTxnId = -1;
-    private long segmentCount = 0L;
-    private long rowsetCount = 0L;
-
     public Replica() {
     }
 
@@ -265,19 +251,19 @@ public class Replica {
     }
 
     public long getSegmentCount() {
-        return segmentCount;
+        throw new UnsupportedOperationException("getSegmentCount is not supported in Replica");
     }
 
     public void setSegmentCount(long segmentCount) {
-        this.segmentCount = segmentCount;
+        throw new UnsupportedOperationException("setSegmentCount is not supported in Replica");
     }
 
     public long getRowsetCount() {
-        return rowsetCount;
+        throw new UnsupportedOperationException("getRowsetCount is not supported in Replica");
     }
 
     public void setRowsetCount(long rowsetCount) {
-        this.rowsetCount = rowsetCount;
+        throw new UnsupportedOperationException("setRowCount is not supported in Replica");
     }
 
     public long getLastFailedVersion() {
@@ -746,19 +732,19 @@ public class Replica {
     }
 
     public void setPreWatermarkTxnId(long preWatermarkTxnId) {
-        this.preWatermarkTxnId = preWatermarkTxnId;
+        throw new UnsupportedOperationException("setPreWatermarkTxnId is not supported in Replica");
     }
 
     public long getPreWatermarkTxnId() {
-        return preWatermarkTxnId;
+        return -1;
     }
 
     public void setPostWatermarkTxnId(long postWatermarkTxnId) {
-        this.postWatermarkTxnId = postWatermarkTxnId;
+        throw  new UnsupportedOperationException("setPostWatermarkTxnId is not supported in Replica");
     }
 
     public long getPostWatermarkTxnId() {
-        return postWatermarkTxnId;
+        return -1;
     }
 
     public void setUserDropTime(long userDropTime) {
