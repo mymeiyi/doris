@@ -50,6 +50,8 @@ import java.util.stream.Collectors;
  * 1. selecting alternative tablets from high load backends, and return them to tablet scheduler.
  * 2. given a tablet, find a backend to migration.
  * 3. deleting the redundant replica in high load, so don't override getCachedSrcBackendId().
+ *
+ * Only used in local mode.
  */
 public class BeLoadRebalancer extends Rebalancer {
     private static final Logger LOG = LogManager.getLogger(BeLoadRebalancer.class);

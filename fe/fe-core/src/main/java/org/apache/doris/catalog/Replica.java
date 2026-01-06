@@ -19,7 +19,6 @@ package org.apache.doris.catalog;
 
 import org.apache.doris.common.Config;
 import org.apache.doris.common.UserException;
-import org.apache.doris.common.util.DebugPointUtil;
 import org.apache.doris.system.Backend;
 import org.apache.doris.thrift.TTabletInfo;
 import org.apache.doris.thrift.TUniqueId;
@@ -37,7 +36,6 @@ import java.util.Comparator;
  */
 public class Replica {
     private static final Logger LOG = LogManager.getLogger(Replica.class);
-    public static final VersionComparator<Replica> VERSION_DESC_COMPARATOR = new VersionComparator<Replica>();
     public static final LastSuccessVersionComparator<Replica> LAST_SUCCESS_VERSION_COMPARATOR =
             new LastSuccessVersionComparator<Replica>();
     public static final IdComparator<Replica> ID_COMPARATOR = new IdComparator<Replica>();
@@ -122,39 +120,8 @@ public class Replica {
     private volatile long totalVersionCount = -1;
     private volatile long visibleVersionCount = -1;
 
-    private long pathHash = -1;
-
     // bad means this Replica is unrecoverable, and we will delete it
     private boolean bad = false;
-
-    // A replica version should increase monotonically,
-    // but backend may missing some versions due to disk failure or bugs.
-    // FE should found these and mark the replica as missing versions.
-    // If backend's report version < fe version, record the backend's report version as `regressiveVersion`,
-    // and if time exceed 5min, fe should mark this replica as missing versions.
-    private long regressiveVersion = -1;
-    private long regressiveVersionTimestamp = 0;
-
-    /*
-     * This can happen when this replica is created by a balance clone task, and
-     * when task finished, the version of this replica is behind the partition's visible version.
-     * So this replica need a further repair.
-     * If we do not do this, this replica will be treated as version stale, and will be removed,
-     * so that the balance task is failed, which is unexpected.
-     *
-     * furtherRepairSetTime and leftFurtherRepairCount are set alone with needFurtherRepair.
-     * This is an insurance, in case that further repair task always fail. If 20 min passed
-     * since we set needFurtherRepair to true, the 'needFurtherRepair' will be set to false.
-     */
-    private long furtherRepairSetTime = -1;
-    private int leftFurtherRepairCount = 0;
-
-    // During full clone, the replica's state is CLONE, it will not load the data.
-    // After full clone finished, even if the replica's version = partition's visible version,
-    //
-    // notice: furtherRepairWatermarkTxnTd is used to clone a replica, protected it from be removed.
-    //
-    private long furtherRepairWatermarkTxnTd = -1;
 
     /* Decommission a backend B, steps are as follow:
      * 1. wait peer backends catchup with B;
@@ -169,12 +136,6 @@ public class Replica {
     private long postWatermarkTxnId = -1;
     private long segmentCount = 0L;
     private long rowsetCount = 0L;
-
-    private long userDropTime = -1;
-
-    private long scaleInDropTime = -1;
-
-    private long lastReportVersion = 0;
 
     public Replica() {
     }
@@ -332,11 +293,11 @@ public class Replica {
     }
 
     public long getPathHash() {
-        return pathHash;
+        return -1;
     }
 
     public void setPathHash(long pathHash) {
-        this.pathHash = pathHash;
+        throw new UnsupportedOperationException("setPathHash is not supported in Replica");
     }
 
     public boolean isBad() {
@@ -368,35 +329,29 @@ public class Replica {
     }
 
     public boolean needFurtherRepair() {
-        return leftFurtherRepairCount > 0
-                && System.currentTimeMillis() < furtherRepairSetTime
-                        + Config.tablet_further_repair_timeout_second * 1000;
+        return false;
     }
 
     public void setNeedFurtherRepair(boolean needFurtherRepair) {
         if (needFurtherRepair) {
-            furtherRepairSetTime = System.currentTimeMillis();
-            leftFurtherRepairCount = Config.tablet_further_repair_max_times;
-        } else {
-            leftFurtherRepairCount = 0;
-            furtherRepairSetTime = -1;
+            throw new UnsupportedOperationException("setNeedFurtherRepair is not supported in Replica");
         }
     }
 
     public void incrFurtherRepairCount() {
-        leftFurtherRepairCount--;
+        throw new UnsupportedOperationException("incrFurtherRepairCount is not supported in Replica");
     }
 
     public int getLeftFurtherRepairCount() {
-        return leftFurtherRepairCount;
+        return 0;
     }
 
     public long getFurtherRepairWatermarkTxnTd() {
-        return furtherRepairWatermarkTxnTd;
+        return -1;
     }
 
     public void setFurtherRepairWatermarkTxnTd(long furtherRepairWatermarkTxnTd) {
-        this.furtherRepairWatermarkTxnTd = furtherRepairWatermarkTxnTd;
+        throw new UnsupportedOperationException("setFurtherRepairWatermarkTxnTd is not supported in Replica");
     }
 
     public void updateWithReport(TTabletInfo backendReplica) {
@@ -643,22 +598,7 @@ public class Replica {
     }
 
     public boolean checkVersionRegressive(long newVersion) {
-        if (newVersion >= version) {
-            regressiveVersion = -1;
-            regressiveVersionTimestamp = -1;
-            return false;
-        }
-
-        if (DebugPointUtil.isEnable("Replica.regressive_version_immediately")) {
-            return true;
-        }
-
-        if (newVersion != regressiveVersion) {
-            regressiveVersion = newVersion;
-            regressiveVersionTimestamp = System.currentTimeMillis();
-        }
-
-        return System.currentTimeMillis() - regressiveVersionTimestamp >= 5 * 60 * 1000L;
+        throw new UnsupportedOperationException("checkVersionRegressive is not supported in Replica");
     }
 
     @Override
@@ -719,12 +659,12 @@ public class Replica {
         if (isBad()) {
             strBuffer.append(", isBad=true");
             Backend backend = Env.getCurrentSystemInfo().getBackend(backendId);
-            if (backend != null && pathHash != -1) {
+            if (backend != null && getPathHash() != -1) {
                 DiskInfo diskInfo = backend.getDisks().values().stream()
-                        .filter(disk -> disk.getPathHash() == pathHash)
+                        .filter(disk -> disk.getPathHash() == getPathHash())
                         .findFirst().orElse(null);
                 if (diskInfo == null) {
-                    strBuffer.append(", disk with path hash " + pathHash + " not exists");
+                    strBuffer.append(", disk with path hash " + getPathHash() + " not exists");
                 } else if (diskInfo.getState() == DiskInfo.DiskState.OFFLINE) {
                     strBuffer.append(", disk " + diskInfo.getRootPath() + " is bad");
                 }
@@ -822,35 +762,20 @@ public class Replica {
     }
 
     public void setUserDropTime(long userDropTime) {
-        this.userDropTime = userDropTime;
+        throw new UnsupportedOperationException("setUserDropTime is not supported in Replica");
     }
 
     public boolean isUserDrop() {
-        if (userDropTime > 0) {
-            if (System.currentTimeMillis() - userDropTime < Config.manual_drop_replica_valid_second * 1000L) {
-                return true;
-            }
-            userDropTime = -1;
-        }
-
         return false;
     }
 
     public void setScaleInDropTimeStamp(long scaleInDropTime) {
-        this.scaleInDropTime = scaleInDropTime;
+        throw new UnsupportedOperationException("setScaleInDropTimeStamp is not supported in Replica");
     }
 
     public boolean isScaleInDrop() {
-        if (this.scaleInDropTime > 0) {
-            if (System.currentTimeMillis() - this.scaleInDropTime
-                    < Config.manual_drop_replica_valid_second * 1000L) {
-                return true;
-            }
-            this.scaleInDropTime = -1;
-        }
         return false;
     }
-
 
     public boolean isAlive() {
         return getState() != ReplicaState.CLONE
@@ -864,10 +789,10 @@ public class Replica {
     }
 
     public void setLastReportVersion(long version) {
-        this.lastReportVersion = version;
+        throw new UnsupportedOperationException("setLastReportVersion is not supported in Replica");
     }
 
     public long getLastReportVersion() {
-        return lastReportVersion;
+        return 0;
     }
 }

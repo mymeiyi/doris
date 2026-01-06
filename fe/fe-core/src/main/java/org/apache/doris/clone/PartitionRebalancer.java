@@ -57,6 +57,8 @@ import java.util.stream.Collectors;
  *
  * selectAlternativeTabletsForCluster() must set the tablet id, so we need to select tablet for each move in this phase
  * (as TabletMove).
+ *
+ * Only used in local mode.
  */
 public class PartitionRebalancer extends Rebalancer {
     private static final Logger LOG = LogManager.getLogger(PartitionRebalancer.class);

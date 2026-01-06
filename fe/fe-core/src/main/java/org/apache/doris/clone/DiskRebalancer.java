@@ -51,6 +51,8 @@ import java.util.Set;
  * 1.1 if user has given prio backends, then select tablets from prio backends no matter cluster is balanced or not.
  * 2. selecting alternative tablets from mid load backends, and return them to tablet scheduler.
  * 3. given a tablet which has src path(disk), find a path(disk) to migration.
+ *
+ * Only used in local mode.
  */
 public class DiskRebalancer extends Rebalancer {
     private static final Logger LOG = LogManager.getLogger(DiskRebalancer.class);
