@@ -371,7 +371,7 @@ public class Replica {
         LOG.info("updateReplicaVersion is not supported in Replica: {}, newVersion: {}, "
                         + "lastFailedVersion: {}, lastSuccessVersion: {}", id, newVersion, lastFailedVersion,
                 lastSuccessVersion);
-        throw new UnsupportedOperationException("updateReplicaVersion is not supported in Replica");
+        // throw new UnsupportedOperationException("updateReplicaVersion is not supported in Replica");
         /*if (LOG.isDebugEnabled()) {
             LOG.debug("before update: {}", this.toString());
         }
