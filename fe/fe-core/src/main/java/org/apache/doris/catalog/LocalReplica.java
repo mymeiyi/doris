@@ -101,6 +101,9 @@ public class LocalReplica extends Replica {
     private long preWatermarkTxnId = -1;
     private long postWatermarkTxnId = -1;
 
+    // bad means this Replica is unrecoverable, and we will delete it
+    private boolean bad = false;
+
     public LocalReplica() {
         super();
     }
@@ -467,6 +470,20 @@ public class LocalReplica extends Replica {
     @Override
     public void setPathHash(long pathHash) {
         this.pathHash = pathHash;
+    }
+
+    @Override
+    public boolean isBad() {
+        return bad;
+    }
+
+    @Override
+    public boolean setBad(boolean bad) {
+        if (this.bad == bad) {
+            return false;
+        }
+        this.bad = bad;
+        return true;
     }
 
     @Override

@@ -17,7 +17,6 @@
 
 package org.apache.doris.catalog;
 
-import org.apache.doris.common.Config;
 import org.apache.doris.common.UserException;
 import org.apache.doris.system.Backend;
 import org.apache.doris.thrift.TTabletInfo;
@@ -105,9 +104,6 @@ public class Replica {
     @Getter
     @SerializedName(value = "lss", alternate = {"localSegmentSize"})
     private Long localSegmentSize = 0L;
-
-    // bad means this Replica is unrecoverable, and we will delete it
-    private boolean bad = false;
 
     public Replica() {
     }
@@ -265,15 +261,14 @@ public class Replica {
     }
 
     public boolean isBad() {
-        return bad;
+        return false;
     }
 
     public boolean setBad(boolean bad) {
-        if (this.bad == bad) {
-            return false;
+        if (bad) {
+            throw new UnsupportedOperationException("setBad is not supported in Replica");
         }
-        this.bad = bad;
-        return true;
+        return false;
     }
 
     public TUniqueId getCooldownMetaId() {
