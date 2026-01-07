@@ -107,7 +107,6 @@ public class LocalTablet extends Tablet {
     @Override
     public long getRemoteDataSize() {
         // if CooldownReplicaId is not init
-        // [fix](fe) move some variables from Tablet to LocalTablet which are not used in CloudTablet
         if (cooldownReplicaId <= 0) {
             return 0;
         }
