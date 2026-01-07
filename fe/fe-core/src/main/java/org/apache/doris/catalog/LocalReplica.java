@@ -37,11 +37,17 @@ public class LocalReplica extends Replica {
     @SerializedName(value = "rss", alternate = {"remoteSegmentSize"})
     private Long remoteSegmentSize = 0L;
 
+    // the last load successful version
+    @SerializedName(value = "lsv", alternate = {"lastSuccessVersion"})
+    private long lastSuccessVersion = -1L;
     // the last load failed version
     @SerializedName(value = "lfv", alternate = {"lastFailedVersion"})
     private long lastFailedVersion = -1L;
     // not serialized, not very important
     private long lastFailedTimestamp = 0;
+
+    private volatile long totalVersionCount = -1;
+    private volatile long visibleVersionCount = -1;
 
     private TUniqueId cooldownMetaId;
     private long cooldownTerm = -1;
@@ -106,14 +112,12 @@ public class LocalReplica extends Replica {
     // for rollup
     // the new replica's version is -1 and last failed version is -1
     public LocalReplica(long replicaId, long backendId, int schemaHash, ReplicaState state) {
-        super(replicaId, backendId, schemaHash, state);
-        this.backendId = backendId;
+        this(replicaId, backendId, -1, schemaHash, 0L, 0L, 0L, state, -1, -1);
     }
 
     // for create tablet and restore
     public LocalReplica(long replicaId, long backendId, ReplicaState state, long version, int schemaHash) {
-        super(replicaId, backendId, state, version, schemaHash);
-        this.backendId = backendId;
+        this(replicaId, backendId, version, schemaHash, 0L, 0L, 0L, state, -1L, version);
     }
 
     public LocalReplica(long replicaId, long backendId, long version, int schemaHash, long dataSize,
@@ -121,6 +125,12 @@ public class LocalReplica extends Replica {
         super(replicaId, backendId, version, schemaHash, dataSize, remoteDataSize, rowCount, state, lastFailedVersion,
                 lastSuccessVersion);
         this.backendId = backendId;
+        this.version = version;
+        if (lastSuccessVersion < this.version) {
+            this.lastSuccessVersion = this.version;
+        } else {
+            this.lastSuccessVersion = lastSuccessVersion;
+        }
         this.lastFailedVersion = lastFailedVersion;
         if (this.lastFailedVersion > 0) {
             this.lastFailedTimestamp = System.currentTimeMillis();
@@ -142,6 +152,16 @@ public class LocalReplica extends Replica {
     @Override
     public void setBackendId(long backendId) {
         this.backendId = backendId;
+    }
+
+    @Override
+    public long getVersion() {
+        return this.version;
+    }
+
+    @Override
+    public long getLastSuccessVersion() {
+        return 1;
     }
 
     @Override
@@ -170,6 +190,166 @@ public class LocalReplica extends Replica {
         this.lastFailedTimestamp = lastFailedTimestamp;
     }
 
+    @Override
+    public boolean tooBigVersionCount() {
+        return visibleVersionCount >= Config.min_version_count_indicate_replica_compaction_too_slow;
+    }
+
+    @Override
+    public long getTotalVersionCount() {
+        return totalVersionCount;
+    }
+
+    @Override
+    public void setTotalVersionCount(long totalVersionCount) {
+        this.totalVersionCount = totalVersionCount;
+    }
+
+    @Override
+    public long getVisibleVersionCount() {
+        return visibleVersionCount;
+    }
+
+    @Override
+    public void setVisibleVersionCount(long visibleVersionCount) {
+        this.visibleVersionCount = visibleVersionCount;
+    }
+
+    /* last failed version:  LFV
+     * last success version: LSV
+     * version:              V
+     *
+     * Case 1:
+     *      If LFV > LSV, set LSV back to V, which indicates that version between LSV and LFV is invalid.
+     *      Clone task will clone the version between LSV and LFV
+     *
+     * Case 2:
+     *      LFV changed, set LSV back to V. This is just same as Case 1. Cause LFV must large than LSV.
+     *
+     * Case 3:
+     *      LFV remains unchanged, just update LSV, and then check if it falls into Case 1.
+     *
+     * Case 4:
+     *      V is larger or equal to LFV, reset LFV. And if V is less than LSV, just set V to LSV. This may
+     *      happen when a clone task finished and report version V, but the LSV is already larger than V,
+     *      And we know that version between V and LSV is valid, so move V forward to LSV.
+     *
+     * Case 5:
+     *      This is a bug case, I don't know why, may be some previous version introduce it. It looks like
+     *      the V(hash) equals to LSV(hash), and V equals to LFV, but LFV hash is 0 or some unknown number.
+     *      We just reset the LFV(hash) to recovery this replica.
+     */
+    @Override
+    protected void updateReplicaVersion(long newVersion, long lastFailedVersion, long lastSuccessVersion) {
+        super.updateReplicaVersion(newVersion, lastFailedVersion, lastSuccessVersion);
+
+        long oldLastFailedVersion = this.lastFailedVersion;
+
+        // just check it
+        if (lastSuccessVersion <= this.version) {
+            lastSuccessVersion = this.version;
+        }
+
+        // case 1:
+        if (this.lastSuccessVersion <= this.lastFailedVersion) {
+            this.lastSuccessVersion = this.version;
+        }
+
+        // TODO: this case is unknown, add log to observe
+        if (this.version > lastFailedVersion && lastFailedVersion > 0) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("current version {} is larger than last failed version {}, "
+                                + "maybe a fatal error or be report version, print a stack here ",
+                        this.version, lastFailedVersion, new Exception());
+            }
+        }
+
+        if (lastFailedVersion != this.lastFailedVersion) {
+            // Case 2:
+            if (lastFailedVersion > this.lastFailedVersion || lastFailedVersion < 0) {
+                this.lastFailedVersion = lastFailedVersion;
+                this.lastFailedTimestamp = lastFailedVersion > 0 ? System.currentTimeMillis() : -1L;
+            }
+
+            this.lastSuccessVersion = this.version;
+        } else {
+            // Case 3:
+            if (lastSuccessVersion >= this.lastSuccessVersion) {
+                this.lastSuccessVersion = lastSuccessVersion;
+            }
+            if (lastFailedVersion >= this.lastSuccessVersion) {
+                this.lastSuccessVersion = this.version;
+            }
+        }
+
+        // Case 4:
+        if (this.version >= this.lastFailedVersion) {
+            this.lastFailedVersion = -1;
+            this.lastFailedTimestamp = -1;
+            if (this.version < this.lastSuccessVersion) {
+                this.version = this.lastSuccessVersion;
+            }
+        }
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("after update {}", this.toString());
+        }
+
+        if (oldLastFailedVersion < 0 && this.lastFailedVersion > 0) {
+            LOG.info("change replica last failed version from '< 0' to '> 0', replica {}, old last failed version {}",
+                    this, oldLastFailedVersion);
+        } else if (oldLastFailedVersion > 0 && this.lastFailedVersion < 0) {
+            LOG.info("change replica last failed version from '> 0' to '< 0', replica {}, old last failed version {}",
+                    this, oldLastFailedVersion);
+        }
+
+    }
+
+    @Override
+    public synchronized void adminUpdateVersionInfo(Long version, Long lastFailedVersion, Long lastSuccessVersion,
+            long updateTime) {
+        long oldLastFailedVersion = this.lastFailedVersion;
+        if (version != null) {
+            this.version = version;
+        }
+        if (lastSuccessVersion != null) {
+            this.lastSuccessVersion = lastSuccessVersion;
+        }
+        if (lastFailedVersion != null) {
+            if (this.lastFailedVersion < lastFailedVersion) {
+                this.lastFailedTimestamp = updateTime;
+            }
+            this.lastFailedVersion = lastFailedVersion;
+        }
+        if (this.lastFailedVersion < this.version) {
+            this.lastFailedVersion = -1;
+            this.lastFailedTimestamp  = -1;
+        }
+        if (this.lastFailedVersion > 0
+                && this.lastSuccessVersion > this.lastFailedVersion) {
+            this.lastSuccessVersion = this.version;
+        }
+        if (this.lastSuccessVersion < this.version) {
+            this.lastSuccessVersion = this.version;
+        }
+        if (oldLastFailedVersion < 0 && this.lastFailedVersion > 0) {
+            LOG.info("change replica last failed version from '< 0' to '> 0', replica {}, old last failed version {}",
+                    this, oldLastFailedVersion);
+        } else if (oldLastFailedVersion > 0 && this.lastFailedVersion < 0) {
+            LOG.info("change replica last failed version from '> 0' to '< 0', replica {}, old last failed version {}",
+                    this, oldLastFailedVersion);
+        }
+    }
+
+    /*
+     * If a replica is overwritten by a restore job, we need to reset version and lastSuccessVersion to
+     * the restored replica version
+     */
+    @Override
+    public void updateVersionForRestore(long version) {
+        this.version = version;
+        this.lastSuccessVersion = version;
+    }
 
     @Override
     public long getRemoteDataSize() {
