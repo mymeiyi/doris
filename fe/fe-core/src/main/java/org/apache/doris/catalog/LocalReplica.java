@@ -295,7 +295,7 @@ public class LocalReplica extends Replica {
             // to update replica. Finally, it find the newer version(5) is lower than replica version(6) in fe.
             if (LOG.isDebugEnabled()) {
                 LOG.debug("replica {} on backend {}'s new version {} is lower than meta version {},"
-                        + "not to continue to update replica", id, getBackendIdValue(), newVersion, this.version);
+                        + "not to continue to update replica", getId(), getBackendIdValue(), newVersion, this.version);
             }
             return;
         }
