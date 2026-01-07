@@ -368,6 +368,9 @@ public class Replica {
      *      We just reset the LFV(hash) to recovery this replica.
      */
     protected void updateReplicaVersion(long newVersion, long lastFailedVersion, long lastSuccessVersion) {
+        LOG.info("updateReplicaVersion is not supported in Replica: {}, newVersion: {}, "
+                        + "lastFailedVersion: {}, lastSuccessVersion: {}", id, newVersion, lastFailedVersion,
+                lastSuccessVersion);
         throw new UnsupportedOperationException("updateReplicaVersion is not supported in Replica");
         /*if (LOG.isDebugEnabled()) {
             LOG.debug("before update: {}", this.toString());
