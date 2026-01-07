@@ -502,6 +502,11 @@ public class Replica {
     }
 
     protected void setLastFailedVersionAndTimestamp(long lastFailedVersion, long lastFailedTimestamp) {
+        if (lastFailedVersion == -1 || lastFailedTimestamp == -1) {
+            return;
+        }
+        LOG.info("setLastFailedVersionAndTimestamp is not supported in Replica: {}, "
+                + "lastFailedVersion: {}, lastFailedTimestamp: {}", id, lastFailedVersion, lastFailedTimestamp);
         throw new UnsupportedOperationException("setLastFailedVersionAndTimestamp is not supported in Replica");
     }
 
