@@ -49,6 +49,9 @@ import java.util.PriorityQueue;
 import java.util.Queue;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+/**
+ * Only used in local mode.
+ */
 public class ConsistencyChecker extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(ConsistencyChecker.class);
 
