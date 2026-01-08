@@ -26,7 +26,6 @@ import org.apache.doris.thrift.TStorageMedium;
 import org.apache.doris.thrift.TTablet;
 import org.apache.doris.thrift.TTabletMetaInfo;
 
-import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Maps;
@@ -62,17 +61,6 @@ public abstract class TabletInvertedIndex {
 
     // tablet id -> tablet meta
     protected Map<Long, TabletMeta> tabletMetaMap = Maps.newHashMap();
-
-    /*
-     *  we use this to save memory.
-     *  we do not need create TabletMeta instance for each tablet,
-     *  cause tablets in one (Partition-MaterializedIndex) has same parent info
-     *      (dbId, tableId, partitionId, indexId, schemaHash)
-     *  we use 'tabletMetaTable' to do the update things
-     *      (eg. update schema hash in TabletMeta)
-     *  partition id -> (index id -> tablet meta)
-     */
-    protected Table<Long, Long, TabletMeta> tabletMetaTable = HashBasedTable.create();
 
     public TabletInvertedIndex() {
     }
@@ -134,50 +122,9 @@ public abstract class TabletInvertedIndex {
 
     public abstract List<Replica> getReplicas(Long tabletId);
 
-    // always add tablet before adding replicas
-    public void addTablet(long tabletId, TabletMeta tabletMeta) {
-        long stamp = writeLock();
-        try {
-            if (tabletMetaMap.containsKey(tabletId)) {
-                return;
-            }
-            tabletMetaMap.put(tabletId, tabletMeta);
-            if (!tabletMetaTable.contains(tabletMeta.getPartitionId(), tabletMeta.getIndexId())) {
-                tabletMetaTable.put(tabletMeta.getPartitionId(), tabletMeta.getIndexId(), tabletMeta);
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("add tablet meta: {}", tabletId);
-                }
-            }
+    public abstract void addTablet(long tabletId, TabletMeta tabletMeta);
 
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("add tablet: {}", tabletId);
-            }
-        } finally {
-            writeUnlock(stamp);
-        }
-    }
-
-    protected abstract void innerDeleteTablet(long tabletId);
-
-    public void deleteTablet(long tabletId) {
-        long stamp = writeLock();
-        try {
-            innerDeleteTablet(tabletId);
-            TabletMeta tabletMeta = tabletMetaMap.remove(tabletId);
-            if (tabletMeta != null) {
-                tabletMetaTable.remove(tabletMeta.getPartitionId(), tabletMeta.getIndexId());
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("delete tablet meta: {}", tabletId);
-                }
-            }
-
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("delete tablet: {}", tabletId);
-            }
-        } finally {
-            writeUnlock(stamp);
-        }
-    }
+    public abstract void deleteTablet(long tabletId);
 
     public abstract void addReplica(long tabletId, Replica replica);
 
@@ -226,7 +173,6 @@ public abstract class TabletInvertedIndex {
         long stamp = writeLock();
         try {
             tabletMetaMap.clear();
-            tabletMetaTable.clear();
             innerClear();
         } finally {
             writeUnlock(stamp);
@@ -278,12 +224,7 @@ public abstract class TabletInvertedIndex {
 
     // just for ut
     public Table<Long, Long, TabletMeta> getTabletMetaTable() {
-        long stamp = readLock();
-        try {
-            return HashBasedTable.create(tabletMetaTable);
-        } finally {
-            readUnlock(stamp);
-        }
+        throw new UnsupportedOperationException("getTabletMetaTable is not supported in TabletInvertedIndex");
     }
 
     // just for ut

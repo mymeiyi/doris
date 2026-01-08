@@ -19,6 +19,7 @@ package org.apache.doris.cloud.catalog;
 
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.TabletInvertedIndex;
+import org.apache.doris.catalog.TabletMeta;
 
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
@@ -54,8 +55,32 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
     }
 
     @Override
-    protected void innerDeleteTablet(long tabletId) {
-        replicaMetaTable.remove(tabletId);
+    public void addTablet(long tabletId, TabletMeta tabletMeta) {
+        long stamp = writeLock();
+        try {
+            if (tabletMetaMap.containsKey(tabletId)) {
+                return;
+            }
+            tabletMetaMap.put(tabletId, tabletMeta);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("add tablet: {}", tabletId);
+            }
+        } finally {
+            writeUnlock(stamp);
+        }
+    }
+
+    @Override
+    public void deleteTablet(long tabletId) {
+        long stamp = writeLock();
+        try {
+            replicaMetaTable.remove(tabletId);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("delete tablet: {}", tabletId);
+            }
+        } finally {
+            writeUnlock(stamp);
+        }
     }
 
     @Override

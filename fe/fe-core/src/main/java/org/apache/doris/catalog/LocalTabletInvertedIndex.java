@@ -66,6 +66,17 @@ import java.util.stream.Collectors;
 public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     private static final Logger LOG = LogManager.getLogger(LocalTabletInvertedIndex.class);
 
+    /*
+     *  we use this to save memory.
+     *  we do not need create TabletMeta instance for each tablet,
+     *  cause tablets in one (Partition-MaterializedIndex) has same parent info
+     *      (dbId, tableId, partitionId, indexId, schemaHash)
+     *  we use 'tabletMetaTable' to do the update things
+     *      (eg. update schema hash in TabletMeta)
+     *  partition id -> (index id -> tablet meta)
+     */
+    private Table<Long, Long, TabletMeta> tabletMetaTable = HashBasedTable.create();
+
     // tablet id -> (backend id -> replica)
     // for cloud mode, no need to known the replica's backend, so use backend id = -1 in cloud mode.
     private Table<Long, Long, Replica> replicaMetaTable = HashBasedTable.create();
@@ -680,6 +691,30 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         }
     }
 
+    // always add tablet before adding replicas
+    @Override
+    public void addTablet(long tabletId, TabletMeta tabletMeta) {
+        long stamp = writeLock();
+        try {
+            if (tabletMetaMap.containsKey(tabletId)) {
+                return;
+            }
+            tabletMetaMap.put(tabletId, tabletMeta);
+            if (!tabletMetaTable.contains(tabletMeta.getPartitionId(), tabletMeta.getIndexId())) {
+                tabletMetaTable.put(tabletMeta.getPartitionId(), tabletMeta.getIndexId(), tabletMeta);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("add tablet meta: {}", tabletId);
+                }
+            }
+
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("add tablet: {}", tabletId);
+            }
+        } finally {
+            writeUnlock(stamp);
+        }
+    }
+
     /**
      * Be will set `used' to false for bad replicas and `version_miss' to true for replicas with hole
      * in their version chain. In either case, those replicas need to be fixed by TabletScheduler.
@@ -722,12 +757,28 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     }
 
     @Override
-    protected void innerDeleteTablet(long tabletId) {
-        Map<Long, Replica> replicas = replicaMetaTable.rowMap().remove(tabletId);
-        if (replicas != null) {
-            for (long backendId : replicas.keySet()) {
-                backingReplicaMetaTable.remove(backendId, tabletId);
+    public void deleteTablet(long tabletId) {
+        long stamp = writeLock();
+        try {
+            Map<Long, Replica> replicas = replicaMetaTable.rowMap().remove(tabletId);
+            if (replicas != null) {
+                for (long backendId : replicas.keySet()) {
+                    backingReplicaMetaTable.remove(backendId, tabletId);
+                }
             }
+            TabletMeta tabletMeta = tabletMetaMap.remove(tabletId);
+            if (tabletMeta != null) {
+                tabletMetaTable.remove(tabletMeta.getPartitionId(), tabletMeta.getIndexId());
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("delete tablet meta: {}", tabletId);
+                }
+            }
+
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("delete tablet: {}", tabletId);
+            }
+        } finally {
+            writeUnlock(stamp);
         }
     }
 
@@ -889,6 +940,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     protected void innerClear() {
+        tabletMetaTable.clear();
         replicaMetaTable.clear();
         backingReplicaMetaTable.clear();
     }
@@ -1027,6 +1079,17 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         long stamp = readLock();
         try {
             return HashBasedTable.create(backingReplicaMetaTable);
+        } finally {
+            readUnlock(stamp);
+        }
+    }
+
+    // just for ut
+    @Override
+    public Table<Long, Long, TabletMeta> getTabletMetaTable() {
+        long stamp = readLock();
+        try {
+            return HashBasedTable.create(tabletMetaTable);
         } finally {
             readUnlock(stamp);
         }
