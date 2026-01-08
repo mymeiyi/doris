@@ -30,6 +30,7 @@ public class LocalReplica extends Replica {
 
     @SerializedName(value = "bid", alternate = {"backendId"})
     private long backendId;
+
     @SerializedName(value = "rds", alternate = {"remoteDataSize"})
     private volatile long remoteDataSize = 0;
     @SerializedName(value = "ris", alternate = {"remoteInvertedIndexSize"})
@@ -173,22 +174,6 @@ public class LocalReplica extends Replica {
     @Override
     public long getLastFailedTimestamp() {
         return lastFailedTimestamp;
-    }
-
-    @Override
-    protected void setLastFailedVersion(long lastFailedVersion) {
-        this.lastFailedVersion = lastFailedVersion;
-    }
-
-    @Override
-    protected void setLastFailedTimestamp(long lastFailedTimestamp) {
-        this.lastFailedTimestamp = lastFailedTimestamp;
-    }
-
-    @Override
-    protected void setLastFailedVersionAndTimestamp(long lastFailedVersion, long lastFailedTimestamp) {
-        this.lastFailedVersion = lastFailedVersion;
-        this.lastFailedTimestamp = lastFailedTimestamp;
     }
 
     @Override

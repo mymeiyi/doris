@@ -860,8 +860,14 @@ public class Tablet extends MetaObject {
         return ready;
     }
 
+    protected long getLastStatusCheckTime() {
+        return -1;
+    }
+
     public void setLastStatusCheckTime(long lastStatusCheckTime) {
-        throw new UnsupportedOperationException("setLastStatusCheckTime is not supported in Tablet");
+        if (lastStatusCheckTime != -1) {
+            throw new UnsupportedOperationException("setLastStatusCheckTime is not supported in Tablet");
+        }
     }
 
     public long getLastLoadFailedTime() {
@@ -869,7 +875,9 @@ public class Tablet extends MetaObject {
     }
 
     public void setLastLoadFailedTime(long lastLoadFailedTime) {
-        throw new UnsupportedOperationException("setLastLoadFailedTime is not supported in Tablet");
+        if (lastLoadFailedTime != -1) {
+            throw new UnsupportedOperationException("setLastLoadFailedTime is not supported in Tablet");
+        }
     }
 
     protected long getLastTimeNoPathForNewReplica() {
@@ -877,10 +885,8 @@ public class Tablet extends MetaObject {
     }
 
     public void setLastTimeNoPathForNewReplica(long lastTimeNoPathForNewReplica) {
-        throw new UnsupportedOperationException("setLastTimeNoPathForNewReplica is not supported in Tablet");
-    }
-
-    protected long getLastStatusCheckTime() {
-        return -1;
+        if (lastTimeNoPathForNewReplica != -1) {
+            throw new UnsupportedOperationException("setLastTimeNoPathForNewReplica is not supported in Tablet");
+        }
     }
 }

@@ -172,7 +172,9 @@ public class Replica {
     }
 
     public void setBackendId(long backendId) {
-        throw new UnsupportedOperationException("setBackendId is not supported in Replica");
+        if (backendId != -1) {
+            throw new UnsupportedOperationException("setBackendId is not supported in Replica");
+        }
     }
 
     public long getDataSize() {
@@ -234,7 +236,7 @@ public class Replica {
     }
 
     public void setRowsetCount(long rowsetCount) {
-        throw new UnsupportedOperationException("setRowCount is not supported in Replica");
+        throw new UnsupportedOperationException("setRowsetCount is not supported in Replica");
     }
 
     public long getLastFailedVersion() {
@@ -243,27 +245,6 @@ public class Replica {
 
     public long getLastFailedTimestamp() {
         return 0;
-    }
-
-    protected void setLastFailedVersion(long lastFailedVersion) {
-        if (lastFailedVersion != -1) {
-            throw new UnsupportedOperationException("setLastFailedVersion is not supported in Replica");
-        }
-    }
-
-    protected void setLastFailedTimestamp(long lastFailedTimestamp) {
-        if (lastFailedTimestamp == -1) {
-            throw new UnsupportedOperationException("setLastFailedTimestamp is not supported in Replica");
-        }
-    }
-
-    protected void setLastFailedVersionAndTimestamp(long lastFailedVersion, long lastFailedTimestamp) {
-        if (lastFailedVersion == -1 && lastFailedTimestamp == -1) {
-            return;
-        }
-        LOG.warn("setLastFailedVersionAndTimestamp is not supported in Replica: {}, "
-                + "lastFailedVersion: {}, lastFailedTimestamp: {}", id, lastFailedVersion, lastFailedTimestamp);
-        throw new UnsupportedOperationException("setLastFailedVersionAndTimestamp is not supported in Replica");
     }
 
     public long getLastSuccessVersion() {
