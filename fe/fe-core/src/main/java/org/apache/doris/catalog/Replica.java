@@ -224,19 +224,23 @@ public class Replica {
     }
 
     public long getSegmentCount() {
-        throw new UnsupportedOperationException("getSegmentCount is not supported in Replica");
+        return 0;
     }
 
     public void setSegmentCount(long segmentCount) {
-        throw new UnsupportedOperationException("setSegmentCount is not supported in Replica");
+        if (segmentCount > 0) {
+            throw new UnsupportedOperationException("setSegmentCount is not supported in Replica");
+        }
     }
 
     public long getRowsetCount() {
-        throw new UnsupportedOperationException("getRowsetCount is not supported in Replica");
+        return 0;
     }
 
     public void setRowsetCount(long rowsetCount) {
-        throw new UnsupportedOperationException("setRowsetCount is not supported in Replica");
+        if (rowsetCount > 0) {
+            throw new UnsupportedOperationException("setRowsetCount is not supported in Replica");
+        }
     }
 
     public long getLastFailedVersion() {
@@ -529,7 +533,9 @@ public class Replica {
     }
 
     public void setPreWatermarkTxnId(long preWatermarkTxnId) {
-        throw new UnsupportedOperationException("setPreWatermarkTxnId is not supported in Replica");
+        if (preWatermarkTxnId != -1) {
+            throw new UnsupportedOperationException("setPreWatermarkTxnId is not supported in Replica");
+        }
     }
 
     public long getPreWatermarkTxnId() {
@@ -537,7 +543,9 @@ public class Replica {
     }
 
     public void setPostWatermarkTxnId(long postWatermarkTxnId) {
-        throw  new UnsupportedOperationException("setPostWatermarkTxnId is not supported in Replica");
+        if (postWatermarkTxnId != -1) {
+            throw new UnsupportedOperationException("setPostWatermarkTxnId is not supported in Replica");
+        }
     }
 
     public long getPostWatermarkTxnId() {
@@ -545,7 +553,9 @@ public class Replica {
     }
 
     public void setUserDropTime(long userDropTime) {
-        throw new UnsupportedOperationException("setUserDropTime is not supported in Replica");
+        if (userDropTime > 0) {
+            throw new UnsupportedOperationException("setUserDropTime is not supported in Replica");
+        }
     }
 
     public boolean isUserDrop() {
@@ -553,7 +563,9 @@ public class Replica {
     }
 
     public void setScaleInDropTimeStamp(long scaleInDropTime) {
-        throw new UnsupportedOperationException("setScaleInDropTimeStamp is not supported in Replica");
+        if (scaleInDropTime > 0) {
+            throw new UnsupportedOperationException("setScaleInDropTimeStamp is not supported in Replica");
+        }
     }
 
     public boolean isScaleInDrop() {
@@ -572,7 +584,9 @@ public class Replica {
     }
 
     public void setLastReportVersion(long version) {
-        throw new UnsupportedOperationException("setLastReportVersion is not supported in Replica");
+        if (version > 0) {
+            throw new UnsupportedOperationException("setLastReportVersion is not supported in Replica");
+        }
     }
 
     public long getLastReportVersion() {
