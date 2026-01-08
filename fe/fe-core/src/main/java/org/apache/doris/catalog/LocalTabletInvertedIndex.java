@@ -75,7 +75,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
      *      (eg. update schema hash in TabletMeta)
      *  partition id -> (index id -> tablet meta)
      */
-    private Table<Long, Long, TabletMeta> tabletMetaTable = HashBasedTable.create();
+    // private Table<Long, Long, TabletMeta> tabletMetaTable = HashBasedTable.create();
 
     // tablet id -> (backend id -> replica)
     // for cloud mode, no need to known the replica's backend, so use backend id = -1 in cloud mode.
@@ -700,12 +700,12 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                 return;
             }
             tabletMetaMap.put(tabletId, tabletMeta);
-            if (!tabletMetaTable.contains(tabletMeta.getPartitionId(), tabletMeta.getIndexId())) {
+            /*if (!tabletMetaTable.contains(tabletMeta.getPartitionId(), tabletMeta.getIndexId())) {
                 tabletMetaTable.put(tabletMeta.getPartitionId(), tabletMeta.getIndexId(), tabletMeta);
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("add tablet meta: {}", tabletId);
                 }
-            }
+            }*/
 
             if (LOG.isDebugEnabled()) {
                 LOG.debug("add tablet: {}", tabletId);
@@ -766,13 +766,13 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                     backingReplicaMetaTable.remove(backendId, tabletId);
                 }
             }
-            TabletMeta tabletMeta = tabletMetaMap.remove(tabletId);
-            if (tabletMeta != null) {
+            tabletMetaMap.remove(tabletId);
+            /*if (tabletMeta != null) {
                 tabletMetaTable.remove(tabletMeta.getPartitionId(), tabletMeta.getIndexId());
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("delete tablet meta: {}", tabletId);
                 }
-            }
+            }*/
 
             if (LOG.isDebugEnabled()) {
                 LOG.debug("delete tablet: {}", tabletId);
@@ -940,7 +940,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     protected void innerClear() {
-        tabletMetaTable.clear();
+        // tabletMetaTable.clear();
         replicaMetaTable.clear();
         backingReplicaMetaTable.clear();
     }
@@ -1085,7 +1085,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     }
 
     // just for ut
-    @Override
+    /*@Override
     public Table<Long, Long, TabletMeta> getTabletMetaTable() {
         long stamp = readLock();
         try {
@@ -1093,7 +1093,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         } finally {
             readUnlock(stamp);
         }
-    }
+    }*/
 
     private boolean isLocal(TStorageMedium storageMedium) {
         return storageMedium == TStorageMedium.HDD || storageMedium == TStorageMedium.SSD;

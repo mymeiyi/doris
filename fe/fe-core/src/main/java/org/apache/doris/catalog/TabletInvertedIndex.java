@@ -223,9 +223,9 @@ public abstract class TabletInvertedIndex {
     }
 
     // just for ut
-    public Table<Long, Long, TabletMeta> getTabletMetaTable() {
+    /*public Table<Long, Long, TabletMeta> getTabletMetaTable() {
         throw new UnsupportedOperationException("getTabletMetaTable is not supported in TabletInvertedIndex");
-    }
+    }*/
 
     // just for ut
     public Map<Long, TabletMeta> getTabletMetaMap() {
