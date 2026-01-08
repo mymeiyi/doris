@@ -401,8 +401,8 @@ public class CloudReplica extends Replica {
             return null;
         }
         long beId = secondBeAndChangeTimestamp.key();
-        long changeTimestamp = secondBeAndChangeTimestamp.value();
         if (LOG.isDebugEnabled()) {
+            long changeTimestamp = secondBeAndChangeTimestamp.value();
             LOG.debug("in secondaryClusterToBackends clusterId {}, beId {}, changeTimestamp {}, replica info {}",
                     clusterId, beId, changeTimestamp, this);
         }
@@ -603,10 +603,10 @@ public class CloudReplica extends Replica {
         if (secondBeAndChangeTimestamp == null) {
             return;
         }
-        long beId = secondBeAndChangeTimestamp.key();
         long changeTimestamp = secondBeAndChangeTimestamp.value();
 
         if (changeTimestamp < expireTimestamp) {
+            long beId = secondBeAndChangeTimestamp.key();
             LOG.debug("remove clusterId {} secondary beId {} changeTimestamp {} expireTimestamp {} replica info {}",
                     clusterId, beId, changeTimestamp, expireTimestamp, this);
             secondaryClusterToBackends.remove(clusterId);
