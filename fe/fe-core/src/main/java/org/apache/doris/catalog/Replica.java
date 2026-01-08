@@ -256,7 +256,9 @@ public class Replica {
     }
 
     public void setPathHash(long pathHash) {
-        throw new UnsupportedOperationException("setPathHash is not supported in Replica");
+        if (pathHash != -1) {
+            throw new UnsupportedOperationException("setPathHash is not supported in Replica");
+        }
     }
 
     public boolean isBad() {
@@ -309,7 +311,9 @@ public class Replica {
     }
 
     public void setFurtherRepairWatermarkTxnTd(long furtherRepairWatermarkTxnTd) {
-        throw new UnsupportedOperationException("setFurtherRepairWatermarkTxnTd is not supported in Replica");
+        if (furtherRepairWatermarkTxnTd != -1) {
+            throw new UnsupportedOperationException("setFurtherRepairWatermarkTxnTd is not supported in Replica");
+        }
     }
 
     public void updateWithReport(TTabletInfo backendReplica) {
@@ -339,7 +343,8 @@ public class Replica {
 
     protected void updateReplicaVersion(long newVersion, long lastFailedVersion, long lastSuccessVersion) {
         if (LOG.isDebugEnabled()) {
-            LOG.debug("before update: {}", this.toString());
+            LOG.debug("before update: {}, newVersion: {}, lastFailedVersion: {}, lastSuccessVersion: {}",
+                    this.toString(), newVersion, lastFailedVersion, lastSuccessVersion);
         }
     }
 
@@ -486,29 +491,9 @@ public class Replica {
 
         Replica replica = (Replica) obj;
         return (id == replica.id)
-                && (getBackendIdValue() == replica.getBackendIdValue())
-                && (getVersion() == replica.getVersion())
                 && (dataSize == replica.dataSize)
                 && (rowCount == replica.rowCount)
-                && (state.equals(replica.state))
-                && (getLastFailedVersion() == replica.getLastFailedVersion())
-                && (getLastSuccessVersion() == replica.getLastSuccessVersion());
-    }
-
-    private static class VersionComparator<T extends Replica> implements Comparator<T> {
-        public VersionComparator() {
-        }
-
-        @Override
-        public int compare(T replica1, T replica2) {
-            if (replica1.getVersion() < replica2.getVersion()) {
-                return 1;
-            } else if (replica1.getVersion() == replica2.getVersion()) {
-                return 0;
-            } else {
-                return -1;
-            }
-        }
+                && (state.equals(replica.state));
     }
 
     private static class LastSuccessVersionComparator<T extends Replica> implements Comparator<T> {

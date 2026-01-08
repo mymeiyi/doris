@@ -178,7 +178,7 @@ public class LocalReplica extends Replica {
 
     @Override
     public long getLastSuccessVersion() {
-        return this.lastSuccessVersion;
+        return lastSuccessVersion;
     }
 
     @Override
@@ -524,6 +524,21 @@ public class LocalReplica extends Replica {
         }
 
         return System.currentTimeMillis() - regressiveVersionTimestamp >= 5 * 60 * 1000L;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (!super.equals(obj)) {
+            return false;
+        }
+        if (!(obj instanceof LocalReplica)) {
+            return false;
+        }
+        LocalReplica replica = (LocalReplica) obj;
+        return (backendId == replica.backendId)
+                && (version == replica.version)
+                && (lastFailedVersion == replica.lastFailedVersion)
+                && (lastSuccessVersion == replica.lastSuccessVersion);
     }
 
     @Override
