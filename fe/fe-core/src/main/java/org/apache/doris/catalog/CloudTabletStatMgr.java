@@ -140,12 +140,16 @@ public class CloudTabletStatMgr extends MasterDaemon {
         }
 
         try {
-            for (Future<Void> future : futures) {
-                future.get();
+            for (int i = 0; i < futures.size(); i++) {
+                futures.get(i).get();
+                if (futures.size() == reqList.size()) {
+                    reqList.set(i, null); // help GC
+                }
             }
         } catch (InterruptedException | ExecutionException e) {
             LOG.error("Error waiting for get tablet stats tasks to complete", e);
         }
+        reqList = null; // help GC
 
         LOG.info("finished to get tablet stat of all backends. cost: {} ms",
                 (System.currentTimeMillis() - start));
