@@ -720,12 +720,21 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     }
 
     @Override
-    protected void innerDeleteTablet(long tabletId) {
-        Map<Long, Replica> replicas = replicaMetaTable.rowMap().remove(tabletId);
-        if (replicas != null) {
-            for (long backendId : replicas.keySet()) {
-                backingReplicaMetaTable.remove(backendId, tabletId);
+    public void deleteTablet(long tabletId) {
+        long stamp = writeLock();
+        try {
+            Map<Long, Replica> replicas = replicaMetaTable.rowMap().remove(tabletId);
+            if (replicas != null) {
+                for (long backendId : replicas.keySet()) {
+                    backingReplicaMetaTable.remove(backendId, tabletId);
+                }
             }
+            tabletMetaMap.remove(tabletId);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("delete tablet: {}", tabletId);
+            }
+        } finally {
+            writeUnlock(stamp);
         }
     }
 

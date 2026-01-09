@@ -34,7 +34,7 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
 
     // tablet id -> replica
     // for cloud mode, no need to know the replica's backend
-    private Map<Long, Replica> replicaMetaTable = Maps.newHashMap();
+    private Map<Long, Replica> replicaMetaMap = Maps.newHashMap();
 
     public CloudTabletInvertedIndex() {
         super();
@@ -44,8 +44,8 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
     public List<Replica> getReplicas(Long tabletId) {
         long stamp = readLock();
         try {
-            if (replicaMetaTable.containsKey(tabletId)) {
-                return Lists.newArrayList(replicaMetaTable.get(tabletId));
+            if (replicaMetaMap.containsKey(tabletId)) {
+                return Lists.newArrayList(replicaMetaMap.get(tabletId));
             }
             return Lists.newArrayList();
         } finally {
@@ -54,8 +54,17 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
     }
 
     @Override
-    protected void innerDeleteTablet(long tabletId) {
-        replicaMetaTable.remove(tabletId);
+    public void deleteTablet(long tabletId) {
+        long stamp = writeLock();
+        try {
+            replicaMetaMap.remove(tabletId);
+            tabletMetaMap.remove(tabletId);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("delete tablet: {}", tabletId);
+            }
+        } finally {
+            writeUnlock(stamp);
+        }
     }
 
     @Override
@@ -64,7 +73,7 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
         try {
             Preconditions.checkState(tabletMetaMap.containsKey(tabletId),
                     "tablet " + tabletId + " not exists, replica " + replica.getId());
-            replicaMetaTable.put(tabletId, replica);
+            replicaMetaMap.put(tabletId, replica);
             if (LOG.isDebugEnabled()) {
                 LOG.debug("add replica {} of tablet {}", replica.getId(), tabletId);
             }
@@ -78,8 +87,8 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
         long stamp = writeLock();
         try {
             Preconditions.checkState(tabletMetaMap.containsKey(tabletId), "tablet " + tabletId + " not exists");
-            if (replicaMetaTable.containsKey(tabletId)) {
-                Replica replica = replicaMetaTable.remove(tabletId);
+            if (replicaMetaMap.containsKey(tabletId)) {
+                Replica replica = replicaMetaMap.remove(tabletId);
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("delete replica {} of tablet {}", replica.getId(), tabletId);
                 }
@@ -97,9 +106,8 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
     public Replica getReplica(long tabletId, long backendId) {
         long stamp = readLock();
         try {
-            Preconditions.checkState(tabletMetaMap.containsKey(tabletId),
-                    "tablet " + tabletId + " not exists, backend " + backendId);
-            return replicaMetaTable.get(tabletId);
+            Preconditions.checkState(tabletMetaMap.containsKey(tabletId), "tablet " + tabletId + " not exists");
+            return replicaMetaMap.get(tabletId);
         } finally {
             readUnlock(stamp);
         }
@@ -109,8 +117,8 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
     public List<Replica> getReplicasByTabletId(long tabletId) {
         long stamp = readLock();
         try {
-            if (replicaMetaTable.containsKey(tabletId)) {
-                return Lists.newArrayList(replicaMetaTable.get(tabletId));
+            if (replicaMetaMap.containsKey(tabletId)) {
+                return Lists.newArrayList(replicaMetaMap.get(tabletId));
             }
             return Lists.newArrayList();
         } finally {
@@ -120,6 +128,6 @@ public class CloudTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     protected void innerClear() {
-        replicaMetaTable.clear();
+        replicaMetaMap.clear();
     }
 }

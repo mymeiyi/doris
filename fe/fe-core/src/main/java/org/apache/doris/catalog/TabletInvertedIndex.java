@@ -57,7 +57,7 @@ public abstract class TabletInvertedIndex {
     public static final TabletMeta NOT_EXIST_TABLET_META = new TabletMeta(NOT_EXIST_VALUE, NOT_EXIST_VALUE,
             NOT_EXIST_VALUE, NOT_EXIST_VALUE, NOT_EXIST_VALUE, TStorageMedium.HDD);
 
-    protected StampedLock lock = new StampedLock();
+    private StampedLock lock = new StampedLock();
 
     // tablet id -> tablet meta
     protected Map<Long, TabletMeta> tabletMetaMap = Maps.newHashMap();
@@ -138,20 +138,7 @@ public abstract class TabletInvertedIndex {
         }
     }
 
-    protected abstract void innerDeleteTablet(long tabletId);
-
-    public void deleteTablet(long tabletId) {
-        long stamp = writeLock();
-        try {
-            innerDeleteTablet(tabletId);
-            tabletMetaMap.remove(tabletId);
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("delete tablet: {}", tabletId);
-            }
-        } finally {
-            writeUnlock(stamp);
-        }
-    }
+    public abstract void deleteTablet(long tabletId);
 
     public abstract void addReplica(long tabletId, Replica replica);
 
