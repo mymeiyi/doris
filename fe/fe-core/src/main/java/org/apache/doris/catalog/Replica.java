@@ -199,7 +199,7 @@ public class Replica {
         }
     }
 
-    public Long getRemoteInvertedIndexSize() {
+    public long getRemoteInvertedIndexSize() {
         return 0L;
     }
 
@@ -209,7 +209,7 @@ public class Replica {
         }
     }
 
-    public Long getRemoteSegmentSize() {
+    public long getRemoteSegmentSize() {
         return 0L;
     }
 
