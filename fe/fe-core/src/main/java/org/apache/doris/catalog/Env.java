@@ -4817,9 +4817,9 @@ public class Env {
         getInternalCatalog().replayUpdateReplica(info);
     }
 
-    public void unprotectDeleteReplica(OlapTable olapTable, ReplicaPersistInfo info) {
+    /*public void unprotectDeleteReplica(OlapTable olapTable, ReplicaPersistInfo info) {
         getInternalCatalog().unprotectDeleteReplica(olapTable, info);
-    }
+    }*/
 
     public void replayDeleteReplica(ReplicaPersistInfo info) throws MetaNotFoundException {
         getInternalCatalog().replayDeleteReplica(info);

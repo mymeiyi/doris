@@ -23,11 +23,16 @@ import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
 
 public class LocalTablet extends Tablet {
     private static final Logger LOG = LogManager.getLogger(LocalTablet.class);
 
+    @SerializedName(value = "rs", alternate = {"replicas"})
+    private List<Replica> replicas;
     @SerializedName(value = "lastCheckTime")
     private long lastCheckTime;
 
@@ -62,7 +67,15 @@ public class LocalTablet extends Tablet {
     }
 
     public LocalTablet(long tabletId) {
-        super(tabletId);
+        this(tabletId, new ArrayList<>());
+    }
+
+    private LocalTablet(long tabletId, List<Replica> replicas) {
+        super(tabletId, replicas);
+        this.replicas = replicas;
+        if (this.replicas == null) {
+            this.replicas = new ArrayList<>();
+        }
         checkedVersion = -1L;
         isConsistent = true;
     }
@@ -160,5 +173,98 @@ public class LocalTablet extends Tablet {
     @Override
     public void setLastCheckTime(long lastCheckTime) {
         this.lastCheckTime = lastCheckTime;
+    }
+
+    private boolean isLatestReplicaAndDeleteOld(Replica newReplica) {
+        boolean delete = false;
+        boolean hasBackend = false;
+        long version = newReplica.getVersion();
+        Iterator<Replica> iterator = replicas.iterator();
+        while (iterator.hasNext()) {
+            Replica replica = iterator.next();
+            if (replica.getBackendIdWithoutException() == newReplica.getBackendIdWithoutException()) {
+                hasBackend = true;
+                if (replica.getVersion() <= version) {
+                    iterator.remove();
+                    delete = true;
+                }
+            }
+        }
+
+        return delete || !hasBackend;
+    }
+
+    @Override
+    public void addReplica(Replica replica, boolean isRestore) {
+        if (isLatestReplicaAndDeleteOld(replica)) {
+            replicas.add(replica);
+            if (!isRestore) {
+                Env.getCurrentInvertedIndex().addReplica(id, replica);
+            }
+        }
+    }
+
+    @Override
+    public Replica getReplicaByBackendId(long backendId) {
+        for (Replica replica : replicas) {
+            if (replica.getBackendIdWithoutException() == backendId) {
+                return replica;
+            }
+        }
+        return null;
+    }
+
+    @Override
+    public List<Replica> getReplicas() {
+        return this.replicas;
+    }
+
+    @Override
+    public boolean deleteReplica(Replica replica) {
+        if (replicas.contains(replica)) {
+            replicas.remove(replica);
+            Env.getCurrentInvertedIndex().deleteReplica(id, replica.getBackendIdWithoutException());
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean deleteReplicaByBackendId(long backendId) {
+        Iterator<Replica> iterator = replicas.iterator();
+        while (iterator.hasNext()) {
+            Replica replica = iterator.next();
+            if (replica.getBackendIdWithoutException() == backendId) {
+                iterator.remove();
+                Env.getCurrentInvertedIndex().deleteReplica(id, backendId);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (!(obj instanceof LocalTablet)) {
+            return false;
+        }
+
+        LocalTablet tablet = (LocalTablet) obj;
+
+        if (replicas != tablet.replicas) {
+            if (replicas.size() != tablet.replicas.size()) {
+                return false;
+            }
+            int size = replicas.size();
+            for (int i = 0; i < size; i++) {
+                if (!tablet.replicas.contains(replicas.get(i))) {
+                    return false;
+                }
+            }
+        }
+        return id == tablet.id;
     }
 }

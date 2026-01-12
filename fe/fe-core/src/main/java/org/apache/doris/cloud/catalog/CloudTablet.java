@@ -24,26 +24,43 @@ import org.apache.doris.common.InternalErrorCode;
 import org.apache.doris.common.UserException;
 import org.apache.doris.system.SystemInfoService;
 
+import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
+import com.google.gson.annotations.SerializedName;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
 public class CloudTablet extends Tablet {
+    private static final Logger LOG = LogManager.getLogger(CloudTablet.class);
+
+    @Deprecated
+    @SerializedName(value = "rs", alternate = {"replicas"})
+    private List<Replica> replicas;
+    @SerializedName(value = "r")
+    private Replica replica;
 
     public CloudTablet() {
-        super();
+        this(0);
     }
 
     public CloudTablet(long tabletId) {
-        super(tabletId);
+        this(tabletId, new ArrayList<>());
+    }
+
+    private CloudTablet(long tabletId, List<Replica> replicas) {
+        super(tabletId, replicas);
+        if (replicas != null && !replicas.isEmpty()) {
+            this.replica = replicas.get(0);
+        }
     }
 
     @Override
     public Replica getReplicaByBackendId(long backendId) {
-        if (!replicas.isEmpty()) {
-            return replicas.get(0);
-        }
-        return null;
+        return replica;
     }
 
     private Multimap<Long, Long> backendPathMapReprocess(Multimap<Long, Long> pathMap) throws UserException {
@@ -64,13 +81,13 @@ public class CloudTablet extends Tablet {
         return backendPathMapReprocess(pathMap);
     }
 
+    @Override
     public Multimap<Long, Long> getNormalReplicaBackendPathMapCloud(String beEndpoint) throws UserException {
         Multimap<Long, Long> pathMap = super.getNormalReplicaBackendPathMapCloud(beEndpoint);
         return backendPathMapReprocess(pathMap);
     }
 
-    @Override
-    protected boolean isLatestReplicaAndDeleteOld(Replica newReplica) {
+    private boolean isLatestReplicaAndDeleteOld(Replica newReplica) {
         boolean delete = false;
         boolean hasBackend = false;
         long version = newReplica.getVersion();
@@ -87,6 +104,7 @@ public class CloudTablet extends Tablet {
         return delete || !hasBackend;
     }
 
+    @Override
     public void addReplica(Replica replica, boolean isRestore) {
         if (isLatestReplicaAndDeleteOld(replica)) {
             replicas.add(replica);
@@ -96,4 +114,52 @@ public class CloudTablet extends Tablet {
         }
     }
 
+    @Override
+    public List<Replica> getReplicas() {
+        if (replica == null) {
+            return Lists.newArrayList();
+        }
+        return Lists.newArrayList(replica);
+    }
+
+    @Override
+    public boolean deleteReplica(Replica replica) {
+        if (replica.equals(replica)) {
+            replica = null;
+            Env.getCurrentInvertedIndex().deleteReplica(id, replica.getBackendIdWithoutException());
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (!(obj instanceof CloudTablet)) {
+            return false;
+        }
+
+        CloudTablet tablet = (CloudTablet) obj;
+
+        if (replica.equals(tablet.replica)) {
+            return false;
+        }
+        return id == tablet.id;
+    }
+
+    /*@Override
+    public boolean deleteReplicaByBackendId(long backendId) {
+        Iterator<Replica> iterator = replicas.iterator();
+        while (iterator.hasNext()) {
+            Replica replica = iterator.next();
+            if (replica.getBackendIdWithoutException() == backendId) {
+                iterator.remove();
+                Env.getCurrentInvertedIndex().deleteReplica(id, backendId);
+                return true;
+            }
+        }
+        return false;
+    }*/
 }
