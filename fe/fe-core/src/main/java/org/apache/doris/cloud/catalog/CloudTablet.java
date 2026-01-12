@@ -22,6 +22,7 @@ import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.common.InternalErrorCode;
 import org.apache.doris.common.UserException;
+import org.apache.doris.persist.gson.GsonPostProcessable;
 import org.apache.doris.system.SystemInfoService;
 
 import com.google.common.collect.Lists;
@@ -30,11 +31,12 @@ import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-public class CloudTablet extends Tablet {
+public class CloudTablet extends Tablet implements GsonPostProcessable {
     private static final Logger LOG = LogManager.getLogger(CloudTablet.class);
 
     @Deprecated
@@ -147,6 +149,15 @@ public class CloudTablet extends Tablet {
             return false;
         }
         return id == tablet.id;
+    }
+
+    @Override
+    public void gsonPostProcess() throws IOException {
+        LOG.info("gsonPostProcess CloudTablet: {}, replicas: {}", this.id, this.replicas);
+        if (replicas != null && !replicas.isEmpty()) {
+            this.replica = replicas.get(0);
+            this.replicas = null;
+        }
     }
 
     /*@Override
