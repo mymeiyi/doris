@@ -395,7 +395,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         return tabletIds;
     }
 
-    public Set<Long> getSnapshotTabletsInSecondaryByBeId(Long beId) {
+    private Set<Long> getSnapshotTabletsInSecondaryByBeId(Long beId) {
         Set<Long> tabletIds = Sets.newHashSet();
         Set<Tablet> tablets = beToTabletsGlobalInSecondary.get(beId);
         if (tablets != null) {
@@ -535,7 +535,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         }
     }
 
-    public void balanceAllPartitions() {
+    private void balanceAllPartitions() {
         for (Map.Entry<Long, Set<Tablet>> entry : beToTabletsGlobal.entrySet()) {
             LOG.info("before partition balance be {} tablet num {}", entry.getKey(), entry.getValue().size());
         }
@@ -571,7 +571,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         }
     }
 
-    public void balanceAllTables() {
+    private void balanceAllTables() {
         for (Map.Entry<Long, Set<Tablet>> entry : beToTabletsGlobal.entrySet()) {
             LOG.info("before table balance be {} tablet num {}", entry.getKey(), entry.getValue().size());
         }
@@ -607,7 +607,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         }
     }
 
-    public void globalBalance() {
+    private void globalBalance() {
         for (Map.Entry<Long, Set<Tablet>> entry : beToTabletsGlobal.entrySet()) {
             LOG.info("before global balance be {} tablet num {}", entry.getKey(), entry.getValue().size());
         }
@@ -642,7 +642,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         }
     }
 
-    public void checkInflightWarmUpCacheAsync() {
+    private void checkInflightWarmUpCacheAsync() {
         Map<Long, List<InfightTask>> beToInfightTasks = new HashMap<Long, List<InfightTask>>();
 
         Set<InfightTablet> invalidTasks = new HashSet<>();
@@ -733,7 +733,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         }
     }
 
-    public void checkDecommissionState(Map<String, List<Long>> clusterToBes) {
+    private void checkDecommissionState(Map<String, List<Long>> clusterToBes) {
         for (Map.Entry<String, List<Long>> entry : clusterToBes.entrySet()) {
             List<Long> beList = entry.getValue();
             for (long beId : beList) {
@@ -891,11 +891,11 @@ public class CloudTabletRebalancer extends MasterDaemon {
         return true;
     }
 
-    public void fillBeToTablets(long be, long tableId, long partId, long indexId, Tablet tablet,
-                                ConcurrentHashMap<Long, Set<Tablet>> globalBeToTablets,
-                                ConcurrentHashMap<Long, ConcurrentHashMap<Long, Set<Tablet>>> beToTabletsInTable,
-                                ConcurrentHashMap<Long, ConcurrentHashMap<Long, ConcurrentHashMap<Long, Set<Tablet>>>>
-                                    partToTablets) {
+    private void fillBeToTablets(long be, long tableId, long partId, long indexId, Tablet tablet,
+            ConcurrentHashMap<Long, Set<Tablet>> globalBeToTablets,
+            ConcurrentHashMap<Long, ConcurrentHashMap<Long, Set<Tablet>>> beToTabletsInTable,
+            ConcurrentHashMap<Long, ConcurrentHashMap<Long, ConcurrentHashMap<Long, Set<Tablet>>>>
+                    partToTablets) {
         // global
         globalBeToTablets.putIfAbsent(be, ConcurrentHashMap.newKeySet());
         globalBeToTablets.get(be).add(tablet);
@@ -989,7 +989,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         }
     }
 
-    public void statRouteInfo() {
+    private void statRouteInfo() {
         ConcurrentHashMap<Long, Set<Tablet>> tmpBeToTabletsGlobal = new ConcurrentHashMap<Long, Set<Tablet>>();
         ConcurrentHashMap<Long, Set<Tablet>> tmpFutureBeToTabletsGlobal = new ConcurrentHashMap<Long, Set<Tablet>>();
         ConcurrentHashMap<Long, Set<Tablet>> tmpBeToTabletsGlobalInSecondary
@@ -1057,7 +1057,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         beToColocateTabletsGlobal = tmpBeToColocateTabletsGlobal;
     }
 
-    public void loopCloudReplica(Operator operator) {
+    private void loopCloudReplica(Operator operator) {
         List<Long> dbIds = Env.getCurrentInternalCatalog().getDbIds();
         for (Long dbId : dbIds) {
             Database db = Env.getCurrentInternalCatalog().getDbNullable(dbId);
@@ -1087,7 +1087,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         }
     }
 
-    public void balanceInPartition(List<Long> bes, String clusterId, List<UpdateCloudReplicaInfo> infos) {
+    private void balanceInPartition(List<Long> bes, String clusterId, List<UpdateCloudReplicaInfo> infos) {
         // balance all partition
         for (Map.Entry<Long, ConcurrentHashMap<Long, ConcurrentHashMap<Long, Set<Tablet>>>> partitionEntry
                 : futurePartitionToTablets.entrySet()) {
@@ -1100,7 +1100,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         }
     }
 
-    public void balanceInTable(List<Long> bes, String clusterId, List<UpdateCloudReplicaInfo> infos) {
+    private void balanceInTable(List<Long> bes, String clusterId, List<UpdateCloudReplicaInfo> infos) {
         // balance all tables
         for (Map.Entry<Long, ConcurrentHashMap<Long, Set<Tablet>>> entry : futureBeToTabletsInTable.entrySet()) {
             balanceImpl(bes, clusterId, entry.getValue(), BalanceType.TABLE, infos);
