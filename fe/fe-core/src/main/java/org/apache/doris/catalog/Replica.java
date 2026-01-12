@@ -99,11 +99,11 @@ public class Replica {
     @Setter
     @Getter
     @SerializedName(value = "lis", alternate = {"localInvertedIndexSize"})
-    private Long localInvertedIndexSize = 0L;
+    private long localInvertedIndexSize = 0L;
     @Setter
     @Getter
     @SerializedName(value = "lss", alternate = {"localSegmentSize"})
-    private Long localSegmentSize = 0L;
+    private long localSegmentSize = 0L;
 
     public Replica() {
     }
