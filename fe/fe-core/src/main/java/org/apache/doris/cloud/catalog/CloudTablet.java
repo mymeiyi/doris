@@ -112,8 +112,11 @@ public class CloudTablet extends Tablet implements GsonPostProcessable {
             LOG.debug("convert replica to replicas for CloudTablet: {}, replica: {}, replicas: {}", this.id,
                     this.replica, this.replicas);
         }
-        if (replica != null && this.replicas == null) {
-            this.replicas = Lists.newArrayList(replica);
+        if (replica != null) {
+            if (this.replicas == null) {
+                this.replicas = Lists.newArrayList();
+            }
+            this.replicas.add(replica);
             this.replica = null;
         }
     }
