@@ -55,7 +55,7 @@ public class CloudReplica extends Replica {
     // so this value is be list
     @SerializedName(value = "bes")
     private ConcurrentHashMap<String, List<Long>> primaryClusterToBackends
-            = new ConcurrentHashMap<String, List<Long>>();
+            = new ConcurrentHashMap<String, List<Long>>(1);
     @SerializedName(value = "dbId")
     private long dbId = -1;
     @SerializedName(value = "tableId")
