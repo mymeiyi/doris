@@ -1544,6 +1544,9 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             List<Long> mowTableIds = mowTableList.stream().map(Table::getId).collect(Collectors.toList());
             sendCalcDeleteBitmaptask(dbId, transactionId, backendToPartitionInfos, mowTableIds,
                     Config.calculate_delete_bitmap_task_timeout_seconds_for_transaction_load);
+            if (true) {
+                throw new UserException("Only for test calc delete bitmap task before commit txn");
+            }
         }
 
         cleanSubTransactions(transactionId);
