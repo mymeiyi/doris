@@ -32,7 +32,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
-import java.util.Iterator;
 import java.util.List;
 
 public class CloudTablet extends Tablet implements GsonPostProcessable {
@@ -85,13 +84,10 @@ public class CloudTablet extends Tablet implements GsonPostProcessable {
     private boolean isLatestReplicaAndDeleteOld(Replica newReplica) {
         boolean delete = false;
         boolean hasBackend = false;
-        long version = newReplica.getVersion();
-        Iterator<Replica> iterator = replicas.iterator();
-        while (iterator.hasNext()) {
+        if (replica != null) {
             hasBackend = true;
-            Replica replica = iterator.next();
-            if (replica.getVersion() <= version) {
-                iterator.remove();
+            if (replica.getVersion() <= newReplica.getVersion()) {
+                replica = null;
                 delete = true;
             }
         }
@@ -102,7 +98,7 @@ public class CloudTablet extends Tablet implements GsonPostProcessable {
     @Override
     public void addReplica(Replica replica, boolean isRestore) {
         if (isLatestReplicaAndDeleteOld(replica)) {
-            replicas.add(replica);
+            this.replica = replica;
             if (!isRestore) {
                 Env.getCurrentInvertedIndex().addReplica(id, replica);
             }
