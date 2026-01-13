@@ -22,16 +22,31 @@ import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.common.InternalErrorCode;
 import org.apache.doris.common.UserException;
+import org.apache.doris.persist.gson.GsonPostProcessable;
 import org.apache.doris.system.SystemInfoService;
 
+import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
+import com.google.gson.annotations.SerializedName;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
+import java.io.IOException;
 import java.util.Iterator;
+import java.util.List;
 
-public class CloudTablet extends Tablet {
+public class CloudTablet extends Tablet implements GsonPostProcessable {
+    private static final Logger LOG = LogManager.getLogger(CloudTablet.class);
+
+    // cloud only has one replica, use replica instead of replicas
+    @Deprecated
+    @SerializedName(value = "rs", alternate = {"replicas"})
+    private List<Replica> replicas;
+    @SerializedName(value = "r")
+    private Replica replica;
 
     public CloudTablet() {
-        super();
+        this(0);
     }
 
     public CloudTablet(long tabletId) {
@@ -40,10 +55,7 @@ public class CloudTablet extends Tablet {
 
     @Override
     public Replica getReplicaByBackendId(long backendId) {
-        if (!replicas.isEmpty()) {
-            return replicas.get(0);
-        }
-        return null;
+        return replica;
     }
 
     private Multimap<Long, Long> backendPathMapReprocess(Multimap<Long, Long> pathMap) throws UserException {
@@ -64,13 +76,13 @@ public class CloudTablet extends Tablet {
         return backendPathMapReprocess(pathMap);
     }
 
+    @Override
     public Multimap<Long, Long> getNormalReplicaBackendPathMapCloud(String beEndpoint) throws UserException {
         Multimap<Long, Long> pathMap = super.getNormalReplicaBackendPathMapCloud(beEndpoint);
         return backendPathMapReprocess(pathMap);
     }
 
-    @Override
-    protected boolean isLatestReplicaAndDeleteOld(Replica newReplica) {
+    private boolean isLatestReplicaAndDeleteOld(Replica newReplica) {
         boolean delete = false;
         boolean hasBackend = false;
         long version = newReplica.getVersion();
@@ -87,6 +99,7 @@ public class CloudTablet extends Tablet {
         return delete || !hasBackend;
     }
 
+    @Override
     public void addReplica(Replica replica, boolean isRestore) {
         if (isLatestReplicaAndDeleteOld(replica)) {
             replicas.add(replica);
@@ -96,4 +109,37 @@ public class CloudTablet extends Tablet {
         }
     }
 
+    @Override
+    public List<Replica> getReplicas() {
+        if (replica == null) {
+            return Lists.newArrayList();
+        }
+        return Lists.newArrayList(replica);
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (!(obj instanceof CloudTablet)) {
+            return false;
+        }
+        CloudTablet tablet = (CloudTablet) obj;
+        if (!replica.equals(tablet.replica)) {
+            return false;
+        }
+        return id == tablet.id;
+    }
+
+    @Override
+    public void gsonPostProcess() throws IOException {
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("convert replicas to replica for CloudTablet: {}, replicas: {}", this.id, this.replicas);
+        }
+        if (replicas != null && !replicas.isEmpty()) {
+            this.replica = replicas.get(0);
+            this.replicas = null;
+        }
+    }
 }
