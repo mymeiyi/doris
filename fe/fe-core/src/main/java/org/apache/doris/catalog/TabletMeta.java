@@ -17,6 +17,7 @@
 
 package org.apache.doris.catalog;
 
+import org.apache.doris.common.Config;
 import org.apache.doris.thrift.TStorageMedium;
 
 import org.apache.logging.log4j.LogManager;
@@ -45,7 +46,9 @@ public class TabletMeta {
         this.oldSchemaHash = schemaHash;
         this.newSchemaHash = -1;
 
-        this.storageMedium = storageMedium;
+        if (Config.isNotCloudMode()) {
+            this.storageMedium = storageMedium;
+        }
     }
 
     public long getDbId() {
@@ -69,7 +72,9 @@ public class TabletMeta {
     }
 
     public void setStorageMedium(TStorageMedium storageMedium) {
-        this.storageMedium = storageMedium;
+        if (Config.isNotCloudMode()) {
+            this.storageMedium = storageMedium;
+        }
     }
 
     public int getOldSchemaHash() {
