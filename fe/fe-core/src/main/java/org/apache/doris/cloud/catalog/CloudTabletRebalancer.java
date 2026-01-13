@@ -106,7 +106,8 @@ public class CloudTabletRebalancer extends MasterDaemon {
 
     private ConcurrentHashMap<Long, ConcurrentHashMap<Long, Set<Tablet>>> futureBeToTabletsInTable;
 
-    private Map<Long, Long> beToDecommissionedTime = new HashMap<Long, Long>();
+    // ?
+    private Map<Long, Long> beToDecommissionedTime = new HashMap<>();
 
     private Random rand = new Random();
 
@@ -179,7 +180,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
         BalanceTypeEnum computeGroupBalanceType = cg.getBalanceType();
         int computeGroupTimeout = cg.getBalanceWarmUpTaskTimeout();
         return computeGroupBalanceType != ComputeGroup.DEFAULT_COMPUTE_GROUP_BALANCE_ENUM
-               || computeGroupTimeout != ComputeGroup.DEFAULT_BALANCE_WARM_UP_TASK_TIMEOUT;
+                || computeGroupTimeout != ComputeGroup.DEFAULT_BALANCE_WARM_UP_TASK_TIMEOUT;
     }
 
     public CloudTabletRebalancer(CloudSystemInfoService cloudSystemInfoService) {
