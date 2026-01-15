@@ -335,20 +335,7 @@ public abstract class Tablet {
 
     // Get the least row count among all valid replicas.
     // The replica with the least row count is the most accurate one. Because it performs most compaction.
-    public long getMinReplicaRowCount(long version) {
-        long minRowCount = Long.MAX_VALUE;
-        long maxReplicaVersion = 0;
-        for (Replica r : getReplicas()) {
-            if (r.isAlive()
-                    && r.checkVersionCatchUp(version, false)
-                    && (r.getVersion() > maxReplicaVersion
-                        || r.getVersion() == maxReplicaVersion && r.getRowCount() < minRowCount)) {
-                minRowCount = r.getRowCount();
-                maxReplicaVersion = r.getVersion();
-            }
-        }
-        return minRowCount == Long.MAX_VALUE ? 0 : minRowCount;
-    }
+    public abstract long getMinReplicaRowCount(long version);
 
     /**
      * A replica is healthy only if
