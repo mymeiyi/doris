@@ -662,7 +662,7 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
             LOG.debug("convert CloudReplica: {}, primaryClusterToBackends: {}, primaryClusterToBackend: {}",
                     this.getId(), this.primaryClusterToBackends, this.primaryClusterToBackend);
         }
-        if (primaryClusterToBackends != null && !primaryClusterToBackends.isEmpty()) {
+        if (primaryClusterToBackends != null) {
             for (Map.Entry<String, List<Long>> entry : primaryClusterToBackends.entrySet()) {
                 String clusterId = entry.getKey();
                 List<Long> beIds = entry.getValue();
