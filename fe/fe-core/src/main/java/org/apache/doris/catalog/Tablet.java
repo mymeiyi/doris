@@ -325,7 +325,7 @@ public abstract class Tablet {
     @Override
     public abstract boolean equals(Object obj);
 
-    public abstract long getDataSize(boolean singleReplica, boolean filterSizeZero) ;
+    public abstract long getDataSize(boolean singleReplica, boolean filterSizeZero);
 
     public long getRemoteDataSize() {
         return 0;
