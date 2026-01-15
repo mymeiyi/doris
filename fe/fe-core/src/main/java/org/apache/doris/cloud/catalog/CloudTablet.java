@@ -19,6 +19,7 @@ package org.apache.doris.cloud.catalog;
 
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.Replica;
+import org.apache.doris.catalog.Replica.ReplicaState;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.common.InternalErrorCode;
 import org.apache.doris.common.UserException;
@@ -111,6 +112,22 @@ public class CloudTablet extends Tablet implements GsonPostProcessable {
             return null;
         }
         return (CloudReplica) replica;
+    }
+
+    @Override
+    public long getDataSize(boolean singleReplica, boolean filterSizeZero) {
+        if (replica != null && replica.getState() == ReplicaState.NORMAL) {
+            return replica.getDataSize();
+        }
+        return 0;
+    }
+
+    @Override
+    public long getRowCount(boolean singleReplica) {
+        if (replica != null && replica.getState() == ReplicaState.NORMAL) {
+            return replica.getRowCount();
+        }
+        return 0;
     }
 
     @Override

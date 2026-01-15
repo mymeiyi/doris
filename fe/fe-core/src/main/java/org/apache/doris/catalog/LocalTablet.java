@@ -17,6 +17,7 @@
 
 package org.apache.doris.catalog;
 
+import org.apache.doris.catalog.Replica.ReplicaState;
 import org.apache.doris.clone.TabletSchedCtx;
 import org.apache.doris.clone.TabletSchedCtx.Priority;
 import org.apache.doris.common.Config;
@@ -33,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
+import java.util.stream.LongStream;
 
 public class LocalTablet extends Tablet {
     private static final Logger LOG = LogManager.getLogger(LocalTablet.class);
@@ -114,6 +116,33 @@ public class LocalTablet extends Tablet {
         }
         // return replica with max remoteDataSize
         return replicas.stream().max(Comparator.comparing(Replica::getRemoteDataSize)).get().getRemoteDataSize();
+    }
+
+    @Override
+    public Replica getReplicaById(long replicaId) {
+        for (Replica replica : getReplicas()) {
+            if (replica.getId() == replicaId) {
+                return replica;
+            }
+        }
+        return null;
+    }
+
+    // ATTN: Replica::getDataSize may zero in cloud and non-cloud
+    // due to dataSize not write to image
+    @Override
+    public long getDataSize(boolean singleReplica, boolean filterSizeZero) {
+        LongStream s = getReplicas().stream().filter(r -> r.getState() == ReplicaState.NORMAL)
+                .filter(r -> !filterSizeZero || r.getDataSize() > 0)
+                .mapToLong(Replica::getDataSize);
+        return singleReplica ? Double.valueOf(s.average().orElse(0)).longValue() : s.sum();
+    }
+
+    @Override
+    public long getRowCount(boolean singleReplica) {
+        LongStream s = getReplicas().stream().filter(r -> r.getState() == ReplicaState.NORMAL)
+                .mapToLong(Replica::getRowCount);
+        return singleReplica ? Double.valueOf(s.average().orElse(0)).longValue() : s.sum();
     }
 
     @Override
