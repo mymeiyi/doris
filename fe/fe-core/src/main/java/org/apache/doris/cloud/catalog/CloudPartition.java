@@ -148,6 +148,7 @@ public class CloudPartition extends Partition {
                 .setTableId(this.tableId)
                 .setPartitionId(super.getId())
                 .setBatchMode(false)
+                .setWaitForPendingTxn(waitForPendingTxns)
                 .build();
 
         try {
