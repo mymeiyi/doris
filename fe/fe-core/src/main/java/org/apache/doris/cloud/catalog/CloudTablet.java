@@ -25,13 +25,13 @@ import org.apache.doris.common.UserException;
 import org.apache.doris.persist.gson.GsonPostProcessable;
 import org.apache.doris.system.SystemInfoService;
 
-import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -82,33 +82,35 @@ public class CloudTablet extends Tablet implements GsonPostProcessable {
         return backendPathMapReprocess(pathMap);
     }
 
-    private boolean isLatestReplicaAndDeleteOld(Replica newReplica) {
-        if (replica == null) {
-            return true;
-        }
-        if (replica.getVersion() <= newReplica.getVersion()) {
-            replica = null;
-            return true;
-        }
-        return false;
-    }
-
     @Override
     public void addReplica(Replica replica, boolean isRestore) {
-        if (isLatestReplicaAndDeleteOld(replica)) {
-            this.replica = replica;
-            if (!isRestore) {
-                Env.getCurrentInvertedIndex().addReplica(id, replica);
-            }
+        this.replica = replica;
+        if (!isRestore) {
+            Env.getCurrentInvertedIndex().addReplica(id, replica);
         }
     }
 
     @Override
     public List<Replica> getReplicas() {
         if (replica == null) {
-            return Lists.newArrayList();
+            return Collections.emptyList();
         }
-        return Lists.newArrayList(replica);
+        return Collections.singletonList(replica);
+    }
+
+    @Override
+    public Replica getReplicaById(long replicaId) {
+        if (replica != null && replica.getId() == replicaId) {
+            return replica;
+        }
+        return null;
+    }
+
+    public CloudReplica getCloudReplica() {
+        if (replica == null) {
+            return null;
+        }
+        return (CloudReplica) replica;
     }
 
     @Override
