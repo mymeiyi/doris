@@ -34,6 +34,7 @@ import org.apache.doris.qe.StmtExecutor;
 import org.apache.doris.rpc.RpcException;
 import org.apache.doris.service.FrontendOptions;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -56,7 +57,7 @@ public class CloudPartition extends Partition {
     private long tableId;
 
     // This value is set when get the version from meta-service, 0 means version is not cached yet
-    private long lastVersionCachedTimeMs = 0;
+    private volatile long lastVersionCachedTimeMs = 0;
 
     private ReentrantLock lock = new ReentrantLock(true);
 
@@ -115,8 +116,16 @@ public class CloudPartition extends Partition {
         return super.getVisibleVersion();
     }
 
-    public boolean isCachedVersionExpired() {
-        long cacheExpirationMs = SessionVariable.cloudPartitionVersionCacheTtlMs;
+    @VisibleForTesting
+    protected boolean isCachedVersionExpired() {
+        if (lastVersionCachedTimeMs == 0) {
+            return true;
+        }
+        ConnectContext ctx = ConnectContext.get();
+        if (ctx == null) {
+            return true;
+        }
+        long cacheExpirationMs = ctx.getSessionVariable().cloudPartitionVersionCacheTtlMs;
         if (cacheExpirationMs <= 0) { // always expired
             return true;
         }
@@ -148,6 +157,7 @@ public class CloudPartition extends Partition {
                 .setTableId(this.tableId)
                 .setPartitionId(super.getId())
                 .setBatchMode(false)
+                .setWaitForPendingTxn(waitForPendingTxns)
                 .build();
 
         try {
