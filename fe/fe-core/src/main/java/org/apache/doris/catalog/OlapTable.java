@@ -3304,10 +3304,10 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
     @VisibleForTesting
     protected void setCachedTableVersion(long version) {
-        if (version > cachedTableVersion) {
+        if (version >= cachedTableVersion) {
             cachedTableVersion = version;
+            lastTableVersionCachedTimeMs = System.currentTimeMillis();
         }
-        lastTableVersionCachedTimeMs = System.currentTimeMillis();
     }
 
     public long getCachedTableVersion() {

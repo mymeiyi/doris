@@ -35,17 +35,6 @@ import java.util.List;
 
 public class CloudPartitionTest {
 
-    /*@Mocked
-    private ConnectContext connectContext;
-
-    private void runBefore() {
-        new Expectations() {
-            ConnectContext.get();
-            minTimes = 0;
-            result = connectContext;
-        };
-    }*/
-
     @Ignore
     public void getCachedVisibleVersion() {
     }
