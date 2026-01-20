@@ -34,11 +34,13 @@ import org.apache.doris.qe.StmtExecutor;
 import org.apache.doris.rpc.RpcException;
 import org.apache.doris.service.FrontendOptions;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.gson.annotations.SerializedName;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -56,7 +58,7 @@ public class CloudPartition extends Partition {
     private long tableId;
 
     // This value is set when get the version from meta-service, 0 means version is not cached yet
-    private long lastVersionCachedTimeMs = 0;
+    private volatile long lastVersionCachedTimeMs = 0;
 
     private ReentrantLock lock = new ReentrantLock(true);
 
@@ -96,7 +98,7 @@ public class CloudPartition extends Partition {
         return;
     }
 
-    public void setCachedVisibleVersion(long version, Long versionUpdateTimeMs) {
+    public void setCachedVisibleVersion(long version, long versionUpdateTimeMs) {
         // we only care the version should increase monotonically and ignore the readers
         LOG.debug("setCachedVisibleVersion use CloudPartition {}, version: {}, old version: {}",
                 super.getId(), version, super.getVisibleVersion());
@@ -115,8 +117,16 @@ public class CloudPartition extends Partition {
         return super.getVisibleVersion();
     }
 
-    public boolean isCachedVersionExpired() {
-        long cacheExpirationMs = SessionVariable.cloudPartitionVersionCacheTtlMs;
+    @VisibleForTesting
+    protected boolean isCachedVersionExpired() {
+        if (lastVersionCachedTimeMs == 0) {
+            return true;
+        }
+        ConnectContext ctx = ConnectContext.get();
+        if (ctx == null) {
+            return true;
+        }
+        long cacheExpirationMs = ctx.getSessionVariable().cloudPartitionVersionCacheTtlMs;
         if (cacheExpirationMs <= 0) { // always expired
             return true;
         }
@@ -148,6 +158,7 @@ public class CloudPartition extends Partition {
                 .setTableId(this.tableId)
                 .setPartitionId(super.getId())
                 .setBatchMode(false)
+                .setWaitForPendingTxn(waitForPendingTxns)
                 .build();
 
         try {
@@ -251,7 +262,7 @@ public class CloudPartition extends Partition {
     // Return the visible version in order of the specified partition ids, -1 means version NOT FOUND.
     public static List<Long> getSnapshotVisibleVersion(List<CloudPartition> partitions) throws RpcException {
         if (partitions.isEmpty()) {
-            return new ArrayList<>();
+            return Collections.emptyList();
         }
 
         if (SessionVariable.cloudPartitionVersionCacheTtlMs <= 0) { // No cached versions will be used
@@ -259,8 +270,8 @@ public class CloudPartition extends Partition {
         }
 
         // partitionId -> cachedVersion
-        List<Pair<Long, Long>> allVersions = new ArrayList<>();
-        List<CloudPartition> expiredPartitions = new ArrayList<>();
+        List<Pair<Long, Long>> allVersions = new ArrayList<>(partitions.size());
+        List<CloudPartition> expiredPartitions = new ArrayList<>(partitions.size());
         for (CloudPartition partition : partitions) {
             long ver = partition.getCachedVisibleVersion();
             if (partition.isCachedVersionExpired()) {
