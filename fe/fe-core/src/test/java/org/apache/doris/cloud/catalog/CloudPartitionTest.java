@@ -19,11 +19,13 @@ package org.apache.doris.cloud.catalog;
 
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.VersionHelper;
-import org.apache.doris.qe.SessionVariable;
+import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.rpc.RpcException;
 
+import mockit.Expectations;
 import mockit.Mock;
 import mockit.MockUp;
+import mockit.Mocked;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
@@ -33,6 +35,17 @@ import java.util.Arrays;
 import java.util.List;
 
 public class CloudPartitionTest {
+
+    @Mocked
+    private ConnectContext connectContext;
+
+    private void runBefore() {
+        new Expectations() {
+            ConnectContext.get();
+            minTimes = 0;
+            result = connectContext;
+        };
+    }
 
     @Ignore
     public void getCachedVisibleVersion() {
@@ -44,13 +57,14 @@ public class CloudPartitionTest {
 
     @Test
     public void testIsCachedVersionExpired() {
+        runBefore();
         // test isCachedVersionExpired
         CloudPartition part = createPartition(1, 2, 3);
-        SessionVariable.cloudPartitionVersionCacheTtlMs = 0;
+        connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = 0;
         Assertions.assertTrue(part.isCachedVersionExpired());
-        SessionVariable.cloudPartitionVersionCacheTtlMs = -10086;
+        connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = -10086;
         part.setCachedVisibleVersion(2, 10086L); // update version and last cache time
-        SessionVariable.cloudPartitionVersionCacheTtlMs = 10000;
+        connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = 10000;
         Assertions.assertFalse(part.isCachedVersionExpired()); // not expired due to long expiration duration
         Assertions.assertEquals(2, part.getCachedVisibleVersion());
 
@@ -58,6 +72,7 @@ public class CloudPartitionTest {
 
     @Test
     public void testCachedVersion() throws RpcException {
+        runBefore();
         CloudPartition part = createPartition(1, 2, 3);
         List<CloudPartition> parts = new ArrayList<>();
         for (long i = 0; i < 3; ++i) {
@@ -87,7 +102,7 @@ public class CloudPartitionTest {
         };
         // CHECKSTYLE ON
 
-        SessionVariable.cloudPartitionVersionCacheTtlMs = -1; // disable cache
+        connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = -1; // disable cache
             {
                 // test single get version
                 Assertions.assertEquals(2, part.getVisibleVersion()); // should not get from cache
@@ -106,7 +121,7 @@ public class CloudPartitionTest {
             }
 
         // enable change expiration and make it cached in long duration
-        SessionVariable.cloudPartitionVersionCacheTtlMs = 100000;
+        connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = 100000;
             {
                 // test single get version
                 Assertions.assertEquals(2, part.getVisibleVersion()); // cached version
@@ -125,7 +140,7 @@ public class CloudPartitionTest {
             }
 
         // enable change expiration and make it expired
-        SessionVariable.cloudPartitionVersionCacheTtlMs = 500;
+        connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = 500;
         try {
             Thread.sleep(550);
         } catch (InterruptedException e) {
