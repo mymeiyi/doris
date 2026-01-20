@@ -265,7 +265,9 @@ public class CloudPartition extends Partition {
             return Collections.emptyList();
         }
 
-        if (SessionVariable.cloudPartitionVersionCacheTtlMs <= 0) { // No cached versions will be used
+        long cloudPartitionVersionCacheTtlMs = ConnectContext.get() == null ? 0
+                : ConnectContext.get().getSessionVariable().cloudPartitionVersionCacheTtlMs;
+        if (cloudPartitionVersionCacheTtlMs <= 0) { // No cached versions will be used
             return getSnapshotVisibleVersionFromMs(partitions, false);
         }
 
@@ -283,8 +285,7 @@ public class CloudPartition extends Partition {
 
         if (LOG.isDebugEnabled()) {
             LOG.debug("cloudPartitionVersionCacheTtlMs={}, numPartitions={}, numFilteredPartitions={}",
-                    SessionVariable.cloudPartitionVersionCacheTtlMs,
-                    partitions.size(), partitions.size() - expiredPartitions.size());
+                    cloudPartitionVersionCacheTtlMs, partitions.size(), partitions.size() - expiredPartitions.size());
         }
 
         List<Long> versions = null;
