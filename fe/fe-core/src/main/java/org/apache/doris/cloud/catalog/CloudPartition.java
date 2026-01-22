@@ -144,7 +144,7 @@ public class CloudPartition extends Partition {
         return getVisibleVersionFromMs(false);
     }
 
-    public long getVisibleVersionFromMs(boolean waitForPendingTxns) {
+    private long getVisibleVersionFromMs(boolean waitForPendingTxns) {
         if (LOG.isDebugEnabled()) {
             LOG.debug("getVisibleVersionFromMs use CloudPartition {}, waitForPendingTxns: {}",
                     super.getName(), waitForPendingTxns);
