@@ -201,6 +201,7 @@ public class OlapAnalysisTask extends BaseAnalysisTask {
                 LOG.info("sout: call get tablet rows");
                 long tabletRows = materializedIndex.getTablet(tabletId)
                         .getMinReplicaRowCount(p.getCachedVisibleVersion());
+                LOG.info("sout: call get tablet rows: {}", tabletRows);
                 if (tabletRows > MAXIMUM_SAMPLE_ROWS) {
                     LOG.debug("Found one large tablet id {} in table {}, rows {}",
                             largeTabletId, tbl.getName(), largeTabletRows);
