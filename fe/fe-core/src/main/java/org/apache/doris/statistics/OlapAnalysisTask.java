@@ -175,6 +175,7 @@ public class OlapAnalysisTask extends BaseAnalysisTask {
                 Comparator.comparing(Partition::getName)).collect(Collectors.toList());
         long largeTabletId = 0;
         long largeTabletRows = Long.MAX_VALUE;
+        LOG.info("sout: partition size: {}", sortedPartitions.size());
         for (Partition p : sortedPartitions) {
             MaterializedIndex materializedIndex = info.indexId == -1 ? p.getBaseIndex() : p.getIndex(info.indexId);
             if (materializedIndex == null) {
