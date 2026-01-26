@@ -52,6 +52,8 @@ import mockit.Mock;
 import mockit.MockUp;
 import mockit.Mocked;
 import org.apache.commons.text.StringSubstitutor;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -62,6 +64,7 @@ import java.util.List;
 import java.util.Map;
 
 public class OlapAnalysisTaskTest {
+    public static final Logger LOG = LogManager.getLogger(OlapAnalysisTaskTest.class);
 
     // test manual
     @Test
@@ -707,6 +710,7 @@ public class OlapAnalysisTaskTest {
         new MockUp<Tablet>() {
             @Mock
             public long getMinReplicaRowCount(long version) {
+                LOG.info("getMinReplicaRowCount called, i={}", i[0]);
                 return tabletsRowCount[i[0]++];
             }
         };

@@ -133,8 +133,10 @@ public class CloudTablet extends Tablet implements GsonPostProcessable {
     @Override
     public long getMinReplicaRowCount(long version) {
         if (replica != null && replica.isAlive() && replica.checkVersionCatchUp(version, false)) {
+            LOG.info("sout: cloud 1, row count {}", replica.getRowCount());
             return replica.getRowCount();
         }
+        LOG.info("sout: cloud 0");
         return 0;
     }
 

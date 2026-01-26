@@ -198,7 +198,7 @@ public class OlapAnalysisTask extends BaseAnalysisTask {
                 long tabletId = ids.get(seekTid);
                 // for local mode, getCachedVisibleVersion return visibleVersion.
                 // for cloud mode, the replica.checkVersionCatchUp always returns true.
-                LOG.info("sout: call get tablet rows");
+                LOG.info("sout: call get tablet rows, v: {}", p.getCachedVisibleVersion());
                 long tabletRows = materializedIndex.getTablet(tabletId)
                         .getMinReplicaRowCount(p.getCachedVisibleVersion());
                 LOG.info("sout: call get tablet rows: {}", tabletRows);

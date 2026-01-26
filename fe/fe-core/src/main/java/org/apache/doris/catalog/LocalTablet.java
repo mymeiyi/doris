@@ -160,6 +160,7 @@ public class LocalTablet extends Tablet {
                 maxReplicaVersion = r.getVersion();
             }
         }
+        LOG.info("sout: local min row count {}, max replica version {}", minRowCount, maxReplicaVersion);
         return minRowCount == Long.MAX_VALUE ? 0 : minRowCount;
     }
 
