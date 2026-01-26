@@ -200,7 +200,7 @@ public class OlapAnalysisTask extends BaseAnalysisTask {
                 // for cloud mode, the replica.checkVersionCatchUp always returns true.
                 LOG.info("sout: call get tablet rows, v: {}", p.getCachedVisibleVersion());
                 long tabletRows = materializedIndex.getTablet(tabletId)
-                        .getMinReplicaRowCount(p.getCachedVisibleVersion());
+                        .getMinReplicaRowCount(p.getVisibleVersion());
                 LOG.info("sout: call get tablet rows: {}", tabletRows);
                 if (tabletRows > MAXIMUM_SAMPLE_ROWS) {
                     LOG.debug("Found one large tablet id {} in table {}, rows {}",
