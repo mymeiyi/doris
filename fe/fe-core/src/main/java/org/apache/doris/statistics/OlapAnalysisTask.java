@@ -191,11 +191,14 @@ public class OlapAnalysisTask extends BaseAnalysisTask {
             tabletCounts = Math.min(tabletCounts, ids.size());
             long seek = tableSample.getSeek() != -1 ? tableSample.getSeek()
                     : (long) (new SecureRandom().nextDouble() * ids.size());
+            LOG.info("sout: tabletCounts: {}, id size: {}, avgTargetRowsPerPartition: {}, avgRowsPerTablet: {}",
+                    tabletCounts, ids.size(), avgTargetRowsPerPartition, avgRowsPerTablet);
             for (int i = 0; i < tabletCounts; i++) {
                 int seekTid = (int) ((i + seek) % ids.size());
                 long tabletId = ids.get(seekTid);
                 // for local mode, getCachedVisibleVersion return visibleVersion.
                 // for cloud mode, the replica.checkVersionCatchUp always returns true.
+                LOG.info("sout: call get tablet rows");
                 long tabletRows = materializedIndex.getTablet(tabletId)
                         .getMinReplicaRowCount(p.getCachedVisibleVersion());
                 if (tabletRows > MAXIMUM_SAMPLE_ROWS) {
