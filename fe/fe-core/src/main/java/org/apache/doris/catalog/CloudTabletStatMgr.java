@@ -35,6 +35,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -48,7 +49,7 @@ import java.util.concurrent.Future;
 public class CloudTabletStatMgr extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(CloudTabletStatMgr.class);
 
-    private volatile List<OlapTable.Statistics> cloudTableStatsList = new ArrayList<>();
+    private volatile List<OlapTable.Statistics> cloudTableStatsList = null;
 
     private static final ExecutorService GET_TABLET_STATS_THREAD_POOL = Executors.newFixedThreadPool(
             Config.max_get_tablet_stat_task_threads_num);
@@ -59,6 +60,11 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
     @Override
     protected void runAfterCatalogReady() {
+        if (cloudTableStatsList == null) {
+            // when start fe, update table statistics info by replica statistics info saved in image.
+            // because the get_tablet_stats rpc may consume a long time.
+            updateStatInfo(Env.getCurrentInternalCatalog().getDbIds());
+        }
         LOG.info("cloud tablet stat begin");
         List<Long> dbIds = getAllTabletStats();
         updateStatInfo(dbIds);
@@ -281,8 +287,8 @@ public class CloudTabletStatMgr extends MasterDaemon {
                             tableReplicaCount, tableRowCount, tableRowsetCount, tableSegmentCount,
                             tableTotalLocalIndexSize, tableTotalLocalSegmentSize, 0L, 0L);
                     olapTable.setStatistics(tableStats);
-                    LOG.debug("finished to set row num for table: {} in database: {}",
-                             table.getName(), db.getFullName());
+                    LOG.debug("finished to set row num for table: {} in database: {}, dataSize: {}",
+                            table.getName(), db.getFullName(), tableStats.getDataSize());
                 } finally {
                     table.readUnlock();
                 }
@@ -363,6 +369,6 @@ public class CloudTabletStatMgr extends MasterDaemon {
     }
 
     public List<OlapTable.Statistics> getCloudTableStats() {
-        return this.cloudTableStatsList;
+        return this.cloudTableStatsList == null ? Collections.emptyList() : this.cloudTableStatsList;
     }
 }
