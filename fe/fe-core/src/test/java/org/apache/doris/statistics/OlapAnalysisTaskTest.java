@@ -23,6 +23,7 @@ import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.DataProperty;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.KeysType;
+import org.apache.doris.catalog.LocalTablet;
 import org.apache.doris.catalog.MaterializedIndex;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Partition;
@@ -708,7 +709,7 @@ public class OlapAnalysisTaskTest {
                 return t;
             }
         };
-        new MockUp<Tablet>() {
+        new MockUp<LocalTablet>() {
             @Mock
             public long getMinReplicaRowCount(long version) {
                 LOG.info("getMinReplicaRowCount called, i={}", i[0]);
