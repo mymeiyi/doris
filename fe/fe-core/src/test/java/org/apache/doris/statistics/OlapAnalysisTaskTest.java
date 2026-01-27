@@ -656,7 +656,7 @@ public class OlapAnalysisTaskTest {
     }
 
     @Test
-    public void testGetSampleTablets(@Mocked MaterializedIndex index, @Mocked Tablet t) {
+    public void testGetSampleTablets(@Mocked MaterializedIndex index, @Mocked LocalTablet t) {
         OlapAnalysisTask task = new OlapAnalysisTask();
         task.tbl = new OlapTable();
         task.col = new Column("col1", PrimitiveType.STRING);
