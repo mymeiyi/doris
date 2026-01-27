@@ -1516,16 +1516,6 @@ public final class MetricRepo {
         MetricRepo.DORIS_METRIC_REGISTER.addMetrics(gauge);
     }
 
-    public static void updateMetaServiceRpcPerMinute(String methodName, double value, List<MetricLabel> labels) {
-        if (!MetricRepo.isInit || Config.isNotCloudMode() || Strings.isNullOrEmpty(methodName)) {
-            return;
-        }
-        GaugeMetricImpl<Double> gauge = CloudMetrics.META_SERVICE_RPC_PER_MINUTE.getOrAdd(methodName);
-        gauge.setValue(value);
-        gauge.setLabels(labels);
-        MetricRepo.DORIS_METRIC_REGISTER.addMetrics(gauge);
-    }
-
     public static void updateClusterBackendAlive(String clusterName, String clusterId, String ipAddress,
             boolean alive) {
         if (!MetricRepo.isInit || Config.isNotCloudMode() || Strings.isNullOrEmpty(clusterName)

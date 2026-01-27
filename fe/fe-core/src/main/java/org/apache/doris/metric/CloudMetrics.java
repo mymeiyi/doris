@@ -51,12 +51,6 @@ public class CloudMetrics {
     protected static AutoMappedMetric<LongCounterMetric> CLUSTER_CLOUD_SMOOTH_UPGRADE_BALANCE_NUM;
     protected static AutoMappedMetric<LongCounterMetric> CLUSTER_CLOUD_WARM_UP_CACHE_BALANCE_NUM;
 
-    // Meta Service RPC metrics
-    public static AutoMappedMetric<LongCounterMetric> META_SERVICE_RPC_ALL_COUNTER;
-    public static AutoMappedMetric<LongCounterMetric> META_SERVICE_RPC_FAILED_COUNTER;
-    public static AutoMappedMetric<LongCounterMetric> META_SERVICE_RPC_LATENCY;
-    protected static AutoMappedMetric<GaugeMetricImpl<Double>> META_SERVICE_RPC_PER_MINUTE;
-
     protected static void init() {
         if (Config.isNotCloudMode()) {
             return;
@@ -112,37 +106,23 @@ public class CloudMetrics {
                         MetricUnit.NOUNIT, "warm up job finished tablets"));
 
         CLUSTER_CLOUD_PARTITION_BALANCE_NUM = new AutoMappedMetric<>(name -> new LongCounterMetric(
-                "cloud_partition_balance_num", MetricUnit.NOUNIT,
-                "current cluster cloud partition balance sync edit log number"));
+            "cloud_partition_balance_num", MetricUnit.NOUNIT,
+            "current cluster cloud partition balance sync edit log number"));
 
         CLUSTER_CLOUD_TABLE_BALANCE_NUM = new AutoMappedMetric<>(name -> new LongCounterMetric(
-                "cloud_table_balance_num", MetricUnit.NOUNIT,
-                "current cluster cloud table balance sync edit log number"));
+            "cloud_table_balance_num", MetricUnit.NOUNIT,
+            "current cluster cloud table balance sync edit log number"));
 
         CLUSTER_CLOUD_GLOBAL_BALANCE_NUM = new AutoMappedMetric<>(name -> new LongCounterMetric(
-                "cloud_global_balance_num", MetricUnit.NOUNIT,
-                "current cluster cloud be balance sync edit log number"));
+            "cloud_global_balance_num", MetricUnit.NOUNIT,
+            "current cluster cloud be balance sync edit log number"));
 
         CLUSTER_CLOUD_SMOOTH_UPGRADE_BALANCE_NUM = new AutoMappedMetric<>(name -> new LongCounterMetric(
-                "cloud_smooth_upgrade_balance_num", MetricUnit.NOUNIT,
-                "current cluster cloud smooth upgrade sync edit log number"));
+            "cloud_smooth_upgrade_balance_num", MetricUnit.NOUNIT,
+            "current cluster cloud smooth upgrade sync edit log number"));
 
         CLUSTER_CLOUD_WARM_UP_CACHE_BALANCE_NUM = new AutoMappedMetric<>(name -> new LongCounterMetric(
-                "cloud_warm_up_balance_num", MetricUnit.NOUNIT,
-                "current cluster cloud warm up cache sync edit log number"));
-
-        // Meta Service RPC metrics
-        META_SERVICE_RPC_ALL_COUNTER = new AutoMappedMetric<>(name -> new LongCounterMetric(
-                "meta_service_rpc_total", MetricUnit.REQUESTS, "total meta service rpc calls"));
-
-        META_SERVICE_RPC_FAILED_COUNTER = new AutoMappedMetric<>(name -> new LongCounterMetric(
-                "meta_service_rpc_failed", MetricUnit.REQUESTS, "failed meta service rpc calls"));
-
-        META_SERVICE_RPC_LATENCY = new AutoMappedMetric<>(name -> new LongCounterMetric(
-                "meta_service_rpc_latency_ms", MetricUnit.MILLISECONDS,
-                "meta service rpc latency in milliseconds"));
-
-        META_SERVICE_RPC_PER_MINUTE = new AutoMappedMetric<>(name -> new GaugeMetricImpl<>(
-                "meta_service_rpc_per_minute", MetricUnit.NOUNIT, "meta service rpc calls per minute", 0.0));
+            "cloud_warm_up_balance_num", MetricUnit.NOUNIT,
+            "current cluster cloud warm up cache sync edit log number"));
     }
 }

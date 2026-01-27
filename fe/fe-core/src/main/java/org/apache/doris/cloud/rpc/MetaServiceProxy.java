@@ -174,38 +174,19 @@ public class MetaServiceProxy {
             this.proxy = proxy;
         }
 
-        public <Response> Response executeRequest(String methodName, Function<MetaServiceClient, Response> function)
-                throws RpcException {
+        public <Response> Response executeRequest(Function<MetaServiceClient, Response> function) throws RpcException {
             long maxRetries = Config.meta_service_rpc_retry_cnt;
             for (long tried = 1; tried <= maxRetries; tried++) {
                 MetaServiceClient client = null;
                 boolean requestFailed = false;
-                long startTime = System.currentTimeMillis();
                 try {
                     client = proxy.getProxy();
-                    Response response = function.apply(client);
-                    // Record success metrics
-                    if (org.apache.doris.metric.MetricRepo.isInit && Config.isCloudMode()) {
-                        long latency = System.currentTimeMillis() - startTime;
-                        org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_ALL_COUNTER.getOrAdd(methodName)
-                                .increase(1L);
-                        org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
-                                .increase(latency);
-                    }
-                    return response;
+                    return function.apply(client);
                 } catch (StatusRuntimeException sre) {
                     requestFailed = true;
-                    // Record failure metrics
-                    if (org.apache.doris.metric.MetricRepo.isInit && Config.isCloudMode()) {
-                        org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_FAILED_COUNTER.getOrAdd(methodName)
-                                .increase(1L);
-                        long latency = System.currentTimeMillis() - startTime;
-                        org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
-                                .increase(latency);
-                    }
                     LOG.warn("failed to request meta service code {}, msg {}, trycnt {}", sre.getStatus().getCode(),
                             sre.getMessage(), tried);
-                    boolean shouldRetry;
+                    boolean shouldRetry = false;
                     switch (sre.getStatus().getCode()) {
                         case UNAVAILABLE:
                         case UNKNOWN:
@@ -222,14 +203,6 @@ public class MetaServiceProxy {
                     }
                 } catch (Exception e) {
                     requestFailed = true;
-                    // Record failure metrics
-                    if (org.apache.doris.metric.MetricRepo.isInit && Config.isCloudMode()) {
-                        org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_FAILED_COUNTER.getOrAdd(methodName)
-                                .increase(1L);
-                        long latency = System.currentTimeMillis() - startTime;
-                        org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
-                                .increase(latency);
-                    }
                     LOG.warn("failed to request meta servive trycnt {}", tried, e);
                     if (tried >= maxRetries) {
                         throw new RpcException("", e.getMessage(), e);
@@ -258,8 +231,6 @@ public class MetaServiceProxy {
     public Future<Cloud.GetVersionResponse> getVisibleVersionAsync(Cloud.GetVersionRequest request)
             throws RpcException {
         MetaServiceClient client = null;
-        long startTime = System.currentTimeMillis();
-        String methodName = "getVisibleVersionAsync";
         try {
             client = getProxy();
             Future<Cloud.GetVersionResponse> future = client.getVisibleVersionAsync(request);
@@ -271,26 +242,10 @@ public class MetaServiceProxy {
                         new com.google.common.util.concurrent.FutureCallback<Cloud.GetVersionResponse>() {
                             @Override
                             public void onSuccess(Cloud.GetVersionResponse result) {
-                                // Record success metrics
-                                if (org.apache.doris.metric.MetricRepo.isInit && Config.isCloudMode()) {
-                                    long latency = System.currentTimeMillis() - startTime;
-                                    org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_ALL_COUNTER
-                                            .getOrAdd(methodName).increase(1L);
-                                    org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_LATENCY
-                                            .getOrAdd(methodName).increase(latency);
-                                }
                             }
 
                             @Override
                             public void onFailure(Throwable t) {
-                                // Record failure metrics
-                                if (org.apache.doris.metric.MetricRepo.isInit && Config.isCloudMode()) {
-                                    long latency = System.currentTimeMillis() - startTime;
-                                    org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_FAILED_COUNTER
-                                            .getOrAdd(methodName).increase(1L);
-                                    org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_LATENCY
-                                            .getOrAdd(methodName).increase(latency);
-                                }
                                 if (finalClient != null) {
                                     finalClient.shutdown(true);
                                 }
@@ -299,14 +254,6 @@ public class MetaServiceProxy {
             }
             return future;
         } catch (Exception e) {
-            // Record failure metrics for exception during setup
-            if (org.apache.doris.metric.MetricRepo.isInit && Config.isCloudMode()) {
-                long latency = System.currentTimeMillis() - startTime;
-                org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_FAILED_COUNTER
-                        .getOrAdd(methodName).increase(1L);
-                org.apache.doris.metric.CloudMetrics.META_SERVICE_RPC_LATENCY
-                        .getOrAdd(methodName).increase(latency);
-            }
             if (client != null) {
                 client.shutdown(true);
             }
@@ -315,163 +262,162 @@ public class MetaServiceProxy {
     }
 
     public Cloud.GetVersionResponse getVersion(Cloud.GetVersionRequest request) throws RpcException {
-        return w.executeRequest("getVersion", (client) -> client.getVersion(request));
+        return w.executeRequest((client) -> client.getVersion(request));
     }
 
     public Cloud.CreateTabletsResponse createTablets(Cloud.CreateTabletsRequest request) throws RpcException {
-        return w.executeRequest("createTablets", (client) -> client.createTablets(request));
+        return w.executeRequest((client) -> client.createTablets(request));
     }
 
     public Cloud.UpdateTabletResponse updateTablet(Cloud.UpdateTabletRequest request) throws RpcException {
-        return w.executeRequest("updateTablet", (client) -> client.updateTablet(request));
+        return w.executeRequest((client) -> client.updateTablet(request));
     }
 
     public Cloud.BeginTxnResponse beginTxn(Cloud.BeginTxnRequest request)
             throws RpcException {
-        return w.executeRequest("beginTxn", (client) -> client.beginTxn(request));
+        return w.executeRequest((client) -> client.beginTxn(request));
     }
 
     public Cloud.PrecommitTxnResponse precommitTxn(Cloud.PrecommitTxnRequest request)
             throws RpcException {
-        return w.executeRequest("precommitTxn", (client) -> client.precommitTxn(request));
+        return w.executeRequest((client) -> client.precommitTxn(request));
     }
 
     public Cloud.CommitTxnResponse commitTxn(Cloud.CommitTxnRequest request)
             throws RpcException {
-        return w.executeRequest("commitTxn", (client) -> client.commitTxn(request));
+        return w.executeRequest((client) -> client.commitTxn(request));
     }
 
     public Cloud.AbortTxnResponse abortTxn(Cloud.AbortTxnRequest request)
             throws RpcException {
-        return w.executeRequest("abortTxn", (client) -> client.abortTxn(request));
+        return w.executeRequest((client) -> client.abortTxn(request));
     }
 
     public Cloud.GetTxnResponse getTxn(Cloud.GetTxnRequest request)
             throws RpcException {
-        return w.executeRequest("getTxn", (client) -> client.getTxn(request));
+        return w.executeRequest((client) -> client.getTxn(request));
     }
 
     public Cloud.GetTxnIdResponse getTxnId(Cloud.GetTxnIdRequest request)
             throws RpcException {
-        return w.executeRequest("getTxnId", (client) -> client.getTxnId(request));
+        return w.executeRequest((client) -> client.getTxnId(request));
     }
 
     public Cloud.GetCurrentMaxTxnResponse getCurrentMaxTxnId(Cloud.GetCurrentMaxTxnRequest request)
             throws RpcException {
-        return w.executeRequest("getCurrentMaxTxnId", (client) -> client.getCurrentMaxTxnId(request));
+        return w.executeRequest((client) -> client.getCurrentMaxTxnId(request));
     }
 
     public Cloud.BeginSubTxnResponse beginSubTxn(Cloud.BeginSubTxnRequest request)
             throws RpcException {
-        return w.executeRequest("beginSubTxn", (client) -> client.beginSubTxn(request));
+        return w.executeRequest((client) -> client.beginSubTxn(request));
     }
 
     public Cloud.AbortSubTxnResponse abortSubTxn(Cloud.AbortSubTxnRequest request)
             throws RpcException {
-        return w.executeRequest("abortSubTxn", (client) -> client.abortSubTxn(request));
+        return w.executeRequest((client) -> client.abortSubTxn(request));
     }
 
     public Cloud.CheckTxnConflictResponse checkTxnConflict(Cloud.CheckTxnConflictRequest request)
             throws RpcException {
-        return w.executeRequest("checkTxnConflict", (client) -> client.checkTxnConflict(request));
+        return w.executeRequest((client) -> client.checkTxnConflict(request));
     }
 
     public Cloud.CleanTxnLabelResponse cleanTxnLabel(Cloud.CleanTxnLabelRequest request)
             throws RpcException {
-        return w.executeRequest("cleanTxnLabel", (client) -> client.cleanTxnLabel(request));
+        return w.executeRequest((client) -> client.cleanTxnLabel(request));
     }
 
     public Cloud.GetClusterResponse getCluster(Cloud.GetClusterRequest request) throws RpcException {
-        return w.executeRequest("getCluster", (client) -> client.getCluster(request));
+        return w.executeRequest((client) -> client.getCluster(request));
     }
 
     public Cloud.IndexResponse prepareIndex(Cloud.IndexRequest request) throws RpcException {
-        return w.executeRequest("prepareIndex", (client) -> client.prepareIndex(request));
+        return w.executeRequest((client) -> client.prepareIndex(request));
     }
 
     public Cloud.IndexResponse commitIndex(Cloud.IndexRequest request) throws RpcException {
-        return w.executeRequest("commitIndex", (client) -> client.commitIndex(request));
+        return w.executeRequest((client) -> client.commitIndex(request));
     }
 
     public Cloud.CheckKVResponse checkKv(Cloud.CheckKVRequest request) throws RpcException {
-        return w.executeRequest("checkKv", (client) -> client.checkKv(request));
+        return w.executeRequest((client) -> client.checkKv(request));
     }
 
     public Cloud.IndexResponse dropIndex(Cloud.IndexRequest request) throws RpcException {
-        return w.executeRequest("dropIndex", (client) -> client.dropIndex(request));
+        return w.executeRequest((client) -> client.dropIndex(request));
     }
 
     public Cloud.PartitionResponse preparePartition(Cloud.PartitionRequest request)
             throws RpcException {
-        return w.executeRequest("preparePartition", (client) -> client.preparePartition(request));
+        return w.executeRequest((client) -> client.preparePartition(request));
     }
 
     public Cloud.PartitionResponse commitPartition(Cloud.PartitionRequest request) throws RpcException {
-        return w.executeRequest("commitPartition", (client) -> client.commitPartition(request));
+        return w.executeRequest((client) -> client.commitPartition(request));
     }
 
     public Cloud.PartitionResponse dropPartition(Cloud.PartitionRequest request) throws RpcException {
-        return w.executeRequest("dropPartition", (client) -> client.dropPartition(request));
+        return w.executeRequest((client) -> client.dropPartition(request));
     }
 
     public Cloud.GetTabletStatsResponse getTabletStats(Cloud.GetTabletStatsRequest request) throws RpcException {
-        return w.executeRequest("getTabletStats", (client) -> client.getTabletStats(request));
+        return w.executeRequest((client) -> client.getTabletStats(request));
     }
 
     public Cloud.CreateStageResponse createStage(Cloud.CreateStageRequest request) throws RpcException {
-        return w.executeRequest("createStage", (client) -> client.createStage(request));
+        return w.executeRequest((client) -> client.createStage(request));
     }
 
     public Cloud.GetStageResponse getStage(Cloud.GetStageRequest request) throws RpcException {
-        return w.executeRequest("getStage", (client) -> client.getStage(request));
+        return w.executeRequest((client) -> client.getStage(request));
     }
 
     public Cloud.DropStageResponse dropStage(Cloud.DropStageRequest request) throws RpcException {
-        return w.executeRequest("dropStage", (client) -> client.dropStage(request));
+        return w.executeRequest((client) -> client.dropStage(request));
     }
 
     public Cloud.GetIamResponse getIam(Cloud.GetIamRequest request) throws RpcException {
-        return w.executeRequest("getIam", (client) -> client.getIam(request));
+        return w.executeRequest((client) -> client.getIam(request));
     }
 
     public Cloud.BeginCopyResponse beginCopy(Cloud.BeginCopyRequest request) throws RpcException {
-        return w.executeRequest("beginCopy", (client) -> client.beginCopy(request));
+        return w.executeRequest((client) -> client.beginCopy(request));
     }
 
     public Cloud.FinishCopyResponse finishCopy(Cloud.FinishCopyRequest request) throws RpcException {
-        return w.executeRequest("finishCopy", (client) -> client.finishCopy(request));
+        return w.executeRequest((client) -> client.finishCopy(request));
     }
 
     public Cloud.GetCopyJobResponse getCopyJob(Cloud.GetCopyJobRequest request) throws RpcException {
-        return w.executeRequest("getCopyJob", (client) -> client.getCopyJob(request));
+        return w.executeRequest((client) -> client.getCopyJob(request));
     }
 
     public Cloud.GetCopyFilesResponse getCopyFiles(Cloud.GetCopyFilesRequest request)
             throws RpcException {
-        return w.executeRequest("getCopyFiles", (client) -> client.getCopyFiles(request));
+        return w.executeRequest((client) -> client.getCopyFiles(request));
     }
 
     public Cloud.FilterCopyFilesResponse filterCopyFiles(Cloud.FilterCopyFilesRequest request)
             throws RpcException {
-        return w.executeRequest("filterCopyFiles", (client) -> client.filterCopyFiles(request));
+        return w.executeRequest((client) -> client.filterCopyFiles(request));
     }
 
     public Cloud.AlterClusterResponse alterCluster(Cloud.AlterClusterRequest request)
             throws RpcException {
-        return w.executeRequest("alterCluster", (client) -> client.alterCluster(request));
+        return w.executeRequest((client) -> client.alterCluster(request));
     }
 
     public Cloud.GetDeleteBitmapUpdateLockResponse getDeleteBitmapUpdateLock(
             Cloud.GetDeleteBitmapUpdateLockRequest request)
             throws RpcException {
-        return w.executeRequest("getDeleteBitmapUpdateLock", (client) -> client.getDeleteBitmapUpdateLock(request));
+        return w.executeRequest((client) -> client.getDeleteBitmapUpdateLock(request));
     }
 
     public Cloud.RemoveDeleteBitmapUpdateLockResponse removeDeleteBitmapUpdateLock(
             Cloud.RemoveDeleteBitmapUpdateLockRequest request)
             throws RpcException {
-        return w.executeRequest("removeDeleteBitmapUpdateLock",
-                (client) -> client.removeDeleteBitmapUpdateLock(request));
+        return w.executeRequest((client) -> client.removeDeleteBitmapUpdateLock(request));
     }
 
     /**
@@ -480,94 +426,93 @@ public class MetaServiceProxy {
     @Deprecated
     public Cloud.AlterObjStoreInfoResponse alterObjStoreInfo(Cloud.AlterObjStoreInfoRequest request)
             throws RpcException {
-        return w.executeRequest("alterObjStoreInfo", (client) -> client.alterObjStoreInfo(request));
+        return w.executeRequest((client) -> client.alterObjStoreInfo(request));
     }
 
     public Cloud.AlterObjStoreInfoResponse alterStorageVault(Cloud.AlterObjStoreInfoRequest request)
             throws RpcException {
-        return w.executeRequest("alterStorageVault", (client) -> client.alterStorageVault(request));
+        return w.executeRequest((client) -> client.alterStorageVault(request));
     }
 
     public Cloud.FinishTabletJobResponse finishTabletJob(Cloud.FinishTabletJobRequest request)
             throws RpcException {
-        return w.executeRequest("finishTabletJob", (client) -> client.finishTabletJob(request));
+        return w.executeRequest((client) -> client.finishTabletJob(request));
     }
 
     public Cloud.GetRLTaskCommitAttachResponse
             getRLTaskCommitAttach(Cloud.GetRLTaskCommitAttachRequest request)
             throws RpcException {
-        return w.executeRequest("getRLTaskCommitAttach", (client) -> client.getRLTaskCommitAttach(request));
+        return w.executeRequest((client) -> client.getRLTaskCommitAttach(request));
     }
 
     public Cloud.ResetRLProgressResponse resetRLProgress(Cloud.ResetRLProgressRequest request)
             throws RpcException {
-        return w.executeRequest("resetRLProgress", (client) -> client.resetRLProgress(request));
+        return w.executeRequest((client) -> client.resetRLProgress(request));
     }
 
     public Cloud.ResetStreamingJobOffsetResponse resetStreamingJobOffset(Cloud.ResetStreamingJobOffsetRequest request)
             throws RpcException {
-        return w.executeRequest("resetStreamingJobOffset", (client) -> client.resetStreamingJobOffset(request));
+        return w.executeRequest((client) -> client.resetStreamingJobOffset(request));
     }
 
     public Cloud.GetObjStoreInfoResponse
             getObjStoreInfo(Cloud.GetObjStoreInfoRequest request) throws RpcException {
-        return w.executeRequest("getObjStoreInfo", (client) -> client.getObjStoreInfo(request));
+        return w.executeRequest((client) -> client.getObjStoreInfo(request));
     }
 
     public Cloud.AbortTxnWithCoordinatorResponse
             abortTxnWithCoordinator(Cloud.AbortTxnWithCoordinatorRequest request) throws RpcException {
-        return w.executeRequest("abortTxnWithCoordinator", (client) -> client.abortTxnWithCoordinator(request));
+        return w.executeRequest((client) -> client.abortTxnWithCoordinator(request));
     }
 
     public Cloud.GetPrepareTxnByCoordinatorResponse
             getPrepareTxnByCoordinator(Cloud.GetPrepareTxnByCoordinatorRequest request) throws RpcException {
-        return w.executeRequest("getPrepareTxnByCoordinator", (client) -> client.getPrepareTxnByCoordinator(request));
+        return w.executeRequest((client) -> client.getPrepareTxnByCoordinator(request));
     }
 
     public Cloud.CreateInstanceResponse createInstance(Cloud.CreateInstanceRequest request) throws RpcException {
-        return w.executeRequest("createInstance", (client) -> client.createInstance(request));
+        return w.executeRequest((client) -> client.createInstance(request));
     }
 
     public Cloud.GetStreamingTaskCommitAttachResponse getStreamingTaskCommitAttach(
             Cloud.GetStreamingTaskCommitAttachRequest request) throws RpcException {
-        return w.executeRequest("getStreamingTaskCommitAttach",
-                (client) -> client.getStreamingTaskCommitAttach(request));
+        return w.executeRequest((client) -> client.getStreamingTaskCommitAttach(request));
     }
 
     public Cloud.DeleteStreamingJobResponse deleteStreamingJob(Cloud.DeleteStreamingJobRequest request)
             throws RpcException {
-        return w.executeRequest("deleteStreamingJob", (client) -> client.deleteStreamingJob(request));
+        return w.executeRequest((client) -> client.deleteStreamingJob(request));
     }
 
     public Cloud.AlterInstanceResponse alterInstance(Cloud.AlterInstanceRequest request) throws RpcException {
-        return w.executeRequest("alterInstance", (client) -> client.alterInstance(request));
+        return w.executeRequest((client) -> client.alterInstance(request));
     }
 
     public Cloud.BeginSnapshotResponse beginSnapshot(Cloud.BeginSnapshotRequest request) throws RpcException {
-        return w.executeRequest("beginSnapshot", (client) -> client.beginSnapshot(request));
+        return w.executeRequest((client) -> client.beginSnapshot(request));
     }
 
     public Cloud.UpdateSnapshotResponse updateSnapshot(Cloud.UpdateSnapshotRequest request) throws RpcException {
-        return w.executeRequest("updateSnapshot", (client) -> client.updateSnapshot(request));
+        return w.executeRequest((client) -> client.updateSnapshot(request));
     }
 
     public Cloud.CommitSnapshotResponse commitSnapshot(Cloud.CommitSnapshotRequest request) throws RpcException {
-        return w.executeRequest("commitSnapshot", (client) -> client.commitSnapshot(request));
+        return w.executeRequest((client) -> client.commitSnapshot(request));
     }
 
     public Cloud.AbortSnapshotResponse abortSnapshot(Cloud.AbortSnapshotRequest request) throws RpcException {
-        return w.executeRequest("abortSnapshot", (client) -> client.abortSnapshot(request));
+        return w.executeRequest((client) -> client.abortSnapshot(request));
     }
 
     public Cloud.ListSnapshotResponse listSnapshot(Cloud.ListSnapshotRequest request) throws RpcException {
-        return w.executeRequest("listSnapshot", (client) -> client.listSnapshot(request));
+        return w.executeRequest((client) -> client.listSnapshot(request));
     }
 
     public Cloud.DropSnapshotResponse dropSnapshot(Cloud.DropSnapshotRequest request) throws RpcException {
-        return w.executeRequest("dropSnapshot", (client) -> client.dropSnapshot(request));
+        return w.executeRequest((client) -> client.dropSnapshot(request));
     }
 
     public Cloud.CloneInstanceResponse cloneInstance(Cloud.CloneInstanceRequest request) throws RpcException {
-        return w.executeRequest("cloneInstance", (client) -> client.cloneInstance(request));
+        return w.executeRequest((client) -> client.cloneInstance(request));
     }
 }

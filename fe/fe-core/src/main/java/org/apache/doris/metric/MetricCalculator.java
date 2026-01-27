@@ -39,9 +39,6 @@ public class MetricCalculator extends TimerTask {
     private Map<String, Long> clusterLastQueryCounter = new HashMap<>();
     private Map<String, Long> clusterLastQueryErrCounter = new HashMap<>();
 
-    // Meta Service RPC metrics tracking
-    private Map<String, Long> metaServiceRpcLastCounter = new HashMap<>();
-
     @Override
     public void run() {
         update();
@@ -53,10 +50,9 @@ public class MetricCalculator extends TimerTask {
             lastTs = currentTs;
             lastQueryCounter = MetricRepo.COUNTER_QUERY_ALL.getValue();
             lastRequestCounter = MetricRepo.COUNTER_REQUEST_ALL.getValue();
-            lastQueryErrCounter = currentErrCounter;
-            lastQuerySlowCounter = currentQuerySlowCounter;
+            lastQueryErrCounter = MetricRepo.COUNTER_QUERY_ERR.getValue();
+            lastQuerySlowCounter = MetricRepo.COUNTER_QUERY_SLOW.getValue();
             initCloudMetrics();
-            initMetaServiceMetrics();
             return;
         }
 
@@ -87,7 +83,6 @@ public class MetricCalculator extends TimerTask {
         lastQuerySlowCounter = currentSlowCounter;
 
         updateCloudMetrics(interval);
-        updateMetaServiceMetrics(interval);
         lastTs = currentTs;
 
         // max tablet compaction score of all backends
@@ -168,39 +163,6 @@ public class MetricCalculator extends TimerTask {
                 MetricRepo.updateClusterQueryErrRate(clusterId, rps, metric.getLabels());
                 MetricRepo.DORIS_METRIC_REGISTER.addMetrics(metric);
                 clusterLastQueryErrCounter.put(clusterId, metric.getValue());
-            });
-        }
-    }
-
-    private void initMetaServiceMetrics() {
-        if (!Config.isCloudMode()) {
-            return;
-        }
-        Map<String, LongCounterMetric> metaServiceRpcAllMetrics =
-                CloudMetrics.META_SERVICE_RPC_ALL_COUNTER.getMetrics();
-        if (metaServiceRpcAllMetrics != null) {
-            metaServiceRpcAllMetrics.forEach((methodName, metric) -> {
-                metaServiceRpcLastCounter.put(methodName, metric.getValue());
-                MetricRepo.DORIS_METRIC_REGISTER.addMetrics(metric);
-            });
-        }
-    }
-
-    private void updateMetaServiceMetrics(long interval) {
-        if (!Config.isCloudMode()) {
-            return;
-        }
-        Map<String, LongCounterMetric> metaServiceRpcAllMetrics =
-                CloudMetrics.META_SERVICE_RPC_ALL_COUNTER.getMetrics();
-        if (metaServiceRpcAllMetrics != null) {
-            metaServiceRpcAllMetrics.forEach((methodName, metric) -> {
-                long currentCount = metric.getValue();
-                long lastCount = metaServiceRpcLastCounter.getOrDefault(methodName, 0L);
-                double rpm = (double) (currentCount - lastCount) * 60.0 / interval;
-                rpm = Double.max(rpm, 0);
-                MetricRepo.updateMetaServiceRpcPerMinute(methodName, rpm, metric.getLabels());
-                MetricRepo.DORIS_METRIC_REGISTER.addMetrics(metric);
-                metaServiceRpcLastCounter.put(methodName, currentCount);
             });
         }
     }
