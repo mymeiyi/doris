@@ -140,16 +140,16 @@ public class CloudMetrics {
 
         // Per-method meta-service RPC metrics
         META_SERVICE_RPC_TOTAL = MetricRepo.addLabeledMetrics("method", () ->
-            new LongCounterMetric("meta_service_rpc_total", MetricUnit.NOUNIT,
-                "total meta service RPC calls"));
+                new LongCounterMetric("meta_service_rpc_total", MetricUnit.NOUNIT,
+                        "total meta service RPC calls"));
 
         META_SERVICE_RPC_FAILED = MetricRepo.addLabeledMetrics("method", () ->
-            new LongCounterMetric("meta_service_rpc_failed", MetricUnit.NOUNIT,
-                "failed meta service RPC calls"));
+                new LongCounterMetric("meta_service_rpc_failed", MetricUnit.NOUNIT,
+                        "failed meta service RPC calls"));
 
         META_SERVICE_RPC_RETRY = MetricRepo.addLabeledMetrics("method", () ->
-            new LongCounterMetric("meta_service_rpc_retry", MetricUnit.NOUNIT,
-                "meta service RPC retry attempts"));
+                new LongCounterMetric("meta_service_rpc_retry", MetricUnit.NOUNIT,
+                        "meta service RPC retry attempts"));
 
         META_SERVICE_RPC_LATENCY = new AutoMappedMetric<>(methodName -> {
             String metricName = MetricRegistry.name("meta_service", "rpc", "latency", "ms",
