@@ -704,6 +704,7 @@ public class OlapAnalysisTaskTest {
 
             @Mock
             public Tablet getTablet(long tabletId) {
+                LOG.info("sout: call getTablet, id={}", tabletId);
                 return t;
             }
         };
