@@ -260,6 +260,20 @@ public class MetaServiceProxy {
     private <Response> Response executeWithMetrics(String methodName, Function<MetaServiceClient, Response> function)
             throws RpcException {
         long startTime = System.currentTimeMillis();
+
+        MetaServiceRateLimiter rateLimiter = MetaServiceRateLimiter.getInstance();
+        boolean acquired = false;
+        try {
+            rateLimiter.acquire(methodName);
+            acquired = true;
+        } catch (RpcRateLimitException e) {
+            if (MetricRepo.isInit && Config.isCloudMode()) {
+                CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
+                CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
+            }
+            throw e;
+        }
+
         if (MetricRepo.isInit && Config.isCloudMode()) {
             CloudMetrics.META_SERVICE_RPC_ALL_TOTAL.increase(1L);
             CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
@@ -280,6 +294,10 @@ public class MetaServiceProxy {
                         .update(System.currentTimeMillis() - startTime);
             }
             throw e;
+        } finally {
+            if (acquired) {
+                rateLimiter.release(methodName);
+            }
         }
     }
 
