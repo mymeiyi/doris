@@ -70,6 +70,9 @@
     2. 导入更新 partition1 的cache version为2，partition2 的cache version为2
     3. 查询1 获取 partiton2 的cache version2
 - 另外，尽量保证未来新加或改的代码，引入非预期的 rpc 调用：默认使用cache
+- 可能存在的问题
+  - 数据可见性是否有问题
+  - master FE 和 follower FE 版本一致性是否有问题
 
 ## 长期思路
 - fe 等节点启动超长连接到 ms，ms 在数据变更后，主动通知相关的节点更新（依赖快照的operation log？）
@@ -132,8 +135,15 @@
 - 收益
   - 对于写入频繁的Partition，stats的获取更及时
   - 对于写入不频繁的Partition，stats变化不大，可以减少较多没有必要的获取
-长期思路
+ - 可能存在的问题
+   - 对master fe依赖过重
+   - master fe和follower fe统计信息不一致的问题
+   - 统计信息不准确的问题  
+     - 导入，compaction，schema change，restore等操作没有正确通知 fe
+     - fe 之间同步统计信息失败
 
-## FE rpc限流
+## 长期思路
 
-## FE 统计信息和version周期持久化
+# FE rpc限流
+
+# FE 统计信息和version周期持久化
