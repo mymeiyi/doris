@@ -1422,6 +1422,7 @@ void MetaServiceImpl::commit_txn_immediately(
         TxnErrorCode& err, KVStats& stats) {
     std::stringstream ss;
     int64_t txn_id = request->txn_id();
+    int64_t table_id = 0;
 
     bool is_versioned_write = is_version_write_enabled(instance_id);
     bool is_versioned_read = is_version_read_enabled(instance_id);
@@ -1753,6 +1754,7 @@ void MetaServiceImpl::commit_txn_immediately(
                 }
             }
             update_table_version(txn.get(), instance_id, db_id, i.first);
+            table_id = i.first;
             commit_txn_log.add_table_ids(i.first);
         }
 
@@ -1888,8 +1890,7 @@ void MetaServiceImpl::commit_txn_immediately(
 
         TEST_SYNC_POINT_RETURN_WITH_VOID("commit_txn_immediately::before_commit", &err, &code);
         // Finally we are done...
-        // err = txn->commit();
-        err = TxnErrorCode::TXN_INVALID_ARGUMENT;
+        err = txn->commit();
         if (err != TxnErrorCode::TXN_OK) {
             if (err == TxnErrorCode::TXN_CONFLICT) {
                 g_bvar_delete_bitmap_lock_txn_remove_conflict_by_load_counter << 1;
@@ -1898,6 +1899,26 @@ void MetaServiceImpl::commit_txn_immediately(
             ss << "failed to commit kv txn, txn_id=" << txn_id << " err=" << err;
             msg = ss.str();
             return;
+        }
+        if (is_versioned_write) {
+            Versionstamp vs;
+            err = txn->get_versionstamp(&vs);
+            if (err == TxnErrorCode::TXN_OK) {
+                LOG(INFO) << "sout: commit txn_id=" << txn_id
+                          << " at versionstamp=" << vs.version();
+                CloneChainReader reader(instance_id, txn_kv_.get(), resource_mgr_.get());
+                Versionstamp table_version;
+                err = reader.get_table_version(table_id, &table_version);
+                if (err == TxnErrorCode::TXN_OK) {
+                    LOG(INFO) << "sout: commit_txn txn_id=" << txn_id << ", table_id=" << table_id
+                              << " get table_version=" << table_version.version()
+                              << ", vs=" << vs.version();
+                }
+            } else {
+                LOG(INFO) << "sout: commit_txn txn_id=" << txn_id << " get vs error=" << err;
+            }
+        } else {
+            LOG(INFO) << "sout: commit_txn txn_id=" << txn_id;
         }
 
         // calculate table stats from tablets stats
