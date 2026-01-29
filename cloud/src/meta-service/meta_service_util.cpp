@@ -78,6 +78,17 @@ void MetaServiceImpl::update_table_version(Transaction* txn, std::string_view in
     LOG_INFO("update table version").tag("db_id", db_id).tag("table_id", table_id);
 
     std::string ver_key = table_version_key({instance_id, db_id, table_id});
+    {
+        std::string ver_val;
+        // 0 for success get a key, 1 for key not found, negative for error
+        err = txn->get(ver_key, &ver_val);
+        if (err == TxnErrorCode::TXN_OK) {
+            int64_t version = 0;
+            if (txn->decode_atomic_int(ver_val, &version)) {
+                LOG(INFO) << "sout: table=" << table_id << " version=" << version;
+            }
+        }
+    }
     txn->atomic_add(ver_key, 1);
     if (is_version_write_enabled(instance_id)) {
         std::string table_version_key = versioned::table_version_key({instance_id, table_id});
