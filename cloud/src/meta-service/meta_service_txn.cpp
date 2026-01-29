@@ -1438,6 +1438,9 @@ void MetaServiceImpl::commit_txn_immediately(
             LOG(WARNING) << msg;
             return;
         }
+        if (is_versioned_write) {
+            txn->enable_get_versionstamp();
+        }
         DORIS_CLOUD_DEFER {
             if (txn == nullptr) return;
             stats.get_bytes += txn->get_bytes();
@@ -1915,7 +1918,7 @@ void MetaServiceImpl::commit_txn_immediately(
                               << ", vs=" << vs.version();
                 }
             } else {
-                LOG(INFO) << "sout: commit_txn txn_id=" << txn_id << " get vs error=" << err;
+                LOG(INFO) << "sout: commit_txn txn_id=" << txn_id << ", get vs error=" << err;
             }
         } else {
             LOG(INFO) << "sout: commit_txn txn_id=" << txn_id;
