@@ -81,7 +81,7 @@ void MetaServiceImpl::update_table_version(Transaction* txn, std::string_view in
     {
         std::string ver_val;
         // 0 for success get a key, 1 for key not found, negative for error
-        err = txn->get(ver_key, &ver_val);
+        auto err = txn->get(ver_key, &ver_val);
         if (err == TxnErrorCode::TXN_OK) {
             int64_t version = 0;
             if (txn->decode_atomic_int(ver_val, &version)) {
