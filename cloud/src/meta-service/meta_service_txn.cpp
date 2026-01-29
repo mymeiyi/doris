@@ -1888,7 +1888,8 @@ void MetaServiceImpl::commit_txn_immediately(
 
         TEST_SYNC_POINT_RETURN_WITH_VOID("commit_txn_immediately::before_commit", &err, &code);
         // Finally we are done...
-        err = txn->commit();
+        // err = txn->commit();
+        err = TxnErrorCode::TXN_INVALID_ARGUMENT;
         if (err != TxnErrorCode::TXN_OK) {
             if (err == TxnErrorCode::TXN_CONFLICT) {
                 g_bvar_delete_bitmap_lock_txn_remove_conflict_by_load_counter << 1;
@@ -2381,8 +2382,7 @@ void MetaServiceImpl::commit_txn_eventually(
                   << " num_del_keys=" << txn->num_del_keys()
                   << " txn_size=" << txn->approximate_bytes() << " txn_id=" << txn_id;
 
-        // err = txn->commit();
-        err = TxnErrorCode::TXN_INVALID_ARGUMENT;
+        err = txn->commit();
         if (err != TxnErrorCode::TXN_OK) {
             if (err == TxnErrorCode::TXN_CONFLICT) {
                 g_bvar_delete_bitmap_lock_txn_remove_conflict_by_load_counter << 1;
