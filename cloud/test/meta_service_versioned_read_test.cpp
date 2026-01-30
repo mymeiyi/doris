@@ -126,6 +126,20 @@ void compact_rowset(TxnKv* txn_kv, std::string instance_id, int64_t tablet_id, i
     ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
 }
 
+static void get_table_version(MetaServiceProxy* meta_service, int64_t db_id, int64_t table_id,
+                              int64_t& version) {
+    brpc::Controller ctrl;
+    GetVersionRequest req;
+    req.set_db_id(db_id);
+    req.set_table_id(table_id);
+    req.set_is_table_version(true);
+    GetVersionResponse resp;
+    meta_service->get_version(&ctrl, &req, &resp, nullptr);
+    ASSERT_EQ(resp.status().code(), MetaServiceCode::OK)
+            << ", get table version res=" << resp.ShortDebugString();
+    version = resp.version();
+}
+
 // Create a MULTI_VERSION_READ_WRITE instance and refresh the resource manager.
 static void create_and_refresh_instance(MetaServiceProxy* service, std::string instance_id) {
     // write instance
@@ -220,6 +234,13 @@ TEST(MetaServiceVersionedReadTest, CommitTxn) {
             meta_service->commit_txn(reinterpret_cast<::google::protobuf::RpcController*>(&cntl),
                                      &req, &res, nullptr);
             ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+
+            ASSERT_EQ(res.tables().size(), 1);
+            ASSERT_EQ(res.tables()[0], table_id);
+            ASSERT_EQ(res.table_versions().size(), 1);
+            int64_t table_version = 0;
+            get_table_version(meta_service.get(), db_id, table_id, table_version);
+            ASSERT_EQ(res.table_versions()[0], table_version);
         }
 
         // doubly commit txn

@@ -944,6 +944,11 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true)
     public static int tablet_stat_update_interval_second = 60;  // 1 min
 
+    // cloud table and partition version checker interval
+    // All frontends will do checking at each interval
+    @ConfField(mutable = true)
+    public static int tablet_table_and_partition_checker_interval_second = 10;  // 10 second
+
     // update interval of alive session
     // Only master FE collect this info from all frontends at each interval
     @ConfField public static int alive_session_update_interval_second = 5;
@@ -3575,6 +3580,13 @@ public class Config extends ConfigBase {
     @ConfField(description = {"Get tablet stat task 的最大并发数。",
         "Maximal concurrent num of get tablet stat job."})
     public static int max_get_tablet_stat_task_threads_num = 4;
+
+    @ConfField(description = {"Get version task 的最大并发数。",
+            "Maximal concurrent num of get version task."})
+    public static int max_get_version_task_threads_num = 4;
+
+    @ConfField(mutable = true)
+    public static int get_version_task_batch_size = 4000;
 
     @ConfField(mutable = true, description = {"schema change job 失败是否重试",
             "Whether to enable retry when a schema change job fails, default is true."})
