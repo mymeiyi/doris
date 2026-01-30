@@ -75,6 +75,10 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                 OlapTable olapTable = (OlapTable) table;
                 if (olapTable.isCachedTableVersionExpired(
                         Config.tablet_table_and_partition_checker_interval_second * 1000)) {
+                    /*LOG.info(
+                            "sout: find one table version expired. cached version: {}, db: {}, table: {}, dbId: {}, tableId: {}",
+                            olapTable.getCachedTableVersion(), olapTable.getDatabase().getFullName(),
+                            olapTable.getName(), olapTable.getDatabase().getId(), olapTable.getId());*/
                     dbIds.add(dbId);
                     tableIds.add(olapTable.getId());
                     tables.add(olapTable);
@@ -100,8 +104,8 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
         } catch (InterruptedException | ExecutionException e) {
             LOG.error("Error waiting for get table version tasks to complete", e);
         }
-        LOG.info("get {} tables need to check version, cost {} ms", tableIds.size(),
-                System.currentTimeMillis() - start);
+        LOG.info("get {} tables need to check table version, {} table need to check partition version, cost {} ms",
+                tableIds.size(), tableVersionMap.size(), System.currentTimeMillis() - start);
     }
 
     private Future<Void> submitGetTableVersionTask(List<Long> dbIds, List<Long> tableIds, List<OlapTable> tables) {
@@ -141,6 +145,10 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
         // TODO range scan table partition versions
         for (Entry<OlapTable, Long> entry : tableVersionMap.entrySet()) {
             OlapTable olapTable = entry.getKey();
+            LOG.info("sout: check partition version for table: {}, db: {}, tableId: {}, dbId: {}, "
+                            + "cache version: {}, target version: {}",
+                    olapTable.getName(), olapTable.getDatabase().getFullName(), olapTable.getId(),
+                    olapTable.getDatabase().getId(), olapTable.getCachedTableVersion(), entry.getValue());
             for (Partition partition : olapTable.getAllPartitions()) {
                 partitions.add((CloudPartition) partition);
                 if (partitions.size() > 2000) {
