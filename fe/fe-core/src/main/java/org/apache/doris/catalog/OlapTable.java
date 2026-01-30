@@ -2111,7 +2111,9 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
     }
 
     public static OlapTable read(DataInput in) throws IOException {
-        return GsonUtils.GSON.fromJson(Text.readString(in), OlapTable.class);
+        String json = Text.readString(in);
+        LOG.info("sout: call read table: {}", json);
+        return GsonUtils.GSON.fromJson(json, OlapTable.class);
     }
 
 

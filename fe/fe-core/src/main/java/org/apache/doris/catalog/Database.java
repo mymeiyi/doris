@@ -691,7 +691,8 @@ public class Database extends MetaObject implements Writable, DatabaseIf<Table>,
     private void writeTables(DataOutput out) throws IOException {
         out.writeInt(nameToTable.size());
         for (Table table : nameToTable.values()) {
-            Text.writeString(out, GsonUtils.GSON.toJson(table));
+            table.write(out);
+            // Text.writeString(out, GsonUtils.GSON.toJson(table));
         }
     }
 

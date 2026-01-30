@@ -464,7 +464,9 @@ public abstract class Table extends MetaObject implements Writable, TableIf, Gso
     }
 
     public static Table read(DataInput in) throws IOException {
-        return GsonUtils.GSON.fromJson(Text.readString(in), Table.class);
+        String json = Text.readString(in);
+        LOG.info("sout: call read table: {}", json);
+        return GsonUtils.GSON.fromJson(json, Table.class);
     }
 
     @Override
