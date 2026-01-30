@@ -30,6 +30,9 @@ public class Config extends ConfigBase {
             "The maximum file size of fe.log and fe.audit.log. After exceeding this size, the log file will be split"})
     public static int log_roll_size_mb = 1024; // 1 GB
 
+    @ConfField
+    public static boolean force_checkpoint = true;
+
     /**
      * sys_log_dir:
      *      This specifies FE log dir. FE will produces 2 log files:

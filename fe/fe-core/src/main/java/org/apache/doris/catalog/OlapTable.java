@@ -1975,7 +1975,10 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
     @Override
     public void write(DataOutput out) throws IOException {
-        Text.writeString(out, GsonUtils.GSON.toJson(this));
+        LOG.info("sout: before write olap table: {}, rowcount: {}, info: {}", name, getRowCount(), this.toString());
+        String json = GsonUtils.GSON.toJson(this);
+        Text.writeString(out, json);
+        LOG.info("sout: after write olap table: {}, rowcount: {}, json: {}", name, getRowCount(), json);
     }
 
     @Override

@@ -109,7 +109,11 @@ public class Checkpoint extends MasterDaemon {
             LOG.info("last checkpoint journal id: {}, current finalized journal id: {}",
                     imageVersion, checkPointVersion);
             if (imageVersion >= checkPointVersion) {
-                return;
+                if (Config.force_checkpoint) {
+                    LOG.info("sout: force to do checkpoint even if no new journal.");
+                } else {
+                    return;
+                }
             }
         } catch (Throwable e) {
             LOG.warn("Save image failed: " + e.getMessage(), e);
