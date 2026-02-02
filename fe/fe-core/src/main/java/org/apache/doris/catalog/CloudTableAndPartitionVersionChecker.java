@@ -31,11 +31,12 @@ import org.apache.doris.thrift.TFrontendUpdateCloudVersionResult;
 import org.apache.doris.thrift.TNetworkAddress;
 import org.apache.doris.thrift.TStatusCode;
 
-import io.jsonwebtoken.lang.Collections;
+import com.google.common.collect.ImmutableList;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -92,16 +93,16 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                 OlapTable olapTable = (OlapTable) table;
                 if (olapTable.isCachedTableVersionExpired(
                         Config.tablet_table_and_partition_checker_interval_second * 1000)) {
-                    /*LOG.info(
-                            "sout: find one table version expired. cached version: {}, db: {}, table: {}, dbId: {}, tableId: {}",
-                            olapTable.getCachedTableVersion(), olapTable.getDatabase().getFullName(),
-                            olapTable.getName(), olapTable.getDatabase().getId(), olapTable.getId());*/
+                    /*LOG.info("sout: find one table version expired. cached version: {}, db: {}, table: {}, "
+                                    + "dbId: {}, tableId: {}", olapTable.getCachedTableVersion(),
+                            olapTable.getDatabase().getFullName(), olapTable.getName(), olapTable.getDatabase().getId(),
+                            olapTable.getId());*/
                     dbIds.add(dbId);
                     tableIds.add(olapTable.getId());
                     tables.add(olapTable);
                     if (dbIds.size() >= Config.get_version_task_batch_size) {
-                        Future<Void> future = submitGetTableVersionTask(Collections.immutable(dbIds),
-                                Collections.immutable(tableIds), Collections.immutable(tables));
+                        Future<Void> future = submitGetTableVersionTask(ImmutableList.copyOf(dbIds),
+                                ImmutableList.copyOf(tableIds), ImmutableList.copyOf(tables));
                         futures.add(future);
                         dbIds.clear();
                         tableIds.clear();
@@ -169,14 +170,14 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
             for (Partition partition : olapTable.getAllPartitions()) {
                 partitions.add((CloudPartition) partition);
                 if (partitions.size() > 2000) {
-                    Future<Void> future = submitGetTableVersionTask(Collections.immutable(partitions));
+                    Future<Void> future = submitGetTableVersionTask(ImmutableList.copyOf(partitions));
                     futures.add(future);
                     partitions.clear();
                 }
             }
         }
         if (partitions.size() > 0) {
-            Future<Void> future = submitGetTableVersionTask(Collections.immutable(partitions));
+            Future<Void> future = submitGetTableVersionTask(ImmutableList.copyOf(partitions));
             futures.add(future);
         }
         try {
@@ -311,6 +312,7 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
             OlapTable olapTable = (OlapTable) table;
             tableVersions.add(Pair.of(olapTable, tableVersionInfo.getVersion()));
         }
+        Collections.sort(tableVersions, Comparator.comparingLong(o -> o.first.getId()));
         for (Pair<OlapTable, Long> tableVersion : tableVersions) {
             tableVersion.first.versionWriteLock();
         }
