@@ -37,6 +37,7 @@ import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.Replica.ReplicaState;
 import org.apache.doris.catalog.ReplicaAllocation;
+import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.TabletMeta;
 import org.apache.doris.cloud.catalog.CloudEnv;
@@ -83,6 +84,7 @@ import org.apache.logging.log4j.Logger;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -939,6 +941,14 @@ public class CloudInternalCatalog extends InternalCatalog {
         if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
             LOG.warn("dropPartition response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
+        } else if (needUpdateTableVersion && response.hasTableVersion() && response.getTableVersion() > 0) {
+            Optional<Database> db = Env.getCurrentInternalCatalog().getDb(dbId);
+            if (db.isPresent()) {
+                Table table = db.get().getTableNullable(tableId);
+                if (table != null && table instanceof OlapTable) {
+                    ((OlapTable) table).setCachedTableVersion(response.getTableVersion());
+                }
+            }
         }
     }
 

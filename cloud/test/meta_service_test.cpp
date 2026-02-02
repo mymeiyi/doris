@@ -8131,7 +8131,7 @@ TEST(MetaServiceTest, PartitionRequest) {
     ASSERT_EQ(txn->get(tbl_version_key, &val), TxnErrorCode::TXN_OK);
     val_int = *reinterpret_cast<const int64_t*>(val.data());
     ASSERT_EQ(val_int, 2);
-        ASSERT_TRUE(res.has_table_version());
+    ASSERT_TRUE(res.has_table_version());
     ASSERT_EQ(val_int, res.table_version());
     // Last state DROPPED
     reset_meta_service();
