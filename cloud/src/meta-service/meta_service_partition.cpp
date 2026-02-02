@@ -930,9 +930,6 @@ void MetaServiceImpl::drop_partition(::google::protobuf::RpcController* controll
         msg = "failed to create txn";
         return;
     }
-    if (is_versioned_write) {
-        txn->enable_get_versionstamp();
-    }
     std::string to_save_val;
     {
         RecyclePartitionPB pb;
@@ -952,6 +949,9 @@ void MetaServiceImpl::drop_partition(::google::protobuf::RpcController* controll
     drop_partition_log.set_table_id(request->table_id());
     drop_partition_log.mutable_index_ids()->CopyFrom(request->index_ids());
     drop_partition_log.set_expired_at_s(request->expiration());
+    if (is_versioned_write) {
+        txn->enable_get_versionstamp();
+    }
 
     CloneChainReader reader(instance_id, resource_mgr_.get());
     for (auto part_id : request->partition_ids()) {
