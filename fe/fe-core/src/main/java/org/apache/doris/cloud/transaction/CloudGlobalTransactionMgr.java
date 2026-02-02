@@ -568,8 +568,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                 tableVersion.first.versionWriteUnlock();
             }
         }
-        ((CloudEnv) env).getCloudTableAndPartitionVersionChecker()
-                .updateVersion(dbId, tableVersions, parititionVersionMap);
+        ((CloudEnv) env).getCloudUpdateVersionTool().updateVersionAsync(dbId, tableVersions, parititionVersionMap);
         env.getAnalysisManager().setNewPartitionLoaded(
                 tablePartitionMap.keySet().stream().collect(Collectors.toList()));
         // tablePartitionMap to string

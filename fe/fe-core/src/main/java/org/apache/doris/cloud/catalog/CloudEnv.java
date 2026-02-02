@@ -19,6 +19,7 @@ package org.apache.doris.cloud.catalog;
 
 import org.apache.doris.analysis.ResourceTypeEnum;
 import org.apache.doris.catalog.CloudTableAndPartitionVersionChecker;
+import org.apache.doris.catalog.CloudUpdateVersionTool;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.EnvFactory;
 import org.apache.doris.cloud.CacheHotspotManager;
@@ -71,6 +72,7 @@ public class CloudEnv extends Env {
     private CloudTabletRebalancer cloudTabletRebalancer;
     private CacheHotspotManager cacheHotspotMgr;
     private CloudTableAndPartitionVersionChecker cloudTableAndPartitionVersionChecker;
+    private CloudUpdateVersionTool cloudUpdateVersionTool;
 
     private boolean enableStorageVault;
 
@@ -92,6 +94,7 @@ public class CloudEnv extends Env {
         this.cacheHotspotMgr = new CacheHotspotManager((CloudSystemInfoService) systemInfo);
         this.upgradeMgr = new CloudUpgradeMgr((CloudSystemInfoService) systemInfo);
         this.cloudTableAndPartitionVersionChecker = new CloudTableAndPartitionVersionChecker();
+        this.cloudUpdateVersionTool = new CloudUpdateVersionTool();
         this.cloudSnapshotHandler = CloudSnapshotHandler.getInstance();
     }
 
@@ -166,8 +169,8 @@ public class CloudEnv extends Env {
         cloudSnapshotHandler.start();
     }
 
-    public CloudTableAndPartitionVersionChecker getCloudTableAndPartitionVersionChecker() {
-        return cloudTableAndPartitionVersionChecker;
+    public CloudUpdateVersionTool getCloudUpdateVersionTool() {
+        return cloudUpdateVersionTool;
     }
 
     @Override
