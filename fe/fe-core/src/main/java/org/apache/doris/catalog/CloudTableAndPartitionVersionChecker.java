@@ -223,6 +223,10 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                         Collectors.toList());
     }
 
+    public void updateVersion(long dbId, OlapTable table, long version) {
+        updateVersion(dbId, Collections.singletonList(Pair.of(table, version)), Collections.emptyMap());
+    }
+
     public void updateVersion(long dbId, List<Pair<OlapTable, Long>> tableVersions,
             Map<CloudPartition, Pair<Long, Long>> parititionVersionMap) {
         if (tableVersions.isEmpty() && parititionVersionMap.isEmpty()) {
