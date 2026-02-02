@@ -36,9 +36,11 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -222,6 +224,9 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
 
     public void updateVersion(long dbId, List<Pair<OlapTable, Long>> tableVersions,
             Map<CloudPartition, Pair<Long, Long>> parititionVersionMap) {
+        if (tableVersions.isEmpty() && parititionVersionMap.isEmpty()) {
+            return;
+        }
         refreshFrontends();
         if (frontends == null || frontends.isEmpty()) {
             return;
@@ -285,6 +290,55 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                 ClientPool.frontendVersionPool.returnObject(addr, client);
             } else {
                 ClientPool.frontendVersionPool.invalidateObject(addr, client);
+            }
+        }
+    }
+
+    public void updateTableVersion(TFrontendUpdateCloudVersionRequest request) {
+        long dbId = request.getDbId();
+        Optional<Database> dbOptional = Env.getCurrentInternalCatalog().getDb(dbId);
+        if (!dbOptional.isPresent()) {
+            return;
+        }
+        Database db = dbOptional.get();
+
+        List<Pair<OlapTable, Long>> tableVersions = new ArrayList<>(request.getTableVersionInfos().size());
+        for (TClodVersionInfo tableVersionInfo : request.getTableVersionInfos()) {
+            Table table = db.getTableNullable(tableVersionInfo.getTableId());
+            if (table == null || !table.isManagedTable()) {
+                continue;
+            }
+            OlapTable olapTable = (OlapTable) table;
+            tableVersions.add(Pair.of(olapTable, tableVersionInfo.getVersion()));
+        }
+        for (Pair<OlapTable, Long> tableVersion : tableVersions) {
+            tableVersion.first.versionWriteLock();
+        }
+        try {
+            for (TClodVersionInfo partitionVersionInfo : request.getPartitionVersionInfos()) {
+                Table table = db.getTableNullable(partitionVersionInfo.getTableId());
+                if (table == null || !table.isManagedTable()) {
+                    continue;
+                }
+                OlapTable olapTable = (OlapTable) table;
+                Partition partition = olapTable.getPartition(partitionVersionInfo.getPartitionId());
+                if (partition == null || !(partition instanceof CloudPartition)) {
+                    continue;
+                }
+                CloudPartition cloudPartition = (CloudPartition) partition;
+                cloudPartition.setCachedVisibleVersion(partitionVersionInfo.getVersion(),
+                        partitionVersionInfo.getVersionUpdateTime());
+                LOG.info("Update Partition. table_id:{}, partition_id:{}, version:{}, update time:{}",
+                        partitionVersionInfo.getTableId(), partition.getId(), partitionVersionInfo.getVersion(),
+                        partitionVersionInfo.getVersionUpdateTime());
+            }
+            for (Pair<OlapTable, Long> tableVersion : tableVersions) {
+                tableVersion.first.setCachedTableVersion(tableVersion.second);
+                LOG.info("Update table_id:{}, visible_version:{}", tableVersion.first.getId(), tableVersion.second);
+            }
+        } finally {
+            for (Pair<OlapTable, Long> tableVersion : tableVersions) {
+                tableVersion.first.versionWriteUnlock();
             }
         }
     }
