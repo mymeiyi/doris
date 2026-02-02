@@ -166,6 +166,10 @@ public class CloudEnv extends Env {
         cloudSnapshotHandler.start();
     }
 
+    public CloudTableAndPartitionVersionChecker getCloudTableAndPartitionVersionChecker() {
+        return cloudTableAndPartitionVersionChecker;
+    }
+
     @Override
     protected void startNonMasterDaemonThreads() {
         LOG.info("start cloud Non Master only daemon threads");

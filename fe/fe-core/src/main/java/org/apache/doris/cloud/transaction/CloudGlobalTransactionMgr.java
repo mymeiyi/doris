@@ -27,6 +27,7 @@ import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.TabletInvertedIndex;
 import org.apache.doris.catalog.TabletMeta;
+import org.apache.doris.cloud.catalog.CloudEnv;
 import org.apache.doris.cloud.catalog.CloudPartition;
 import org.apache.doris.cloud.proto.Cloud.AbortSubTxnRequest;
 import org.apache.doris.cloud.proto.Cloud.AbortSubTxnResponse;
@@ -567,6 +568,8 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                 tableVersion.first.versionWriteUnlock();
             }
         }
+        ((CloudEnv) env).getCloudTableAndPartitionVersionChecker()
+                .updateVersion(dbId, tableVersions, parititionVersionMap);
         env.getAnalysisManager().setNewPartitionLoaded(
                 tablePartitionMap.keySet().stream().collect(Collectors.toList()));
         // tablePartitionMap to string

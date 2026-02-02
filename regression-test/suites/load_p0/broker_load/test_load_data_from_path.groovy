@@ -414,7 +414,7 @@ suite("test_load_columns_from_path", "load_p0") {
 
         // [[1, 2, 30]]
     } finally {
-        sql """ TRUNCATE TABLE ${tableName} """
+        // sql """ TRUNCATE TABLE ${tableName} """
     }
 
 }

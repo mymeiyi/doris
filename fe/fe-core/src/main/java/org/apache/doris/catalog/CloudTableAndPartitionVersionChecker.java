@@ -18,8 +18,18 @@
 package org.apache.doris.catalog;
 
 import org.apache.doris.cloud.catalog.CloudPartition;
+import org.apache.doris.common.ClientPool;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.Pair;
 import org.apache.doris.common.util.MasterDaemon;
+import org.apache.doris.system.Frontend;
+import org.apache.doris.system.SystemInfoService.HostInfo;
+import org.apache.doris.thrift.FrontendService;
+import org.apache.doris.thrift.TClodVersionInfo;
+import org.apache.doris.thrift.TFrontendUpdateCloudVersionRequest;
+import org.apache.doris.thrift.TFrontendUpdateCloudVersionResult;
+import org.apache.doris.thrift.TNetworkAddress;
+import org.apache.doris.thrift.TStatusCode;
 
 import io.jsonwebtoken.lang.Collections;
 import org.apache.logging.log4j.LogManager;
@@ -27,6 +37,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,6 +45,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.stream.Collectors;
 
 public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(CloudTableAndPartitionVersionChecker.class);
@@ -42,6 +54,9 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
     private Set<Long> failedTable = ConcurrentHashMap.newKeySet();
     private static final ExecutorService GET_VERSION_THREAD_POOL = Executors.newFixedThreadPool(
             Config.max_get_version_task_threads_num);
+    private static final ExecutorService UPDATE_VERSION_THREAD_POOL = Executors.newFixedThreadPool(
+            Config.max_get_version_task_threads_num);
+    private List<Frontend> frontends = null;
 
     public CloudTableAndPartitionVersionChecker() {
         super("cloud table and partition version checker",
@@ -195,5 +210,82 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
             }
             return null;
         });
+    }
+
+    private void refreshFrontends() {
+        HostInfo selfNode = Env.getCurrentEnv().getSelfNode();
+        frontends = Env.getCurrentEnv().getFrontends(null).stream()
+                .filter(fe -> fe.isAlive() && !(fe.getHost().equals(selfNode.getHost())
+                        && fe.getRpcPort() == selfNode.getPort())).collect(
+                        Collectors.toList());
+    }
+
+    public void updateVersion(long dbId, List<Pair<OlapTable, Long>> tableVersions,
+            Map<CloudPartition, Pair<Long, Long>> parititionVersionMap) {
+        refreshFrontends();
+        if (frontends == null || frontends.isEmpty()) {
+            return;
+        }
+
+        List<TClodVersionInfo> tableVersionInfos = new ArrayList<>();
+        tableVersions.forEach(pair -> {
+            TClodVersionInfo tableVersion = new TClodVersionInfo();
+            tableVersion.setTableId(pair.first.getId());
+            tableVersion.setVersion(pair.second);
+            tableVersionInfos.add(tableVersion);
+
+        });
+        List<TClodVersionInfo> partitionVersionInfos = new ArrayList<>();
+        parititionVersionMap.forEach((partition, versionPair) -> {
+            TClodVersionInfo partitionVersion = new TClodVersionInfo();
+            partitionVersion.setTableId(partition.getTableId());
+            partitionVersion.setPartitionId(partition.getId());
+            partitionVersion.setVersion(versionPair.first);
+            partitionVersion.setVersionUpdateTime(versionPair.second);
+            partitionVersionInfos.add(partitionVersion);
+        });
+        TFrontendUpdateCloudVersionRequest request =
+                new TFrontendUpdateCloudVersionRequest();
+        request.setDbId(dbId);
+        request.setTableVersionInfos(tableVersionInfos);
+        request.setPartitionVersionInfos(partitionVersionInfos);
+        UPDATE_VERSION_THREAD_POOL.submit(() -> {
+            try {
+                updateCloudVersionToFes(request);
+            } catch (Exception e) {
+                LOG.warn("update table and partition version exception:", e);
+            }
+        });
+    }
+
+    private void updateCloudVersionToFes(TFrontendUpdateCloudVersionRequest request) {
+        List<Frontend> frontends = Env.getCurrentEnv().getFrontends(null);
+        for (Frontend fe : frontends) {
+            updateCloudVersionToFe(request, fe);
+        }
+    }
+
+    private void updateCloudVersionToFe(TFrontendUpdateCloudVersionRequest request, Frontend fe) {
+        FrontendService.Client client = null;
+        TNetworkAddress addr = new TNetworkAddress(fe.getHost(), fe.getRpcPort());
+        boolean ok = false;
+        try {
+            client = ClientPool.frontendVersionPool.borrowObject(addr);
+            TFrontendUpdateCloudVersionResult result = client.updateCloudVersion(request);
+            ok = true;
+            if (result.getStatus().getStatusCode() != TStatusCode.OK) {
+                LOG.warn("failed to update cloud table and partition version to frontend {}:{},"
+                        + " err: {}", fe.getHost(), fe.getRpcPort(), result.getStatus().getErrorMsgs());
+            }
+        } catch (Exception e) {
+            LOG.warn("failed to update cloud table and partition version to frontend {}:{}", fe.getHost(),
+                    fe.getRpcPort(), e);
+        } finally {
+            if (ok) {
+                ClientPool.frontendVersionPool.returnObject(addr, client);
+            } else {
+                ClientPool.frontendVersionPool.invalidateObject(addr, client);
+            }
+        }
     }
 }
