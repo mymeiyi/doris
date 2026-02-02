@@ -211,6 +211,9 @@ void MetaServiceImpl::commit_index(::google::protobuf::RpcController* controller
         msg = "db_id is required for versioned write, please upgrade your FE version";
         return;
     }
+    if (request->has_is_new_table() && request->is_new_table() && is_versioned_write) {
+        txn->enable_get_versionstamp();
+    }
 
     CloneChainReader reader(instance_id, resource_mgr_.get());
     for (auto index_id : request->index_ids()) {
@@ -327,6 +330,29 @@ void MetaServiceImpl::commit_index(::google::protobuf::RpcController* controller
                 msg = fmt::format("failed to get table version, err={}", err);
                 return;
             }
+        } else {
+            // set table versions in response
+            int64_t table_id = request->table_id();
+            std::string ver_key = table_version_key({instance_id, request->db_id(), table_id});
+            std::string ver_val;
+            err = txn->get(ver_key, &ver_val);
+            int64_t table_version = 0;
+            if (err == TxnErrorCode::TXN_OK) {
+                if (!txn->decode_atomic_int(ver_val, &table_version)) {
+                    code = MetaServiceCode::PROTOBUF_PARSE_ERR;
+                    ss << "malformed table version value, err=" << err
+                       << " table_id=" << request->table_id();
+                    msg = ss.str();
+                    LOG(WARNING) << msg;
+                    return;
+                }
+            } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
+                code = cast_as<ErrCategory::READ>(err);
+                ss << "failed to get table version, err=" << err << " table_id=" << table_id;
+                msg = ss.str();
+                return;
+            }
+            response->set_table_version(table_version + 1);
         }
         // init table version, for create and truncate table
         update_table_version(txn.get(), instance_id, request->db_id(), request->table_id());
@@ -352,6 +378,22 @@ void MetaServiceImpl::commit_index(::google::protobuf::RpcController* controller
         code = cast_as<ErrCategory::COMMIT>(err);
         msg = fmt::format("failed to commit txn: {}", err);
         return;
+    }
+
+    // set table version
+    if (request->has_is_new_table() && request->is_new_table() && is_versioned_read) {
+        Versionstamp vs;
+        err = txn->get_versionstamp(&vs);
+        if (err != TxnErrorCode::TXN_OK) {
+            code = cast_as<ErrCategory::READ>(err);
+            ss << "failed to get kv txn versionstamp, table_id=" << request->table_id()
+               << " err=" << err;
+            msg = ss.str();
+            LOG(WARNING) << msg;
+            return;
+        }
+        int64_t version = vs.version();
+        response->set_table_version(version);
     }
 }
 

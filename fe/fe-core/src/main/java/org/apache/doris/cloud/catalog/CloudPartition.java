@@ -40,8 +40,10 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -267,6 +269,15 @@ public class CloudPartition extends Partition {
                 : ConnectContext.get().getSessionVariable().cloudPartitionVersionCacheTtlMs;
         if (cloudPartitionVersionCacheTtlMs <= 0) { // No cached versions will be used
             return getSnapshotVisibleVersionFromMs(partitions, false);
+        }
+
+        Set<Long> tableIds = partitions.stream()
+                .map(CloudPartition::getTableId)
+                .collect(Collectors.toSet());
+        List<Long> tableIdsList = new ArrayList<>(tableIds);
+        Collections.sort(tableIdsList);
+        for (Long tableId : tableIdsList) {
+
         }
 
         // partitionId -> cachedVersion

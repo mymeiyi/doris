@@ -484,10 +484,13 @@ public class CloudInternalCatalog extends InternalCatalog {
      */
     @Override
     public void afterCreatePartitions(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds,
-            boolean isCreateTable, boolean isBatchCommit)
+            boolean isCreateTable, boolean isBatchCommit, OlapTable olapTable)
             throws DdlException {
         if (isBatchCommit) {
-            commitMaterializedIndex(dbId, tableId, indexIds, partitionIds, isCreateTable);
+            long tableVersion = commitMaterializedIndex(dbId, tableId, indexIds, partitionIds, isCreateTable);
+            if (isCreateTable && tableVersion > 0) {
+                olapTable.setCachedTableVersion(tableVersion);
+            }
         } else {
             commitPartition(dbId, tableId, partitionIds, indexIds);
         }
@@ -633,12 +636,12 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
-    public void commitMaterializedIndex(long dbId, long tableId, List<Long> indexIds, List<Long> partitionIds,
+    public long commitMaterializedIndex(long dbId, long tableId, List<Long> indexIds, List<Long> partitionIds,
             boolean isCreateTable)
             throws DdlException {
         if (Config.enable_check_compatibility_mode) {
             LOG.info("skip committing materialized index in checking compatibility mode");
-            return;
+            return 0;
         }
 
         Cloud.IndexRequest.Builder indexRequestBuilder = Cloud.IndexRequest.newBuilder()
@@ -674,6 +677,10 @@ public class CloudInternalCatalog extends InternalCatalog {
             LOG.warn("commitIndex response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
         }
+        if (isCreateTable && response.hasTableVersion()) {
+            return response.getTableVersion();
+        }
+        return 0;
     }
 
     private void checkPartition(long dbId, long tableId, List<Long> partitionIds)

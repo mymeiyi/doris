@@ -1763,7 +1763,7 @@ void MetaServiceImpl::commit_txn_immediately(
                 if (err == TxnErrorCode::TXN_OK) {
                     if (!txn->decode_atomic_int(ver_val, &table_version)) {
                         code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-                        ss << "malformed table version valuen, err=" << err
+                        ss << "malformed table version value, err=" << err
                            << " table_id=" << i.first;
                         msg = ss.str();
                         LOG(WARNING) << msg;
@@ -1771,7 +1771,7 @@ void MetaServiceImpl::commit_txn_immediately(
                     }
                 } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
                     code = cast_as<ErrCategory::READ>(err);
-                    ss << "failed to get table version, err=" << err << " table_id=" << i.first;
+                    ss << "failed to get table version, err=" << err << " table_id=" << table_id;
                     msg = ss.str();
                     return;
                 }
@@ -2417,7 +2417,7 @@ void MetaServiceImpl::commit_txn_eventually(
                 if (err == TxnErrorCode::TXN_OK) {
                     if (!txn->decode_atomic_int(ver_val, &table_version)) {
                         code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-                        ss << "malformed table version valuen, err=" << err
+                        ss << "malformed table version value, err=" << err
                            << " table_id=" << i.first;
                         msg = ss.str();
                         LOG(WARNING) << msg;
@@ -2425,7 +2425,7 @@ void MetaServiceImpl::commit_txn_eventually(
                     }
                 } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
                     code = cast_as<ErrCategory::READ>(err);
-                    ss << "failed to get table version, err=" << err << " table_id=" << i.first;
+                    ss << "failed to get table version, err=" << err << " table_id=" << table_id;
                     msg = ss.str();
                     return;
                 }
@@ -2914,7 +2914,7 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
                 if (err == TxnErrorCode::TXN_OK) {
                     if (!txn->decode_atomic_int(ver_val, &table_version)) {
                         code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-                        ss << "malformed table version valuen, err=" << err
+                        ss << "malformed table version value, err=" << err
                            << " table_id=" << i.first;
                         msg = ss.str();
                         LOG(WARNING) << msg;
@@ -2922,7 +2922,7 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
                     }
                 } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
                     code = cast_as<ErrCategory::READ>(err);
-                    ss << "failed to get table version, err=" << err << " table_id=" << i.first;
+                    ss << "failed to get table version, err=" << err << " table_id=" << table_id;
                     msg = ss.str();
                     return;
                 }

@@ -1363,6 +1363,7 @@ message IndexRequest {
 
 message IndexResponse {
     optional MetaServiceResponseStatus status = 1;
+    optional int64 table_version = 2;
 }
 
 message PartitionRequest {
