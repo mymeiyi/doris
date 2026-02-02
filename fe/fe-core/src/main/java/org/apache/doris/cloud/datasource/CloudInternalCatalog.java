@@ -488,7 +488,7 @@ public class CloudInternalCatalog extends InternalCatalog {
             throws DdlException {
         if (isBatchCommit) {
             long tableVersion = commitMaterializedIndex(dbId, tableId, indexIds, partitionIds, isCreateTable);
-            if (isCreateTable && tableVersion > 0) {
+            if (olapTable != null && isCreateTable && tableVersion > 0) {
                 olapTable.setCachedTableVersion(tableVersion);
             }
         } else {
