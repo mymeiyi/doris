@@ -37,6 +37,7 @@ import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.Replica.ReplicaState;
 import org.apache.doris.catalog.ReplicaAllocation;
+import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.TabletMeta;
 import org.apache.doris.cloud.catalog.CloudEnv;
@@ -83,6 +84,7 @@ import org.apache.logging.log4j.Logger;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -484,12 +486,18 @@ public class CloudInternalCatalog extends InternalCatalog {
      */
     @Override
     public void afterCreatePartitions(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds,
-            boolean isCreateTable, boolean isBatchCommit)
+            boolean isCreateTable, boolean isBatchCommit, OlapTable olapTable)
             throws DdlException {
         if (isBatchCommit) {
-            commitMaterializedIndex(dbId, tableId, indexIds, partitionIds, isCreateTable);
+            long tableVersion = commitMaterializedIndex(dbId, tableId, indexIds, partitionIds, isCreateTable);
+            if (olapTable != null && isCreateTable && tableVersion > 0) {
+                olapTable.setCachedTableVersion(tableVersion);
+            }
         } else {
-            commitPartition(dbId, tableId, partitionIds, indexIds);
+            long tableVersion = commitPartition(dbId, tableId, partitionIds, indexIds);
+            if (olapTable != null && isCreateTable && tableVersion > 0) {
+                olapTable.setCachedTableVersion(tableVersion);
+            }
         }
         if (!Config.check_create_table_recycle_key_remained) {
             return;
@@ -554,11 +562,11 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
-    public void commitPartition(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds)
+    public long commitPartition(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds)
             throws DdlException {
         if (Config.enable_check_compatibility_mode) {
             LOG.info("skip committing partitions in check compatibility mode");
-            return;
+            return 0;
         }
 
         Cloud.PartitionRequest.Builder partitionRequestBuilder = Cloud.PartitionRequest.newBuilder()
@@ -593,6 +601,10 @@ public class CloudInternalCatalog extends InternalCatalog {
             LOG.warn("commitPartition response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
         }
+        if (response.hasTableVersion()) {
+            return response.getTableVersion();
+        }
+        return 0;
     }
 
     // if `expiration` = 0, recycler will delete uncommitted indexes in `retention_seconds`
@@ -633,12 +645,12 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
-    public void commitMaterializedIndex(long dbId, long tableId, List<Long> indexIds, List<Long> partitionIds,
+    public long commitMaterializedIndex(long dbId, long tableId, List<Long> indexIds, List<Long> partitionIds,
             boolean isCreateTable)
             throws DdlException {
         if (Config.enable_check_compatibility_mode) {
             LOG.info("skip committing materialized index in checking compatibility mode");
-            return;
+            return 0;
         }
 
         Cloud.IndexRequest.Builder indexRequestBuilder = Cloud.IndexRequest.newBuilder()
@@ -674,6 +686,10 @@ public class CloudInternalCatalog extends InternalCatalog {
             LOG.warn("commitIndex response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
         }
+        if (isCreateTable && response.hasTableVersion()) {
+            return response.getTableVersion();
+        }
+        return 0;
     }
 
     private void checkPartition(long dbId, long tableId, List<Long> partitionIds)
@@ -925,6 +941,14 @@ public class CloudInternalCatalog extends InternalCatalog {
         if (response.getStatus().getCode() != Cloud.MetaServiceCode.OK) {
             LOG.warn("dropPartition response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
+        } else if (needUpdateTableVersion && response.hasTableVersion() && response.getTableVersion() > 0) {
+            Optional<Database> db = Env.getCurrentInternalCatalog().getDb(dbId);
+            if (db.isPresent()) {
+                Table table = db.get().getTableNullable(tableId);
+                if (table != null && table instanceof OlapTable) {
+                    ((OlapTable) table).setCachedTableVersion(response.getTableVersion());
+                }
+            }
         }
     }
 

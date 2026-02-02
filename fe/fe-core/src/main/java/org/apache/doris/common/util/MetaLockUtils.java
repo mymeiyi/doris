@@ -18,6 +18,7 @@
 package org.apache.doris.common.util;
 
 import org.apache.doris.catalog.DatabaseIf;
+import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.MetaNotFoundException;
@@ -152,6 +153,13 @@ public class MetaLockUtils {
                 }
                 return false;
             }
+        }
+        return true;
+    }
+
+    public static boolean tryUpdateVersionLockTables(List<OlapTable> tableList, long timeout, TimeUnit unit) {
+        for (int i = 0; i < tableList.size(); i++) {
+            tableList.get(i).versionWriteLock();
         }
         return true;
     }

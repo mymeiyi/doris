@@ -1436,6 +1436,9 @@ void MetaServiceImpl::commit_txn_immediately(
             LOG(WARNING) << msg;
             return;
         }
+        if (is_versioned_write) {
+            txn->enable_get_versionstamp();
+        }
         DORIS_CLOUD_DEFER {
             if (txn == nullptr) return;
             stats.get_bytes += txn->get_bytes();
@@ -1750,6 +1753,30 @@ void MetaServiceImpl::commit_txn_immediately(
                     LOG(WARNING) << msg;
                     return;
                 }
+            } else {
+                // set table versions in response
+                int64_t table_id = i.first;
+                std::string ver_key = table_version_key({instance_id, db_id, table_id});
+                std::string ver_val;
+                err = txn->get(ver_key, &ver_val);
+                int64_t table_version = 0;
+                if (err == TxnErrorCode::TXN_OK) {
+                    if (!txn->decode_atomic_int(ver_val, &table_version)) {
+                        code = MetaServiceCode::PROTOBUF_PARSE_ERR;
+                        ss << "malformed table version value, err=" << err
+                           << " table_id=" << i.first;
+                        msg = ss.str();
+                        LOG(WARNING) << msg;
+                        return;
+                    }
+                } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
+                    code = cast_as<ErrCategory::READ>(err);
+                    ss << "failed to get table version, err=" << err << " table_id=" << table_id;
+                    msg = ss.str();
+                    return;
+                }
+                response->add_tables(table_id);
+                response->add_table_versions(table_version + 1);
             }
             update_table_version(txn.get(), instance_id, db_id, i.first);
             commit_txn_log.add_table_ids(i.first);
@@ -1896,6 +1923,27 @@ void MetaServiceImpl::commit_txn_immediately(
             ss << "failed to commit kv txn, txn_id=" << txn_id << " err=" << err;
             msg = ss.str();
             return;
+        }
+
+        // set table version
+        if (is_versioned_read) {
+            DCHECK_EQ(response->tables().size(), 0);
+            DCHECK_EQ(response->table_versions().size(), 0);
+            Versionstamp vs;
+            err = txn->get_versionstamp(&vs);
+            if (err != TxnErrorCode::TXN_OK) {
+                code = cast_as<ErrCategory::READ>(err);
+                ss << "failed to get kv txn versionstamp, txn_id=" << txn_id << " err=" << err;
+                msg = ss.str();
+                LOG(WARNING) << msg;
+                return;
+            }
+            int64_t version = vs.version();
+            for (auto& i : table_id_tablet_ids) {
+                int64_t table_id = i.first;
+                response->add_tables(table_id);
+                response->add_table_versions(version);
+            }
         }
 
         // calculate table stats from tablets stats
@@ -2057,6 +2105,9 @@ void MetaServiceImpl::commit_txn_eventually(
             msg = ss.str();
             LOG(WARNING) << msg;
             return;
+        }
+        if (is_versioned_write) {
+            txn->enable_get_versionstamp();
         }
         DORIS_CLOUD_DEFER {
             if (txn == nullptr) return;
@@ -2356,6 +2407,30 @@ void MetaServiceImpl::commit_txn_eventually(
                     LOG(WARNING) << msg;
                     return;
                 }
+            } else {
+                // set table versions in response
+                int64_t table_id = i.first;
+                std::string ver_key = table_version_key({instance_id, db_id, table_id});
+                std::string ver_val;
+                err = txn->get(ver_key, &ver_val);
+                int64_t table_version = 0;
+                if (err == TxnErrorCode::TXN_OK) {
+                    if (!txn->decode_atomic_int(ver_val, &table_version)) {
+                        code = MetaServiceCode::PROTOBUF_PARSE_ERR;
+                        ss << "malformed table version value, err=" << err
+                           << " table_id=" << i.first;
+                        msg = ss.str();
+                        LOG(WARNING) << msg;
+                        return;
+                    }
+                } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
+                    code = cast_as<ErrCategory::READ>(err);
+                    ss << "failed to get table version, err=" << err << " table_id=" << table_id;
+                    msg = ss.str();
+                    return;
+                }
+                response->add_tables(table_id);
+                response->add_table_versions(table_version + 1);
             }
             update_table_version(txn.get(), instance_id, db_id, i.first);
             commit_txn_log.add_table_ids(i.first);
@@ -2389,6 +2464,27 @@ void MetaServiceImpl::commit_txn_eventually(
             ss << "failed to commit kv txn, txn_id=" << txn_id << " err=" << err;
             msg = ss.str();
             return;
+        }
+
+        // set table version
+        if (is_versioned_read) {
+            DCHECK_EQ(response->tables().size(), 0);
+            DCHECK_EQ(response->table_versions().size(), 0);
+            Versionstamp vs;
+            err = txn->get_versionstamp(&vs);
+            if (err != TxnErrorCode::TXN_OK) {
+                code = cast_as<ErrCategory::READ>(err);
+                ss << "failed to get kv txn versionstamp, txn_id=" << txn_id << " err=" << err;
+                msg = ss.str();
+                LOG(WARNING) << msg;
+                return;
+            }
+            int64_t version = vs.version();
+            for (auto& i : table_id_tablet_ids) {
+                int64_t table_id = i.first;
+                response->add_tables(table_id);
+                response->add_table_versions(version);
+            }
         }
 
         TEST_SYNC_POINT_CALLBACK("commit_txn_eventually::abort_txn_after_mark_txn_commited");
@@ -2488,6 +2584,8 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
         }
         sub_txn_to_tmp_rowsets_meta.emplace(sub_txn_id, std::move(tmp_rowsets_meta));
     }
+    bool is_versioned_write = is_version_write_enabled(instance_id);
+    bool is_versioned_read = is_version_read_enabled(instance_id);
     do {
         TEST_SYNC_POINT_CALLBACK("commit_txn_with_sub_txn:begin", &txn_id);
         // Create a readonly txn for scan tmp rowset
@@ -2499,6 +2597,9 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
             msg = ss.str();
             LOG(WARNING) << msg;
             return;
+        }
+        if (is_versioned_write) {
+            txn->enable_get_versionstamp();
         }
         DORIS_CLOUD_DEFER {
             if (txn == nullptr) return;
@@ -2560,8 +2661,6 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
 
         AnnotateTag txn_tag("txn_id", txn_id);
 
-        bool is_versioned_write = is_version_write_enabled(instance_id);
-        bool is_versioned_read = is_version_read_enabled(instance_id);
         CloneChainReader meta_reader(instance_id, resource_mgr_.get());
 
         // Prepare rowset meta and new_versions
@@ -2805,6 +2904,30 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
                     LOG(WARNING) << msg;
                     return;
                 }
+            } else {
+                // set table versions in response
+                int64_t table_id = i.first;
+                std::string ver_key = table_version_key({instance_id, db_id, table_id});
+                std::string ver_val;
+                err = txn->get(ver_key, &ver_val);
+                int64_t table_version = 0;
+                if (err == TxnErrorCode::TXN_OK) {
+                    if (!txn->decode_atomic_int(ver_val, &table_version)) {
+                        code = MetaServiceCode::PROTOBUF_PARSE_ERR;
+                        ss << "malformed table version value, err=" << err
+                           << " table_id=" << i.first;
+                        msg = ss.str();
+                        LOG(WARNING) << msg;
+                        return;
+                    }
+                } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
+                    code = cast_as<ErrCategory::READ>(err);
+                    ss << "failed to get table version, err=" << err << " table_id=" << table_id;
+                    msg = ss.str();
+                    return;
+                }
+                response->add_tables(table_id);
+                response->add_table_versions(table_version + 1);
             }
             update_table_version(txn.get(), instance_id, db_id, i.first);
             commit_txn_log.add_table_ids(i.first);
@@ -2936,6 +3059,27 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
             ss << "failed to commit kv txn with sub txn, txn_id=" << txn_id << " err=" << err;
             msg = ss.str();
             return;
+        }
+
+        // set table version
+        if (is_versioned_read) {
+            DCHECK_EQ(response->tables().size(), 0);
+            DCHECK_EQ(response->table_versions().size(), 0);
+            Versionstamp vs;
+            err = txn->get_versionstamp(&vs);
+            if (err != TxnErrorCode::TXN_OK) {
+                code = cast_as<ErrCategory::READ>(err);
+                ss << "failed to get kv txn versionstamp, txn_id=" << txn_id << " err=" << err;
+                msg = ss.str();
+                LOG(WARNING) << msg;
+                return;
+            }
+            int64_t version = vs.version();
+            for (auto& i : table_id_tablet_ids) {
+                int64_t table_id = i.first;
+                response->add_tables(table_id);
+                response->add_table_versions(version);
+            }
         }
 
         // calculate table stats from tablets stats
