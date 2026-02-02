@@ -697,7 +697,8 @@ void MetaServiceImpl::commit_partition(::google::protobuf::RpcController* contro
         for (size_t j = i; j < end; j++) {
             partition_ids.push_back(request->partition_ids(j));
         }
-        commit_partition_internal(request, instance_id, partition_ids, code, msg, stats);
+        // 传入 response，以便内部设置 table_version
+        commit_partition_internal(request, instance_id, partition_ids, response, code, msg, stats);
         if (code != MetaServiceCode::OK) {
             return;
         }
@@ -707,8 +708,8 @@ void MetaServiceImpl::commit_partition(::google::protobuf::RpcController* contro
 void MetaServiceImpl::commit_partition_internal(const PartitionRequest* request,
                                                 const std::string& instance_id,
                                                 const std::vector<int64_t>& partition_ids,
-                                                MetaServiceCode& code, std::string& msg,
-                                                KVStats& stats) {
+                                                PartitionResponse* response, MetaServiceCode& code,
+                                                std::string& msg, KVStats& stats) {
     std::unique_ptr<Transaction> txn;
     TxnErrorCode err = txn_kv_->create_txn(&txn);
     if (err != TxnErrorCode::TXN_OK) {
@@ -739,6 +740,10 @@ void MetaServiceImpl::commit_partition_internal(const PartitionRequest* request,
         code = MetaServiceCode::INVALID_ARGUMENT;
         msg = "missing db_id for versioned write, please upgrade your FE version";
         return;
+    }
+
+    if (is_versioned_write) {
+        txn->enable_get_versionstamp();
     }
 
     CloneChainReader reader(instance_id, resource_mgr_.get());
@@ -826,17 +831,33 @@ void MetaServiceImpl::commit_partition_internal(const PartitionRequest* request,
         return;
     }
 
-    // update table versions
-    if (is_versioned_read) {
-        // Read the table version, to build the operation log visible version range.
-        Versionstamp table_version;
-        err = reader.get_table_version(txn.get(), request->table_id(), &table_version, true);
-        if (err != TxnErrorCode::TXN_OK && err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
+    // set table versions in response
+    if (!is_versioned_read) {
+        std::string ver_key =
+                table_version_key({instance_id, request->db_id(), request->table_id()});
+        std::string ver_val;
+        err = txn->get(ver_key, &ver_val);
+        int64_t table_version = 0;
+        if (err == TxnErrorCode::TXN_OK) {
+            if (!txn->decode_atomic_int(ver_val, &table_version)) {
+                code = MetaServiceCode::PROTOBUF_PARSE_ERR;
+                std::stringstream ss;
+                ss << "malformed table version value, err=" << err
+                   << " table_id=" << request->table_id();
+                msg = ss.str();
+                LOG(WARNING) << msg;
+                return;
+            }
+        } else if (err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
             code = cast_as<ErrCategory::READ>(err);
-            msg = fmt::format("failed to get table version, err={}", err);
+            std::stringstream ss;
+            ss << "failed to get table version, err=" << err << " table_id=" << request->table_id();
+            msg = ss.str();
             return;
         }
+        response->set_table_version(table_version + 1);
     }
+
     update_table_version(txn.get(), instance_id, request->db_id(), request->table_id());
 
     if (commit_partition_log.partition_ids_size() > 0 && is_version_write_enabled(instance_id)) {
@@ -859,6 +880,22 @@ void MetaServiceImpl::commit_partition_internal(const PartitionRequest* request,
         code = cast_as<ErrCategory::COMMIT>(err);
         msg = fmt::format("failed to commit txn: {}", err);
         return;
+    }
+
+    if (is_versioned_read) {
+        Versionstamp vs;
+        err = txn->get_versionstamp(&vs);
+        if (err != TxnErrorCode::TXN_OK) {
+            code = cast_as<ErrCategory::READ>(err);
+            std::stringstream ss;
+            ss << "failed to get kv txn versionstamp, table_id=" << request->table_id()
+               << " err=" << err;
+            msg = ss.str();
+            LOG(WARNING) << msg;
+            return;
+        }
+        int64_t version = vs.version();
+        response->set_table_version(version);
     }
 }
 
@@ -1046,7 +1083,7 @@ void check_create_table(std::string instance_id, std::shared_ptr<TxnKv> txn_kv,
         } else if (err == TxnErrorCode::TXN_TOO_OLD) {
             stats.get_bytes += txn->get_bytes();
             stats.get_counter += txn->num_get_keys();
-            //  separate it to several txn for rubustness
+            //  separate it to several txn for rubostness
             txn.reset();
             TxnErrorCode err = txn_kv->create_txn(&txn);
             if (err != TxnErrorCode::TXN_OK) {

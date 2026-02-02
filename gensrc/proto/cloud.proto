@@ -1380,6 +1380,7 @@ message PartitionRequest {
 
 message PartitionResponse {
     optional MetaServiceResponseStatus status = 1;
+    optional int64 table_version = 2;
 }
 
 message RestoreJobRequest {
