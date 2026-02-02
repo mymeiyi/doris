@@ -930,6 +930,9 @@ void MetaServiceImpl::drop_partition(::google::protobuf::RpcController* controll
         msg = "failed to create txn";
         return;
     }
+    if (is_versioned_write) {
+        txn->enable_get_versionstamp();
+    }
     std::string to_save_val;
     {
         RecyclePartitionPB pb;
