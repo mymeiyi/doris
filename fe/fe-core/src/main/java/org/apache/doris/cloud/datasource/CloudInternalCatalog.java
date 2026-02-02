@@ -492,7 +492,10 @@ public class CloudInternalCatalog extends InternalCatalog {
                 olapTable.setCachedTableVersion(tableVersion);
             }
         } else {
-            commitPartition(dbId, tableId, partitionIds, indexIds);
+            long tableVersion = commitPartition(dbId, tableId, partitionIds, indexIds);
+            if (olapTable != null && isCreateTable && tableVersion > 0) {
+                olapTable.setCachedTableVersion(tableVersion);
+            }
         }
         if (!Config.check_create_table_recycle_key_remained) {
             return;
@@ -557,11 +560,11 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
-    public void commitPartition(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds)
+    public long commitPartition(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds)
             throws DdlException {
         if (Config.enable_check_compatibility_mode) {
             LOG.info("skip committing partitions in check compatibility mode");
-            return;
+            return 0;
         }
 
         Cloud.PartitionRequest.Builder partitionRequestBuilder = Cloud.PartitionRequest.newBuilder()
@@ -596,6 +599,10 @@ public class CloudInternalCatalog extends InternalCatalog {
             LOG.warn("commitPartition response: {} ", response);
             throw new DdlException(response.getStatus().getMsg());
         }
+        if (response.hasTableVersion()) {
+            return response.getTableVersion();
+        }
+        return 0;
     }
 
     // if `expiration` = 0, recycler will delete uncommitted indexes in `retention_seconds`
