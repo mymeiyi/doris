@@ -110,7 +110,7 @@ public class CloudUpdateVersionTool {
                 } catch (Exception e) {
                     LOG.warn("update table and partition version error", e);
                 }
-            });    
+            });
         }
     }
 
