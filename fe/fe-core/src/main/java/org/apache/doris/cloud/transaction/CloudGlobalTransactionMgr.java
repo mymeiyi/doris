@@ -563,8 +563,8 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                         txnId, tableVersion.first.getId(), tableVersion.second);
             }
         } finally {
-            for (Pair<OlapTable, Long> tableVersion : tableVersions) {
-                tableVersion.first.versionWriteUnlock();
+            for (int i = tableVersions.size() - 1; i >= 0; i--) {
+                tableVersions.get(i).first.versionReadUnlock();
             }
         }
         ((CloudEnv) env).getCloudUpdateVersionTool().updateVersionAsync(dbId, tableVersions, partitionVersionMap);
