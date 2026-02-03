@@ -17,6 +17,7 @@
 
 package org.apache.doris.cloud.catalog;
 
+import org.apache.doris.catalog.CloudTabletStatMgr;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.Replica.ReplicaState;
