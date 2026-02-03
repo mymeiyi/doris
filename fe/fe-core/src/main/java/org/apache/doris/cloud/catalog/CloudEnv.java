@@ -18,7 +18,6 @@
 package org.apache.doris.cloud.catalog;
 
 import org.apache.doris.analysis.ResourceTypeEnum;
-import org.apache.doris.catalog.CloudUpdateVersionTool;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.EnvFactory;
 import org.apache.doris.cloud.CacheHotspotManager;

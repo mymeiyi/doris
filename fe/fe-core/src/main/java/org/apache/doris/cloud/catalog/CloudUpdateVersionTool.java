@@ -15,9 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-package org.apache.doris.catalog;
+package org.apache.doris.cloud.catalog;
 
-import org.apache.doris.cloud.catalog.CloudPartition;
+import org.apache.doris.catalog.Database;
+import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.Partition;
+import org.apache.doris.catalog.Table;
 import org.apache.doris.common.ClientPool;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.Pair;
@@ -53,14 +57,7 @@ public class CloudUpdateVersionTool {
     public CloudUpdateVersionTool() {
     }
 
-    private void refreshFrontends() {
-        HostInfo selfNode = Env.getCurrentEnv().getSelfNode();
-        frontends = Env.getCurrentEnv().getFrontends(null).stream()
-                .filter(fe -> fe.isAlive() && !(fe.getHost().equals(selfNode.getHost())
-                        && fe.getRpcPort() == selfNode.getPort())).collect(
-                        Collectors.toList());
-    }
-
+    // master FE send update version rpc to other FEs
     public void updateVersionAsync(long dbId, OlapTable table, long version) {
         updateVersionAsync(dbId, Collections.singletonList(Pair.of(table, version)), Collections.emptyMap());
     }
@@ -71,7 +68,7 @@ public class CloudUpdateVersionTool {
             try {
                 updateVersion(dbId, tableVersions, parititionVersionMap);
             } catch (Exception e) {
-                LOG.warn("update table and partition version exception:", e);
+                LOG.warn("update table and partition version error", e);
             }
         });
     }
@@ -81,20 +78,19 @@ public class CloudUpdateVersionTool {
         if (tableVersions.isEmpty() && parititionVersionMap.isEmpty()) {
             return;
         }
-        refreshFrontends();
+        List<Frontend> frontends = getFrontends();
         if (frontends == null || frontends.isEmpty()) {
             return;
         }
 
-        List<TClodVersionInfo> tableVersionInfos = new ArrayList<>();
+        List<TClodVersionInfo> tableVersionInfos = new ArrayList<>(tableVersions.size());
         tableVersions.forEach(pair -> {
             TClodVersionInfo tableVersion = new TClodVersionInfo();
             tableVersion.setTableId(pair.first.getId());
             tableVersion.setVersion(pair.second);
             tableVersionInfos.add(tableVersion);
-
         });
-        List<TClodVersionInfo> partitionVersionInfos = new ArrayList<>();
+        List<TClodVersionInfo> partitionVersionInfos = new ArrayList<>(parititionVersionMap.size());
         parititionVersionMap.forEach((partition, versionPair) -> {
             TClodVersionInfo partitionVersion = new TClodVersionInfo();
             partitionVersion.setTableId(partition.getTableId());
@@ -108,20 +104,23 @@ public class CloudUpdateVersionTool {
         request.setDbId(dbId);
         request.setTableVersionInfos(tableVersionInfos);
         request.setPartitionVersionInfos(partitionVersionInfos);
-        UPDATE_VERSION_THREAD_POOL.submit(() -> {
-            try {
-                updateCloudVersionToFes(request);
-            } catch (Exception e) {
-                LOG.warn("update table and partition version exception:", e);
-            }
-        });
+        for (Frontend fe : frontends) {
+            UPDATE_VERSION_THREAD_POOL.submit(() -> {
+                try {
+                    updateCloudVersionToFe(request, fe);
+                } catch (Exception e) {
+                    LOG.warn("update table and partition version error", e);
+                }
+            });    
+        }
     }
 
-    private void updateCloudVersionToFes(TFrontendUpdateCloudVersionRequest request) {
-        List<Frontend> frontends = Env.getCurrentEnv().getFrontends(null);
-        for (Frontend fe : frontends) {
-            updateCloudVersionToFe(request, fe);
-        }
+    private List<Frontend> getFrontends() {
+        HostInfo selfNode = Env.getCurrentEnv().getSelfNode();
+        return Env.getCurrentEnv().getFrontends(null).stream()
+                .filter(fe -> fe.isAlive() && !(fe.getHost().equals(selfNode.getHost())
+                        && fe.getRpcPort() == selfNode.getPort())).collect(
+                        Collectors.toList());
     }
 
     private void updateCloudVersionToFe(TFrontendUpdateCloudVersionRequest request, Frontend fe) {
@@ -148,6 +147,7 @@ public class CloudUpdateVersionTool {
         }
     }
 
+    // follower and observer FE receive update version rpc from master FE
     public void updateVersionAsync(TFrontendUpdateCloudVersionRequest request) {
         long dbId = request.getDbId();
         Optional<Database> dbOptional = Env.getCurrentInternalCatalog().getDb(dbId);
@@ -155,6 +155,7 @@ public class CloudUpdateVersionTool {
             return;
         }
         Database db = dbOptional.get();
+        // only update table version
         if (request.getPartitionVersionInfos().isEmpty()) {
             request.getTableVersionInfos().forEach(tableVersionInfo -> {
                 Table table = db.getTableNullable(tableVersionInfo.getTableId());
@@ -163,7 +164,7 @@ public class CloudUpdateVersionTool {
                 }
                 OlapTable olapTable = (OlapTable) table;
                 olapTable.setCachedTableVersion(tableVersionInfo.getVersion());
-                LOG.info("Update table_id:{}, visible_version:{}", olapTable.getId(), tableVersionInfo.getVersion());
+                LOG.info("Update table_id: {}, visible_version: {}", olapTable.getId(), tableVersionInfo.getVersion());
             });
             return;
         }
@@ -189,19 +190,19 @@ public class CloudUpdateVersionTool {
                 }
                 OlapTable olapTable = (OlapTable) table;
                 Partition partition = olapTable.getPartition(partitionVersionInfo.getPartitionId());
-                if (partition == null || !(partition instanceof CloudPartition)) {
+                if (partition == null) {
                     continue;
                 }
                 CloudPartition cloudPartition = (CloudPartition) partition;
                 cloudPartition.setCachedVisibleVersion(partitionVersionInfo.getVersion(),
                         partitionVersionInfo.getVersionUpdateTime());
-                LOG.info("Update Partition. table_id:{}, partition_id:{}, version:{}, update time:{}",
+                LOG.info("Update table_id: {}, partition_id: {}, version: {}, update time: {}",
                         partitionVersionInfo.getTableId(), partition.getId(), partitionVersionInfo.getVersion(),
                         partitionVersionInfo.getVersionUpdateTime());
             }
             for (Pair<OlapTable, Long> tableVersion : tableVersions) {
                 tableVersion.first.setCachedTableVersion(tableVersion.second);
-                LOG.info("Update table_id:{}, visible_version:{}", tableVersion.first.getId(), tableVersion.second);
+                LOG.info("Update table_id: {}, visible_version: {}", tableVersion.first.getId(), tableVersion.second);
             }
         } finally {
             for (Pair<OlapTable, Long> tableVersion : tableVersions) {
