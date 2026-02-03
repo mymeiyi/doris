@@ -1673,6 +1673,38 @@ struct TGetOlapTableMetaResult {
     4: optional list<i64> removed_partitions
 }
 
+// BE -> FE: Notify that partitions have been updated (data ingested)
+// Used for cache invalidation or triggering stats refresh
+//struct TNotifyUpdatePartitionRequest {
+//    1: optional i64 db_id
+//    2: optional i64 table_id
+//    3: optional list<i64> partition_ids
+//}
+
+//struct TNotifyUpdatePartitionResponse {
+//    1: optional Status.TStatus status
+//}
+
+// Master -> Follower: Sync cloud tablet statistics
+// Contains the 6 key stats fields from CloudTabletStatMgr
+struct TCloudTabletStat {
+    1: optional i64 tablet_id
+    2: optional i64 data_size
+    3: optional i64 row_count
+    4: optional i64 rowset_count
+    5: optional i64 segment_count
+    6: optional i64 index_size
+    7: optional i64 segment_size
+}
+
+struct TSyncCloudTabletStatsRequest {
+    1: optional list<TCloudTabletStat> tablet_stats
+}
+
+struct TSyncCloudTabletStatsResponse {
+    1: optional Status.TStatus status
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1: TGetDbsParams params)
     TGetTablesResult getTableNames(1: TGetTablesParams params)
@@ -1778,4 +1810,10 @@ service FrontendService {
     TGetTableTDEInfoResult getTableTDEInfo(1: TGetTableTDEInfoRequest request)
 
     TGetOlapTableMetaResult getOlapTableMeta(1: TGetOlapTableMetaRequest request)
+
+    // BE -> FE: Notify that partitions have been updated
+    //TNotifyUpdatePartitionResponse notifyUpdatePartition(1: TNotifyUpdatePartitionRequest request)
+
+    // Master -> Follower: Sync cloud tablet statistics
+    TSyncCloudTabletStatsResponse syncCloudTabletStats(1: TSyncCloudTabletStatsRequest request)
 }

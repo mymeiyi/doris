@@ -26,6 +26,7 @@ import org.apache.doris.backup.BackupMeta;
 import org.apache.doris.backup.Snapshot;
 import org.apache.doris.binlog.BinlogLagInfo;
 import org.apache.doris.catalog.AutoIncrementGenerator;
+import org.apache.doris.catalog.CloudTabletStatMgr;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.DatabaseIf;
@@ -222,6 +223,8 @@ import org.apache.doris.thrift.TMasterResult;
 import org.apache.doris.thrift.TMySqlLoadAcquireTokenResult;
 import org.apache.doris.thrift.TNetworkAddress;
 import org.apache.doris.thrift.TNodeInfo;
+/*import org.apache.doris.thrift.TNotifyUpdatePartitionRequest;
+import org.apache.doris.thrift.TNotifyUpdatePartitionResponse;*/
 import org.apache.doris.thrift.TNullableStringLiteral;
 import org.apache.doris.thrift.TOlapTableIndexTablets;
 import org.apache.doris.thrift.TOlapTablePartition;
@@ -262,6 +265,8 @@ import org.apache.doris.thrift.TStreamLoadMultiTablePutResult;
 import org.apache.doris.thrift.TStreamLoadPutRequest;
 import org.apache.doris.thrift.TStreamLoadPutResult;
 import org.apache.doris.thrift.TSubTxnInfo;
+import org.apache.doris.thrift.TSyncCloudTabletStatsRequest;
+import org.apache.doris.thrift.TSyncCloudTabletStatsResponse;
 import org.apache.doris.thrift.TSyncQueryColumns;
 import org.apache.doris.thrift.TTableIndexQueryStats;
 import org.apache.doris.thrift.TTableMetadataNameIds;
@@ -4391,7 +4396,22 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 return new TStatus(TStatusCode.INVALID_ARGUMENT);
             }
             CommitTxnResponse commitTxnResponse = CommitTxnResponse.parseFrom(receivedProtobufBytes);
-            Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse);
+            if (request.isSetTxnId() && request.getTxnId() != -1) {
+                Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse);
+            } else {
+                // update tablet stats
+                CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
+                if (cloudTabletStatMgr == null) {
+                    LOG.warn("cloudTabletStatMgr is null, cannot update tablet stats");
+                    return new TStatus(TStatusCode.OK);
+                }
+                for (int i = 0; i < commitTxnResponse.getTablesList().size(); i++) {
+                    long tableId = commitTxnResponse.getTablesList().get(i);
+                    long partitionId = commitTxnResponse.getTablesList().get(i);
+                    long tabletId = commitTxnResponse.getTabletsList().get(i);
+                    cloudTabletStatMgr.handleTabletUpdateNotify(request.getDbId(), tableId, partitionId, tabletId);
+                }
+            }
         } catch (InvalidProtocolBufferException e) {
             // Handle the exception, log it, or take appropriate action
             e.printStackTrace();
@@ -4720,6 +4740,74 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             status.addToErrorMsgs(e.getMessage());
             return result;
         }
+    }
+
+    /*@Override
+    public TNotifyUpdatePartitionResponse notifyUpdatePartition(TNotifyUpdatePartitionRequest request)
+            throws TException {
+        TNotifyUpdatePartitionResponse response = new TNotifyUpdatePartitionResponse();
+        TStatus status = new TStatus(TStatusCode.OK);
+        response.setStatus(status);
+
+        if (!request.isSetDbId() || !request.isSetTableId()) {
+            status.setStatusCode(TStatusCode.INVALID_ARGUMENT);
+            status.addToErrorMsgs("db_id and table_id are required");
+            return response;
+        }
+
+        if (!request.isSetPartitionIds() || request.getPartitionIds().isEmpty()) {
+            status.setStatusCode(TStatusCode.INVALID_ARGUMENT);
+            status.addToErrorMsgs("partition_ids is required and cannot be empty");
+            return response;
+        }
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("receive notifyUpdatePartition request: db_id={}, table_id={}, partition_ids={}",
+                    request.getDbId(), request.getTableId(), request.getPartitionIds());
+        }
+
+        if (Config.isCloudMode()) {
+            CloudTabletStatMgr cloudTabletStatMgr = ((CloudEnv) Env.getCurrentEnv()).getCloudTabletStatMgr();
+            if (cloudTabletStatMgr != null) {
+                cloudTabletStatMgr.handlePartitionUpdateNotify(
+                        request.getDbId(), request.getTableId(), request.getPartitionIds());
+            }
+        }
+
+        return response;
+    }*/
+
+    @Override
+    public TSyncCloudTabletStatsResponse syncCloudTabletStats(TSyncCloudTabletStatsRequest request)
+            throws TException {
+        TSyncCloudTabletStatsResponse response = new TSyncCloudTabletStatsResponse();
+        TStatus status = new TStatus(TStatusCode.OK);
+        response.setStatus(status);
+
+        if (Env.getCurrentEnv().isMaster()) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("syncCloudTabletStats called on master, ignoring");
+            }
+            return response;
+        }
+
+        if (!request.isSetTabletStats() || request.getTabletStats().isEmpty()) {
+            return response;
+        }
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("receive syncCloudTabletStats request with {} tablet stats",
+                    request.getTabletStatsSize());
+        }
+
+        if (Config.isCloudMode()) {
+            CloudTabletStatMgr cloudTabletStatMgr = ((CloudEnv) Env.getCurrentEnv()).getCloudTabletStatMgr();
+            if (cloudTabletStatMgr != null) {
+                cloudTabletStatMgr.handleSyncTabletStats(request.getTabletStats());
+            }
+        }
+
+        return response;
     }
 
     private TStatus checkMaster() {

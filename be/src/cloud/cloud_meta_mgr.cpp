@@ -1418,6 +1418,62 @@ static void send_stats_to_fe_async(const int64_t db_id, const int64_t txn_id,
     }
 }
 
+// Async notify FE about partition update after commit_tablet_job success.
+// Non-fatal: errors are logged but never fail the caller.
+/*static void notify_partition_update_to_fe_async(int64_t db_id, int64_t table_id,
+                                                int64_t partition_id) {
+    auto st = ExecEnv::GetInstance()->send_table_stats_thread_pool()->submit_func(
+            [db_id, table_id, partition_id]() -> Status {
+                TNotifyUpdatePartitionRequest request;
+                TNotifyUpdatePartitionResponse response;
+
+                request.__set_db_id(db_id);
+                request.__set_table_id(table_id);
+                std::vector<int64_t> partition_ids = {partition_id};
+                request.__set_partition_ids(partition_ids);
+
+                TNetworkAddress master_addr =
+                        ExecEnv::GetInstance()->cluster_info()->master_fe_addr;
+                if (master_addr.hostname.empty() || master_addr.port == 0) {
+                    LOG(WARNING) << "notify_partition_update_to_fe_async: "
+                                 << "Have not get FE Master heartbeat yet"
+                                 << " db_id=" << db_id << " table_id=" << table_id
+                                 << " partition_id=" << partition_id;
+                    return Status::OK();
+                }
+
+                auto rpc_status = ThriftRpcHelper::rpc<FrontendServiceClient>(
+                        master_addr.hostname, master_addr.port,
+                        [&request, &response](FrontendServiceConnection& client) {
+                            client->notifyUpdatePartition(response, request);
+                        });
+
+                if (!rpc_status.ok()) {
+                    LOG(WARNING) << "notify_partition_update_to_fe_async RPC failed, errmsg="
+                                 << rpc_status << " db_id=" << db_id << " table_id=" << table_id
+                                 << " partition_id=" << partition_id;
+                    return Status::OK();
+                }
+
+                Status status = Status::create<false>(response.status);
+                if (!status.ok()) {
+                    LOG(WARNING) << "notify_partition_update_to_fe_async failed, errmsg=" << status
+                                 << " db_id=" << db_id << " table_id=" << table_id
+                                 << " partition_id=" << partition_id;
+                } else {
+                    VLOG_DEBUG << "notify_partition_update_to_fe_async success"
+                               << " db_id=" << db_id << " table_id=" << table_id
+                               << " partition_id=" << partition_id;
+                }
+                return Status::OK();
+            });
+    if (!st.ok()) {
+        LOG(WARNING) << "notify_partition_update_to_fe_async task submission failed: "
+                     << st.to_string() << " db_id=" << db_id << " table_id=" << table_id
+                     << " partition_id=" << partition_id;
+    }
+}*/
+
 Status CloudMetaMgr::commit_txn(const StreamLoadContext& ctx, bool is_2pc) {
     VLOG_DEBUG << "commit txn, db_id: " << ctx.db_id << ", txn_id: " << ctx.txn_id
                << ", label: " << ctx.label << ", is_2pc: " << is_2pc;
@@ -1594,6 +1650,15 @@ Status CloudMetaMgr::commit_tablet_job(const TabletJobInfoPB& job, FinishTabletJ
         return Status::Error<ErrorCode::DELETE_BITMAP_LOCK_ERROR, false>(
                 "txn conflict when commit tablet job {}", job.ShortDebugString());
     }
+
+    if (st.ok() && job.has_compaction() && job.has_idx()) {
+        CommitTxnResponse res;
+        res.add_table_ids(idx.table_id());
+        res.add_partition_ids(idx.partition_id());
+        res.add_tablet_ids(idx.tablet_id());
+        send_stats_to_fe_async(idx.db_id(), -1, "", res);
+    }
+
     return st;
 }
 

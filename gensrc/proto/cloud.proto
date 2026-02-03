@@ -1012,6 +1012,8 @@ message CommitTxnResponse {
     // table_id --> version
     repeated int64 tables = 8;
     repeated int64 table_versions = 9;
+    // notify fe to get tablet stats
+    repeated int64 tablet_ids = 10;
 }
 
 message AbortTxnRequest {
