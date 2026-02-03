@@ -24,8 +24,6 @@ import org.apache.doris.catalog.Partition;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.util.MasterDaemon;
-import org.apache.doris.system.Frontend;
-
 import com.google.common.collect.ImmutableList;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -47,9 +45,6 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
     private Set<Long> failedTables = ConcurrentHashMap.newKeySet();
     private static final ExecutorService GET_VERSION_THREAD_POOL = Executors.newFixedThreadPool(
             Config.cloud_max_get_version_task_threads_num);
-    private static final ExecutorService UPDATE_VERSION_THREAD_POOL = Executors.newFixedThreadPool(
-            Config.cloud_max_get_version_task_threads_num);
-    private List<Frontend> frontends = null;
 
     public CloudTableAndPartitionVersionChecker() {
         super("cloud table and partition version checker",
@@ -59,51 +54,46 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
     @Override
     protected void runAfterCatalogReady() {
         LOG.info("cloud table and partition version checker begin");
-        getTablesToCheck();
-        getPartitionVersion();
+        checkTableVersions();
+        updatePartitionVersion();
     }
 
-    private void getTablesToCheck() {
+    private void checkTableVersions() {
         List<Future<Void>> futures = new ArrayList<>();
         long start = System.currentTimeMillis();
         List<Long> dbIds = new ArrayList<>();
         List<Long> tableIds = new ArrayList<>();
         List<OlapTable> tables = new ArrayList<>();
-        for (Long dbId : Env.getCurrentInternalCatalog().getDbIds()) {
-            Database db = Env.getCurrentInternalCatalog().getDbNullable(dbId);
-            if (db == null) {
-                continue;
-            }
-
+        for (Database db : Env.getCurrentInternalCatalog().getDbs()) {
             List<Table> tableList = db.getTables();
             for (Table table : tableList) {
                 if (!table.isManagedTable()) {
                     continue;
                 }
                 OlapTable olapTable = (OlapTable) table;
-                if (olapTable.isCachedTableVersionExpired(
+                if (!olapTable.isCachedTableVersionExpired(
                         Config.cloud_table_and_partition_version_checker_interval_second * 1000)) {
-                    /*LOG.info("sout: find one table version expired. cached version: {}, db: {}, table: {}, "
-                                    + "dbId: {}, tableId: {}", olapTable.getCachedTableVersion(),
-                            olapTable.getDatabase().getFullName(), olapTable.getName(), olapTable.getDatabase().getId(),
-                            olapTable.getId());*/
-                    dbIds.add(dbId);
-                    tableIds.add(olapTable.getId());
-                    tables.add(olapTable);
-                    if (dbIds.size() >= Config.cloud_get_version_task_batch_size) {
-                        Future<Void> future = submitGetTableVersionTask(ImmutableList.copyOf(dbIds),
+                    continue;
+                }
+                dbIds.add(db.getId());
+                tableIds.add(olapTable.getId());
+                tables.add(olapTable);
+                if (dbIds.size() >= Config.cloud_get_version_task_batch_size) {
+                    Future<Void> future = submitGetTableVersionTask(ImmutableList.copyOf(dbIds),
                                 ImmutableList.copyOf(tableIds), ImmutableList.copyOf(tables));
-                        futures.add(future);
-                        dbIds.clear();
-                        tableIds.clear();
-                        tables.clear();
-                    }
+                    futures.add(future);
+                    dbIds.clear();
+                    tableIds.clear();
+                    tables.clear();
                 }
             }
         }
         if (!dbIds.isEmpty()) {
-            Future<Void> future = submitGetTableVersionTask(dbIds, tableIds, tables);
+            Future<Void> future = submitGetTableVersionTask(ImmutableList.copyOf(dbIds), ImmutableList.copyOf(tableIds), ImmutableList.copyOf(tables));
             futures.add(future);
+            dbIds.clear();
+            tableIds.clear();
+            tables.clear();
         }
         try {
             for (Future<Void> future : futures) {
@@ -112,8 +102,8 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
         } catch (InterruptedException | ExecutionException e) {
             LOG.error("Error waiting for get table version tasks to complete", e);
         }
-        LOG.info("get {} tables need to check table version, {} table need to check partition version, cost {} ms",
-                tableIds.size(), tableVersionMap.size(), System.currentTimeMillis() - start);
+        LOG.info("get table versions cost {} ms, tables need to update partition version: {}, rpc size: {}", System.currentTimeMillis() - start,
+                tableVersionMap.size(), futures.size());
     }
 
     private Future<Void> submitGetTableVersionTask(List<Long> dbIds, List<Long> tableIds, List<OlapTable> tables) {
@@ -122,7 +112,7 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                 List<Long> versions = OlapTable.getVisibleVersionFromMeta(dbIds, tableIds);
                 for (int i = 0; i < tables.size(); i++) {
                     OlapTable table = tables.get(i);
-                    Long version = versions.get(i);
+                    long version = versions.get(i);
                     if (version > table.getCachedTableVersion()) {
                         tableVersionMap.compute(table, (k, v) -> {
                             if (v == null || version > v) {
@@ -137,20 +127,20 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                     }
                 }
             } catch (Exception e) {
-                LOG.warn("get tablet version exception:", e);
+                LOG.warn("get tablet version error", e);
             }
             return null;
         });
     }
 
-    private void getPartitionVersion() {
+    private void updatePartitionVersion() {
         if (tableVersionMap.isEmpty()) {
             return;
         }
         List<Future<Void>> futures = new ArrayList<>();
         long start = System.currentTimeMillis();
         List<CloudPartition> partitions = new ArrayList<>();
-        // TODO range scan table partition versions
+        // TODO meta service support range scan partition versions
         for (Entry<OlapTable, Long> entry : tableVersionMap.entrySet()) {
             OlapTable olapTable = entry.getKey();
             LOG.info("sout: check partition version for table: {}, db: {}, tableId: {}, dbId: {}, "
@@ -159,16 +149,17 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                     olapTable.getDatabase().getId(), olapTable.getCachedTableVersion(), entry.getValue());
             for (Partition partition : olapTable.getAllPartitions()) {
                 partitions.add((CloudPartition) partition);
-                if (partitions.size() > 2000) {
-                    Future<Void> future = submitGetTableVersionTask(ImmutableList.copyOf(partitions));
+                if (partitions.size() >= Config.cloud_get_version_task_batch_size) {
+                    Future<Void> future = submitGetPartitionVersionTask(ImmutableList.copyOf(partitions));
                     futures.add(future);
                     partitions.clear();
                 }
             }
         }
         if (partitions.size() > 0) {
-            Future<Void> future = submitGetTableVersionTask(ImmutableList.copyOf(partitions));
+            Future<Void> future = submitGetPartitionVersionTask(ImmutableList.copyOf(partitions));
             futures.add(future);
+            partitions.clear();
         }
         try {
             for (Future<Void> future : futures) {
@@ -185,18 +176,18 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                 olapTable.setCachedTableVersion(version);
             }
         }
-        LOG.info("get partition versions cost {} ms, table size: {}, rpc size: {}", System.currentTimeMillis() - start,
-                tableVersionMap.size(), futures.size());
+        LOG.info("update partition versions cost {} ms, table size: {}, rpc size: {}, failed tables: {}", System.currentTimeMillis() - start,
+                tableVersionMap.size(), futures.size(), failedTables);
         tableVersionMap.clear();
         failedTables.clear();
     }
 
-    private Future<Void> submitGetTableVersionTask(List<CloudPartition> partitions) {
+    private Future<Void> submitGetPartitionVersionTask(List<CloudPartition> partitions) {
         return GET_VERSION_THREAD_POOL.submit(() -> {
             try {
                 CloudPartition.getSnapshotVisibleVersionFromMs(partitions, false);
             } catch (Exception e) {
-                LOG.warn("get tablet version exception:", e);
+                LOG.warn("get partition version error", e);
                 Set<Long> failedTableIds = partitions.stream().map(p -> p.getTableId())
                         .collect(java.util.stream.Collectors.toSet());
                 failedTables.addAll(failedTableIds);
@@ -204,5 +195,4 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
             return null;
         });
     }
-
 }

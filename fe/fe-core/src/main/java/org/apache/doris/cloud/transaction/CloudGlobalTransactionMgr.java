@@ -540,7 +540,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         for (int i = 0; i < commitTxnResponse.getTablesList().size(); i++) {
             Long tableId = commitTxnResponse.getTablesList().get(i);
             Optional<Table> table = db.getTable(tableId);
-            if (table.isEmpty() || !table.get().isManagedTable()) {
+            if (!table.isPresent() || !table.get().isManagedTable()) {
                 continue;
             }
             OlapTable olapTable = (OlapTable) table.get();
