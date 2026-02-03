@@ -69,6 +69,8 @@ public class CloudEnv extends Env {
 
     private CloudTabletRebalancer cloudTabletRebalancer;
     private CacheHotspotManager cacheHotspotMgr;
+    private CloudTableAndPartitionVersionChecker cloudTableAndPartitionVersionChecker;
+    private CloudUpdateVersionTool cloudUpdateVersionTool;
 
     private boolean enableStorageVault;
 
@@ -89,6 +91,8 @@ public class CloudEnv extends Env {
         this.cloudTabletRebalancer = new CloudTabletRebalancer((CloudSystemInfoService) systemInfo);
         this.cacheHotspotMgr = new CacheHotspotManager((CloudSystemInfoService) systemInfo);
         this.upgradeMgr = new CloudUpgradeMgr((CloudSystemInfoService) systemInfo);
+        this.cloudTableAndPartitionVersionChecker = new CloudTableAndPartitionVersionChecker();
+        this.cloudUpdateVersionTool = new CloudUpdateVersionTool();
         this.cloudSnapshotHandler = CloudSnapshotHandler.getInstance();
     }
 
@@ -159,7 +163,12 @@ public class CloudEnv extends Env {
             cacheHotspotMgr.start();
         }
         upgradeMgr.start();
+        cloudTableAndPartitionVersionChecker.start();
         cloudSnapshotHandler.start();
+    }
+
+    public CloudUpdateVersionTool getCloudUpdateVersionTool() {
+        return cloudUpdateVersionTool;
     }
 
     @Override
