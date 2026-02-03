@@ -126,6 +126,9 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 
 /**
@@ -239,6 +242,8 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
     // This value is set when get the table version from meta-service, 0 means version is not cached yet
     private volatile long lastTableVersionCachedTimeMs = 0;
     private volatile long cachedTableVersion = -1;
+
+    private ReadWriteLock versionLock = Config.isCloudMode() ? new ReentrantReadWriteLock() : null;
 
     public OlapTable() {
         // for persist
@@ -3330,6 +3335,14 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
         return System.currentTimeMillis() - lastTableVersionCachedTimeMs > cacheExpirationMs;
     }
 
+    public boolean isCachedTableVersionExpired(long expirationMs) {
+        // -1 means no cache yet, need to fetch from MS
+        if (cachedTableVersion == -1 || cacheExpirationMs <= 0) {
+            return true;
+        }
+        return System.currentTimeMillis() - lastTableVersionCachedTimeMs > expirationMs;
+    }
+
     @VisibleForTesting
     protected void setCachedTableVersion(long version) {
         if (version >= cachedTableVersion) {
@@ -3845,5 +3858,21 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
     public String getSeqMappingKey(String column) {
         return getOrCreatTableProperty().getSeqMappingKey(column);
+    }
+
+    public void versionReadLock() {
+        versionLock.readLock().lock();
+    }
+
+    public void versionReadUnlock() {
+        versionLock.readLock().unlock();
+    }
+
+    public void versionWriteLock() {
+        versionLock.writeLock().lock();
+    }
+
+    public void versionWriteUnlock() {
+        versionLock.writeLock().unlock();
     }
 }
