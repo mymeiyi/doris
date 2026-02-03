@@ -81,7 +81,7 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                 tables.add(olapTable);
                 if (dbIds.size() >= Config.cloud_get_version_task_batch_size) {
                     Future<Void> future = submitGetTableVersionTask(tableVersionMap, ImmutableList.copyOf(dbIds),
-                                ImmutableList.copyOf(tableIds), ImmutableList.copyOf(tables));
+                            ImmutableList.copyOf(tableIds), ImmutableList.copyOf(tables));
                     futures.add(future);
                     dbIds.clear();
                     tableIds.clear();
@@ -90,7 +90,8 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
             }
         }
         if (!dbIds.isEmpty()) {
-            Future<Void> future = submitGetTableVersionTask(tableVersionMap, ImmutableList.copyOf(dbIds), ImmutableList.copyOf(tableIds), ImmutableList.copyOf(tables));
+            Future<Void> future = submitGetTableVersionTask(tableVersionMap, ImmutableList.copyOf(dbIds),
+                    ImmutableList.copyOf(tableIds), ImmutableList.copyOf(tables));
             futures.add(future);
             dbIds.clear();
             tableIds.clear();
@@ -103,12 +104,13 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
         } catch (InterruptedException | ExecutionException e) {
             LOG.error("Error waiting for get table version tasks to complete", e);
         }
-        LOG.info("get table versions cost {} ms, tables need to update partition version: {}, rpc size: {}", System.currentTimeMillis() - start,
-                tableVersionMap.size(), futures.size());
+        LOG.info("get table versions cost {} ms, rpc size: {}, found {} tables need to update partition version",
+                System.currentTimeMillis() - start, futures.size(), tableVersionMap.size());
         return tableVersionMap;
     }
 
-    private Future<Void> submitGetTableVersionTask(Map<OlapTable, Long> tableVersionMap, List<Long> dbIds, List<Long> tableIds, List<OlapTable> tables) {
+    private Future<Void> submitGetTableVersionTask(Map<OlapTable, Long> tableVersionMap, List<Long> dbIds,
+            List<Long> tableIds, List<OlapTable> tables) {
         return GET_VERSION_THREAD_POOL.submit(() -> {
             try {
                 List<Long> versions = OlapTable.getVisibleVersionFromMeta(dbIds, tableIds);
@@ -143,10 +145,10 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
         // TODO meta service support range scan partition versions
         for (Entry<OlapTable, Long> entry : tableVersionMap.entrySet()) {
             OlapTable olapTable = entry.getKey();
-            LOG.info("sout: check partition version for table: {}, db: {}, tableId: {}, dbId: {}, "
-                            + "cache version: {}, target version: {}",
-                    olapTable.getName(), olapTable.getDatabase().getFullName(), olapTable.getId(),
-                    olapTable.getDatabase().getId(), olapTable.getCachedTableVersion(), entry.getValue());
+            LOG.info("check partition version for table: {}, db: {}, tableId: {}, dbId: {}, "
+                            + "cache version: {}, target version: {}", olapTable.getName(),
+                    olapTable.getDatabase().getFullName(), olapTable.getId(), olapTable.getDatabase().getId(),
+                    olapTable.getCachedTableVersion(), entry.getValue());
             for (Partition partition : olapTable.getAllPartitions()) {
                 partitions.add((CloudPartition) partition);
                 if (partitions.size() >= Config.cloud_get_version_task_batch_size) {
@@ -176,10 +178,8 @@ public class CloudTableAndPartitionVersionChecker extends MasterDaemon {
                 olapTable.setCachedTableVersion(version);
             }
         }
-        LOG.info("update partition versions cost {} ms, table size: {}, rpc size: {}, failed tables: {}", System.currentTimeMillis() - start,
-                tableVersionMap.size(), futures.size(), failedTables);
-        tableVersionMap.clear();
-        failedTables.clear();
+        LOG.info("update partition versions cost {} ms, table size: {}, rpc size: {}, failed tables: {}",
+                System.currentTimeMillis() - start, tableVersionMap.size(), futures.size(), failedTables);
     }
 
     private Future<Void> submitGetPartitionVersionTask(Set<Long> failedTables, List<CloudPartition> partitions) {

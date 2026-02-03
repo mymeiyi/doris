@@ -99,8 +99,7 @@ public class CloudUpdateVersionTool {
             partitionVersion.setVersionUpdateTime(versionPair.second);
             partitionVersionInfos.add(partitionVersion);
         });
-        TFrontendUpdateCloudVersionRequest request =
-                new TFrontendUpdateCloudVersionRequest();
+        TFrontendUpdateCloudVersionRequest request = new TFrontendUpdateCloudVersionRequest();
         request.setDbId(dbId);
         request.setTableVersionInfos(tableVersionInfos);
         request.setPartitionVersionInfos(partitionVersionInfos);
@@ -164,7 +163,7 @@ public class CloudUpdateVersionTool {
                 }
                 OlapTable olapTable = (OlapTable) table;
                 olapTable.setCachedTableVersion(tableVersionInfo.getVersion());
-                LOG.info("Update table_id: {}, visible_version: {}", olapTable.getId(), tableVersionInfo.getVersion());
+                LOG.info("Update tableId: {}, version: {}", olapTable.getId(), tableVersionInfo.getVersion());
             });
             return;
         }
@@ -196,13 +195,13 @@ public class CloudUpdateVersionTool {
                 CloudPartition cloudPartition = (CloudPartition) partition;
                 cloudPartition.setCachedVisibleVersion(partitionVersionInfo.getVersion(),
                         partitionVersionInfo.getVersionUpdateTime());
-                LOG.info("Update table_id: {}, partition_id: {}, version: {}, update time: {}",
+                LOG.info("Update tableId: {}, partitionId: {}, version: {}, updateTime: {}",
                         partitionVersionInfo.getTableId(), partition.getId(), partitionVersionInfo.getVersion(),
                         partitionVersionInfo.getVersionUpdateTime());
             }
             for (Pair<OlapTable, Long> tableVersion : tableVersions) {
                 tableVersion.first.setCachedTableVersion(tableVersion.second);
-                LOG.info("Update table_id: {}, visible_version: {}", tableVersion.first.getId(), tableVersion.second);
+                LOG.info("Update tableId: {}, version: {}", tableVersion.first.getId(), tableVersion.second);
             }
         } finally {
             for (Pair<OlapTable, Long> tableVersion : tableVersions) {
