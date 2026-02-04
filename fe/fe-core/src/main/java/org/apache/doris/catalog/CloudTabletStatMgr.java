@@ -463,14 +463,13 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
             CloudReplica cloudReplica = (CloudReplica) replica;
             cloudReplica.setLastGetTabletStatsTime(System.currentTimeMillis());
-            int getTabletStatsIntervalIndex = cloudReplica.getStatsIntervalIndex();
+            int statsIntervalIndex = cloudReplica.getStatsIntervalIndex();
             if (activeUpdate || statsChanged) {
-                getTabletStatsIntervalIndex = 0;
+                statsIntervalIndex = 0;
             } else {
-                getTabletStatsIntervalIndex = Math.min(getTabletStatsIntervalIndex + 1,
-                        DEFAULT_INTERVAL_LADDER_MS.length - 1);
+                statsIntervalIndex = Math.min(statsIntervalIndex + 1, DEFAULT_INTERVAL_LADDER_MS.length - 1);
             }
-            cloudReplica.setStatsIntervalIndex(getTabletStatsIntervalIndex);
+            cloudReplica.setStatsIntervalIndex(statsIntervalIndex);
         }
         // push tablet stats to other fes
         if (activeUpdate && Env.getCurrentEnv().isMaster()) {
