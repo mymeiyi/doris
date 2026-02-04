@@ -37,7 +37,9 @@ import org.apache.doris.catalog.PartitionInfo;
 import org.apache.doris.catalog.PartitionType;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.Type;
+import org.apache.doris.cloud.catalog.CloudPartition;
 import org.apache.doris.common.AnalysisException;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.FeConstants;
@@ -70,6 +72,7 @@ import org.apache.doris.nereids.types.DateTimeType;
 import org.apache.doris.nereids.types.DateTimeV2Type;
 import org.apache.doris.nereids.types.DateV2Type;
 import org.apache.doris.nereids.types.coercion.DateLikeType;
+import org.apache.doris.rpc.RpcException;
 import org.apache.doris.thrift.TCell;
 import org.apache.doris.thrift.TRow;
 
@@ -79,6 +82,8 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -94,6 +99,8 @@ import java.util.stream.Collectors;
  * show [temp] partitions' detail info within a table
  */
 public class PartitionsProcDir implements ProcDirInterface {
+    private static final Logger LOG = LogManager.getLogger(PartitionsProcDir.class);
+
     public static final ImmutableList<String> TITLE_NAMES = new ImmutableList.Builder<String>()
             .add("PartitionId").add("PartitionName")
             .add("VisibleVersion").add("VisibleVersionTime")
@@ -397,6 +404,27 @@ public class PartitionsProcDir implements ProcDirInterface {
         return partitionInfosInrernal.stream().map(pair -> pair.second).collect(Collectors.toList());
     }
 
+    private List<Long> getPartitionVersions(OlapTable olapTable, List<Long> partitionIds)
+            throws AnalysisException {
+        List<Long> partitionVersions;
+        if (Config.isNotCloudMode()) {
+            partitionVersions = partitionIds.stream().map(id -> olapTable.getPartition(id).getVisibleVersion())
+                    .collect(Collectors.toList());
+        } else {
+            List<CloudPartition> partitions = partitionIds.stream().map(id -> olapTable.getPartition(id))
+                    .map(p -> (CloudPartition) p).collect(Collectors.toList());
+            try {
+                partitionVersions = CloudPartition.getSnapshotVisibleVersion(partitions);
+            } catch (RpcException e) {
+                LOG.warn("get partition versions failed for table: {}", olapTable.getId(), e);
+                throw new AnalysisException("get partition versions failed: " + e.getMessage(), e);
+            }
+        }
+        Preconditions.checkState(partitionVersions.size() == partitionIds.size(),
+                "versions size %s not equal partition size %s", partitionVersions.size(), partitionIds.size());
+        return partitionVersions;
+    }
+
     private List<Pair<List<Comparable>, TRow>> getPartitionInfosInrernal() throws AnalysisException {
         Preconditions.checkNotNull(db);
         Preconditions.checkNotNull(olapTable);
@@ -446,8 +474,10 @@ public class PartitionsProcDir implements ProcDirInterface {
                 partitionIds = partitions.stream().map(Partition::getId).collect(Collectors.toList());
             }
 
+            List<Long> partitionVersions = getPartitionVersions(olapTable, partitionIds);
             Joiner joiner = Joiner.on(", ");
-            for (Long partitionId : partitionIds) {
+            for (int j = 0; j < partitionIds.size(); j++) {
+                long partitionId = partitionIds.get(j);
                 Partition partition = olapTable.getPartition(partitionId);
 
                 List<Comparable> partitionInfo = new ArrayList<Comparable>();
@@ -457,8 +487,9 @@ public class PartitionsProcDir implements ProcDirInterface {
                 trow.addToColumnValue(new TCell().setLongVal(partitionId));
                 partitionInfo.add(partitionName);
                 trow.addToColumnValue(new TCell().setStringVal(partitionName));
-                partitionInfo.add(partition.getVisibleVersion());
-                trow.addToColumnValue(new TCell().setLongVal(partition.getVisibleVersion()));
+                long partitionVersion = partitionVersions.get(j);
+                partitionInfo.add(partitionVersion);
+                trow.addToColumnValue(new TCell().setLongVal(partitionVersion));
                 String visibleTime = TimeUtils.longToTimeString(partition.getVisibleVersionTime());
                 partitionInfo.add(visibleTime);
                 trow.addToColumnValue(new TCell().setStringVal(visibleTime));

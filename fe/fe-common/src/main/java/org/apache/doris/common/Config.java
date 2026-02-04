@@ -3584,6 +3584,22 @@ public class Config extends ConfigBase {
         "Maximal concurrent num of get tablet stat job."})
     public static int max_get_tablet_stat_task_threads_num = 4;
 
+    @ConfField(description = {"存算分离模式下检查 table 和 partition version 的间隔. 所有 frontend 都会检查",
+            "Cloud table and partition version checker interval. All frontends will do checking"})
+    public static int cloud_table_and_partition_version_checker_interval_second = 10;
+
+    @ConfField(description = {"Get version task 的最大并发数",
+            "Maximal concurrent num of get version task."})
+    public static int cloud_max_get_version_task_threads_num = 4;
+
+    @ConfField(description = {"Update version task 的最大并发数",
+            "Maximal concurrent num of update version task."})
+    public static int cloud_update_version_task_threads_num = 4;
+
+    @ConfField(mutable = true, description = {"Get version task 的 batch size",
+            "Maximal batch size of get version task."})
+    public static int cloud_get_version_task_batch_size = 4000;
+
     @ConfField(mutable = true, description = {"schema change job 失败是否重试",
             "Whether to enable retry when a schema change job fails, default is true."})
     public static boolean enable_schema_change_retry = true;

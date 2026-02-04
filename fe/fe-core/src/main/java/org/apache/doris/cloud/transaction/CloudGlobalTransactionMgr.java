@@ -27,6 +27,7 @@ import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.TabletInvertedIndex;
 import org.apache.doris.catalog.TabletMeta;
+import org.apache.doris.cloud.catalog.CloudEnv;
 import org.apache.doris.cloud.catalog.CloudPartition;
 import org.apache.doris.cloud.proto.Cloud.AbortSubTxnRequest;
 import org.apache.doris.cloud.proto.Cloud.AbortSubTxnResponse;
@@ -142,6 +143,7 @@ import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -474,29 +476,16 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         }
     }
 
-    /**
-     * Post process of commitTxn
-     * 1. update some stats
-     * 2. produce event for further processes like async MV
-     * @param commitTxnResponse commit txn call response from meta-service
-     */
-    public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse) {
-        // ========================================
-        // update some table stats
-        // ========================================
+    private Map<Long, List<Long>> updateVersion(CommitTxnResponse commitTxnResponse) {
         long dbId = commitTxnResponse.getTxnInfo().getDbId();
         long txnId = commitTxnResponse.getTxnInfo().getTxnId();
-        // 1. update rowCountfor AnalysisManager
-        Map<Long, Long> updatedRows = new HashMap<>();
-        for (TableStatsPB tableStats : commitTxnResponse.getTableStatsList()) {
-            LOG.info("Update RowCount for AnalysisManager. transactionId:{}, table_id:{}, updated_row_count:{}",
-                    txnId, tableStats.getTableId(), tableStats.getUpdatedRowCount());
-            updatedRows.put(tableStats.getTableId(), tableStats.getUpdatedRowCount());
+        int totalPartitionNum = commitTxnResponse.getPartitionIdsList().size();
+        if (totalPartitionNum == 0 && commitTxnResponse.getTableVersionsList().size() == 0) {
+            return Collections.emptyMap();
         }
         Env env = Env.getCurrentEnv();
-        env.getAnalysisManager().updateUpdatedRows(updatedRows);
-        // 2. notify partition first load
-        int totalPartitionNum = commitTxnResponse.getPartitionIdsList().size();
+        // partition -> <version, versionUpdateTime>
+        Map<CloudPartition, Pair<Long, Long>> partitionVersionMap = new HashMap<>();
         // a map to record <tableId, [firstLoadPartitionIds]>
         Map<Long, List<Long>> tablePartitionMap = Maps.newHashMap();
         for (int idx = 0; idx < totalPartitionNum; ++idx) {
@@ -521,12 +510,75 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             }
             if (version == 2) {
                 partition.getMaterializedIndices(MaterializedIndex.IndexExtState.ALL)
-                    .stream().forEach(i -> i.setRowCountReported(false));
+                        .stream().forEach(i -> i.setRowCountReported(false));
             }
-            partition.setCachedVisibleVersion(version, commitTxnResponse.getVersionUpdateTimeMs());
-            LOG.info("Update Partition. transactionId:{}, table_id:{}, partition_id:{}, version:{}, update time:{}",
-                    txnId, tableId, partition.getId(), version, commitTxnResponse.getVersionUpdateTimeMs());
+            partitionVersionMap.put(partition, Pair.of(version, commitTxnResponse.getVersionUpdateTimeMs()));
         }
+        // collect table versions
+        Preconditions.checkState(
+                commitTxnResponse.getTablesList().size() == commitTxnResponse.getTableVersionsList().size(),
+                "table num=" + commitTxnResponse.getTablesList().size()
+                        + " not equal to table version num=" + commitTxnResponse.getTableVersionsList().size());
+        Database db = env.getInternalCatalog().getDb(dbId).get();
+        List<Pair<OlapTable, Long>> tableVersions = new ArrayList<>(commitTxnResponse.getTablesList().size());
+        for (int i = 0; i < commitTxnResponse.getTablesList().size(); i++) {
+            Long tableId = commitTxnResponse.getTablesList().get(i);
+            Table table = db.getTableNullable(tableId);
+            if (table == null || !table.isManagedTable()) {
+                continue;
+            }
+            tableVersions.add(Pair.of((OlapTable) table, commitTxnResponse.getTableVersionsList().get(i)));
+        }
+        Collections.sort(tableVersions, Comparator.comparingLong(o -> o.first.getId()));
+        // update partition version and table version
+        for (Pair<OlapTable, Long> tableVersion : tableVersions) {
+            tableVersion.first.versionWriteLock();
+        }
+        try {
+            partitionVersionMap.forEach((partition, versionPair) -> {
+                partition.setCachedVisibleVersion(versionPair.first, versionPair.second);
+                LOG.info("Update Partition. transactionId:{}, table_id:{}, partition_id:{}, version:{}, update time:{}",
+                        txnId, partition.getTableId(), partition.getId(), versionPair.first, versionPair.second);
+            });
+            for (Pair<OlapTable, Long> tableVersion : tableVersions) {
+                tableVersion.first.setCachedTableVersion(tableVersion.second);
+                LOG.info("Update Table. transactionId:{}, table_id:{}, visible_version:{}",
+                        txnId, tableVersion.first.getId(), tableVersion.second);
+            }
+        } finally {
+            for (int i = tableVersions.size() - 1; i >= 0; i--) {
+                tableVersions.get(i).first.versionWriteUnlock();
+            }
+        }
+        // notify follower and observer FE to update their version cache
+        ((CloudEnv) env).getCloudUpdateVersionTool().updateVersionAsync(dbId, tableVersions, partitionVersionMap);
+        return tablePartitionMap;
+    }
+
+    /**
+     * Post process of commitTxn
+     * 1. update some stats
+     * 2. produce event for further processes like async MV
+     * @param commitTxnResponse commit txn call response from meta-service
+     */
+    public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse) {
+        // ========================================
+        // update some table stats
+        // ========================================
+        long dbId = commitTxnResponse.getTxnInfo().getDbId();
+        long txnId = commitTxnResponse.getTxnInfo().getTxnId();
+        // 1. update rowCountfor AnalysisManager
+        Map<Long, Long> updatedRows = new HashMap<>();
+        for (TableStatsPB tableStats : commitTxnResponse.getTableStatsList()) {
+            LOG.info("Update RowCount for AnalysisManager. transactionId:{}, table_id:{}, updated_row_count:{}",
+                    txnId, tableStats.getTableId(), tableStats.getUpdatedRowCount());
+            updatedRows.put(tableStats.getTableId(), tableStats.getUpdatedRowCount());
+        }
+        Env env = Env.getCurrentEnv();
+        env.getAnalysisManager().updateUpdatedRows(updatedRows);
+        // 2. update table and partition version
+        Map<Long, List<Long>> tablePartitionMap = updateVersion(commitTxnResponse);
+        // 3. notify partition first load
         env.getAnalysisManager().setNewPartitionLoaded(
                 tablePartitionMap.keySet().stream().collect(Collectors.toList()));
         // tablePartitionMap to string
