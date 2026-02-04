@@ -596,7 +596,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             LOG.info("notify partition first load. {}", sb);
         }
         // 4. notify update tablet stats
-        ((CloudTabletStatMgr) (env.getTabletStatMgr())).updateTabletStats(tabletIds);
+        ((CloudTabletStatMgr) (env.getTabletStatMgr())).addActiveTablets(tabletIds);
 
         // ========================================
         // produce event

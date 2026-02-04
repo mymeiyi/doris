@@ -76,7 +76,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
     private static final ExecutorService SYNC_TABLET_STATS_THREAD_POOL = Executors.newFixedThreadPool(
             Config.cloud_sync_tablet_stats_task_threads_num,
             new ThreadFactoryBuilder().setNameFormat("sync-tablet-stats-%d").setDaemon(true).build());
-    private AtomicReference<Map<Long, TabletIndexPB>> tablets = new AtomicReference<>(new ConcurrentHashMap<>());
+    private AtomicReference<Map<Long, TabletIndexPB>> activeTablets = new AtomicReference<>(new ConcurrentHashMap<>());
 
     /**
      * Interval ladder in milliseconds: 1m, 5m, 10m, 30m, 2h, 6h, 12h, 3d, infinite.
@@ -109,8 +109,8 @@ public class CloudTabletStatMgr extends MasterDaemon {
         }*/
 
         // active get tablets
-        Map<Long, TabletIndexPB> copiedTablets = tablets.getAndSet(new ConcurrentHashMap<>());
-        getTabletStats(copiedTablets);
+        Map<Long, TabletIndexPB> copiedTablets = activeTablets.getAndSet(new ConcurrentHashMap<>());
+        getActiveTabletStats(copiedTablets);
         // select tablets whose
         List<Long> dbIds = getAllTabletStats(cloudTablet -> {
             if (copiedTablets.containsKey(cloudTablet.getId())) {
@@ -121,7 +121,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
                 return false;
             }
             CloudReplica cloudReplica = (CloudReplica) replicas.get(0);
-            int index = cloudReplica.getGetTabletStatsIntervalIndex();
+            int index = cloudReplica.getStatsIntervalIndex();
             if (index >= DEFAULT_INTERVAL_LADDER_MS.length) {
                 LOG.warn("get tablet stats interval index out of range, tabletId: {}, index: {}",
                         cloudTablet.getId(), index);
@@ -207,7 +207,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
     }
 
     // active tablets
-    private void getTabletStats(Map<Long, TabletIndexPB> tablets) {
+    private void getActiveTabletStats(Map<Long, TabletIndexPB> tablets) {
         long start = System.currentTimeMillis();
         List<Future<Void>> futures = new ArrayList<>();
         GetTabletStatsRequest.Builder builder =
@@ -238,7 +238,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
         return GET_TABLET_STATS_THREAD_POOL.submit(() -> {
             GetTabletStatsResponse resp;
             try {
-                resp = getTabletStats(req);
+                resp = getTabletStatsFromMs(req);
             } catch (RpcException e) {
                 LOG.warn("get tablet stats exception:", e);
                 return null;
@@ -463,14 +463,14 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
             CloudReplica cloudReplica = (CloudReplica) replica;
             cloudReplica.setLastGetTabletStatsTime(System.currentTimeMillis());
-            int getTabletStatsIntervalIndex = cloudReplica.getGetTabletStatsIntervalIndex();
+            int getTabletStatsIntervalIndex = cloudReplica.getStatsIntervalIndex();
             if (activeUpdate || statsChanged) {
                 getTabletStatsIntervalIndex = 0;
             } else {
                 getTabletStatsIntervalIndex = Math.min(getTabletStatsIntervalIndex + 1,
                         DEFAULT_INTERVAL_LADDER_MS.length - 1);
             }
-            cloudReplica.setGetTabletStatsIntervalIndex(getTabletStatsIntervalIndex);
+            cloudReplica.setStatsIntervalIndex(getTabletStatsIntervalIndex);
         }
         // push tablet stats to other fes
         if (activeUpdate && Env.getCurrentEnv().isMaster()) {
@@ -478,7 +478,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
         }
     }
 
-    private GetTabletStatsResponse getTabletStats(GetTabletStatsRequest request)
+    private GetTabletStatsResponse getTabletStatsFromMs(GetTabletStatsRequest request)
             throws RpcException {
         GetTabletStatsResponse response;
         try {
@@ -494,7 +494,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
         return this.cloudTableStatsList;
     }
 
-    public void updateTabletStats(List<Long> tabletIds) {
+    public void addActiveTablets(List<Long> tabletIds) {
         for (Long tabletId : tabletIds) {
             TabletMeta tabletMeta = Env.getCurrentInvertedIndex().getTabletMeta(tabletId);
             if (tabletMeta == null) {
@@ -506,7 +506,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
             tabletBuilder.setIndexId(tabletMeta.getIndexId());
             tabletBuilder.setPartitionId(tabletMeta.getPartitionId());
             tabletBuilder.setTabletId(tabletId);
-            tablets.get().put(tabletId, tabletBuilder.build());
+            activeTablets.get().put(tabletId, tabletBuilder.build());
         }
     }
 

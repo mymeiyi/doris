@@ -74,7 +74,7 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
     long lastGetTabletStatsTime;
     @Getter
     @Setter
-    int getTabletStatsIntervalIndex = 0;
+    int statsIntervalIndex = 0;
 
     private long segmentCount = 0L;
     private long rowsetCount = 0L;

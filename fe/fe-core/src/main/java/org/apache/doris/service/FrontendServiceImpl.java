@@ -4404,7 +4404,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                     LOG.warn("cloudTabletStatMgr is null, cannot update tablet stats");
                     return new TStatus(TStatusCode.OK);
                 }
-                cloudTabletStatMgr.updateTabletStats(request.getTabletIds());
+                cloudTabletStatMgr.addActiveTablets(request.getTabletIds());
             }
         } catch (InvalidProtocolBufferException e) {
             // Handle the exception, log it, or take appropriate action
