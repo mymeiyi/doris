@@ -69,6 +69,8 @@ public class CloudEnv extends Env {
 
     private CloudTabletRebalancer cloudTabletRebalancer;
     private CacheHotspotManager cacheHotspotMgr;
+    private CloudSyncVersionDaemon cloudSyncVersionDaemon;
+    private CloudFEVersionSynchronizer cloudFEVersionSynchronizer;
 
     private boolean enableStorageVault;
 
@@ -89,6 +91,8 @@ public class CloudEnv extends Env {
         this.cloudTabletRebalancer = new CloudTabletRebalancer((CloudSystemInfoService) systemInfo);
         this.cacheHotspotMgr = new CacheHotspotManager((CloudSystemInfoService) systemInfo);
         this.upgradeMgr = new CloudUpgradeMgr((CloudSystemInfoService) systemInfo);
+        this.cloudSyncVersionDaemon = new CloudSyncVersionDaemon();
+        this.cloudFEVersionSynchronizer = new CloudFEVersionSynchronizer();
         this.cloudSnapshotHandler = CloudSnapshotHandler.getInstance();
     }
 
@@ -146,6 +150,7 @@ public class CloudEnv extends Env {
 
         super.initialize(args);
         this.cloudSnapshotHandler.initialize();
+        cloudInstanceStatusChecker.start();
     }
 
     @Override
@@ -159,14 +164,18 @@ public class CloudEnv extends Env {
             cacheHotspotMgr.start();
         }
         upgradeMgr.start();
+        cloudSyncVersionDaemon.start();
         cloudSnapshotHandler.start();
+    }
+
+    public CloudFEVersionSynchronizer getCloudUpdateVersionTool() {
+        return cloudFEVersionSynchronizer;
     }
 
     @Override
     protected void startNonMasterDaemonThreads() {
         LOG.info("start cloud Non Master only daemon threads");
         super.startNonMasterDaemonThreads();
-        cloudInstanceStatusChecker.start();
     }
 
     public static String genFeNodeNameFromMeta(String host, int port, long timeMs) {
