@@ -1370,7 +1370,7 @@ static void send_stats_to_fe_async(const int64_t db_id, const int64_t txn_id,
     std::string protobufBytes;
     res.SerializeToString(&protobufBytes);
     auto st = ExecEnv::GetInstance()->send_table_stats_thread_pool()->submit_func(
-            [db_id, txn_id, label, protobufBytes]() -> Status {
+            [db_id, txn_id, label, protobufBytes, tablet_ids]() -> Status {
                 TReportCommitTxnResultRequest request;
                 TStatus result;
 
@@ -1494,8 +1494,8 @@ Status CloudMetaMgr::commit_txn(const StreamLoadContext& ctx, bool is_2pc) {
 
     if (st.ok()) {
         std::vector<int64_t> tablet_ids;
-        for (auto& commit_info : ctx->commit_infos) {
-            tablet_ids.emplace_back(commit_info.tablet_id);
+        for (auto& commit_info : ctx.commit_infos) {
+            tablet_ids.emplace_back(commit_info.tabletId);
         }
         send_stats_to_fe_async(ctx.db_id, ctx.txn_id, ctx.label, res, tablet_ids);
     }
@@ -1663,7 +1663,7 @@ Status CloudMetaMgr::commit_tablet_job(const TabletJobInfoPB& job, FinishTabletJ
         res.add_partition_ids(idx.partition_id());
         res.add_tablet_ids(idx.tablet_id());*/
         std::vector<int64_t> tablet_ids = {job.idx().tablet_id()};
-        send_stats_to_fe_async(idx.db_id(), -1, "", res, tablet_ids);
+        send_stats_to_fe_async(-1, -1, "", res, tablet_ids);
     }
 
     return st;

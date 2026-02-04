@@ -4397,7 +4397,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             }
             CommitTxnResponse commitTxnResponse = CommitTxnResponse.parseFrom(receivedProtobufBytes);
             if (request.isSetTxnId() && request.getTxnId() != -1) {
-                Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse);
+                Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse, request.getTabletIdsList());
             } else {
                 // update tablet stats
                 CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
@@ -4405,12 +4405,12 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                     LOG.warn("cloudTabletStatMgr is null, cannot update tablet stats");
                     return new TStatus(TStatusCode.OK);
                 }
-                for (int i = 0; i < commitTxnResponse.getTablesList().size(); i++) {
+                cloudTabletStatMgr.updateTabletStats(request.getTabletIdsList());
+                /*for (int i = 0; i < commitTxnResponse.getTablesList().size(); i++) {
                     long tableId = commitTxnResponse.getTablesList().get(i);
                     long partitionId = commitTxnResponse.getTablesList().get(i);
                     long tabletId = commitTxnResponse.getTabletsList().get(i);
-                    cloudTabletStatMgr.handleTabletUpdateNotify(request.getDbId(), tableId, partitionId, tabletId);
-                }
+                }*/
             }
         } catch (InvalidProtocolBufferException e) {
             // Handle the exception, log it, or take appropriate action
