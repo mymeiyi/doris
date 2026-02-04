@@ -131,6 +131,8 @@ public class CloudTabletStatMgr extends MasterDaemon {
             if (cloudReplica.getLastGetTabletStatsTime() + interval > System.currentTimeMillis()) {
                 return false;
             }
+            LOG.info("need get tablet stats. dbId: {}, tableId: {}, tabletId: {}, index: {}", cloudReplica.getDbId(),
+                    cloudReplica.getTableId(), cloudReplica.getId(), index);
             return true;
         });
         updateStatInfo(dbIds);
@@ -466,8 +468,13 @@ public class CloudTabletStatMgr extends MasterDaemon {
             int statsIntervalIndex = cloudReplica.getStatsIntervalIndex();
             if (activeUpdate || statsChanged) {
                 statsIntervalIndex = 0;
+                LOG.info("set 1 dbId: {}, tableId: {}, tabletId: {}, index: 0, active: {}, changed: {}",
+                        cloudReplica.getDbId(), cloudReplica.getTableId(),
+                        stat.getIdx().getTabletId(), activeUpdate, statsIntervalIndex);
             } else {
                 statsIntervalIndex = Math.min(statsIntervalIndex + 1, DEFAULT_INTERVAL_LADDER_MS.length - 1);
+                LOG.info("set 2 dbId: {}, tableId: {}, tabletId: {}, index: 0",
+                        cloudReplica.getDbId(), cloudReplica.getTableId(), stat.getIdx().getTabletId());
             }
             cloudReplica.setStatsIntervalIndex(statsIntervalIndex);
         }
