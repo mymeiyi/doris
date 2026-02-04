@@ -34,6 +34,7 @@ import org.apache.doris.thrift.TFrontendSyncCloudVersionResult;
 import org.apache.doris.thrift.TNetworkAddress;
 import org.apache.doris.thrift.TStatusCode;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -50,7 +51,8 @@ public class CloudFEVersionSynchronizer {
     private static final Logger LOG = LogManager.getLogger(CloudFEVersionSynchronizer.class);
 
     private static final ExecutorService SYNC_VERSION_THREAD_POOL = Executors.newFixedThreadPool(
-            Config.cloud_update_version_task_threads_num);
+            Config.cloud_update_version_task_threads_num,
+            new ThreadFactoryBuilder().setNameFormat("sync-version-%d").setDaemon(true).build());
 
     public CloudFEVersionSynchronizer() {
     }

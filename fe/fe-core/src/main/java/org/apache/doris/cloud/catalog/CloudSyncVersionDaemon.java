@@ -26,6 +26,7 @@ import org.apache.doris.common.Config;
 import org.apache.doris.common.util.MasterDaemon;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -43,7 +44,8 @@ import java.util.concurrent.Future;
 public class CloudSyncVersionDaemon extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(CloudSyncVersionDaemon.class);
     private static final ExecutorService GET_VERSION_THREAD_POOL = Executors.newFixedThreadPool(
-            Config.cloud_get_version_task_threads_num);
+            Config.cloud_get_version_task_threads_num,
+            new ThreadFactoryBuilder().setNameFormat("get-version-%d").setDaemon(true).build());
 
     public CloudSyncVersionDaemon() {
         super("cloud table and partition version checker",
