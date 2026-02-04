@@ -18,6 +18,8 @@
 package org.apache.doris.catalog;
 
 import org.apache.doris.catalog.MaterializedIndex.IndexExtState;
+import org.apache.doris.cloud.catalog.CloudReplica;
+import org.apache.doris.cloud.catalog.CloudTablet;
 import org.apache.doris.cloud.proto.Cloud.GetTabletStatsRequest;
 import org.apache.doris.cloud.proto.Cloud.GetTabletStatsResponse;
 import org.apache.doris.cloud.proto.Cloud.MetaServiceCode;
@@ -30,16 +32,22 @@ import org.apache.doris.common.util.MasterDaemon;
 import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.rpc.RpcException;
 import org.apache.doris.service.FrontendOptions;
+import org.apache.doris.thrift.TCloudTabletStat;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 /*
  * CloudTabletStatMgr is for collecting tablet(replica) statistics from backends.
@@ -52,6 +60,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
     private static final ExecutorService GET_TABLET_STATS_THREAD_POOL = Executors.newFixedThreadPool(
             Config.max_get_tablet_stat_task_threads_num);
+    private AtomicReference<Map<Long, TabletIndexPB>> tablets = new AtomicReference<>(new ConcurrentHashMap<>());
 
     public CloudTabletStatMgr() {
         super("cloud tablet stat mgr", Config.tablet_stat_update_interval_second * 1000);
@@ -60,11 +69,63 @@ public class CloudTabletStatMgr extends MasterDaemon {
     @Override
     protected void runAfterCatalogReady() {
         LOG.info("cloud tablet stat begin");
-        List<Long> dbIds = getAllTabletStats();
+        boolean getAll = false;
+        if (getAll) {
+            List<Long> dbIds = getAllTabletStats(null);
+            updateStatInfo(dbIds);
+            return;
+        }
+
+        Map<Long, TabletIndexPB> copiedTablets = tablets.getAndSet(new ConcurrentHashMap<>());
+        // notify other frontends to
+        getTabletStats(copiedTablets);
+        List<Long> dbIds = getAllTabletStats(new Function<CloudTablet, Boolean>() {
+            @Override
+            public Boolean apply(CloudTablet cloudTablet) {
+                if (copiedTablets.containsKey(cloudTablet.getId())) {
+                    return false;
+                }
+                List<Replica> replicas = Env.getCurrentInvertedIndex().getReplicas(cloudTablet.getId());
+                if (replicas == null || replicas.isEmpty()) {
+                    return false;
+                }
+                CloudReplica cloudReplica = (CloudReplica) replicas.get(0);
+                long interval = cloudReplica.getGetTabletStatsIntervalMs();
+                if (System.currentTimeMillis() - cloudReplica.getLastGetTabletStatsTime() < interval) {
+                    return false;
+                }
+                return true;
+            }
+        });
         updateStatInfo(dbIds);
     }
 
-    private List<Long> getAllTabletStats() {
+    private void getTabletStats(Map<Long, TabletIndexPB> tablets) {
+        List<Future<Void>> futures = new ArrayList<>();
+        GetTabletStatsRequest.Builder builder =
+                GetTabletStatsRequest.newBuilder().setRequestIp(FrontendOptions.getLocalHostAddressCached());
+        for (Entry<Long, TabletIndexPB> entry : tablets.entrySet()) {
+            builder.addTabletIdx(entry.getValue());
+            if (builder.getTabletIdxCount() >= Config.get_tablet_stat_batch_size) {
+                futures.add(submitGetTabletStatsTask(builder.build()));
+                builder = GetTabletStatsRequest.newBuilder()
+                        .setRequestIp(FrontendOptions.getLocalHostAddressCached());
+            }
+        }
+        if (builder.getTabletIdxCount() > 0) {
+            futures.add(submitGetTabletStatsTask(builder.build()));
+        }
+
+        try {
+            for (Future<Void> future : futures) {
+                future.get();
+            }
+        } catch (InterruptedException | ExecutionException e) {
+            LOG.error("Error waiting for get tablet stats tasks to complete", e);
+        }
+    }
+
+    private List<Long> getAllTabletStats(Function<CloudTablet, Boolean> predicate) {
         long start = System.currentTimeMillis();
         List<Future<Void>> futures = new ArrayList<>();
         GetTabletStatsRequest.Builder builder =
@@ -87,13 +148,19 @@ public class CloudTabletStatMgr extends MasterDaemon {
                     OlapTable tbl = (OlapTable) table;
                     for (Partition partition : tbl.getAllPartitions()) {
                         for (MaterializedIndex index : partition.getMaterializedIndices(IndexExtState.VISIBLE)) {
-                            for (Long tabletId : index.getTabletIdsInOrder()) {
+                            for (Tablet tablet : index.getTablets()) {
+                                if (predicate != null) {
+                                    CloudTablet cloudTablet = (CloudTablet) tablet;
+                                    if (!predicate.apply(cloudTablet)) {
+                                        continue;
+                                    }
+                                }
                                 TabletIndexPB.Builder tabletBuilder = TabletIndexPB.newBuilder();
                                 tabletBuilder.setDbId(dbId);
                                 tabletBuilder.setTableId(table.getId());
                                 tabletBuilder.setIndexId(index.getId());
                                 tabletBuilder.setPartitionId(partition.getId());
-                                tabletBuilder.setTabletId(tabletId);
+                                tabletBuilder.setTabletId(tablet.getId());
                                 builder.addTabletIdx(tabletBuilder);
 
                                 if (builder.getTabletIdxCount() >= Config.get_tablet_stat_batch_size) {
@@ -282,7 +349,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
                             tableTotalLocalIndexSize, tableTotalLocalSegmentSize, 0L, 0L);
                     olapTable.setStatistics(tableStats);
                     LOG.debug("finished to set row num for table: {} in database: {}",
-                             table.getName(), db.getFullName());
+                            table.getName(), db.getFullName());
                 } finally {
                     table.readUnlock();
                 }
@@ -341,12 +408,26 @@ public class CloudTabletStatMgr extends MasterDaemon {
                 continue;
             }
             Replica replica = replicas.get(0);
+            boolean statsChanged = replica.getDataSize() != stat.getDataSize()
+                    || replica.getRowsetCount() != stat.getNumRowsets()
+                    || replica.getSegmentCount() != stat.getNumSegments()
+                    || replica.getRowCount() != stat.getNumRows()
+                    || replica.getLocalInvertedIndexSize() != stat.getIndexSize()
+                    || replica.getLocalSegmentSize() != stat.getSegmentSize();
             replica.setDataSize(stat.getDataSize());
             replica.setRowsetCount(stat.getNumRowsets());
             replica.setSegmentCount(stat.getNumSegments());
             replica.setRowCount(stat.getNumRows());
             replica.setLocalInvertedIndexSize(stat.getIndexSize());
             replica.setLocalSegmentSize(stat.getSegmentSize());
+            CloudReplica cloudReplica = (CloudReplica) replica;
+            cloudReplica.setLastGetTabletStatsTime(System.currentTimeMillis());
+            if (statsChanged) {
+                cloudReplica.setGetTabletStatsIntervalMs(System.currentTimeMillis());
+            } else {
+                // TODO
+                cloudReplica.setGetTabletStatsIntervalMs(0);
+            }
         }
     }
 
@@ -364,5 +445,33 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
     public List<OlapTable.Statistics> getCloudTableStats() {
         return this.cloudTableStatsList;
+    }
+
+    // --
+    public void handleTabletUpdateNotify(long dbId, long tableId, long indexId, long partitionId, long tabletId) {
+        TabletIndexPB.Builder tabletBuilder = TabletIndexPB.newBuilder();
+        tabletBuilder.setDbId(dbId);
+        tabletBuilder.setTableId(tableId);
+        tabletBuilder.setIndexId(indexId);
+        tabletBuilder.setPartitionId(partitionId);
+        tabletBuilder.setTabletId(tabletId);
+        tablets.get().put(tabletId, tabletBuilder.build());
+    }
+
+    public void updateTabletStats(List<Long> tabletIds) {
+        for (Long tabletId : tabletIds) {
+            TabletMeta tabletMeta = Env.getCurrentInvertedIndex().getTabletMeta(tabletId);
+            TabletIndexPB.Builder tabletBuilder = TabletIndexPB.newBuilder();
+            tabletBuilder.setDbId(tabletMeta.getDbId());
+            tabletBuilder.setTableId(tabletMeta.getTableId());
+            tabletBuilder.setIndexId(tabletMeta.getIndexId());
+            tabletBuilder.setPartitionId(tabletMeta.getPartitionId());
+            tabletBuilder.setTabletId(tabletId);
+            tablets.get().put(tabletId, tabletBuilder.build());
+        }
+    }
+
+    public void handleSyncTabletStats(List<TCloudTabletStat> tabletStats) {
+
     }
 }

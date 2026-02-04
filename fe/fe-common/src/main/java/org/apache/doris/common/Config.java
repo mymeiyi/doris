@@ -944,6 +944,18 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true)
     public static int tablet_stat_update_interval_second = 60;  // 1 min
 
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "云模式下 tablet 统计信息的自适应拉取间隔阶梯，单位为毫秒。逗号分隔，最后一个可为 -1 表示无限（不再自动拉取）。",
+            "Interval ladder (milliseconds) for adaptive cloud tablet stats fetching."
+                    + " Comma-separated; use -1 for infinite (never auto-fetch)."})
+    public static String cloud_tablet_stat_interval_ladder_ms =
+            "60000,300000,600000,1800000,7200000,21600000,43200000,259200000,-1";
+
+    @ConfField(mutable = true, masterOnly = true, description = {
+            "云模式下 tablet 统计信息全量兜底刷新周期，单位为秒。设置为 0 表示禁用。",
+            "Full refresh interval (seconds) for cloud tablet stats; 0 disables full refresh."})
+    public static long cloud_tablet_stat_full_refresh_interval_sec = 0;
+
     // update interval of alive session
     // Only master FE collect this info from all frontends at each interval
     @ConfField public static int alive_session_update_interval_second = 5;

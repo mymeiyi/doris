@@ -26,6 +26,7 @@ import org.apache.doris.backup.BackupMeta;
 import org.apache.doris.backup.Snapshot;
 import org.apache.doris.binlog.BinlogLagInfo;
 import org.apache.doris.catalog.AutoIncrementGenerator;
+import org.apache.doris.catalog.CloudTabletStatMgr;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.DatabaseIf;
@@ -262,6 +263,8 @@ import org.apache.doris.thrift.TStreamLoadMultiTablePutResult;
 import org.apache.doris.thrift.TStreamLoadPutRequest;
 import org.apache.doris.thrift.TStreamLoadPutResult;
 import org.apache.doris.thrift.TSubTxnInfo;
+import org.apache.doris.thrift.TSyncCloudTabletStatsRequest;
+import org.apache.doris.thrift.TSyncCloudTabletStatsResponse;
 import org.apache.doris.thrift.TSyncQueryColumns;
 import org.apache.doris.thrift.TTableIndexQueryStats;
 import org.apache.doris.thrift.TTableMetadataNameIds;
@@ -4391,7 +4394,17 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 return new TStatus(TStatusCode.INVALID_ARGUMENT);
             }
             CommitTxnResponse commitTxnResponse = CommitTxnResponse.parseFrom(receivedProtobufBytes);
-            Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse);
+            if (request.isSetTxnId() && request.getTxnId() != -1) {
+                Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse, request.getTabletIds());
+            } else {
+                // compaction notify update tablet stats
+                CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
+                if (cloudTabletStatMgr == null) {
+                    LOG.warn("cloudTabletStatMgr is null, cannot update tablet stats");
+                    return new TStatus(TStatusCode.OK);
+                }
+                cloudTabletStatMgr.updateTabletStats(request.getTabletIds());
+            }
         } catch (InvalidProtocolBufferException e) {
             // Handle the exception, log it, or take appropriate action
             e.printStackTrace();
@@ -4720,6 +4733,39 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             status.addToErrorMsgs(e.getMessage());
             return result;
         }
+    }
+
+    @Override
+    public TSyncCloudTabletStatsResponse syncCloudTabletStats(TSyncCloudTabletStatsRequest request)
+            throws TException {
+        TSyncCloudTabletStatsResponse response = new TSyncCloudTabletStatsResponse();
+        TStatus status = new TStatus(TStatusCode.OK);
+        response.setStatus(status);
+
+        if (Env.getCurrentEnv().isMaster()) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("syncCloudTabletStats called on master, ignoring");
+            }
+            return response;
+        }
+
+        if (!request.isSetTabletStats() || request.getTabletStats().isEmpty()) {
+            return response;
+        }
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("receive syncCloudTabletStats request with {} tablet stats",
+                    request.getTabletStatsSize());
+        }
+
+        if (Config.isCloudMode()) {
+            CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
+            if (cloudTabletStatMgr != null) {
+                cloudTabletStatMgr.handleSyncTabletStats(request.getTabletStats());
+            }
+        }
+
+        return response;
     }
 
     private TStatus checkMaster() {
