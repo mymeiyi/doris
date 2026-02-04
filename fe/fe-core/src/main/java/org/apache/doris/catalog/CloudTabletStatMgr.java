@@ -76,8 +76,8 @@ public class CloudTabletStatMgr extends MasterDaemon {
         }
 
         Map<Long, TabletIndexPB> copiedTablets = tablets.getAndSet(new ConcurrentHashMap<>());
+        // notify other frontends to
         getTabletStats(copiedTablets);
-        // TODO only return tables need to update
         List<Long> dbIds = getAllTabletStats(new Function<CloudTablet, Boolean>() {
             @Override
             public Boolean apply(CloudTablet cloudTablet) {
@@ -454,5 +454,18 @@ public class CloudTabletStatMgr extends MasterDaemon {
         tabletBuilder.setPartitionId(partitionId);
         tabletBuilder.setTabletId(tabletId);
         tablets.get().put(tabletId, tabletBuilder.build());
+    }
+
+    public void updateTabletStats(List<Long> tabletIds) {
+        for (Long tabletId : tabletIds) {
+            TabletMeta tabletMeta = Env.getCurrentInvertedIndex().getTabletMeta(tabletId);
+            TabletIndexPB.Builder tabletBuilder = TabletIndexPB.newBuilder();
+            tabletBuilder.setDbId(tabletMeta.getDbId());
+            tabletBuilder.setTableId(tabletMeta.getTableId());
+            tabletBuilder.setIndexId(tabletMeta.getIndexId());
+            tabletBuilder.setPartitionId(tabletMeta.getPartitionId());
+            tabletBuilder.setTabletId(tabletId);
+            tablets.get().put(tabletId, tabletBuilder.build());
+        }
     }
 }

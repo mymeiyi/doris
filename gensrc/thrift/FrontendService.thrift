@@ -1513,6 +1513,7 @@ struct TReportCommitTxnResultRequest {
     2: optional i64 txnId
     3: optional string label
     4: optional binary payload
+    5: optional list<i64> tabletIds
 }
 
 struct TQueryColumn {

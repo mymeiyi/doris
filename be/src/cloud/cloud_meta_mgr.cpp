@@ -1365,7 +1365,8 @@ Status CloudMetaMgr::update_tmp_rowset(const RowsetMeta& rs_meta) {
 
 // async send TableStats(in res) to FE coz we are in streamload ctx, response to the user ASAP
 static void send_stats_to_fe_async(const int64_t db_id, const int64_t txn_id,
-                                   const std::string& label, CommitTxnResponse& res) {
+                                   const std::string& label, CommitTxnResponse& res,
+                                   const std::vector<int64_t>& tablet_ids) {
     std::string protobufBytes;
     res.SerializeToString(&protobufBytes);
     auto st = ExecEnv::GetInstance()->send_table_stats_thread_pool()->submit_func(
@@ -1382,6 +1383,7 @@ static void send_stats_to_fe_async(const int64_t db_id, const int64_t txn_id,
                 request.__set_txnId(txn_id);
                 request.__set_label(label);
                 request.__set_payload(protobufBytes);
+                request.__set_tabletIds(tablet_ids);
 
                 Status status;
                 int64_t duration_ns = 0;
@@ -1491,7 +1493,11 @@ Status CloudMetaMgr::commit_txn(const StreamLoadContext& ctx, bool is_2pc) {
     auto st = retry_rpc("commit txn", req, &res, &MetaService_Stub::commit_txn);
 
     if (st.ok()) {
-        send_stats_to_fe_async(ctx.db_id, ctx.txn_id, ctx.label, res);
+        std::vector<int64_t> tablet_ids;
+        for (auto& commit_info : ctx->commit_infos) {
+            tablet_ids.emplace_back(commit_info.tablet_id);
+        }
+        send_stats_to_fe_async(ctx.db_id, ctx.txn_id, ctx.label, res, tablet_ids);
     }
 
     return st;
@@ -1653,10 +1659,11 @@ Status CloudMetaMgr::commit_tablet_job(const TabletJobInfoPB& job, FinishTabletJ
 
     if (st.ok() && job.has_compaction() && job.has_idx()) {
         CommitTxnResponse res;
-        res.add_table_ids(idx.table_id());
+        /*res.add_table_ids(idx.table_id());
         res.add_partition_ids(idx.partition_id());
-        res.add_tablet_ids(idx.tablet_id());
-        send_stats_to_fe_async(idx.db_id(), -1, "", res);
+        res.add_tablet_ids(idx.tablet_id());*/
+        std::vector<int64_t> tablet_ids = {job.idx().tablet_id()};
+        send_stats_to_fe_async(idx.db_id(), -1, "", res, tablet_ids);
     }
 
     return st;
