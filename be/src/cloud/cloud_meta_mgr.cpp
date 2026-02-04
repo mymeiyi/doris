@@ -1657,13 +1657,17 @@ Status CloudMetaMgr::commit_tablet_job(const TabletJobInfoPB& job, FinishTabletJ
                 "txn conflict when commit tablet job {}", job.ShortDebugString());
     }
 
-    if (st.ok() && job.has_compaction() && job.has_idx()) {
-        CommitTxnResponse res;
+    if (st.ok() && !job.compaction().empty() && job.has_idx()) {
+        CommitTxnResponse commit_txn_resp;
         /*res.add_table_ids(idx.table_id());
         res.add_partition_ids(idx.partition_id());
         res.add_tablet_ids(idx.tablet_id());*/
-        std::vector<int64_t> tablet_ids = {job.idx().tablet_id()};
-        send_stats_to_fe_async(-1, -1, "", res, tablet_ids);
+        std::vector<int64_t> tablet_ids;
+        for (auto& idx : job.compaction().idx()) {
+        }
+        tablet_ids.emplace_back(idx.tablet_id());
+        }
+        send_stats_to_fe_async(-1, -1, "", commit_txn_resp, tablet_ids);
     }
 
     return st;
