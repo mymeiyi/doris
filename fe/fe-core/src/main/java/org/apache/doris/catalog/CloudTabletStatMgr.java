@@ -566,7 +566,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
         HostInfo selfNode = Env.getCurrentEnv().getSelfNode();
         return Env.getCurrentEnv().getFrontends(null).stream()
                 .filter(fe -> fe.isAlive() && !(fe.getHost().equals(selfNode.getHost())
-                        && fe.getRpcPort() == selfNode.getPort())).collect(
+                        && fe.getEditLogPort() == selfNode.getPort())).collect(
                         Collectors.toList());
     }
 }
