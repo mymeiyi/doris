@@ -1674,23 +1674,11 @@ struct TGetOlapTableMetaResult {
     4: optional list<i64> removed_partitions
 }
 
-// Master -> Follower: Sync cloud tablet statistics
-// Contains the 6 key stats fields from CloudTabletStatMgr
-struct TCloudTabletStat {
-    1: optional i64 tablet_id
-    2: optional i64 data_size
-    3: optional i64 row_count
-    4: optional i64 rowset_count
-    5: optional i64 segment_count
-    6: optional i64 index_size
-    7: optional i64 segment_size
+struct TUpdateCloudTabletStatsRequest {
+    1: optional binary tablet_stats_pb
 }
 
-struct TSyncCloudTabletStatsRequest {
-    1: optional list<TCloudTabletStat> tablet_stats
-}
-
-struct TSyncCloudTabletStatsResponse {
+struct TUpdateCloudTabletStatsResponse {
     1: optional Status.TStatus status
 }
 
@@ -1800,5 +1788,5 @@ service FrontendService {
 
     TGetOlapTableMetaResult getOlapTableMeta(1: TGetOlapTableMetaRequest request)
 
-    TSyncCloudTabletStatsResponse syncCloudTabletStats(1: TSyncCloudTabletStatsRequest request)
+    TUpdateCloudTabletStatsResponse updateCloudTabletStats(1: TUpdateCloudTabletStatsRequest request)
 }

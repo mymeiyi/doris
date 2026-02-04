@@ -49,6 +49,7 @@ import org.apache.doris.cloud.catalog.CloudPartition;
 import org.apache.doris.cloud.catalog.CloudReplica;
 import org.apache.doris.cloud.catalog.CloudTablet;
 import org.apache.doris.cloud.proto.Cloud.CommitTxnResponse;
+import org.apache.doris.cloud.proto.Cloud.GetTabletStatsResponse;
 import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.AnalysisException;
@@ -274,6 +275,8 @@ import org.apache.doris.thrift.TTableStatus;
 import org.apache.doris.thrift.TTabletLocation;
 import org.apache.doris.thrift.TTxnParams;
 import org.apache.doris.thrift.TUniqueId;
+import org.apache.doris.thrift.TUpdateCloudTabletStatsRequest;
+import org.apache.doris.thrift.TUpdateCloudTabletStatsResponse;
 import org.apache.doris.thrift.TUpdateFollowerPartitionStatsCacheRequest;
 import org.apache.doris.thrift.TUpdateFollowerStatsCacheRequest;
 import org.apache.doris.thrift.TUpdatePlanStatsCacheRequest;
@@ -4736,35 +4739,33 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     }
 
     @Override
-    public TSyncCloudTabletStatsResponse syncCloudTabletStats(TSyncCloudTabletStatsRequest request)
+    public TUpdateCloudTabletStatsResponse updateCloudTabletStats(TUpdateCloudTabletStatsRequest request)
             throws TException {
-        TSyncCloudTabletStatsResponse response = new TSyncCloudTabletStatsResponse();
+        TUpdateCloudTabletStatsResponse response = new TUpdateCloudTabletStatsResponse();
         TStatus status = new TStatus(TStatusCode.OK);
         response.setStatus(status);
 
         if (Env.getCurrentEnv().isMaster()) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("syncCloudTabletStats called on master, ignoring");
-            }
+            LOG.warn("updateCloudTabletStats called on master, ignoring");
             return response;
         }
 
-        if (!request.isSetTabletStats() || request.getTabletStats().isEmpty()) {
+        byte[] receivedProtobufBytes = request.getTabletStatsPb();
+        if (receivedProtobufBytes == null || receivedProtobufBytes.length <= 0) {
+            status.setStatusCode(TStatusCode.INVALID_ARGUMENT);
+            status.addToErrorMsgs("TabletStatsPb is null or empty");
             return response;
         }
-
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("receive syncCloudTabletStats request with {} tablet stats",
-                    request.getTabletStatsSize());
+        GetTabletStatsResponse getTabletStatsResponse;
+        try {
+            getTabletStatsResponse = GetTabletStatsResponse.parseFrom(receivedProtobufBytes);
+        } catch (Exception e) {
+            status.setStatusCode(TStatusCode.INVALID_ARGUMENT);
+            status.addToErrorMsgs("parse GetTabletStatsResponse error: " + e.getMessage());
+            return response;
         }
-
-        if (Config.isCloudMode()) {
-            CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
-            if (cloudTabletStatMgr != null) {
-                cloudTabletStatMgr.handleSyncTabletStats(request.getTabletStats());
-            }
-        }
-
+        CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
+        cloudTabletStatMgr.handleUpdateTabletStats(getTabletStatsResponse);
         return response;
     }
 
