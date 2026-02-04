@@ -470,11 +470,12 @@ public class CloudTabletStatMgr extends MasterDaemon {
                 statsIntervalIndex = 0;
                 LOG.info("set 1 dbId: {}, tableId: {}, tabletId: {}, index: 0, active: {}, changed: {}",
                         cloudReplica.getDbId(), cloudReplica.getTableId(),
-                        stat.getIdx().getTabletId(), activeUpdate, statsIntervalIndex);
+                        stat.getIdx().getTabletId(), activeUpdate, statsChanged);
             } else {
                 statsIntervalIndex = Math.min(statsIntervalIndex + 1, DEFAULT_INTERVAL_LADDER_MS.length - 1);
-                LOG.info("set 2 dbId: {}, tableId: {}, tabletId: {}, index: 0",
-                        cloudReplica.getDbId(), cloudReplica.getTableId(), stat.getIdx().getTabletId());
+                LOG.info("set 2 dbId: {}, tableId: {}, tabletId: {}, index: {}",
+                        cloudReplica.getDbId(), cloudReplica.getTableId(), stat.getIdx().getTabletId(),
+                        statsIntervalIndex);
             }
             cloudReplica.setStatsIntervalIndex(statsIntervalIndex);
         }
