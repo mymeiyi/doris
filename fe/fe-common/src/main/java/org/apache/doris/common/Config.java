@@ -3584,6 +3584,10 @@ public class Config extends ConfigBase {
         "Maximal concurrent num of get tablet stat job."})
     public static int max_get_tablet_stat_task_threads_num = 4;
 
+    @ConfField(description = {"存算分离模式下 Sync tablet stats task 的最大并发数。",
+            "Maximal concurrent num of sync tablet stats task in cloud mode."})
+    public static int cloud_sync_tablet_stats_task_threads_num = 4;
+
     @ConfField(description = {"存算分离模式下同步 table 和 partition version 的间隔. 所有 frontend 都会检查",
             "Cloud table and partition version syncer interval. All frontends will perform the checking"})
     public static int cloud_version_syncer_interval_second = 120;
