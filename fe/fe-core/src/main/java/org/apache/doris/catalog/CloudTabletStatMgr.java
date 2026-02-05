@@ -47,8 +47,9 @@ import org.apache.logging.log4j.Logger;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -76,7 +77,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
     private static final ExecutorService SYNC_TABLET_STATS_THREAD_POOL = Executors.newFixedThreadPool(
             Config.cloud_sync_tablet_stats_task_threads_num,
             new ThreadFactoryBuilder().setNameFormat("sync-tablet-stats-%d").setDaemon(true).build());
-    private AtomicReference<Map<Long, TabletIndexPB>> activeTablets = new AtomicReference<>(new ConcurrentHashMap<>());
+    private AtomicReference<Set<Long>> activeTablets = new AtomicReference<>(ConcurrentHashMap.newKeySet());
 
     /**
      * Interval ladder in milliseconds: 1m, 5m, 10m, 30m, 2h, 6h, 12h, 3d, infinite.
@@ -109,11 +110,11 @@ public class CloudTabletStatMgr extends MasterDaemon {
         }*/
 
         // active get tablets
-        Map<Long, TabletIndexPB> copiedTablets = activeTablets.getAndSet(new ConcurrentHashMap<>());
+        Set<Long> copiedTablets = activeTablets.getAndSet(ConcurrentHashMap.newKeySet());
         getActiveTabletStats(copiedTablets);
         // select tablets whose
         List<Long> dbIds = getAllTabletStats(cloudTablet -> {
-            if (copiedTablets.containsKey(cloudTablet.getId())) {
+            if (copiedTablets.contains(cloudTablet.getId())) {
                 return false;
             }
             List<Replica> replicas = Env.getCurrentInvertedIndex().getReplicas(cloudTablet.getId());
@@ -209,12 +210,21 @@ public class CloudTabletStatMgr extends MasterDaemon {
     }
 
     // active tablets
-    private void getActiveTabletStats(Map<Long, TabletIndexPB> tablets) {
+    private void getActiveTabletStats(Set<Long> tablets) {
+        List<Long> tabletIds = new ArrayList<>(tablets);
+        Collections.sort(tabletIds);
+        List<TabletMeta> tabletMetas = Env.getCurrentInvertedIndex().getTabletMetaList(tabletIds);
         long start = System.currentTimeMillis();
         List<Future<Void>> futures = new ArrayList<>();
         GetTabletStatsRequest.Builder builder =
                 GetTabletStatsRequest.newBuilder().setRequestIp(FrontendOptions.getLocalHostAddressCached());
-        for (TabletIndexPB tabletIndexPB : tablets.values()) {
+        long activeTabletNum = 0;
+        for (int i = 0; i < tabletIds.size(); i++) {
+            TabletIndexPB tabletIndexPB = getTabletIndexPB(tabletIds.get(i), tabletMetas.get(i));
+            if (tabletIndexPB == null) {
+                continue;
+            }
+            activeTabletNum++;
             builder.addTabletIdx(tabletIndexPB);
             if (builder.getTabletIdxCount() >= Config.get_tablet_stat_batch_size) {
                 futures.add(submitGetTabletStatsTask(builder.build(), true));
@@ -233,7 +243,17 @@ public class CloudTabletStatMgr extends MasterDaemon {
         } catch (InterruptedException | ExecutionException e) {
             LOG.error("Error waiting for get tablet stats tasks to complete", e);
         }
-        LOG.info("finished to get {} tablets stats, cost {}ms", tablets.size(), System.currentTimeMillis() - start);
+        LOG.info("finished to get {} active tablets stats, cost {}ms", activeTabletNum,
+                System.currentTimeMillis() - start);
+    }
+
+    private TabletIndexPB getTabletIndexPB(long tabletId, TabletMeta tabletMeta) {
+        if (tabletMeta == null || tabletMeta == TabletInvertedIndex.NOT_EXIST_TABLET_META) {
+            return null;
+        }
+        return TabletIndexPB.newBuilder().setDbId(tabletMeta.getDbId()).setTableId(tabletMeta.getTableId())
+                .setIndexId(tabletMeta.getIndexId()).setPartitionId(tabletMeta.getPartitionId()).setTabletId(tabletId)
+                .build();
     }
 
     private Future<Void> submitGetTabletStatsTask(GetTabletStatsRequest req, boolean activeUpdate) {
@@ -502,19 +522,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
     }
 
     public void addActiveTablets(List<Long> tabletIds) {
-        for (Long tabletId : tabletIds) {
-            TabletMeta tabletMeta = Env.getCurrentInvertedIndex().getTabletMeta(tabletId);
-            if (tabletMeta == null) {
-                continue;
-            }
-            TabletIndexPB.Builder tabletBuilder = TabletIndexPB.newBuilder();
-            tabletBuilder.setDbId(tabletMeta.getDbId());
-            tabletBuilder.setTableId(tabletMeta.getTableId());
-            tabletBuilder.setIndexId(tabletMeta.getIndexId());
-            tabletBuilder.setPartitionId(tabletMeta.getPartitionId());
-            tabletBuilder.setTabletId(tabletId);
-            activeTablets.get().put(tabletId, tabletBuilder.build());
-        }
+        activeTablets.get().addAll(tabletIds);
     }
 
     // master FE send update tablet stats rpc to other FEs
