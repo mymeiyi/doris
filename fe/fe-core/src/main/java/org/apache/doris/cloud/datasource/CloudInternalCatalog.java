@@ -490,6 +490,8 @@ public class CloudInternalCatalog extends InternalCatalog {
         if (isBatchCommit) {
             long tableVersion = commitMaterializedIndex(dbId, tableId, indexIds, partitionIds, isCreateTable);
             if (olapTable != null && isCreateTable && tableVersion > 0) {
+                LOG.info("sout: create p1. set table: {}, cahced version: {}, pre version: {}", tableId, tableVersion,
+                        olapTable.getCachedTableVersion());
                 olapTable.setCachedTableVersion(tableVersion);
                 ((CloudEnv) Env.getCurrentEnv()).getCloudUpdateVersionTool()
                         .pushVersionAsync(dbId, olapTable, tableVersion);
@@ -497,6 +499,8 @@ public class CloudInternalCatalog extends InternalCatalog {
         } else {
             long tableVersion = commitPartition(dbId, tableId, partitionIds, indexIds);
             if (olapTable != null && tableVersion > 0) {
+                LOG.info("sout: create p2. set table: {}, cahced version: {}, pre version: {}", tableId, tableVersion,
+                        olapTable.getCachedTableVersion());
                 olapTable.setCachedTableVersion(tableVersion);
                 ((CloudEnv) Env.getCurrentEnv()).getCloudUpdateVersionTool()
                         .pushVersionAsync(dbId, olapTable, tableVersion);
@@ -953,6 +957,8 @@ public class CloudInternalCatalog extends InternalCatalog {
             if (table != null && table instanceof OlapTable) {
                 long tableVersion = response.getTableVersion();
                 OlapTable olapTable = (OlapTable) table;
+                LOG.info("sout: drop p. set table: {}, cahced version: {}, pre version: {}", tableId, tableVersion,
+                        olapTable.getCachedTableVersion());
                 olapTable.setCachedTableVersion(tableVersion);
                 ((CloudEnv) Env.getCurrentEnv()).getCloudUpdateVersionTool()
                         .pushVersionAsync(dbId, olapTable, tableVersion);
