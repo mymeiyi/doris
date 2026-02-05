@@ -168,6 +168,8 @@ import org.apache.doris.thrift.TFrontendPingFrontendResult;
 import org.apache.doris.thrift.TFrontendPingFrontendStatusCode;
 import org.apache.doris.thrift.TFrontendReportAliveSessionRequest;
 import org.apache.doris.thrift.TFrontendReportAliveSessionResult;
+import org.apache.doris.thrift.TFrontendSyncCloudVersionRequest;
+import org.apache.doris.thrift.TFrontendSyncCloudVersionResult;
 import org.apache.doris.thrift.TGetBackendMetaRequest;
 import org.apache.doris.thrift.TGetBackendMetaResult;
 import org.apache.doris.thrift.TGetBinlogLagResult;
@@ -2356,6 +2358,19 @@ public class FrontendServiceImpl implements FrontendService.Iface {
             result.setStatus(TFrontendPingFrontendStatusCode.FAILED);
             result.setMsg("not ready");
         }
+        return result;
+    }
+
+    @Override
+    public TFrontendSyncCloudVersionResult syncCloudVersion(TFrontendSyncCloudVersionRequest request)
+            throws TException {
+        TFrontendSyncCloudVersionResult result = new TFrontendSyncCloudVersionResult();
+        TStatus status = new TStatus(TStatusCode.OK);
+        result.setStatus(status);
+        if (Env.getCurrentEnv().isMaster()) {
+            return result;
+        }
+        ((CloudEnv) (Env.getCurrentEnv())).getCloudUpdateVersionTool().syncVersionAsync(request);
         return result;
     }
 
