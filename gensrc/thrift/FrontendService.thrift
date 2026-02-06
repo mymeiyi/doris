@@ -1677,10 +1677,6 @@ struct TSyncCloudTabletStatsRequest {
     1: optional binary tablet_stats_pb
 }
 
-struct TSyncCloudTabletStatsResult {
-    1: optional Status.TStatus status
-}
-
 service FrontendService {
     TGetDbsResult getDbNames(1: TGetDbsParams params)
     TGetTablesResult getTableNames(1: TGetTablesParams params)
@@ -1785,5 +1781,5 @@ service FrontendService {
 
     TGetOlapTableMetaResult getOlapTableMeta(1: TGetOlapTableMetaRequest request)
 
-    TSyncCloudTabletStatsResult syncCloudTabletStats(1: TSyncCloudTabletStatsRequest request)
+    Status.TStatus syncCloudTabletStats(1: TSyncCloudTabletStatsRequest request)
 }
