@@ -30,8 +30,8 @@ import org.apache.doris.system.SystemInfoService.HostInfo;
 import org.apache.doris.thrift.FrontendService;
 import org.apache.doris.thrift.TCloudVersionInfo;
 import org.apache.doris.thrift.TFrontendSyncCloudVersionRequest;
-import org.apache.doris.thrift.TFrontendSyncCloudVersionResult;
 import org.apache.doris.thrift.TNetworkAddress;
+import org.apache.doris.thrift.TStatus;
 import org.apache.doris.thrift.TStatusCode;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -122,11 +122,11 @@ public class CloudFEVersionSynchronizer {
         boolean ok = false;
         try {
             client = ClientPool.frontendVersionPool.borrowObject(addr);
-            TFrontendSyncCloudVersionResult result = client.syncCloudVersion(request);
+            TStatus status = client.syncCloudVersion(request);
             ok = true;
-            if (result.getStatus().getStatusCode() != TStatusCode.OK) {
+            if (status.getStatusCode() != TStatusCode.OK) {
                 LOG.warn("failed to push cloud version to frontend {}:{}, err: {}", fe.getHost(), fe.getRpcPort(),
-                        result.getStatus().getErrorMsgs());
+                        status.getErrorMsgs());
             }
         } catch (Exception e) {
             LOG.warn("failed to push cloud version to frontend {}:{}", fe.getHost(), fe.getRpcPort(), e);
