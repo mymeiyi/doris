@@ -135,7 +135,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
         updateStatInfo(dbIds);
     }
 
-    private List<Long> getAllTabletStats(Function<CloudTablet, Boolean> predicate) {
+    private List<Long> getAllTabletStats(Function<CloudTablet, Boolean> filter) {
         long getStatsTabletNum = 0;
         long start = System.currentTimeMillis();
         List<Future<Void>> futures = new ArrayList<>();
@@ -160,10 +160,8 @@ public class CloudTabletStatMgr extends MasterDaemon {
                     for (Partition partition : tbl.getAllPartitions()) {
                         for (MaterializedIndex index : partition.getMaterializedIndices(IndexExtState.VISIBLE)) {
                             for (Tablet tablet : index.getTablets()) {
-                                if (predicate != null) {
-                                    if (!predicate.apply((CloudTablet) tablet)) {
-                                        continue;
-                                    }
+                                if (filter != null && !filter.apply((CloudTablet) tablet)) {
+                                    continue;
                                 }
                                 getStatsTabletNum++;
                                 TabletIndexPB.Builder tabletBuilder = TabletIndexPB.newBuilder();
@@ -512,6 +510,9 @@ public class CloudTabletStatMgr extends MasterDaemon {
     }
 
     public void addActiveTablets(List<Long> tabletIds) {
+        if (tabletIds == null || tabletIds.isEmpty()) {
+            return;
+        }
         synchronized (activeTablets) {
             activeTablets.addAll(tabletIds);
         }

@@ -143,6 +143,7 @@ import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -664,7 +665,8 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
 
         final CommitTxnRequest commitTxnRequest = builder.build();
         executeCommitTxnRequest(commitTxnRequest, transactionId, is2PC, txnCommitAttachment,
-                tabletCommitInfos.stream().map(t -> t.getTabletId()).collect(Collectors.toList()));
+                tabletCommitInfos == null ? Collections.emptyList()
+                        : tabletCommitInfos.stream().map(t -> t.getTabletId()).collect(Collectors.toList()));
     }
 
     private void executeCommitTxnRequest(CommitTxnRequest commitTxnRequest, long transactionId, boolean is2PC,

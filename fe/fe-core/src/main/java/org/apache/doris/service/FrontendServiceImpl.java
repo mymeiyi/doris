@@ -4377,27 +4377,22 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         }
 
         try {
+            List<Long> tabletIds = request.isSetTabletIds() ? request.getTabletIds() : Collections.emptyList();
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("force sync tablet stats for txnId: {}, tabletNum: {}, tabletIds: {}", request.txnId,
+                        tabletIds.size(), tabletIds);
+            }
             if (request.isSetTxnId() && request.getTxnId() != -1) {
                 byte[] receivedProtobufBytes = request.getPayload();
                 if (receivedProtobufBytes == null || receivedProtobufBytes.length <= 0) {
                     return new TStatus(TStatusCode.INVALID_ARGUMENT);
                 }
                 CommitTxnResponse commitTxnResponse = CommitTxnResponse.parseFrom(receivedProtobufBytes);
-                Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse, request.getTabletIds());
+                Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse, tabletIds);
             } else {
                 // compaction notify update tablet stats
                 CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
-                if (cloudTabletStatMgr == null) {
-                    LOG.warn("CloudTabletStatMgr is null");
-                    TStatus status = new TStatus(TStatusCode.INTERNAL_ERROR);
-                    status.addToErrorMsgs("CloudTabletStatMgr is null");
-                    return status;
-                }
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("force sync tablet stats for txnId: {}, tabletNum: {}, tabletIds: {}", request.txnId,
-                            request.getTabletIds().size(), request.getTabletIds());
-                }
-                cloudTabletStatMgr.addActiveTablets(request.getTabletIds());
+                cloudTabletStatMgr.addActiveTablets(tabletIds);
             }
         } catch (InvalidProtocolBufferException e) {
             // Handle the exception, log it, or take appropriate action
