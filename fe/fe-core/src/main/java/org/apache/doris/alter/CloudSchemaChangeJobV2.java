@@ -100,7 +100,7 @@ public class CloudSchemaChangeJobV2 extends SchemaChangeJobV2 {
             LOG.debug("force sync tablet stats for table: {}, tabletNum: {}, tabletIds: {}", tableId,
                     tabletIds.size(), tabletIds);
         }
-        ((CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr())).addActiveTablets(tabletIds);
+        CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
     }
 
     @Override

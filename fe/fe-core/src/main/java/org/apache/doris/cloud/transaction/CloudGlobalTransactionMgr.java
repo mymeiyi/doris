@@ -549,7 +549,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             LOG.debug("force sync tablet stats for txnId: {}, tabletNum: {}, tabletIds: {}", txnId,
                     tabletIds.size(), tabletIds);
         }
-        ((CloudTabletStatMgr) (env.getTabletStatMgr())).addActiveTablets(tabletIds);
+        CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
 
         // ========================================
         // produce event
@@ -1586,7 +1586,6 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         }
 
         final CommitTxnRequest commitTxnRequest = builder.build();
-
         executeCommitTxnRequest(commitTxnRequest, transactionId, false, null,
                 tabletIds.stream().collect(Collectors.toList()));
     }

@@ -263,7 +263,6 @@ import org.apache.doris.thrift.TStreamLoadPutRequest;
 import org.apache.doris.thrift.TStreamLoadPutResult;
 import org.apache.doris.thrift.TSubTxnInfo;
 import org.apache.doris.thrift.TSyncCloudTabletStatsRequest;
-import org.apache.doris.thrift.TSyncCloudTabletStatsResult;
 import org.apache.doris.thrift.TSyncQueryColumns;
 import org.apache.doris.thrift.TTableIndexQueryStats;
 import org.apache.doris.thrift.TTableMetadataNameIds;
@@ -4391,8 +4390,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                 Env.getCurrentGlobalTransactionMgr().afterCommitTxnResp(commitTxnResponse, tabletIds);
             } else {
                 // compaction notify update tablet stats
-                CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
-                cloudTabletStatMgr.addActiveTablets(tabletIds);
+                CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
             }
         } catch (InvalidProtocolBufferException e) {
             // Handle the exception, log it, or take appropriate action
@@ -4725,22 +4723,19 @@ public class FrontendServiceImpl implements FrontendService.Iface {
     }
 
     @Override
-    public TSyncCloudTabletStatsResult syncCloudTabletStats(TSyncCloudTabletStatsRequest request)
+    public TStatus syncCloudTabletStats(TSyncCloudTabletStatsRequest request)
             throws TException {
-        TSyncCloudTabletStatsResult response = new TSyncCloudTabletStatsResult();
         TStatus status = new TStatus(TStatusCode.OK);
-        response.setStatus(status);
-
         if (Env.getCurrentEnv().isMaster()) {
             LOG.warn("syncCloudTabletStats called on master, ignoring");
-            return response;
+            return status;
         }
 
         byte[] receivedProtobufBytes = request.getTabletStatsPb();
         if (receivedProtobufBytes == null || receivedProtobufBytes.length <= 0) {
             status.setStatusCode(TStatusCode.INVALID_ARGUMENT);
             status.addToErrorMsgs("TabletStatsPb is null or empty");
-            return response;
+            return status;
         }
         GetTabletStatsResponse getTabletStatsResponse;
         try {
@@ -4748,11 +4743,10 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         } catch (Exception e) {
             status.setStatusCode(TStatusCode.INVALID_ARGUMENT);
             status.addToErrorMsgs("parse GetTabletStatsResponse error: " + e.getMessage());
-            return response;
+            return status;
         }
-        CloudTabletStatMgr cloudTabletStatMgr = (CloudTabletStatMgr) (Env.getCurrentEnv().getTabletStatMgr());
-        cloudTabletStatMgr.syncTabletStats(getTabletStatsResponse);
-        return response;
+        CloudTabletStatMgr.getInstance().syncTabletStats(getTabletStatsResponse);
+        return status;
     }
 
     private TStatus checkMaster() {

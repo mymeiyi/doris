@@ -37,6 +37,7 @@ import org.apache.doris.system.Frontend;
 import org.apache.doris.system.SystemInfoService.HostInfo;
 import org.apache.doris.thrift.FrontendService;
 import org.apache.doris.thrift.TNetworkAddress;
+import org.apache.doris.thrift.TStatus;
 import org.apache.doris.thrift.TStatusCode;
 import org.apache.doris.thrift.TSyncCloudTabletStatsRequest;
 import org.apache.doris.thrift.TSyncCloudTabletStatsResult;
@@ -203,7 +204,6 @@ public class CloudTabletStatMgr extends MasterDaemon {
         return dbIds;
     }
 
-    // active tablets
     private void getActiveTabletStats(Set<Long> tablets) {
         List<Long> tabletIds = new ArrayList<>(tablets);
         Collections.sort(tabletIds);
@@ -531,7 +531,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
                 try {
                     pushTabletStatsToFe(request, fe);
                 } catch (Exception e) {
-                    LOG.warn("push tablet stats to fe: {} error", fe.getHost(), e);
+                    LOG.warn("push tablet stats to frontend {}:{} error", fe.getHost(), fe.getRpcPort(), e);
                 }
             });
         }
@@ -543,14 +543,14 @@ public class CloudTabletStatMgr extends MasterDaemon {
         boolean ok = false;
         try {
             client = ClientPool.frontendStatsPool.borrowObject(addr);
-            TSyncCloudTabletStatsResult result = client.syncCloudTabletStats(request);
+            TStatus status = client.syncCloudTabletStats(request);
             ok = true;
-            if (result.getStatus().getStatusCode() != TStatusCode.OK) {
-                LOG.warn("failed to update cloud tablet stats to frontend {}:{}, err: {}", fe.getHost(),
-                        fe.getRpcPort(), result.getStatus().getErrorMsgs());
+            if (status.getStatusCode() != TStatusCode.OK) {
+                LOG.warn("failed to push cloud tablet stats to frontend {}:{}, err: {}", fe.getHost(),
+                        fe.getRpcPort(), status.getErrorMsgs());
             }
         } catch (Exception e) {
-            LOG.warn("failed to update update cloud tablet stats to frontend {}:{}", fe.getHost(), fe.getRpcPort(), e);
+            LOG.warn("failed to push update cloud tablet stats to frontend {}:{}", fe.getHost(), fe.getRpcPort(), e);
         } finally {
             if (ok) {
                 ClientPool.frontendStatsPool.returnObject(addr, client);
@@ -560,7 +560,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
         }
     }
 
-    // follower and observer FE receive update tablet stats rpc from master FE
+    // follower and observer FE receive sync tablet stats rpc from master FE
     public void syncTabletStats(GetTabletStatsResponse response) {
         if (response.getTabletStatsList().isEmpty()) {
             return;
@@ -576,5 +576,9 @@ public class CloudTabletStatMgr extends MasterDaemon {
                 .filter(fe -> fe.isAlive() && !(fe.getHost().equals(selfNode.getHost())
                         && fe.getEditLogPort() == selfNode.getPort())).collect(
                         Collectors.toList());
+    }
+
+    public static CloudTabletStatMgr getInstance() {
+        return (CloudTabletStatMgr) Env.getCurrentEnv().getTabletStatMgr();
     }
 }
