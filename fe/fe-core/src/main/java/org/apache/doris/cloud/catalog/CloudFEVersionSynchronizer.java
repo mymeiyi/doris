@@ -193,13 +193,17 @@ public class CloudFEVersionSynchronizer {
                 CloudPartition cloudPartition = (CloudPartition) partition;
                 cloudPartition.setCachedVisibleVersion(partitionVersionInfo.getVersion(),
                         partitionVersionInfo.getVersionUpdateTime());
-                LOG.info("Update tableId: {}, partitionId: {}, version: {}, updateTime: {}",
-                        partitionVersionInfo.getTableId(), partition.getId(), partitionVersionInfo.getVersion(),
-                        partitionVersionInfo.getVersionUpdateTime());
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Update tableId: {}, partitionId: {}, version: {}, updateTime: {}",
+                            partitionVersionInfo.getTableId(), partition.getId(), partitionVersionInfo.getVersion(),
+                            partitionVersionInfo.getVersionUpdateTime());
+                }
             }
             for (Pair<OlapTable, Long> tableVersion : tableVersions) {
                 tableVersion.first.setCachedTableVersion(tableVersion.second);
-                LOG.info("Update tableId: {}, version: {}", tableVersion.first.getId(), tableVersion.second);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Update tableId: {}, version: {}", tableVersion.first.getId(), tableVersion.second);
+                }
             }
         } finally {
             for (int i = tableVersions.size() - 1; i >= 0; i--) {
