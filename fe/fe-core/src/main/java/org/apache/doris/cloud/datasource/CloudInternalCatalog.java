@@ -491,14 +491,14 @@ public class CloudInternalCatalog extends InternalCatalog {
             long tableVersion = commitMaterializedIndex(dbId, tableId, indexIds, partitionIds, isCreateTable);
             if (olapTable != null && isCreateTable && tableVersion > 0) {
                 olapTable.setCachedTableVersion(tableVersion);
-                ((CloudEnv) Env.getCurrentEnv()).getCloudUpdateVersionTool()
+                ((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()
                         .pushVersionAsync(dbId, olapTable, tableVersion);
             }
         } else {
             long tableVersion = commitPartition(dbId, tableId, partitionIds, indexIds);
             if (olapTable != null && tableVersion > 0) {
                 olapTable.setCachedTableVersion(tableVersion);
-                ((CloudEnv) Env.getCurrentEnv()).getCloudUpdateVersionTool()
+                ((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()
                         .pushVersionAsync(dbId, olapTable, tableVersion);
             }
         }
@@ -954,7 +954,7 @@ public class CloudInternalCatalog extends InternalCatalog {
                 long tableVersion = response.getTableVersion();
                 OlapTable olapTable = (OlapTable) table;
                 olapTable.setCachedTableVersion(tableVersion);
-                ((CloudEnv) Env.getCurrentEnv()).getCloudUpdateVersionTool()
+                ((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()
                         .pushVersionAsync(dbId, olapTable, tableVersion);
             }
         }

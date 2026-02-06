@@ -610,7 +610,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             }
         }
         // notify follower and observer FE to update their version cache
-        ((CloudEnv) env).getCloudUpdateVersionTool().pushVersionAsync(dbId, tableVersions, partitionVersionMap);
+        ((CloudEnv) env).getCloudFEVersionSynchronizer().pushVersionAsync(dbId, tableVersions, partitionVersionMap);
         return tablePartitionMap;
     }
 

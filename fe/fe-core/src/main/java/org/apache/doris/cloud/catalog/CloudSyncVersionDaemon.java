@@ -149,10 +149,8 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
         // TODO meta service support range scan partition versions
         for (Entry<OlapTable, Long> entry : tableVersionMap.entrySet()) {
             OlapTable olapTable = entry.getKey();
-            LOG.info("check partition version for table: {}, db: {}, tableId: {}, dbId: {}, "
-                            + "cache version: {}, target version: {}", olapTable.getName(),
-                    olapTable.getDatabase().getFullName(), olapTable.getId(), olapTable.getDatabase().getId(),
-                    olapTable.getCachedTableVersion(), entry.getValue());
+            LOG.info("sync partition version for db: {}, table: {}, table cache version: {}, new version: {}",
+                    olapTable.getDatabase(), olapTable, olapTable.getCachedTableVersion(), entry.getValue());
             for (Partition partition : olapTable.getAllPartitions()) {
                 partitions.add((CloudPartition) partition);
                 if (partitions.size() >= Config.cloud_get_version_task_batch_size) {

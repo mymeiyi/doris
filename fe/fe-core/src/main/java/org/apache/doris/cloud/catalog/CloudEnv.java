@@ -164,11 +164,10 @@ public class CloudEnv extends Env {
             cacheHotspotMgr.start();
         }
         upgradeMgr.start();
-        cloudSyncVersionDaemon.start();
         cloudSnapshotHandler.start();
     }
 
-    public CloudFEVersionSynchronizer getCloudUpdateVersionTool() {
+    public CloudFEVersionSynchronizer getCloudFEVersionSynchronizer() {
         return cloudFEVersionSynchronizer;
     }
 
@@ -176,6 +175,7 @@ public class CloudEnv extends Env {
     protected void startNonMasterDaemonThreads() {
         LOG.info("start cloud Non Master only daemon threads");
         super.startNonMasterDaemonThreads();
+        cloudSyncVersionDaemon.start();
     }
 
     public static String genFeNodeNameFromMeta(String host, int port, long timeMs) {

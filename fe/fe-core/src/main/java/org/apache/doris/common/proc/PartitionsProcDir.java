@@ -438,7 +438,7 @@ public class PartitionsProcDir implements ProcDirInterface {
                 partitionVersionMap.put(partition, Pair.of(version, partition.getVisibleVersionTime()));
             }
             // push to other fes
-            ((CloudEnv) (Env.getCurrentEnv())).getCloudUpdateVersionTool()
+            ((CloudEnv) (Env.getCurrentEnv())).getCloudFEVersionSynchronizer()
                     .pushVersionAsync(dbId, tableVersionMap, partitionVersionMap);
         } else {
             List<CloudPartition> partitions = partitionIds.stream().map(id -> olapTable.getPartition(id))

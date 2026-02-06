@@ -2370,7 +2370,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         if (Env.getCurrentEnv().isMaster()) {
             return result;
         }
-        ((CloudEnv) (Env.getCurrentEnv())).getCloudUpdateVersionTool().syncVersionAsync(request);
+        ((CloudEnv) (Env.getCurrentEnv())).getCloudFEVersionSynchronizer().syncVersionAsync(request);
         return result;
     }
 
