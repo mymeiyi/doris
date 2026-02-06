@@ -951,8 +951,8 @@ public class CloudInternalCatalog extends InternalCatalog {
             }
             Table table = db.getTableNullable(tableId);
             if (table != null && table instanceof OlapTable) {
-                long tableVersion = response.getTableVersion();
                 OlapTable olapTable = (OlapTable) table;
+                long tableVersion = response.getTableVersion();
                 olapTable.setCachedTableVersion(tableVersion);
                 ((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()
                         .pushVersionAsync(dbId, olapTable, tableVersion);

@@ -40,6 +40,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.stream.Collectors;
 
 public class CloudSyncVersionDaemon extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(CloudSyncVersionDaemon.class);
@@ -108,7 +109,7 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
         } catch (InterruptedException | ExecutionException e) {
             LOG.error("Error waiting for get table version tasks to complete", e);
         }
-        LOG.info("sync table versions cost {} ms, rpc size: {}, found {} tables need to update partition version",
+        LOG.info("sync table version cost {} ms, rpc size: {}, found {} tables need to sync partition version",
                 System.currentTimeMillis() - start, futures.size(), tableVersionMap.size());
         return tableVersionMap;
     }
@@ -179,7 +180,7 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
                 olapTable.setCachedTableVersion(entry.getValue());
             }
         }
-        LOG.info("sync partition versions cost {} ms, table size: {}, rpc size: {}, failed tables: {}",
+        LOG.info("sync partition version cost {} ms, table size: {}, rpc size: {}, failed tables: {}",
                 System.currentTimeMillis() - start, tableVersionMap.size(), futures.size(), failedTables);
     }
 
@@ -190,7 +191,7 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
             } catch (Exception e) {
                 LOG.warn("get partition version error", e);
                 Set<Long> failedTableIds = partitions.stream().map(p -> p.getTableId())
-                        .collect(java.util.stream.Collectors.toSet());
+                        .collect(Collectors.toSet());
                 failedTables.addAll(failedTableIds);
             }
             return null;

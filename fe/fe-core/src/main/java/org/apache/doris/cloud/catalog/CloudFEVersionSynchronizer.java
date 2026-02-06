@@ -51,7 +51,7 @@ public class CloudFEVersionSynchronizer {
     private static final Logger LOG = LogManager.getLogger(CloudFEVersionSynchronizer.class);
 
     private static final ExecutorService SYNC_VERSION_THREAD_POOL = Executors.newFixedThreadPool(
-            Config.cloud_update_version_task_threads_num,
+            Config.cloud_sync_version_task_threads_num,
             new ThreadFactoryBuilder().setNameFormat("sync-version-%d").setDaemon(true).build());
 
     public CloudFEVersionSynchronizer() {
@@ -67,20 +67,11 @@ public class CloudFEVersionSynchronizer {
         if (tableVersions.isEmpty() && partitionVersionMap.isEmpty()) {
             return;
         }
-        SYNC_VERSION_THREAD_POOL.submit(() -> {
-            try {
-                pushVersion(dbId, tableVersions, partitionVersionMap);
-            } catch (Exception e) {
-                LOG.warn("push cloud version error", e);
-            }
-        });
+        pushVersion(dbId, tableVersions, partitionVersionMap);
     }
 
     private void pushVersion(long dbId, List<Pair<OlapTable, Long>> tableVersions,
             Map<CloudPartition, Pair<Long, Long>> partitionVersionMap) {
-        if (tableVersions.isEmpty() && partitionVersionMap.isEmpty()) {
-            return;
-        }
         List<Frontend> frontends = getFrontends();
         if (frontends == null || frontends.isEmpty()) {
             return;
@@ -150,8 +141,7 @@ public class CloudFEVersionSynchronizer {
 
     // follower and observer FE receive sync version rpc from master FE
     public void syncVersionAsync(TFrontendSyncCloudVersionRequest request) {
-        long dbId = request.getDbId();
-        Database db = Env.getCurrentInternalCatalog().getDbNullable(dbId);
+        Database db = Env.getCurrentInternalCatalog().getDbNullable(request.getDbId());
         if (db == null) {
             return;
         }
@@ -164,19 +154,26 @@ public class CloudFEVersionSynchronizer {
                 }
                 OlapTable olapTable = (OlapTable) table;
                 olapTable.setCachedTableVersion(tableVersionInfo.getVersion());
-                LOG.info("Update tableId: {}, version: {}", olapTable.getId(), tableVersionInfo.getVersion());
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Update tableId: {}, version: {}", olapTable.getId(), tableVersionInfo.getVersion());
+                }
             });
             return;
         }
+        // update partition and table version
+        SYNC_VERSION_THREAD_POOL.submit(() -> {
+            syncVersion(db, request);
+        });
+    }
 
+    private void syncVersion(Database db, TFrontendSyncCloudVersionRequest request) {
         List<Pair<OlapTable, Long>> tableVersions = new ArrayList<>(request.getTableVersionInfos().size());
         for (TCloudVersionInfo tableVersionInfo : request.getTableVersionInfos()) {
             Table table = db.getTableNullable(tableVersionInfo.getTableId());
             if (table == null || !table.isManagedTable()) {
                 continue;
             }
-            OlapTable olapTable = (OlapTable) table;
-            tableVersions.add(Pair.of(olapTable, tableVersionInfo.getVersion()));
+            tableVersions.add(Pair.of((OlapTable) table, tableVersionInfo.getVersion()));
         }
         Collections.sort(tableVersions, Comparator.comparingLong(o -> o.first.getId()));
         for (Pair<OlapTable, Long> tableVersion : tableVersions) {

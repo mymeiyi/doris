@@ -539,7 +539,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         long dbId = commitTxnResponse.getTxnInfo().getDbId();
         long txnId = commitTxnResponse.getTxnInfo().getTxnId();
         int totalPartitionNum = commitTxnResponse.getPartitionIdsList().size();
-        if (totalPartitionNum == 0 && commitTxnResponse.getTableVersionsList().size() == 0) {
+        if (totalPartitionNum == 0 && commitTxnResponse.getTableVersionsList().isEmpty()) {
             return Collections.emptyMap();
         }
         Env env = Env.getCurrentEnv();
@@ -601,8 +601,8 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             });
             for (Pair<OlapTable, Long> tableVersion : tableVersions) {
                 tableVersion.first.setCachedTableVersion(tableVersion.second);
-                LOG.info("Update Table. transactionId:{}, table_id:{}, visible_version:{}",
-                        txnId, tableVersion.first.getId(), tableVersion.second);
+                LOG.info("Update Table. transactionId:{}, table_id:{}, version:{}", txnId, tableVersion.first.getId(),
+                        tableVersion.second);
             }
         } finally {
             for (int i = tableVersions.size() - 1; i >= 0; i--) {

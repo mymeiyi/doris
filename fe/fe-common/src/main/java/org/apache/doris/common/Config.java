@@ -3591,12 +3591,12 @@ public class Config extends ConfigBase {
     @ConfField(description = {"Get version task 的并发数", "Concurrent num of get version task."})
     public static int cloud_get_version_task_threads_num = 4;
 
-    @ConfField(description = {"Update version task 的最大并发数",
-            "Maximal concurrent num of update version task."})
-    public static int cloud_update_version_task_threads_num = 4;
+    @ConfField(description = {"Master FE 发送给其它 FE sync version task 的最大并发数",
+            "Maximal concurrent num of sync version task between Master FE and other FEs."})
+    public static int cloud_sync_version_task_threads_num = 4;
 
-    @ConfField(mutable = true, description = {"Get version task 的 batch size",
-            "Maximal batch size of get version task."})
+    @ConfField(mutable = true, description = {"Get version task 包含的 table 或 partition 数目的 batch size",
+            "Maximal table or partition batch size of get version task."})
     public static int cloud_get_version_task_batch_size = 4000;
 
     @ConfField(mutable = true, description = {"schema change job 失败是否重试",

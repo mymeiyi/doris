@@ -415,21 +415,20 @@ public class PartitionsProcDir implements ProcDirInterface {
             partitionVersions = partitionIds.stream().map(id -> olapTable.getPartition(id).getVisibleVersion())
                     .collect(Collectors.toList());
         } else if (ConnectContext.get() != null && ConnectContext.get().getSessionVariable().cloudForceSyncVersion) {
-            LOG.info("cloud force sync version for table: {}, partitionNum: {}", olapTable.getId(),
-                    partitionIds.size());
+            LOG.info("cloud force sync version for table: {}, partitionNum: {}", olapTable, partitionIds.size());
             long dbId = olapTable.getDatabase().getId();
             // sync table version
             List<Long> tableVersions = OlapTable.getVisibleVersionFromMeta(Lists.newArrayList(dbId),
                     Lists.newArrayList(olapTable.getId()));
             List<Pair<OlapTable, Long>> tableVersionMap = Lists.newArrayList(Pair.of(olapTable, tableVersions.get(0)));
             // sync partition version
-            List<CloudPartition> partitions = partitionIds.stream().map(id -> olapTable.getPartition(id))
-                    .map(p -> (CloudPartition) p).collect(Collectors.toList());
+            List<CloudPartition> partitions = partitionIds.stream()
+                    .map(id -> (CloudPartition) (olapTable.getPartition(id))).collect(Collectors.toList());
             try {
                 partitionVersions = CloudPartition.getSnapshotVisibleVersionFromMs(partitions, false);
             } catch (RpcException e) {
-                LOG.warn("get partition versions failed for table: {}", olapTable.getId(), e);
-                throw new AnalysisException("get partition versions failed: " + e.getMessage(), e);
+                LOG.warn("get partition versions failed for table: {}", olapTable, e);
+                throw new AnalysisException("get partition versions failed", e);
             }
             Map<CloudPartition, Pair<Long, Long>> partitionVersionMap = new HashMap<>(partitionIds.size());
             for (int i = 0; i < partitionIds.size(); i++) {
@@ -441,13 +440,13 @@ public class PartitionsProcDir implements ProcDirInterface {
             ((CloudEnv) (Env.getCurrentEnv())).getCloudFEVersionSynchronizer()
                     .pushVersionAsync(dbId, tableVersionMap, partitionVersionMap);
         } else {
-            List<CloudPartition> partitions = partitionIds.stream().map(id -> olapTable.getPartition(id))
-                    .map(p -> (CloudPartition) p).collect(Collectors.toList());
+            List<CloudPartition> partitions = partitionIds.stream()
+                    .map(id -> (CloudPartition) (olapTable.getPartition(id))).collect(Collectors.toList());
             try {
                 partitionVersions = CloudPartition.getSnapshotVisibleVersion(partitions);
             } catch (RpcException e) {
-                LOG.warn("get partition versions failed for table: {}", olapTable.getId(), e);
-                throw new AnalysisException("get partition versions failed: " + e.getMessage(), e);
+                LOG.warn("get partition versions failed for table: {}", olapTable, e);
+                throw new AnalysisException("get partition versions failed", e);
             }
         }
         Preconditions.checkState(partitionVersions.size() == partitionIds.size(),
