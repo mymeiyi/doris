@@ -781,10 +781,6 @@ struct TFrontendSyncCloudVersionRequest {
    3: optional list<TCloudVersionInfo> partitionVersionInfos
 }
 
-struct TFrontendSyncCloudVersionResult {
-   1: required Status.TStatus status
-}
-
 struct TFrontendReportAliveSessionRequest {
    1: required i32 clusterId
    2: required string token
@@ -1740,7 +1736,7 @@ service FrontendService {
 
     TFrontendPingFrontendResult ping(1: TFrontendPingFrontendRequest request)
 
-    TFrontendSyncCloudVersionResult syncCloudVersion(1: TFrontendSyncCloudVersionRequest request)
+    Status.TStatus syncCloudVersion(1: TFrontendSyncCloudVersionRequest request)
 
     TInitExternalCtlMetaResult initExternalCtlMeta(1: TInitExternalCtlMetaRequest request)
 
