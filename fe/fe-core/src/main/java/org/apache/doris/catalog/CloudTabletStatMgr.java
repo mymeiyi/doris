@@ -262,14 +262,6 @@ public class CloudTabletStatMgr extends MasterDaemon {
                 LOG.warn("get tablet stats return failed.");
                 return null;
             }
-            if (LOG.isDebugEnabled()) {
-                int i = 0;
-                for (TabletIndexPB idx : req.getTabletIdxList()) {
-                    LOG.debug("db_id: {} table_id: {} index_id: {} tablet_id: {} size: {}",
-                            idx.getDbId(), idx.getTableId(), idx.getIndexId(),
-                            idx.getTabletId(), resp.getTabletStats(i++).getDataSize());
-                }
-            }
             updateTabletStat(resp, activeUpdate);
             return null;
         });
