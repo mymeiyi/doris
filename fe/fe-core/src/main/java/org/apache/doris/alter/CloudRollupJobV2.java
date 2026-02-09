@@ -58,6 +58,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 public class CloudRollupJobV2 extends RollupJobV2 {
     private static final Logger LOG = LogManager.getLogger(CloudRollupJobV2.class);
@@ -124,17 +125,14 @@ public class CloudRollupJobV2 extends RollupJobV2 {
         LOG.info("onCreateRollupReplicaDone finished, dbId:{}, tableId:{}, jobId:{}, rollupIndexList:{}",
                 dbId, tableId, jobId, rollupIndexList);
 
-        // add all rollup replicas to tablet inverted index
-        List<Long> tabletIds = new ArrayList<>();
-        for (Long partitionId : partitionIdToRollupIndex.keySet()) {
-            MaterializedIndex rollupIndex = partitionIdToRollupIndex.get(partitionId);
-            rollupIndex.getTablets().stream().map(Tablet::getId).forEach(tabletIds::add);
-        }
-        LOG.info("force sync tablet stats for table: {}, tabletNum: {}, tabletIds: {}", tableId,
-                tabletIds.size(), tabletIds);
+        List<Long> tabletIds = partitionIdToRollupIndex.values().stream()
+                .flatMap(rollupIndex -> rollupIndex.getTablets().stream()).map(Tablet::getId)
+                .collect(Collectors.toList());
+        LOG.info("force sync tablet stats for table: {}, index: {}, tabletNum: {}, tabletIds: {}", tableId,
+                rollupIndexId, tabletIds.size(), tabletIds);
         if (LOG.isDebugEnabled()) {
-            LOG.debug("force sync tablet stats for table: {}, tabletNum: {}, tabletIds: {}", tableId,
-                    tabletIds.size(), tabletIds);
+            LOG.debug("force sync tablet stats for table: {}, index: {}, tabletNum: {}, tabletIds: {}", tableId,
+                    rollupIndexId, tabletIds.size(), tabletIds);
         }
         CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
     }
