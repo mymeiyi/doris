@@ -21,16 +21,43 @@ import com.google.common.base.Strings;
 
 public class RpcException extends Exception {
 
+    /**
+     * Categorizes the type of RPC failure for adaptive throttling decisions.
+     */
+    public enum FailureType {
+        /** RPC timed out (gRPC DEADLINE_EXCEEDED) */
+        TIMEOUT,
+        /** Other failures (UNAVAILABLE, UNKNOWN, etc.) */
+        OTHER
+    }
+
     private String host;
+    private FailureType failureType;
 
     public RpcException(String host, String message) {
         super(message);
         this.host = host;
+        this.failureType = FailureType.OTHER;
     }
 
     public RpcException(String host, String message, Exception e) {
         super(message, e);
         this.host = host;
+        this.failureType = FailureType.OTHER;
+    }
+
+    public RpcException(String host, String message, Exception e, FailureType failureType) {
+        super(message, e);
+        this.host = host;
+        this.failureType = failureType;
+    }
+
+    public FailureType getFailureType() {
+        return failureType;
+    }
+
+    public boolean isTimeout() {
+        return failureType == FailureType.TIMEOUT;
     }
 
     @Override

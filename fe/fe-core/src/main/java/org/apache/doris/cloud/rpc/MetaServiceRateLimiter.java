@@ -43,6 +43,9 @@ public class MetaServiceRateLimiter {
 
     private MetaServiceRateLimiter() {
         reloadConfig();
+        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+            MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
+        }
     }
 
     public static MetaServiceRateLimiter getInstance() {
@@ -129,6 +132,7 @@ public class MetaServiceRateLimiter {
         private final RateLimiter rateLimiter;
         private final Semaphore waitingSemaphore;
         private final int maxWaiting;
+        private final int configuredQps;
 
         private final AtomicLong throttledCount = new AtomicLong(0);
         private final AtomicLong rejectedCount = new AtomicLong(0);
@@ -136,10 +140,19 @@ public class MetaServiceRateLimiter {
         MethodRateLimiter(String methodName, int qps, int maxWaiting) {
             this.methodName = methodName;
             this.maxWaiting = maxWaiting;
+            this.configuredQps = qps;
             this.rateLimiter = qps > 0 ? RateLimiter.create(qps) : RateLimiter.create(Double.MAX_VALUE);
             this.waitingSemaphore = new Semaphore(maxWaiting);
             LOG.info("Created rate limiter for method {}: qps={}, maxWaiting={}",
                     methodName, qps, maxWaiting);
+        }
+
+        void applyAdaptiveFactor(double factor) {
+            if (configuredQps <= 0) {
+                return;
+            }
+            double effectiveQps = Math.max(1.0, configuredQps * factor);
+            rateLimiter.setRate(effectiveQps);
         }
 
         void acquire() throws RpcRateLimitException {
@@ -187,6 +200,13 @@ public class MetaServiceRateLimiter {
                 }
             }
         }
+    }
+
+    public void setAdaptiveFactor(double factor) {
+        for (MethodRateLimiter limiter : methodLimiters.values()) {
+            limiter.applyAdaptiveFactor(factor);
+        }
+        LOG.info("Applied adaptive factor {} to {} method limiters", factor, methodLimiters.size());
     }
 
     @VisibleForTesting

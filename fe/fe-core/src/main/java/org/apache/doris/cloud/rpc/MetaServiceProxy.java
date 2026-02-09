@@ -212,19 +212,23 @@ public class MetaServiceProxy {
                     LOG.warn("failed to request meta service code {}, msg {}, trycnt {}", sre.getStatus().getCode(),
                             sre.getMessage(), tried);
                     boolean shouldRetry = false;
+                    boolean isTimeout = false;
                     switch (sre.getStatus().getCode()) {
                         case UNAVAILABLE:
                         case UNKNOWN:
                             shouldRetry = true;
                             break;
                         case DEADLINE_EXCEEDED:
+                            isTimeout = true;
                             shouldRetry = tried <= Config.meta_service_rpc_timeout_retry_times;
                             break;
                         default:
                             shouldRetry = false;
                     }
                     if (!shouldRetry || tried >= maxRetries) {
-                        throw new RpcException("", sre.getMessage(), sre);
+                        RpcException.FailureType failureType = isTimeout
+                                ? RpcException.FailureType.TIMEOUT : RpcException.FailureType.OTHER;
+                        throw new RpcException("", sre.getMessage(), sre, failureType);
                     }
                 } catch (Exception e) {
                     requestFailed = true;
@@ -285,6 +289,12 @@ public class MetaServiceProxy {
                 CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
                         .update(System.currentTimeMillis() - startTime);
             }
+            if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+                MetaServiceAdaptiveThrottle.Signal signal = MetaServiceCodeExtractor.isMaxQpsLimit(response)
+                        ? MetaServiceAdaptiveThrottle.Signal.BACKPRESSURE
+                        : MetaServiceAdaptiveThrottle.Signal.SUCCESS;
+                MetaServiceAdaptiveThrottle.getInstance().recordSignal(signal);
+            }
             return response;
         } catch (RpcException e) {
             if (MetricRepo.isInit && Config.isCloudMode()) {
@@ -292,6 +302,12 @@ public class MetaServiceProxy {
                 CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
                 CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
                         .update(System.currentTimeMillis() - startTime);
+            }
+            if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+                MetaServiceAdaptiveThrottle.Signal signal = e.isTimeout()
+                        ? MetaServiceAdaptiveThrottle.Signal.TIMEOUT
+                        : MetaServiceAdaptiveThrottle.Signal.SUCCESS;
+                MetaServiceAdaptiveThrottle.getInstance().recordSignal(signal);
             }
             throw e;
         } finally {
