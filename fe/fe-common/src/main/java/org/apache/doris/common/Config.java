@@ -3652,6 +3652,56 @@ public class Config extends ConfigBase {
             "QPS limit config per method, format: method1:qps1;method2:qps2, e.g.: getVersion:100;getTabletStats:50"})
     public static String meta_service_rpc_rate_limit_qps_config = "";
 
+    @ConfField(mutable = true, description = {
+            "是否启用自适应限流（根据超时和服务端背压自动调整QPS）",
+            "Whether to enable adaptive rate limiting (auto-adjust QPS based on timeout and server backpressure)"})
+    public static boolean meta_service_rpc_adaptive_throttle_enabled = false;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流最小因子，限流值不会低于 configuredQps * minFactor",
+            "Adaptive throttle minimum factor, effective QPS will not drop below configuredQps * minFactor"})
+    public static double meta_service_rpc_adaptive_throttle_min_factor = 0.1;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流快速下降乘数，每次触发降级时 factor = factor * decreaseMultiplier",
+            "Adaptive throttle fast decrease multiplier, factor = factor * decreaseMultiplier on each overload"})
+    public static double meta_service_rpc_adaptive_throttle_decrease_multiplier = 0.7;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流冷却时间（毫秒），降级后等待此时间才开始恢复",
+            "Adaptive throttle cooldown period (ms), wait this long after decrease before starting recovery"})
+    public static long meta_service_rpc_adaptive_throttle_cooldown_ms = 30000;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流恢复间隔（毫秒），每隔此时间恢复一次",
+            "Adaptive throttle recovery interval (ms), recover once every this interval"})
+    public static long meta_service_rpc_adaptive_throttle_recovery_interval_ms = 5000;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流恢复步长，每次恢复时 factor += recoveryStep",
+            "Adaptive throttle recovery step, factor += recoveryStep on each recovery tick"})
+    public static double meta_service_rpc_adaptive_throttle_recovery_step = 0.05;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流滑动窗口时间（秒），在此窗口内统计请求和错误",
+            "Adaptive throttle sliding window duration (seconds) for counting requests and errors"})
+    public static int meta_service_rpc_adaptive_throttle_window_seconds = 10;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流触发所需的最小窗口请求数",
+            "Adaptive throttle minimum requests in window before overload can trigger"})
+    public static int meta_service_rpc_adaptive_throttle_min_window_requests = 20;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流触发所需的最小错误数（超时+背压）",
+            "Adaptive throttle minimum bad events (timeout + backpressure) in window to trigger overload"})
+    public static int meta_service_rpc_adaptive_throttle_bad_trigger_count = 3;
+
+    @ConfField(mutable = true, description = {
+            "自适应限流触发所需的最小错误率",
+            "Adaptive throttle minimum bad rate (bad/total) in window to trigger overload"})
+    public static double meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.05;
+
     @ConfField(mutable = true, description = {"存算分离模式下自动启停功能，对于该配置中的数据库名不进行唤醒操作，"
             + "用于内部作业的数据库，例如统计信息用到的数据库，"
             + "举例：auto_start_ignore_db_names=__internal_schema, information_schema",
