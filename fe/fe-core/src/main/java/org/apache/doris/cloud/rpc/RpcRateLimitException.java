@@ -34,7 +34,7 @@ public class RpcRateLimitException extends RpcException {
         super("", message, null);
     }
 
-    public RpcRateLimitException(String message, Throwable cause) {
+    public RpcRateLimitException(String message, Exception cause) {
         super("", message, cause);
     }
 }
