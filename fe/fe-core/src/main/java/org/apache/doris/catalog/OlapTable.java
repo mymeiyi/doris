@@ -3409,6 +3409,49 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
                     .collect(Collectors.toList());
         }
 
+        ConnectContext ctx = ConnectContext.get();
+        long cloudTableVersionCacheTtlMs = ctx == null
+                ? VariableMgr.getDefaultSessionVariable().cloudTableVersionCacheTtlMs
+                : ctx.getSessionVariable().cloudTableVersionCacheTtlMs;
+        if (cloudTableVersionCacheTtlMs <= 0) { // No cached versions will be used
+            return getVisibleVersionInBatchFromMs(tables);
+        }
+
+        // tableId -> cachedVersion, 0 means to be fetched from meta-service
+        List<Pair<Long, Long>> allVersions = new ArrayList<>(tables.size());
+        List<OlapTable> expiredTables = new ArrayList<>(tables.size());
+        for (OlapTable table : tables) {
+            long ver = table.getCachedTableVersion();
+            if (table.isCachedTableVersionExpired()) {
+                expiredTables.add(table);
+                ver = 0L; // 0 means to be fetched from meta-service
+            }
+            allVersions.add(Pair.of(table.getId(), ver));
+        }
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("cloudTableVersionCacheTtlMs={}, numTables={}, numExpiredTables={}",
+                    cloudTableVersionCacheTtlMs, tables.size(), expiredTables.size());
+        }
+
+        List<Long> msVersions = null;
+        if (!expiredTables.isEmpty()) { // Not all table versions are from cache
+            msVersions = getVisibleVersionInBatchFromMs(expiredTables);
+        }
+        int msIdx = 0;
+        for (Pair<Long, Long> v : allVersions) { // ATTN: keep the assigning order!!!
+            if (v.second == 0L && msVersions != null) {
+                v.second = msVersions.get(msIdx++);
+            }
+        }
+        if (!expiredTables.isEmpty()) { // Not all table versions are from cache
+            assert msIdx == msVersions.size() : "size not match, idx=" + msIdx + " verSize=" + msVersions.size();
+        }
+
+        return allVersions.stream().map(i -> i.second).collect(Collectors.toList());
+    }
+
+    // Get the table versions in batch from meta-service, and update cache.
+    private static List<Long> getVisibleVersionInBatchFromMs(List<OlapTable> tables) {
         List<Long> dbIds = new ArrayList<>(tables.size());
         List<Long> tableIds = new ArrayList<>(tables.size());
         for (OlapTable table : tables) {
