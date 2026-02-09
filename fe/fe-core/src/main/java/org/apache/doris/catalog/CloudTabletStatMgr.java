@@ -475,11 +475,12 @@ public class CloudTabletStatMgr extends MasterDaemon {
                 statsIntervalIndex = 0;
                 if (!activeUpdate && statsChanged) {
                     LOG.info("tablet stats changed, reset interval index to 0, dbId: {}, tableId: {}, "
-                                    + "partitionId: {}, tabletId: {}, dataSize: {}, rowCount: {}, rowsetCount: {}, "
-                                    + "segmentCount: {}, indexSize: {}, segmentSize: {}", stat.getIdx().getDbId(),
-                            stat.getIdx().getTableId(), stat.getIdx().getPartitionId(), stat.getIdx().getTabletId(),
-                            stat.getDataSize(), stat.getNumRows(), stat.getNumRowsets(), stat.getNumSegments(),
-                            stat.getIndexSize(), stat.getSegmentSize());
+                                    + "indexId: {}, partitionId: {}, tabletId: {}, dataSize: {}, rowCount: {}, "
+                                    + "rowsetCount: {}, segmentCount: {}, indexSize: {}, segmentSize: {}",
+                            stat.getIdx().getDbId(), stat.getIdx().getTableId(), stat.getIdx().getIndexId(),
+                            stat.getIdx().getPartitionId(), stat.getIdx().getTabletId(), stat.getDataSize(),
+                            stat.getNumRows(), stat.getNumRowsets(), stat.getNumSegments(), stat.getIndexSize(),
+                            stat.getSegmentSize());
                 }
             } else {
                 statsIntervalIndex = Math.min(statsIntervalIndex + 1, DEFAULT_INTERVAL_LADDER_MS.length - 1);
