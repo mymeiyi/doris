@@ -1528,6 +1528,8 @@ struct TReportCommitTxnResultRequest {
     2: optional i64 txnId
     3: optional string label
     4: optional binary payload
+    // tablets which need to update stats
+    5: optional list<i64> tabletIds
 }
 
 struct TQueryColumn {
@@ -1862,6 +1864,10 @@ struct TMasterAddressResult {
     2: optional Types.TNetworkAddress master_address
 }
 
+struct TSyncCloudTabletStatsRequest {
+    1: optional binary tablet_stats_pb
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1: TGetDbsParams params)
     TGetTablesResult getTableNames(1: TGetTablesParams params)
@@ -1984,4 +1990,6 @@ service FrontendService {
     TInsertOverwriteRecordResult addOrDropInsertOverwriteRecord(1: TInsertOverwriteRecordRequest request)
 
     TRecordFinishedLoadJobResult recordFinishedLoadJobRequest(1: TRecordFinishedLoadJobRequest request)
+
+    Status.TStatus syncCloudTabletStats(1: TSyncCloudTabletStatsRequest request)
 }
