@@ -1524,6 +1524,8 @@ struct TReportCommitTxnResultRequest {
     2: optional i64 txnId
     3: optional string label
     4: optional binary payload
+    // tablets which need to update stats
+    5: optional list<i64> tabletIds
 }
 
 struct TQueryColumn {
@@ -1684,6 +1686,10 @@ struct TGetOlapTableMetaResult {
     4: optional list<i64> removed_partitions
 }
 
+struct TSyncCloudTabletStatsRequest {
+    1: optional binary tablet_stats_pb
+}
+
 service FrontendService {
     TGetDbsResult getDbNames(1: TGetDbsParams params)
     TGetTablesResult getTableNames(1: TGetTablesParams params)
@@ -1789,4 +1795,6 @@ service FrontendService {
     TGetTableTDEInfoResult getTableTDEInfo(1: TGetTableTDEInfoRequest request)
 
     TGetOlapTableMetaResult getOlapTableMeta(1: TGetOlapTableMetaRequest request)
+
+    Status.TStatus syncCloudTabletStats(1: TSyncCloudTabletStatsRequest request)
 }

@@ -36,6 +36,8 @@ import com.google.common.base.Strings;
 import com.google.common.hash.HashCode;
 import com.google.common.hash.Hashing;
 import com.google.gson.annotations.SerializedName;
+import lombok.Getter;
+import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -67,9 +69,15 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
     private long indexId = -1;
     @SerializedName(value = "idx")
     private long idx = -1;
+    @Getter
+    @Setter
+    long lastGetTabletStatsTime = 0;
+    @Getter
+    @Setter
+    int statsIntervalIndex = 0;
 
     private long segmentCount = 0L;
-    private long rowsetCount = 0L;
+    private long rowsetCount = 1L; // [0-1] rowset
 
     private static final Random rand = new Random();
 
