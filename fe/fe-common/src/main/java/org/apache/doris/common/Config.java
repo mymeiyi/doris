@@ -3627,6 +3627,31 @@ public class Config extends ConfigBase {
             "In cloud mode, the retry number when the FE requests the meta service times out is 1 by default"})
     public static int meta_service_rpc_timeout_retry_times = 1;
 
+    @ConfField(mutable = true, description = {
+            "是否启用 meta-service RPC 限流",
+            "Whether to enable rate limiting for meta-service RPC calls"})
+    public static boolean meta_service_rpc_rate_limit_enabled = false;
+
+    @ConfField(mutable = true, description = {
+            "默认每个方法的 QPS 限制（每秒请求数），值为 -1 表示不限制",
+            "Default QPS limit for each method (requests per second), -1 means no limit"})
+    public static int meta_service_rpc_rate_limit_default_qps = 200;
+
+    @ConfField(mutable = true, description = {
+            "每个方法的最大等待请求数，超过此数量的请求将直接拒绝",
+            "Maximum waiting requests per method, requests exceeding this will be rejected immediately"})
+    public static int meta_service_rpc_rate_limit_max_waiting = 1000;
+
+    @ConfField(mutable = true, description = {
+            "获取令牌的最大等待时间（毫秒），超过此时间仍未获取到令牌则失败",
+            "Maximum wait time (ms) to acquire a token, request fails if timeout"})
+    public static long meta_service_rpc_rate_limit_wait_timeout_ms = 5000;
+
+    @ConfField(mutable = true, description = {
+            "各方法的 QPS 限制配置，格式: method1:qps1;method2:qps2，例如: getVersion:100;getTabletStats:50",
+            "QPS limit config per method, format: method1:qps1;method2:qps2, e.g.: getVersion:100;getTabletStats:50"})
+    public static String meta_service_rpc_rate_limit_qps_config = "";
+
     @ConfField(mutable = true, description = {"存算分离模式下自动启停功能，对于该配置中的数据库名不进行唤醒操作，"
             + "用于内部作业的数据库，例如统计信息用到的数据库，"
             + "举例：auto_start_ignore_db_names=__internal_schema, information_schema",
