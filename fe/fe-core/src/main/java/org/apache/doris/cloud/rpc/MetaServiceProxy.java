@@ -103,7 +103,7 @@ public class MetaServiceProxy {
             CloudMetrics.META_SERVICE_RPC_ALL_TOTAL.increase(1L);
             CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
         }
-
+        MetaServiceRateLimiter.getInstance().acquire(methodName);
         try {
             final MetaServiceClient client = getProxy();
             Cloud.GetInstanceResponse response = client.getInstance(request);
@@ -120,6 +120,8 @@ public class MetaServiceProxy {
                         .update(System.currentTimeMillis() - startTime);
             }
             throw new RpcException("", e.getMessage(), e);
+        } finally {
+            MetaServiceRateLimiter.getInstance().release(methodName);
         }
     }
 
@@ -198,6 +200,7 @@ public class MetaServiceProxy {
                 throws RpcException {
             long maxRetries = Config.meta_service_rpc_retry_cnt;
             for (long tried = 1; tried <= maxRetries; tried++) {
+                MetaServiceRateLimiter.getInstance().acquire(methodName);
                 MetaServiceClient client = null;
                 boolean requestFailed = false;
                 try {
@@ -233,6 +236,7 @@ public class MetaServiceProxy {
                         throw new RpcException("", e.getMessage(), e);
                     }
                 } finally {
+                    MetaServiceRateLimiter.getInstance().release(methodName);
                     if (requestFailed && proxy.needReconn() && client != null) {
                         client.shutdown(true);
                     }
@@ -294,6 +298,7 @@ public class MetaServiceProxy {
             CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
         }
 
+        MetaServiceRateLimiter.getInstance().acquire(methodName);
         try {
             client = getProxy();
             Future<Cloud.GetVersionResponse> future = client.getVisibleVersionAsync(request);
@@ -305,6 +310,7 @@ public class MetaServiceProxy {
                         new com.google.common.util.concurrent.FutureCallback<Cloud.GetVersionResponse>() {
                             @Override
                             public void onSuccess(Cloud.GetVersionResponse result) {
+                                MetaServiceRateLimiter.getInstance().release(methodName);
                                 if (MetricRepo.isInit && Config.isCloudMode()) {
                                     CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
                                             .update(System.currentTimeMillis() - startTime);
@@ -313,6 +319,7 @@ public class MetaServiceProxy {
 
                             @Override
                             public void onFailure(Throwable t) {
+                                MetaServiceRateLimiter.getInstance().release(methodName);
                                 if (MetricRepo.isInit && Config.isCloudMode()) {
                                     CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
                                     CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
@@ -327,6 +334,7 @@ public class MetaServiceProxy {
             }
             return future;
         } catch (Exception e) {
+            MetaServiceRateLimiter.getInstance().release(methodName);
             if (MetricRepo.isInit && Config.isCloudMode()) {
                 CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
                 CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
