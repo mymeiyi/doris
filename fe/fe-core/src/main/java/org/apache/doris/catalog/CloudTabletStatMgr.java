@@ -51,6 +51,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -61,7 +62,10 @@ import java.util.stream.Collectors;
 
 /*
  * CloudTabletStatMgr is for collecting tablet(replica) statistics from backends.
- * Each FE will collect by itself.
+ * Config.cloud_get_tablet_stats_version:
+ * 1: Each FE will collect by itself.
+ * 2: Master FE collects active tablet stats and pushes to followers and observers,
+ *    and each FE will collect tablet stats by interval ladder.
  */
 public class CloudTabletStatMgr extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(CloudTabletStatMgr.class);
@@ -76,7 +80,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
     private static final ExecutorService SYNC_TABLET_STATS_THREAD_POOL = Executors.newFixedThreadPool(
             Config.cloud_sync_tablet_stats_task_threads_num,
             new ThreadFactoryBuilder().setNameFormat("sync-tablet-stats-%d").setDaemon(true).build());
-    private Set<Long> activeTablets = new HashSet<>();
+    private Set<Long> activeTablets = ConcurrentHashMap.newKeySet();
 
     /**
      * Interval ladder in milliseconds: 1m, 5m, 10m, 30m, 2h, 6h, 12h, 3d, infinite.
@@ -100,13 +104,20 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
     @Override
     protected void runAfterCatalogReady() {
-        LOG.info("cloud tablet stat begin");
-        // get stats for active tablets
-        Set<Long> copiedTablets;
-        synchronized (activeTablets) {
-            copiedTablets = new HashSet<>(activeTablets);
-            activeTablets.clear();
+        int version = Config.cloud_get_tablet_stats_version;
+        LOG.info("cloud tablet stat begin with version: {}", version);
+
+        // version1: get all tablet stats
+        if (version == 1) {
+            this.activeTablets.clear();
+            List<Long> dbIds = getAllTabletStats(null);
+            updateStatInfo(dbIds);
+            return;
         }
+
+        // version2: get stats for active tablets
+        Set<Long> copiedTablets = new HashSet<>(activeTablets);
+        activeTablets.removeAll(copiedTablets);
         getActiveTabletStats(copiedTablets);
 
         // get stats by interval
@@ -173,7 +184,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
                                 builder.addTabletIdx(tabletBuilder);
 
                                 if (builder.getTabletIdxCount() >= Config.get_tablet_stat_batch_size) {
-                                    futures.add(submitGetTabletStatsTask(builder.build(), false));
+                                    futures.add(submitGetTabletStatsTask(builder.build(), filter == null));
                                     builder = GetTabletStatsRequest.newBuilder()
                                             .setRequestIp(FrontendOptions.getLocalHostAddressCached());
                                 }
@@ -187,7 +198,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
         } // end for dbs
 
         if (builder.getTabletIdxCount() > 0) {
-            futures.add(submitGetTabletStatsTask(builder.build(), false));
+            futures.add(submitGetTabletStatsTask(builder.build(), filter == null));
         }
 
         try {
@@ -473,8 +484,8 @@ public class CloudTabletStatMgr extends MasterDaemon {
             int statsIntervalIndex = cloudReplica.getStatsIntervalIndex();
             if (activeUpdate || statsChanged) {
                 statsIntervalIndex = 0;
-                if (!activeUpdate && statsChanged) {
-                    LOG.info("tablet stats changed, reset interval index to 0, dbId: {}, tableId: {}, "
+                if (!activeUpdate && statsChanged && LOG.isDebugEnabled()) {
+                    LOG.debug("tablet stats changed, reset interval index to 0, dbId: {}, tableId: {}, "
                                     + "indexId: {}, partitionId: {}, tabletId: {}, dataSize: {}, rowCount: {}, "
                                     + "rowsetCount: {}, segmentCount: {}, indexSize: {}, segmentSize: {}. lastIdx: {}",
                             stat.getIdx().getDbId(), stat.getIdx().getTableId(), stat.getIdx().getIndexId(),
@@ -488,7 +499,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
             cloudReplica.setStatsIntervalIndex(statsIntervalIndex);
         }
         // push tablet stats to other fes
-        if (activeUpdate && Env.getCurrentEnv().isMaster()) {
+        if (Config.cloud_get_tablet_stats_version == 2 && activeUpdate && Env.getCurrentEnv().isMaster()) {
             pushTabletStats(response);
         }
     }
@@ -510,12 +521,10 @@ public class CloudTabletStatMgr extends MasterDaemon {
     }
 
     public void addActiveTablets(List<Long> tabletIds) {
-        if (tabletIds == null || tabletIds.isEmpty()) {
+        if (Config.cloud_get_tablet_stats_version == 1 || tabletIds == null || tabletIds.isEmpty()) {
             return;
         }
-        synchronized (activeTablets) {
-            activeTablets.addAll(tabletIds);
-        }
+        activeTablets.addAll(tabletIds);
     }
 
     // master FE send update tablet stats rpc to other FEs
@@ -562,7 +571,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
     // follower and observer FE receive sync tablet stats rpc from master FE
     public void syncTabletStats(GetTabletStatsResponse response) {
-        if (response.getTabletStatsList().isEmpty()) {
+        if (Config.cloud_get_tablet_stats_version == 1 || response.getTabletStatsList().isEmpty()) {
             return;
         }
         SYNC_TABLET_STATS_THREAD_POOL.submit(() -> {
@@ -571,6 +580,9 @@ public class CloudTabletStatMgr extends MasterDaemon {
     }
 
     private List<Frontend> getFrontends() {
+        if (!Env.getCurrentEnv().isMaster()) {
+            return Collections.emptyList();
+        }
         HostInfo selfNode = Env.getCurrentEnv().getSelfNode();
         return Env.getCurrentEnv().getFrontends(null).stream()
                 .filter(fe -> fe.isAlive() && !(fe.getHost().equals(selfNode.getHost())

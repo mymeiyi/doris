@@ -208,8 +208,7 @@ public class TabletsProcDir implements ProcDirInterface {
             table.readUnlock();
         }
         if (tabletIds != null && !tabletIds.isEmpty()) {
-            LOG.info("force sync tablet stats for table: {}, tabletNum: {}, tabletIds: {}", table,
-                    tabletIds.size(), tabletIds);
+            LOG.info("force sync tablet stats for table: {}, tabletNum: {}", table, tabletIds.size());
             CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
         }
         return tabletInfos;

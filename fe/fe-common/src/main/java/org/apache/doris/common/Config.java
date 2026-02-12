@@ -3592,7 +3592,6 @@ public class Config extends ConfigBase {
             description = { "存算分离模式下，一个 BE 挂掉多长时间后，它的 tablet 彻底转移到其他 BE 上" })
     public static int rehash_tablet_after_be_dead_seconds = 3600;
 
-
     @ConfField(mutable = true, description = {"存算分离模式下是否启用自动启停功能，默认 true",
         "Whether to enable the automatic start-stop feature in cloud model, default is true."})
     public static boolean enable_auto_start_for_cloud_cluster = true;
@@ -3602,9 +3601,15 @@ public class Config extends ConfigBase {
             + "model is set to 300 times, which is approximately 5 minutes by default."})
     public static int auto_start_wait_to_resume_times = 300;
 
-    @ConfField(description = {"存算分离模式下 Sync tablet stats task 的最大并发数。",
-            "Maximal concurrent num of sync tablet stats task in cloud mode."})
+    @ConfField(description = {"存算分离模式下 master FE 同步 tablet stats 到 observer 和 follower 的最大并发数。",
+            "Maximal concurrent num of master FE sync tablet stats task to observers and followers in cloud mode."})
     public static int cloud_sync_tablet_stats_task_threads_num = 4;
+
+    @ConfField(mutable = true, description = {
+            "存算分离模式下获取 tablet stats 的版本. 版本1: 获取全部 tablet; 版本2: 获取 active 和间隔到期的 tablet",
+            "Version of getting tablet stats in cloud mode. Version 1: get all tablets; "
+                    + "Version 2: get active and interval expired tablets"})
+    public static int cloud_get_tablet_stats_version = 2;
 
     @ConfField(description = {"Get tablet stat task 的最大并发数。",
         "Maximal concurrent num of get tablet stat job."})
