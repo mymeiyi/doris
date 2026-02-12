@@ -71,9 +71,11 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
     private long idx = -1;
     @Getter
     @Setter
+    @SerializedName(value = "gst")
     long lastGetTabletStatsTime = 0;
     @Getter
     @Setter
+    @SerializedName(value = "sii")
     int statsIntervalIndex = 0;
 
     @SerializedName(value = "sc")
