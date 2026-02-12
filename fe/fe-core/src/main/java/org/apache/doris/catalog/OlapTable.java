@@ -240,6 +240,7 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
     // Cache for table version in cloud mode
     // This value is set when get the table version from meta-service, 0 means version is not cached yet
     private volatile long lastTableVersionCachedTimeMs = 0;
+    @SerializedName(value = "cv")
     private volatile long cachedTableVersion = -1;
 
     public OlapTable() {
@@ -3332,8 +3333,7 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
         return System.currentTimeMillis() - lastTableVersionCachedTimeMs > cacheExpirationMs;
     }
 
-    @VisibleForTesting
-    protected void setCachedTableVersion(long version) {
+    public void setCachedTableVersion(long version) {
         if (version >= cachedTableVersion) {
             cachedTableVersion = version;
             lastTableVersionCachedTimeMs = System.currentTimeMillis();

@@ -68,7 +68,9 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
     @SerializedName(value = "idx")
     private long idx = -1;
 
+    @SerializedName(value = "sc")
     private long segmentCount = 0L;
+    @SerializedName(value = "rsc")
     private long rowsetCount = 0L;
 
     private static final Random rand = new Random();

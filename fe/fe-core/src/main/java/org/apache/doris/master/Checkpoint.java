@@ -17,7 +17,15 @@
 
 package org.apache.doris.master;
 
+import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.MaterializedIndex;
+import org.apache.doris.catalog.MaterializedIndex.IndexExtState;
+import org.apache.doris.catalog.OlapTable;
+import org.apache.doris.catalog.Partition;
+import org.apache.doris.catalog.Replica;
+import org.apache.doris.catalog.Table;
+import org.apache.doris.catalog.Tablet;
 import org.apache.doris.common.CheckpointException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.FeConstants;
@@ -146,6 +154,7 @@ public class Checkpoint extends MasterDaemon {
                                 checkPointVersion, env.getReplayedJournalId()));
             }
             env.postProcessAfterMetadataReplayed(false);
+            postProcessCloudMetadata();
             latestImageFilePath = env.saveImage();
             replayedJournalId = env.getReplayedJournalId();
 
@@ -394,5 +403,100 @@ public class Checkpoint extends MasterDaemon {
 
     public ReentrantReadWriteLock getLock() {
         return lock;
+    }
+
+    private void postProcessCloudMetadata() {
+        if (Config.isNotCloudMode()) {
+            return;
+        }
+        Env servingEnv = Env.getServingEnv();
+        if (servingEnv == null) {
+            LOG.warn("serving env is null, skip process cloud metadata for checkpoint");
+            return;
+        }
+        long start = System.currentTimeMillis();
+        for (Database db : env.getInternalCatalog().getDbs()) {
+            Database servingDb = servingEnv.getInternalCatalog().getDbNullable(db.getId());
+            if (servingDb == null) {
+                LOG.warn("serving db is null. dbId: {}, dbName: {}", db.getId(), db.getFullName());
+                continue;
+            }
+
+            for (Table table : db.getTables()) {
+                Table servingTable = servingDb.getTableNullable(table.getId());
+                if (servingTable == null) {
+                    LOG.warn("serving table is null. dbId: {}, table: {}", db.getId(), table);
+                    continue;
+                }
+                if (!(table instanceof OlapTable) || !(servingTable instanceof OlapTable)) {
+                    continue;
+                }
+                OlapTable olapTable = (OlapTable) table;
+                OlapTable servingOlapTable = (OlapTable) servingTable;
+
+                // set table version
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("set table version. table: {}, oldVersion: {}. newVersion: {}", table,
+                            olapTable.getCachedTableVersion(), servingOlapTable.getCachedTableVersion());
+                }
+                olapTable.setCachedTableVersion(servingOlapTable.getCachedTableVersion());
+
+                List<Partition> partitions = olapTable.getAllPartitions();
+                for (Partition partition : partitions) {
+                    Partition servingPartition = servingOlapTable.getPartition(partition.getId());
+                    if (servingPartition == null) {
+                        LOG.warn("serving partition is null. tableId: {}, partitionId: {}", table.getId(),
+                                partition.getId());
+                        continue;
+                    }
+                    // set partition version
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("set partition version. tableId: {}, partitionId: {}, oldVersion: {}, oldTime: {}. "
+                                        + "newVersion: {}, newTime: {}", table.getId(), partition.getId(),
+                                partition.getVisibleVersion(), partition.getVisibleVersionTime(),
+                                servingPartition.getVisibleVersion(), servingPartition.getVisibleVersionTime());
+                    }
+                    partition.setVisibleVersionAndTime(servingPartition.getVisibleVersion(),
+                            servingPartition.getVisibleVersionTime());
+                    // set tablet stats
+                    setTabletStats(table.getId(), partition, servingPartition);
+                }
+            }
+        }
+        LOG.info("post process cloud metadata for checkpoint finished. cost {} ms", System.currentTimeMillis() - start);
+    }
+
+    private void setTabletStats(long tableId, Partition partition, Partition servingPartition) {
+        for (MaterializedIndex index : partition.getMaterializedIndices(IndexExtState.VISIBLE)) {
+            MaterializedIndex servingIndex = servingPartition.getIndex(index.getId());
+            if (servingIndex == null) {
+                LOG.warn("serving index is null. tableId: {}, partitionId: {}, indexId: {}", tableId, partition.getId(),
+                        index.getId());
+                continue;
+            }
+            for (Tablet tablet : index.getTablets()) {
+                Tablet servingTablet = servingIndex.getTablet(tablet.getId());
+                if (servingTablet == null) {
+                    LOG.warn("serving tablet is null. tableId: {}, partitionId: {}, indexId: {}, tabletId: {}", tableId,
+                            partition.getId(), index.getId(), tablet.getId());
+                    continue;
+                }
+                for (Replica replica : tablet.getReplicas()) {
+                    Replica servingReplica = servingTablet.getReplicaById(replica.getId());
+                    if (servingReplica == null) {
+                        LOG.warn("serving replica is null. tableId: {}, partitionId: {}, indexId: {}, tabletId: {}, "
+                                        + "replicaId: {}", tableId, partition.getId(), index.getId(), tablet.getId(),
+                                replica.getId());
+                        continue;
+                    }
+                    replica.setDataSize(servingReplica.getDataSize());
+                    replica.setRowsetCount(servingReplica.getRowsetCount());
+                    replica.setSegmentCount(servingReplica.getSegmentCount());
+                    replica.setRowCount(servingReplica.getRowCount());
+                    replica.setLocalInvertedIndexSize(servingReplica.getLocalInvertedIndexSize());
+                    replica.setLocalSegmentSize(servingReplica.getLocalSegmentSize());
+                }
+            }
+        }
     }
 }
