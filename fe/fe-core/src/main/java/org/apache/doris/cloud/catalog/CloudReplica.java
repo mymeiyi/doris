@@ -77,8 +77,8 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
      * The index of {@link org.apache.doris.catalog.CloudTabletStatMgr#DEFAULT_INTERVAL_LADDER_MS} array.
      * Used to control the interval of getting tablet stats.
      * When get tablet stats:
-     * if the stats is stale, will update this index to next value to get stats less frequently;
-     * if the stats is fresh, will update this index to 0 to get stats more frequently.
+     * if the stats is unchanged, will update this index to next value to get stats less frequently;
+     * if the stats is changed, will update this index to 0 to get stats more frequently.
      */
     @Getter
     @Setter

@@ -62,7 +62,10 @@ import java.util.stream.Collectors;
 
 /*
  * CloudTabletStatMgr is for collecting tablet(replica) statistics from backends.
- * Each FE will collect by itself.
+ * Config.cloud_get_tablet_stats_version:
+ * 1: Each FE will collect by itself.
+ * 2: Master FE collects active tablet stats and pushes to followers and observers,
+ *    and each FE will collect tablet stats by interval ladder.
  */
 public class CloudTabletStatMgr extends MasterDaemon {
     private static final Logger LOG = LogManager.getLogger(CloudTabletStatMgr.class);
