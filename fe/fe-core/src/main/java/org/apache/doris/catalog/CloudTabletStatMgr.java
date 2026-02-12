@@ -107,15 +107,15 @@ public class CloudTabletStatMgr extends MasterDaemon {
         int version = Config.cloud_get_tablet_stats_version;
         LOG.info("cloud tablet stat begin with version: {}", version);
 
+        // version1: get all tablet stats
         if (version == 1) {
             this.activeTablets.get().clear();
-            // get all tablet stats
             List<Long> dbIds = getAllTabletStats(null);
             updateStatInfo(dbIds);
             return;
         }
 
-        // get stats for active tablets
+        // version2: get stats for active tablets
         Set<Long> copiedTablets = activeTablets.getAndSet(ConcurrentHashMap.newKeySet());
         getActiveTabletStats(copiedTablets);
 
