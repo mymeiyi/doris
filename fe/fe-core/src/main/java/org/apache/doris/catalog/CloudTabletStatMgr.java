@@ -194,7 +194,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
         } // end for dbs
 
         if (builder.getTabletIdxCount() > 0) {
-            futures.add(submitGetTabletStatsTask(builder.build(), false));
+            futures.add(submitGetTabletStatsTask(builder.build(), filter == null));
         }
 
         try {
@@ -567,7 +567,7 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
     // follower and observer FE receive sync tablet stats rpc from master FE
     public void syncTabletStats(GetTabletStatsResponse response) {
-        if (response.getTabletStatsList().isEmpty()) {
+        if (Config.cloud_get_tablet_stats_version == 1 || response.getTabletStatsList().isEmpty()) {
             return;
         }
         SYNC_TABLET_STATS_THREAD_POOL.submit(() -> {
