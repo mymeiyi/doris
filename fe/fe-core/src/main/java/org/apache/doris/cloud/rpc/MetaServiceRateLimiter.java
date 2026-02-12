@@ -179,7 +179,7 @@ public class MetaServiceRateLimiter {
         }
     }
 
-    public void release(String methodName) {
+    /*public void release(String methodName) {
         if (!Config.meta_service_rpc_rate_limit_enabled) {
             return;
         }
@@ -188,9 +188,9 @@ public class MetaServiceRateLimiter {
         if (limiter != null) {
             limiter.release();
         }
-    }
+    }*/
 
-    protected class MethodRateLimiter {
+    protected static class MethodRateLimiter {
         private final String methodName;
         private volatile int maxWaiting;
         private final RateLimiter rateLimiter;
@@ -220,7 +220,7 @@ public class MetaServiceRateLimiter {
                 boolean acquired = rateLimiter.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
 
                 if (!acquired) {
-                    release();
+                    // release();
                     if (MetricRepo.isInit && Config.isCloudMode()) {
                         CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                     }
@@ -231,10 +231,11 @@ public class MetaServiceRateLimiter {
             } catch (RpcRateLimitException e) {
                 throw e;
             } catch (Exception e) {
-                release();
+                // release();
                 throw new RpcRateLimitException(
                     "Failed to acquire rate limit for method: " + methodName, e);
             } finally {
+                waitingSemaphore.release();
                 if (MetricRepo.isInit && Config.isCloudMode()) {
                     CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
                             .update(System.currentTimeMillis() - startTime);
@@ -242,9 +243,9 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        void release() {
+        /*void release() {
             waitingSemaphore.release();
-        }
+        }*/
 
         void updateQps(int qps) {
             rateLimiter.setRate(qps);
