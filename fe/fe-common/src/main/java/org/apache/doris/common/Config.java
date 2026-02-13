@@ -653,6 +653,10 @@ public class Config extends ConfigBase {
             "Randomly use V3 storage_format (ext_meta) for some tables in fuzzy tests to increase coverage"})
     public static boolean random_use_v3_storage_format = true;
 
+    @ConfField(mutable = true, masterOnly = true, description = {"Cloud checkpoint image 刷新的时间间隔，单位是秒。",
+            "The interval of refreshing cloud checkpoint image, in seconds."})
+    public static long cloud_checkpoint_image_refresh_seconds = 3600;
+
     @ConfField(mutable = true, masterOnly = true, description = {
             "等内部攒批真正写入完成才返回；insert into 和 stream load 默认开启攒批",
             "Wait for the internal batch to be written before returning; "
