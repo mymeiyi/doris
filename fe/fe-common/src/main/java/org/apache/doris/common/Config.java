@@ -654,6 +654,16 @@ public class Config extends ConfigBase {
     public static boolean random_use_v3_storage_format = true;
 
     @ConfField(mutable = true, masterOnly = true, description = {
+            "Cloud 模式下 checkpoint 镜像文件的过期阈值（单位秒）。"
+                    + "如果镜像文件的创建时间距今超过此值，即使没有新的 journal 也会强制生成新镜像。"
+                    + "这有助于保持镜像中的表版本、分区版本和 tablet 统计信息为最新。",
+            "The stale threshold of checkpoint image file in cloud mode (in seconds). "
+                    + "If the image file is older than this threshold, a new checkpoint will be triggered "
+                    + "even if there are no new journals. This helps keep table version, partition version, "
+                    + "and tablet stats in the image up-to-date."})
+    public static long cloud_checkpoint_image_stale_threshold_seconds = 3600;
+
+    @ConfField(mutable = true, masterOnly = true, description = {
             "等内部攒批真正写入完成才返回；insert into 和 stream load 默认开启攒批",
             "Wait for the internal batch to be written before returning; "
                     + "insert into and stream load use group commit by default."})
