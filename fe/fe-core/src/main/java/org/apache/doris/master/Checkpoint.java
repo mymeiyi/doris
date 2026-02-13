@@ -126,8 +126,8 @@ public class Checkpoint extends MasterDaemon {
                 // No new finalized journals beyond the latest image.
                 // But in cloud mode, we may still want to force a checkpoint if the latest image file is too old.
                 // This helps that image can keep the newer table version, partition version, tablet stats.
-                LOG.info("Trigger checkpoint in cloud mode because latest image is too old. " +
-                                "latestImageSeq: {}, latestImageCreateTime: {}", imageVersion, latestImageCreateTime);
+                LOG.info("Trigger checkpoint in cloud mode because latest image is too old. "
+                        + "latestImageSeq: {}, latestImageCreateTime: {}", imageVersion, latestImageCreateTime);
             } else {
                 return;
             }

@@ -62,8 +62,14 @@ public class CloudTabletStatMgr extends MasterDaemon {
         if (cloudTableStatsList.isEmpty()) {
             // use tablet stats loaded from image to update table stats when fe start
             // avoid that the table stats is empty for a long time since getAllTabletStats may consume a long time
-            LOG.info("cloud tablet stat is empty, will update stat info of all tables");
-            updateStatInfo(Env.getCurrentInternalCatalog().getDbIds());
+            LOG.info("cloud tablet stat is empty, will update stat info of all tables, db num: {}",
+                    Env.getCurrentInternalCatalog().getDbIds().size());
+            try {
+                updateStatInfo(Env.getCurrentInternalCatalog().getDbIds());
+            } catch (Throwable e) {
+                LOG.warn("failed to update stat info of all tables when cloud tablet stat is empty", e);
+            }
+            LOG.info("finish cloud tablet stat is empty");
         }
         LOG.info("cloud tablet stat begin");
         List<Long> dbIds = getAllTabletStats();
