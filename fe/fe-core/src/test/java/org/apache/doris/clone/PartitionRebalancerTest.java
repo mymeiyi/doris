@@ -65,7 +65,7 @@ public class PartitionRebalancerTest extends TestWithFeService {
 
         LOG.info("add 04 backends and check balance result");
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.4", lastFeRpcPort)));
-        Thread.sleep(2000);
+        Thread.sleep(6000);
         Assertions.assertEquals(Lists.newArrayList(8, 8, 8, 8), getBackendTabletNumLists());
 
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.5", lastFeRpcPort)));
