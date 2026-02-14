@@ -491,9 +491,11 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         // 1. update rowCountfor AnalysisManager
         Map<Long, Long> updatedRows = new HashMap<>();
         for (TableStatsPB tableStats : commitTxnResponse.getTableStatsList()) {
-            LOG.info("Update RowCount for AnalysisManager. transactionId:{}, table_id:{}, updated_row_count:{}",
-                    txnId, tableStats.getTableId(), tableStats.getUpdatedRowCount());
-            updatedRows.put(tableStats.getTableId(), tableStats.getUpdatedRowCount());
+            if (tableStats.hasUpdatedRowCount()) {
+                LOG.info("Update RowCount for AnalysisManager. transactionId:{}, table_id:{}, updated_row_count:{}",
+                        txnId, tableStats.getTableId(), tableStats.getUpdatedRowCount());
+                updatedRows.put(tableStats.getTableId(), tableStats.getUpdatedRowCount());
+            }
         }
         Env env = Env.getCurrentEnv();
         env.getAnalysisManager().updateUpdatedRows(updatedRows);
@@ -539,7 +541,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         long dbId = commitTxnResponse.getTxnInfo().getDbId();
         long txnId = commitTxnResponse.getTxnInfo().getTxnId();
         int totalPartitionNum = commitTxnResponse.getPartitionIdsList().size();
-        if (totalPartitionNum == 0 && commitTxnResponse.getTableVersionsList().isEmpty()) {
+        if (totalPartitionNum == 0 && commitTxnResponse.getTableStatsList().isEmpty()) {
             return Collections.emptyMap();
         }
         Env env = Env.getCurrentEnv();
@@ -574,19 +576,17 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             partitionVersionMap.put(partition, Pair.of(version, commitTxnResponse.getVersionUpdateTimeMs()));
         }
         // collect table versions
-        Preconditions.checkState(
-                commitTxnResponse.getTablesList().size() == commitTxnResponse.getTableVersionsList().size(),
-                "table num=" + commitTxnResponse.getTablesList().size()
-                        + " not equal to table version num=" + commitTxnResponse.getTableVersionsList().size());
         Database db = env.getInternalCatalog().getDb(dbId).get();
-        List<Pair<OlapTable, Long>> tableVersions = new ArrayList<>(commitTxnResponse.getTablesList().size());
-        for (int i = 0; i < commitTxnResponse.getTablesList().size(); i++) {
-            Long tableId = commitTxnResponse.getTablesList().get(i);
-            Table table = db.getTableNullable(tableId);
+        List<Pair<OlapTable, Long>> tableVersions = new ArrayList<>(commitTxnResponse.getTableStatsList().size());
+        for (TableStatsPB tableStats : commitTxnResponse.getTableStatsList()) {
+            if (!tableStats.hasTableVersion()) {
+                continue;
+            }
+            Table table = db.getTableNullable(tableStats.getTableId());
             if (table == null || !table.isManagedTable()) {
                 continue;
             }
-            tableVersions.add(Pair.of((OlapTable) table, commitTxnResponse.getTableVersionsList().get(i)));
+            tableVersions.add(Pair.of((OlapTable) table, tableStats.getTableVersion()));
         }
         Collections.sort(tableVersions, Comparator.comparingLong(o -> o.first.getId()));
         // update partition version and table version

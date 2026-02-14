@@ -244,7 +244,7 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
     private volatile long lastTableVersionCachedTimeMs = 0;
     private volatile long cachedTableVersion = -1;
 
-    private ReadWriteLock versionLock = Config.isCloudMode() ? new ReentrantReadWriteLock() : null;
+    private ReadWriteLock versionLock = Config.isCloudMode() ? new ReentrantReadWriteLock(true) : null;
 
     public OlapTable() {
         // for persist

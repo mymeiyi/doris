@@ -998,6 +998,7 @@ message SubTxnInfo {
 message TableStatsPB {
     optional int64 table_id = 1;
     optional int64 updated_row_count = 2;
+    optional int64 table_version = 3;
 }
 
 message CommitTxnResponse {
@@ -1009,9 +1010,6 @@ message CommitTxnResponse {
     repeated int64 versions = 5;
     repeated TableStatsPB table_stats = 6;
     optional int64 version_update_time_ms = 7;
-    // table_id --> version
-    repeated int64 tables = 8;
-    repeated int64 table_versions = 9;
 }
 
 message AbortTxnRequest {

@@ -1785,6 +1785,8 @@ void MetaServiceImpl::commit_txn_immediately(
             response->add_versions(new_version);
         }
 
+        // table_id -> version, for response
+        std::map<int64_t, int64_t> table_version_map;
         // Save table versions
         for (auto& i : table_id_tablet_ids) {
             if (is_versioned_read) {
@@ -1819,8 +1821,7 @@ void MetaServiceImpl::commit_txn_immediately(
                     msg = ss.str();
                     return;
                 }
-                response->add_tables(table_id);
-                response->add_table_versions(table_version + 1);
+                table_version_map[table_id] = table_version + 1;
             }
             update_table_version(txn.get(), instance_id, db_id, i.first);
             commit_txn_log.add_table_ids(i.first);
@@ -1974,8 +1975,6 @@ void MetaServiceImpl::commit_txn_immediately(
 
         // set table versions in response
         if (is_versioned_read) {
-            DCHECK_EQ(response->tables().size(), 0);
-            DCHECK_EQ(response->table_versions().size(), 0);
             Versionstamp vs;
             err = txn->get_versionstamp(&vs);
             if (err != TxnErrorCode::TXN_OK) {
@@ -1988,8 +1987,7 @@ void MetaServiceImpl::commit_txn_immediately(
             int64_t version = vs.version();
             for (auto& i : table_id_tablet_ids) {
                 int64_t table_id = i.first;
-                response->add_tables(table_id);
-                response->add_table_versions(version);
+                table_version_map[table_id] = version;
             }
         }
 
@@ -1998,15 +1996,17 @@ void MetaServiceImpl::commit_txn_immediately(
         std::vector<int64_t> base_tablet_ids(request->base_tablet_ids().begin(),
                                              request->base_tablet_ids().end());
         calc_table_stats(tablet_ids, tablet_stats, table_stats, base_tablet_ids);
-        for (const auto& pair : table_stats) {
+        for (const auto& pair : table_version_map) {
             TableStatsPB* stats_pb = response->add_table_stats();
             auto table_id = pair.first;
-            auto stats = pair.second;
-            get_pb_from_tablestats(stats, stats_pb);
             stats_pb->set_table_id(table_id);
-            VLOG_DEBUG << "Add TableStats to CommitTxnResponse. txn_id=" << txn_id
-                       << " table_id=" << table_id
-                       << " updated_row_count=" << stats_pb->updated_row_count();
+            stats_pb->set_table_version(pair.second);
+            if (auto it = table_stats.find(table_id); it != table_stats.end()) {
+                get_pb_from_tablestats(it->second, stats_pb);
+                VLOG_DEBUG << "Add TableStats to CommitTxnResponse. txn_id=" << txn_id
+                           << " table_id=" << table_id
+                           << " updated_row_count=" << stats_pb->updated_row_count();
+            }
         }
         response->mutable_txn_info()->CopyFrom(txn_info);
         TEST_SYNC_POINT_CALLBACK("commit_txn_immediately::finish", &code);
@@ -2474,6 +2474,8 @@ void MetaServiceImpl::commit_txn_eventually(
             }
         }
 
+        // table_id -> version, for response
+        std::map<int64_t, int64_t> table_version_map;
         // Save table versions
         for (auto& i : table_id_tablet_ids) {
             if (is_versioned_read) {
@@ -2508,8 +2510,7 @@ void MetaServiceImpl::commit_txn_eventually(
                     msg = ss.str();
                     return;
                 }
-                response->add_tables(table_id);
-                response->add_table_versions(table_version + 1);
+                table_version_map[table_id] = table_version + 1;
             }
             update_table_version(txn.get(), instance_id, db_id, i.first);
             commit_txn_log.add_table_ids(i.first);
@@ -2550,8 +2551,6 @@ void MetaServiceImpl::commit_txn_eventually(
 
         // set table versions in response
         if (is_versioned_read) {
-            DCHECK_EQ(response->tables().size(), 0);
-            DCHECK_EQ(response->table_versions().size(), 0);
             Versionstamp vs;
             err = txn->get_versionstamp(&vs);
             if (err != TxnErrorCode::TXN_OK) {
@@ -2564,8 +2563,7 @@ void MetaServiceImpl::commit_txn_eventually(
             int64_t version = vs.version();
             for (auto& i : table_id_tablet_ids) {
                 int64_t table_id = i.first;
-                response->add_tables(table_id);
-                response->add_table_versions(version);
+                table_version_map[table_id] = version;
             }
         }
 
@@ -2599,15 +2597,17 @@ void MetaServiceImpl::commit_txn_eventually(
         std::vector<int64_t> base_tablet_ids(request->base_tablet_ids().begin(),
                                              request->base_tablet_ids().end());
         calc_table_stats(tablet_ids, tablet_stats, table_stats, base_tablet_ids);
-        for (const auto& pair : table_stats) {
+        for (const auto& pair : table_version_map) {
             TableStatsPB* stats_pb = response->add_table_stats();
             auto table_id = pair.first;
-            auto stats = pair.second;
-            get_pb_from_tablestats(stats, stats_pb);
             stats_pb->set_table_id(table_id);
-            VLOG_DEBUG << "Add TableStats to CommitTxnResponse. txn_id=" << txn_id
-                       << " table_id=" << table_id
-                       << " updated_row_count=" << stats_pb->updated_row_count();
+            stats_pb->set_table_version(pair.second);
+            if (auto it = table_stats.find(table_id); it != table_stats.end()) {
+                get_pb_from_tablestats(it->second, stats_pb);
+                VLOG_DEBUG << "Add TableStats to CommitTxnResponse. txn_id=" << txn_id
+                           << " table_id=" << table_id
+                           << " updated_row_count=" << stats_pb->updated_row_count();
+            }
         }
 
         // txn set visible for fe callback
@@ -2960,6 +2960,8 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
             response->add_versions(new_version);
         }
 
+        // table_id -> version, for response
+        std::map<int64_t, int64_t> table_version_map;
         // Save table versions
         for (auto& i : table_id_tablet_ids) {
             if (is_versioned_read) {
@@ -2994,8 +2996,7 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
                     msg = ss.str();
                     return;
                 }
-                response->add_tables(table_id);
-                response->add_table_versions(table_version + 1);
+                table_version_map[table_id] = table_version + 1;
             }
             update_table_version(txn.get(), instance_id, db_id, i.first);
             commit_txn_log.add_table_ids(i.first);
@@ -3135,8 +3136,6 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
 
         // set table versions in response
         if (is_versioned_read) {
-            DCHECK_EQ(response->tables().size(), 0);
-            DCHECK_EQ(response->table_versions().size(), 0);
             Versionstamp vs;
             err = txn->get_versionstamp(&vs);
             if (err != TxnErrorCode::TXN_OK) {
@@ -3149,8 +3148,7 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
             int64_t version = vs.version();
             for (auto& i : table_id_tablet_ids) {
                 int64_t table_id = i.first;
-                response->add_tables(table_id);
-                response->add_table_versions(version);
+                table_version_map[table_id] = version;
             }
         }
 
@@ -3159,15 +3157,17 @@ void MetaServiceImpl::commit_txn_with_sub_txn(const CommitTxnRequest* request,
         std::vector<int64_t> base_tablet_ids(request->base_tablet_ids().begin(),
                                              request->base_tablet_ids().end());
         calc_table_stats(tablet_ids, tablet_stats, table_stats, base_tablet_ids);
-        for (const auto& pair : table_stats) {
+        for (const auto& pair : table_version_map) {
             TableStatsPB* stats_pb = response->add_table_stats();
             auto table_id = pair.first;
-            auto stats = pair.second;
-            get_pb_from_tablestats(stats, stats_pb);
             stats_pb->set_table_id(table_id);
-            VLOG_DEBUG << "Add TableStats to CommitTxnResponse. txn_id=" << txn_id
-                       << " table_id=" << table_id
-                       << " updated_row_count=" << stats_pb->updated_row_count();
+            stats_pb->set_table_version(table_version_map[table_id]);
+            if (auto it = table_stats.find(table_id); it != table_stats.end()) {
+                get_pb_from_tablestats(it->second, stats_pb);
+                VLOG_DEBUG << "Add TableStats to CommitTxnResponse. txn_id=" << txn_id
+                           << " table_id=" << table_id
+                           << " updated_row_count=" << stats_pb->updated_row_count();
+            }
         }
 
         response->mutable_txn_info()->CopyFrom(txn_info);

@@ -418,6 +418,8 @@ public class PartitionsProcDir implements ProcDirInterface {
             LOG.info("cloud force sync version for table: {}, partitionNum: {}", olapTable, partitionIds.size());
             long dbId = olapTable.getDatabase().getId();
             // sync table version
+            // Note: does not update table version cache to avoid that when getting partition version fails,
+            // the table version cache is updated but partition version cache is not updated.
             List<Long> tableVersions = OlapTable.getVisibleVersionFromMeta(Lists.newArrayList(dbId),
                     Lists.newArrayList(olapTable.getId()));
             List<Pair<OlapTable, Long>> tableVersionMap = Lists.newArrayList(Pair.of(olapTable, tableVersions.get(0)));
@@ -425,7 +427,13 @@ public class PartitionsProcDir implements ProcDirInterface {
             List<CloudPartition> partitions = partitionIds.stream()
                     .map(id -> (CloudPartition) (olapTable.getPartition(id))).collect(Collectors.toList());
             try {
-                partitionVersions = CloudPartition.getSnapshotVisibleVersionFromMs(partitions, false);
+                partitionVersions = new ArrayList<>(partitionIds.size());
+                int batchSize = Config.cloud_get_version_task_batch_size;
+                for (int start = 0; start < partitions.size(); start += batchSize) {
+                    int end = Math.min(start + batchSize, partitions.size());
+                    List<CloudPartition> batch = partitions.subList(start, end);
+                    partitionVersions.addAll(CloudPartition.getSnapshotVisibleVersionFromMs(batch, false));
+                }
             } catch (RpcException e) {
                 LOG.warn("get partition versions failed for table: {}", olapTable, e);
                 throw new AnalysisException("get partition versions failed", e);

@@ -59,11 +59,17 @@ public class CloudFEVersionSynchronizer {
 
     // master FE send sync version rpc to other FEs
     public void pushVersionAsync(long dbId, OlapTable table, long version) {
+        if (!Config.cloud_enable_version_syncer) {
+            return;
+        }
         pushVersionAsync(dbId, Collections.singletonList(Pair.of(table, version)), Collections.emptyMap());
     }
 
     public void pushVersionAsync(long dbId, List<Pair<OlapTable, Long>> tableVersions,
             Map<CloudPartition, Pair<Long, Long>> partitionVersionMap) {
+        if (!Config.cloud_enable_version_syncer) {
+            return;
+        }
         if (tableVersions.isEmpty() && partitionVersionMap.isEmpty()) {
             return;
         }

@@ -565,6 +565,9 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
+    /**
+     * @return table version if returned by MetaService, otherwise return 0
+     */
     public long commitPartition(long dbId, long tableId, List<Long> partitionIds, List<Long> indexIds)
             throws DdlException {
         if (Config.enable_check_compatibility_mode) {
@@ -648,6 +651,9 @@ public class CloudInternalCatalog extends InternalCatalog {
         }
     }
 
+    /**
+     * @return table version if returned by MetaService, otherwise return 0
+     */
     public long commitMaterializedIndex(long dbId, long tableId, List<Long> indexIds, List<Long> partitionIds,
             boolean isCreateTable)
             throws DdlException {

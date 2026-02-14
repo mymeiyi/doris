@@ -3610,6 +3610,10 @@ public class Config extends ConfigBase {
             "Cloud table and partition version syncer interval. All frontends will perform the checking"})
     public static int cloud_version_syncer_interval_second = 20;
 
+    @ConfField(mutable = true, description = {"存算分离模式下是否启用同步 table 和 partition version 的功能",
+            "Whether to enable the function of syncing table and partition version in cloud mode"})
+    public static boolean cloud_enable_version_syncer = true;
+
     @ConfField(description = {"Get version task 的并发数", "Concurrent num of get version task."})
     public static int cloud_get_version_task_threads_num = 4;
 
@@ -3619,7 +3623,7 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true, description = {"Get version task 包含的 table 或 partition 数目的 batch size",
             "Maximal table or partition batch size of get version task."})
-    public static int cloud_get_version_task_batch_size = 4000;
+    public static int cloud_get_version_task_batch_size = 2000;
 
     @ConfField(mutable = true, description = {"schema change job 失败是否重试",
             "Whether to enable retry when a schema change job fails, default is true."})

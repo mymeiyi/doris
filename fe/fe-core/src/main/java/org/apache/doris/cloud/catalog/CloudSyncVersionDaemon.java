@@ -55,6 +55,9 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
 
     @Override
     protected void runAfterCatalogReady() {
+        if (!Config.cloud_enable_version_syncer) {
+            return;
+        }
         LOG.info("begin sync cloud table and partition version");
         Map<OlapTable, Long> tableVersionMap = syncTableVersions();
         if (!tableVersionMap.isEmpty()) {

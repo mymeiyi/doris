@@ -641,13 +641,11 @@ TEST(TxnLazyCommitTest, CommitTxnEventuallyWithoutDbIdTest) {
         ASSERT_TRUE(last_pending_txn_id_hit);
         ASSERT_TRUE(commit_txn_eventually_finish_hit);
 
-        ASSERT_EQ(res.tables().size(), 1);
-        ASSERT_EQ(res.tables()[0], table_id);
-        ASSERT_EQ(res.table_versions().size(), 1);
+        ASSERT_EQ(res.table_stats().size(), 1);
         int64_t table_version = 0;
         get_table_version(meta_service.get(), db_id, table_id, table_version);
         ASSERT_EQ(table_version, 1);
-        ASSERT_EQ(res.table_versions()[0], table_version);
+        ASSERT_EQ(res.table_stats()[0].table_version(), table_version);
     }
 
     {
@@ -940,12 +938,10 @@ TEST(TxnLazyCommitVersionedReadTest, CommitTxnEventually) {
         ASSERT_TRUE(last_pending_txn_id_hit);
         ASSERT_TRUE(commit_txn_eventually_finish_hit);
 
-        ASSERT_EQ(res.tables().size(), 1);
-        ASSERT_EQ(res.tables()[0], table_id);
-        ASSERT_EQ(res.table_versions().size(), 1);
+        ASSERT_EQ(res.table_stats().size(), 1);
         int64_t table_version = 0;
         get_table_version(meta_service.get(), db_id, table_id, table_version);
-        ASSERT_EQ(res.table_versions()[0], table_version);
+        ASSERT_EQ(res.table_stats()[0].table_version(), table_version);
     }
 
     {
@@ -1525,10 +1521,8 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase1Test) {
                                      &req, &res, nullptr);
             ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
 
-            ASSERT_EQ(res.tables().size(), 1);
-            ASSERT_EQ(res.tables()[0], table_id);
-            ASSERT_EQ(res.table_versions().size(), 1);
-            txn1_table_version = res.table_versions()[0];
+            ASSERT_EQ(res.table_stats().size(), 1);
+            txn1_table_version = res.table_stats()[0].table_version();
         }
     });
 
@@ -1581,10 +1575,8 @@ TEST(TxnLazyCommitTest, ConcurrentCommitTxnEventuallyCase1Test) {
                                      &req, &res, nullptr);
             ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
 
-            ASSERT_EQ(res.tables().size(), 1);
-            ASSERT_EQ(res.tables()[0], table_id);
-            ASSERT_EQ(res.table_versions().size(), 1);
-            txn2_table_version = res.table_versions()[0];
+            ASSERT_EQ(res.table_stats().size(), 1);
+            txn2_table_version = res.table_stats()[0].table_version();
         }
     });
 

@@ -277,7 +277,7 @@ public class CloudPartition extends Partition {
             }
             tableMap.put(partition.getTableId(), (OlapTable) table);
         }
-        List<OlapTable> tables = tableMap.values().stream().collect(Collectors.toList());
+        List<OlapTable> tables = tableMap.values().stream().collect(Collectors.toCollection(ArrayList::new));
         Collections.sort(tables, Comparator.comparingLong(o -> o.getId()));
         return tables;
     }
