@@ -773,9 +773,9 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                     Map<Long, Replica> backendMap = backingReplicaMetaTable.get(backendId);
                     if (backendMap != null) {
                         backendMap.remove(tabletId);
-                        if (backendMap.isEmpty()) {
+                        /*if (backendMap.isEmpty()) {
                             backingReplicaMetaTable.remove(backendId);
-                        }
+                        }*/
                     }
                 }
             }
@@ -825,16 +825,16 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                     LOG.debug("delete replica {} of tablet {} in backend {}",
                             replica == null ? null : replica.getId(), tabletId, backendId);
                 }
-                if (tabletMap.isEmpty()) {
+                /*if (tabletMap.isEmpty()) {
                     replicaMetaTable.remove(tabletId);
-                }
+                }*/
 
                 Map<Long, Replica> backendMap = backingReplicaMetaTable.get(backendId);
                 if (backendMap != null) {
                     backendMap.remove(tabletId);
-                    if (backendMap.isEmpty()) {
+                    /*if (backendMap.isEmpty()) {
                         backingReplicaMetaTable.remove(backendId);
-                    }
+                    }*/
                 }
             } else {
                 // this may happen when fe restart after tablet is empty(bug cause)
