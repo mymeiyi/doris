@@ -92,6 +92,22 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
             new LinkedBlockingQueue<>(Config.tablet_report_queue_size),
             new ThreadPoolExecutor.DiscardOldestPolicy());
 
+    private void show() {
+        LOG.info("====================");
+        LOG.info("Show replicaMetaTable");
+        for (Map.Entry<Long, Long2ObjectOpenHashMap<Replica>> entry1 : replicaMetaTable.entrySet()) {
+            entry1.getValue()
+                    .forEach((k, v) -> LOG.info("tablet: {}, backend: {}, replica: {}", entry1.getKey(), k, v));
+        }
+        LOG.info("====================");
+        LOG.info("Show backingReplicaMetaTable");
+        for (Map.Entry<Long, Long2ObjectOpenHashMap<Replica>> entry1 : backingReplicaMetaTable.entrySet()) {
+            entry1.getValue()
+                    .forEach((k, v) -> LOG.info("tablet: {}, backend: {}, replica {}", k, entry1.getKey(), v));
+        }
+        LOG.info("====================");
+    }
+
     public LocalTabletInvertedIndex() {
         super();
     }
@@ -111,6 +127,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                              List<TTabletMetaInfo> tabletToUpdate,
                              List<CooldownConf> cooldownConfToPush,
                              List<CooldownConf> cooldownConfToUpdate) {
+        LOG.info("tabletReport called: backendId={}, tablets={}", backendId, backendTablets.size());
         List<Pair<TabletMeta, TTabletInfo>> cooldownTablets = new ArrayList<>();
         long feTabletNum = 0;
         long stamp = readLock();
@@ -140,6 +157,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                 tabletSyncMap, tabletDeleteFromMeta, tabletFoundInMeta, tabletMigrationMap,
                 partitionVersionSyncMap, transactionsToPublish, transactionsToClear,
                 tabletToUpdate, tabletRecoveryMap, start);
+        // show();
     }
 
     /**
@@ -159,6 +177,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                                           List<TTabletMetaInfo> tabletToUpdate,
                                           List<Pair<TabletMeta, TTabletInfo>> cooldownTablets,
                                           Map<Long, Replica> replicaMetaWithBackend) {
+        LOG.info("processTabletReportAsync: backendId={}, totalTablets={}", backendId, replicaMetaWithBackend.size());
         // Calculate optimal chunk size to balance task granularity and concurrency
         // For large tablet counts (40W-50W), we want smaller chunks to maximize parallelism
         // Target: create at least threadPoolSize * 4 tasks for better load balancing
@@ -204,6 +223,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         // Wait for all tasks to complete
         CompletableFuture.allOf(tabletFutures.toArray(new CompletableFuture[0])).join();
         partitionFuture.join();
+        // show();
     }
 
     /**
@@ -221,6 +241,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                                      List<TTabletMetaInfo> tabletToUpdate,
                                      List<Pair<TabletMeta, TTabletInfo>> cooldownTablets,
                                      Map.Entry<Long, Replica> entry) {
+        LOG.info("processTabletEntry: backendId={}, tabletId={}", backendId, entry.getKey());
         long tabletId = entry.getKey();
         Replica replica = entry.getValue();
 
@@ -257,7 +278,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                                         ListMultimap<Long, Long> tabletRecoveryMap,
                                         List<TTabletMetaInfo> tabletToUpdate,
                                         List<Pair<TabletMeta, TTabletInfo>> cooldownTablets) {
-        // Check and prepare tablet meta info update
+        LOG.info("processExistingTablet: backendId={}, tabletId={}", backendId, tabletId);
         TTabletMetaInfo tabletMetaInfo = prepareTabletMetaInfo(replica, tabletMeta, backendTabletInfo);
 
         // Check if version sync is needed
@@ -314,6 +335,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
      */
     private TTabletMetaInfo prepareTabletMetaInfo(Replica replica, TabletMeta tabletMeta,
                                                    TTabletInfo backendTabletInfo) {
+        LOG.info("prepareTabletMetaInfo: tableId={}, replicaId={}", tabletMeta.getTableId(), replica.getId());
         TTabletMetaInfo tabletMetaInfo = null;
 
         // Check replica id mismatch
@@ -372,6 +394,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
      */
     private void logReplicaRecovery(Replica replica, long tabletId, long backendId,
                                      TTabletInfo backendTabletInfo) {
+        LOG.info("logReplicaRecovery: tabletId={}, backendId={}, replicaId={}", tabletId, backendId, replica.getId());
         LOG.warn("replica {} of tablet {} on backend {} need recovery. "
                         + "replica in FE: {}, report version {}, report schema hash: {}, "
                         + "is bad: {}, is version missing: {}",
@@ -386,9 +409,10 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
      * Check if storage medium migration is needed
      */
     private void checkStorageMediumMigration(long tabletId, TabletMeta tabletMeta,
-                                              TTabletInfo backendTabletInfo,
-                                              HashMap<Long, TStorageMedium> storageMediumMap,
-                                              ListMultimap<TStorageMedium, Long> tabletMigrationMap) {
+                                               TTabletInfo backendTabletInfo,
+                                               HashMap<Long, TStorageMedium> storageMediumMap,
+                                               ListMultimap<TStorageMedium, Long> tabletMigrationMap) {
+        LOG.info("checkStorageMediumMigration: tabletId={}", tabletId);
         if (Config.disable_storage_medium_check) {
             return;
         }
@@ -417,6 +441,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
      * Update replica's version count
      */
     private void updateReplicaVersionCount(Replica replica, TTabletInfo backendTabletInfo) {
+        LOG.info("updateReplicaVersionCount: replicaId={}, versionCount={}", replica.getId(), backendTabletInfo.getTotalVersionCount());
         if (backendTabletInfo.isSetTotalVersionCount()) {
             replica.setTotalVersionCount(backendTabletInfo.getTotalVersionCount());
             replica.setVisibleVersionCount(backendTabletInfo.isSetVisibleVersionCount()
@@ -429,7 +454,8 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
      * Process tablet that exists in FE but not reported by BE
      */
     private void processDeletedTablet(long backendId, long tabletId, TabletMeta tabletMeta,
-                                       ListMultimap<Long, Long> tabletDeleteFromMeta) {
+                                        ListMultimap<Long, Long> tabletDeleteFromMeta) {
+        LOG.info("processDeletedTablet: backendId={}, tabletId={}", backendId, tabletId);
         if (LOG.isDebugEnabled()) {
             LOG.debug("backend[{}] does not report tablet[{}-{}]", backendId, tabletId, tabletMeta);
         }
@@ -442,7 +468,8 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
      * Process partition versions reported by BE
      */
     private void processPartitionVersions(Map<Long, Long> backendPartitionsVersion,
-                                           Map<Long, Long> partitionVersionSyncMap) {
+                                            Map<Long, Long> partitionVersionSyncMap) {
+        LOG.info("processPartitionVersions: partitions={}", backendPartitionsVersion.size());
         for (Map.Entry<Long, Long> entry : backendPartitionsVersion.entrySet()) {
             long partitionId = entry.getKey();
             long backendVersion = entry.getValue();
@@ -495,6 +522,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     private void handleBackendTransactions(long backendId, List<Long> transactionIds, long tabletId,
             TabletMeta tabletMeta, Map<Long, SetMultimap<Long, TPartitionVersionInfo>> transactionsToPublish,
             SetMultimap<Long, Long> transactionsToClear) {
+        LOG.info("handleBackendTransactions: backendId={}, tabletId={}, transactions={}", backendId, tabletId, transactionIds.size());
         GlobalTransactionMgrIface transactionMgr = Env.getCurrentGlobalTransactionMgr();
         long partitionId = tabletMeta.getPartitionId();
         for (Long transactionId : transactionIds) {
@@ -540,6 +568,8 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     // the transactionId may be sub transaction id or transaction id
     private TPartitionVersionInfo generatePartitionVersionInfoWhenReport(TransactionState transactionState,
             long transactionId, TabletMeta tabletMeta, long partitionId) {
+        LOG.info("generatePartitionVersionInfoWhenReport: transactionId={}, tableId={}", transactionId,
+                tabletMeta.getTableId());
         TableCommitInfo tableCommitInfo;
         if (transactionState.getSubTxnIds() == null) {
             tableCommitInfo = transactionState.getTableCommitInfo(tabletMeta.getTableId());
@@ -556,6 +586,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     private void publishPartition(TransactionState transactionState, long transactionId, TabletMeta tabletMeta,
             long partitionId, Map<Long, SetMultimap<Long, TPartitionVersionInfo>> transactionsToPublish) {
+        LOG.info("publishPartition: transactionId={}, tableId={}", transactionId, tabletMeta.getTableId());
         TPartitionVersionInfo versionInfo = generatePartitionVersionInfoWhenReport(transactionState,
                 transactionId, tabletMeta, partitionId);
         if (versionInfo != null) {
@@ -572,6 +603,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     }
 
     private boolean needSync(Replica replicaInFe, TTabletInfo backendTabletInfo) {
+        LOG.info("needSync: tabletId={}, replicaId={}", backendTabletInfo.tablet_id, replicaInFe.getId());
         if (backendTabletInfo.isSetUsed() && !backendTabletInfo.isUsed()) {
             // tablet is bad, do not sync
             // it will be handled in needRecovery()
@@ -611,6 +643,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     private void handleCooldownConf(TabletMeta tabletMeta, TTabletInfo beTabletInfo,
             List<CooldownConf> cooldownConfToPush, List<CooldownConf> cooldownConfToUpdate) {
+        LOG.info("handleCooldownConf: tableId={}", tabletMeta.getTableId());
         Tablet tablet;
         try {
             OlapTable table = (OlapTable) Env.getCurrentInternalCatalog().getDbNullable(tabletMeta.getDbId())
@@ -674,13 +707,14 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     public List<Replica> getReplicas(Long tabletId) {
+        LOG.info("getReplicas: tabletId={}", tabletId);
         long stamp = readLock();
         try {
             Map<Long, Replica> replicaMap = replicaMetaTable.get(tabletId);
             if (replicaMap != null) {
                 return replicaMap.values().stream().collect(Collectors.toList());
             }
-            return Collections.emptyList();
+            return Lists.newArrayList();
         } finally {
             readUnlock(stamp);
         }
@@ -691,6 +725,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
      * in their version chain. In either case, those replicas need to be fixed by TabletScheduler.
      */
     private boolean needRecover(Replica replicaInFe, int schemaHashInFe, TTabletInfo backendTabletInfo) {
+        LOG.info("needRecover: tabletId={}, replicaId={}", backendTabletInfo.tablet_id, replicaInFe.getId());
         if (replicaInFe.getState() != ReplicaState.NORMAL) {
             // only normal replica need recover
             // case:
@@ -729,6 +764,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     public void deleteTablet(long tabletId) {
+        LOG.info("deleteTablet: tabletId={}", tabletId);
         long stamp = writeLock();
         try {
             Map<Long, Replica> replicas = replicaMetaTable.remove(tabletId);
@@ -748,12 +784,14 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                 LOG.debug("delete tablet: {}", tabletId);
             }
         } finally {
+            show();
             writeUnlock(stamp);
         }
     }
 
     @Override
     public void addReplica(long tabletId, Replica replica) {
+        LOG.info("addReplica: tabletId={}, replicaId={}, backendId={}", tabletId, replica.getId(), replica.getBackendIdWithoutException());
         long stamp = writeLock();
         try {
             long backendId = replica.getBackendIdWithoutException();
@@ -768,12 +806,14 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                         replica.getId(), tabletId, backendId);
             }
         } finally {
+            show();
             writeUnlock(stamp);
         }
     }
 
     @Override
     public void deleteReplica(long tabletId, long backendId) {
+        LOG.info("deleteReplica: tabletId={}, backendId={}", tabletId, backendId);
         long stamp = writeLock();
         try {
             Preconditions.checkState(tabletMetaMap.containsKey(tabletId),
@@ -802,12 +842,14 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
                 LOG.error("tablet[{}] contains no replica in inverted index", tabletId);
             }
         } finally {
+            show();
             writeUnlock(stamp);
         }
     }
 
     @Override
     public Replica getReplica(long tabletId, long backendId) {
+        LOG.info("getReplica: tabletId={}, backendId={}", tabletId, backendId);
         long stamp = readLock();
         try {
             Preconditions.checkState(tabletMetaMap.containsKey(tabletId),
@@ -821,13 +863,14 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     public List<Replica> getReplicasByTabletId(long tabletId) {
+        LOG.info("getReplicasByTabletId: tabletId={}", tabletId);
         long stamp = readLock();
         try {
             Map<Long, Replica> tabletMap = replicaMetaTable.get(tabletId);
             if (tabletMap != null) {
                 return Lists.newArrayList(tabletMap.values());
             }
-            return Collections.emptyList();
+            return Lists.newArrayList();
         } finally {
             readUnlock(stamp);
         }
@@ -835,6 +878,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     public Long getTabletSizeByBackendId(long backendId) {
+        LOG.info("getTabletSizeByBackendId: backendId={}", backendId);
         Long ret = 0L;
         long stamp = readLock();
         try {
@@ -850,21 +894,25 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     public List<Long> getTabletIdsByBackendId(long backendId) {
+        LOG.info("getTabletIdsByBackendId: backendId={}", backendId);
         long stamp = readLock();
         try {
             Map<Long, Replica> replicaMetaWithBackend = backingReplicaMetaTable.get(backendId);
             if (replicaMetaWithBackend != null) {
+                LOG.info("get tablet ids by backend id {}, tablet {}", backendId, replicaMetaWithBackend.keySet());
                 return Lists.newArrayList(replicaMetaWithBackend.keySet());
             }
+            LOG.info("get tablet ids by backend id {}, tablet is null", backendId);
         } finally {
             readUnlock(stamp);
         }
-        return Collections.emptyList();
+        return Lists.newArrayList();
     }
 
     @Override
     public List<Pair<Long, Long>> getTabletSizeByBackendIdAndStorageMedium(long backendId,
             TStorageMedium storageMedium) {
+        // LOG.info("getTabletSizeByBackendIdAndStorageMedium: backendId={}, medium={}", backendId, storageMedium);
         long stamp = readLock();
         try {
             Map<Long, Replica> replicaMetaWithBackend = backingReplicaMetaTable.get(backendId);
@@ -877,11 +925,12 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         } finally {
             readUnlock(stamp);
         }
-        return Collections.emptyList();
+        return Lists.newArrayList();
     }
 
     @Override
     public int getTabletNumByBackendId(long backendId) {
+        LOG.info("getTabletNumByBackendId: backendId={}", backendId);
         long stamp = readLock();
         try {
             Map<Long, Replica> replicaMetaWithBackend = backingReplicaMetaTable.get(backendId);
@@ -896,6 +945,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     public Map<TStorageMedium, Long> getReplicaNumByBeIdAndStorageMedium(long backendId) {
+        LOG.info("getReplicaNumByBeIdAndStorageMedium: backendId={}", backendId);
         Map<TStorageMedium, Long> replicaNumMap = Maps.newHashMap();
         long hddNum = 0;
         long ssdNum = 0;
@@ -921,12 +971,14 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
 
     @Override
     protected void innerClear() {
+        LOG.info("innerClear called");
         replicaMetaTable.clear();
         backingReplicaMetaTable.clear();
     }
 
     @Override
     public void setPartitionCollectInfoMap(ImmutableMap<Long, PartitionCollectInfo> partitionCollectInfoMap) {
+        LOG.info("setPartitionCollectInfoMap: size={}", partitionCollectInfoMap.size());
         this.partitionCollectInfoMap = partitionCollectInfoMap;
     }
 
@@ -934,6 +986,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     @Override
     public Map<TStorageMedium, TreeMultimap<Long, PartitionBalanceInfo>> buildPartitionInfoBySkew(
             List<Long> availableBeIds, Map<Long, Pair<TabletMove, Long>> movesInProgress) {
+        LOG.info("buildPartitionInfoBySkew: availableBeIds={}, movesInProgress={}", availableBeIds.size(), movesInProgress.size());
         Set<Long> dbIds = Sets.newHashSet();
         Set<Long> tableIds = Sets.newHashSet();
         Set<Long> partitionIds = Sets.newHashSet();
@@ -1049,6 +1102,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     @VisibleForTesting
     @Override
     public Table<Long, Long, Replica> getReplicaMetaTable() {
+        LOG.info("getReplicaMetaTable called");
         long stamp = readLock();
         try {
             Table<Long, Long, Replica> table = HashBasedTable.create();
@@ -1067,6 +1121,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     @VisibleForTesting
     @Override
     public Table<Long, Long, Replica> getBackingReplicaMetaTable() {
+        LOG.info("getBackingReplicaMetaTable called");
         long stamp = readLock();
         try {
             Table<Long, Long, Replica> table = HashBasedTable.create();

@@ -23,13 +23,17 @@ import org.apache.doris.utframe.TestWithFeService;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 public class PartitionRebalancerTest extends TestWithFeService {
+    private static final Logger LOG = LogManager.getLogger(PartitionRebalancerTest.class);
 
     @Override
     protected void beforeCreatingConnectContext() throws Exception {
@@ -59,9 +63,10 @@ public class PartitionRebalancerTest extends TestWithFeService {
         Thread.sleep(2000);
         Assertions.assertEquals(Sets.newHashSet(11, 11, 10), getBackendTabletNums());
 
+        LOG.info("add 04 backends and check balance result");
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.4", lastFeRpcPort)));
         Thread.sleep(2000);
-        Assertions.assertEquals(Sets.newHashSet(8, 8, 8, 8), getBackendTabletNums());
+        Assertions.assertEquals(Lists.newArrayList(8, 8, 8, 8), getBackendTabletNumLists());
 
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.5", lastFeRpcPort)));
         Thread.sleep(2000);
@@ -72,6 +77,12 @@ public class PartitionRebalancerTest extends TestWithFeService {
         return Env.getCurrentSystemInfo().getAllBackendIds().stream()
                 .map(beId -> Env.getCurrentInvertedIndex().getTabletIdsByBackendId(beId).size())
                 .collect(Collectors.toSet());
+    }
+
+    private List<Integer> getBackendTabletNumLists() {
+        return Env.getCurrentSystemInfo().getAllBackendIds().stream()
+                .map(beId -> Env.getCurrentInvertedIndex().getTabletIdsByBackendId(beId).size())
+                .collect(Collectors.toList());
     }
 
 }
