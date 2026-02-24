@@ -647,7 +647,7 @@ void TxnLazyCommitTask::commit() {
     if (true) {
         code_ = MetaServiceCode::INVALID_ARGUMENT;
         std::stringstream ss;
-        ss << "force make lazy committer error, txn_id=" << txn_id;
+        ss << "force make lazy committer error, txn_id=" << txn_id_;
         msg_ = ss.str();
         LOG(WARNING) << msg_;
         return;
