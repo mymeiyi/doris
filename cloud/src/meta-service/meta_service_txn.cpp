@@ -2146,6 +2146,13 @@ void MetaServiceImpl::commit_txn_eventually(
         int64_t last_pending_txn_id = 0;
         std::unique_ptr<Transaction> txn;
         err = txn_kv_->create_txn(&txn);
+        if (true) {
+            code = cast_as<ErrCategory::CREATE>(err);
+            ss << "force make lazy committer error, txn_id=" << txn_id << " err=" << err;
+            msg = ss.str();
+            LOG(WARNING) << msg;
+            return;
+        }
         if (err != TxnErrorCode::TXN_OK) {
             code = cast_as<ErrCategory::CREATE>(err);
             ss << "failed to create txn, txn_id=" << txn_id << " err=" << err;
