@@ -644,6 +644,14 @@ void TxnLazyCommitTask::commit() {
         g_bvar_txn_lazy_committer_committing_duration << sw.elapsed_us();
     };
 
+    if (true) {
+        code_ = MetaServiceCode::INVALID_ARGUMENT;
+        std::stringstream ss;
+        ss << "force make lazy committer error, txn_id=" << txn_id;
+        msg_ = ss.str();
+        LOG(WARNING) << msg_;
+        return;
+    }
     int64_t db_id;
     get_txn_db_id(txn_kv_.get(), instance_id_, txn_id_, code_, msg_, &db_id, nullptr);
     if (code_ != MetaServiceCode::OK) {
