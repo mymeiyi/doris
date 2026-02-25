@@ -18,12 +18,14 @@
 package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.cloud.proto.Cloud;
+import org.apache.doris.cloud.proto.Cloud.GetVersionResponse;
 import org.apache.doris.common.Config;
 import org.apache.doris.metric.CloudMetrics;
 import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.rpc.RpcException;
 
 import com.google.common.collect.Maps;
+import com.google.common.util.concurrent.ListenableFuture;
 import io.grpc.StatusRuntimeException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -312,43 +314,39 @@ public class MetaServiceProxy {
         try {
             acquired = MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
             client = getProxy();
-            Future<Cloud.GetVersionResponse> future = client.getVisibleVersionAsync(request);
-            if (future instanceof com.google.common.util.concurrent.ListenableFuture) {
-                com.google.common.util.concurrent.ListenableFuture<Cloud.GetVersionResponse> listenableFuture =
-                        (com.google.common.util.concurrent.ListenableFuture<Cloud.GetVersionResponse>) future;
-                MetaServiceClient finalClient = client;
-                boolean finalAcquired = acquired;
-                com.google.common.util.concurrent.Futures.addCallback(listenableFuture,
-                        new com.google.common.util.concurrent.FutureCallback<Cloud.GetVersionResponse>() {
-                            @Override
-                            public void onSuccess(Cloud.GetVersionResponse result) {
-                                if (finalAcquired) {
-                                    MetaServiceRateLimiter.getInstance().release(methodName, cost);
-                                }
-                                if (MetricRepo.isInit && Config.isCloudMode()) {
-                                    CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
-                                            .update(System.currentTimeMillis() - startTime);
-                                }
+            ListenableFuture<GetVersionResponse> future = client.getVisibleVersionAsync(request);
+            MetaServiceClient finalClient = client;
+            boolean finalAcquired = acquired;
+            com.google.common.util.concurrent.Futures.addCallback(future,
+                    new com.google.common.util.concurrent.FutureCallback<Cloud.GetVersionResponse>() {
+                        @Override
+                        public void onSuccess(Cloud.GetVersionResponse result) {
+                            if (finalAcquired) {
+                                MetaServiceRateLimiter.getInstance().release(methodName, cost);
+                            }
+                            if (MetricRepo.isInit && Config.isCloudMode()) {
+                                CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
+                                        .update(System.currentTimeMillis() - startTime);
+                            }
+                        }
+
+                        @Override
+                        public void onFailure(Throwable t) {
+                            if (finalAcquired) {
+                                MetaServiceRateLimiter.getInstance().release(methodName, cost);
                             }
 
-                            @Override
-                            public void onFailure(Throwable t) {
-                                if (finalAcquired) {
-                                    MetaServiceRateLimiter.getInstance().release(methodName, cost);
-                                }
-
-                                if (MetricRepo.isInit && Config.isCloudMode()) {
-                                    CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
-                                    CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
-                                    CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
-                                            .update(System.currentTimeMillis() - startTime);
-                                }
-                                if (finalClient != null) {
-                                    finalClient.shutdown(true);
-                                }
+                            if (MetricRepo.isInit && Config.isCloudMode()) {
+                                CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
+                                CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
+                                CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
+                                        .update(System.currentTimeMillis() - startTime);
                             }
-                        }, com.google.common.util.concurrent.MoreExecutors.directExecutor());
-            }
+                            if (finalClient != null) {
+                                finalClient.shutdown(true);
+                            }
+                        }
+                    }, com.google.common.util.concurrent.MoreExecutors.directExecutor());
             return future;
         } catch (Exception e) {
             if (acquired) {

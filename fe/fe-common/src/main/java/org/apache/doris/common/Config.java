@@ -3634,8 +3634,10 @@ public class Config extends ConfigBase {
             "Whether to enable rate limiting for meta-service RPC calls"})
     public static boolean meta_service_rpc_rate_limit_enabled = true;
 
-    @ConfField(mutable = true, description = {"默认每个方法每个 CPU 内核的 QPS 限制（每秒请求数），值为 -1 表示不限制",
-            "Default QPS limit for each method (requests per second) in each cpu core, -1 means no limit"})
+    @ConfField(mutable = true, description = {
+            "默认每个方法每个 CPU 内核的 QPS 限制（每秒请求数），值为非正数（<= 0） 表示不限制",
+            "Default QPS limit for each method (requests per second) in each cpu core, "
+                    + "non-positive value (<= 0) means no limit"})
     public static int meta_service_rpc_rate_limit_default_qps_per_core = 10;
 
     @ConfField(mutable = true, description = {"每个方法的最大等待请求数，超过此数量的请求将直接拒绝",
@@ -3647,16 +3649,18 @@ public class Config extends ConfigBase {
     public static long meta_service_rpc_rate_limit_wait_timeout_ms = 5000;
 
     @ConfField(mutable = true, description = {"访问 meta service 的各 RPC 方法的 QPS 在每个 CPU 内核的限制配置，"
-            + "格式: method1:qps1;method2:qps2，例如: getVersion:100;getTabletStats:50",
+            + "格式: method1:qps1;method2:qps2，例如: getVersion:100;getTabletStats:50, 值为非正数（<= 0） 表示不限制",
             "QPS limit config per rpc method to meta service in per cpu core, "
-                    + "format: method1:qps1;method2:qps2, e.g.: getVersion:100;getTabletStats:50"})
+                    + "format: method1:qps1;method2:qps2, e.g.: getVersion:100;getTabletStats:50, "
+                    + "non-positive value (<= 0) means no limit"})
     public static String meta_service_rpc_rate_limit_qps_per_core_config = "";
 
     @ConfField(mutable = true, description = {
             "各方法的 cost 在每个 CPU 内核的限制配置，格式: method1:cost1;method2:cost2，"
-                    + "例如: getVersion:1000;getTabletStats:50。cost 的计算方式是预估 rpc 需要访问的 kv 数",
+                    + "例如: getVersion:1000;getTabletStats:50，值为非正数（<= 0） 表示不限制。"
+                    + "cost 的计算方式是预估 rpc 需要访问的 kv 数",
             "Cost limit config per method in per cpu core, format: method1:cost1;method2:cost2, "
-                    + "e.g.: getVersion:1000;getTabletStats:50. "
+                    + "e.g.: getVersion:1000;getTabletStats:50, non-positive value (<= 0) means no limit. "
                     + "The cost is calculated based on the estimated number of kv accesses required by the rpc"})
     public static String meta_service_rpc_cost_limit_per_core_config = "getVersion:5000";
 

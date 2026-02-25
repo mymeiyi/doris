@@ -29,7 +29,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -268,14 +267,29 @@ public class MetaServiceRateLimiter {
 
         boolean acquire(int cost) throws RpcRateLimitException {
             long startAt = System.nanoTime();
+            boolean acquired = acquireCostLimit(cost);
             try {
-                boolean acquired = acquireCostLimit(cost);
                 acquireQpsRateLimit();
                 return acquired;
+            } catch (RpcRateLimitException | RuntimeException e) {
+                if (acquired) {
+                    try {
+                        release(cost);
+                    } catch (Exception releaseEx) {
+                        LOG.warn("Failed to release cost reservation for method {} after QPS limit failure",
+                                methodName, releaseEx);
+                    }
+                }
+                throw e;
             } finally {
+                long durationNs = System.nanoTime() - startAt;
                 SummaryProfile summaryProfile = SummaryProfile.getSummaryProfile(ConnectContext.get());
                 if (summaryProfile != null) {
-                    summaryProfile.addWaitMsRpcLimiterTime(System.nanoTime() - startAt);
+                    summaryProfile.addWaitMsRpcRateLimiterTime(durationNs);
+                }
+                if (MetricRepo.isInit && Config.isCloudMode()) {
+                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
+                            .update(TimeUnit.NANOSECONDS.toMillis(durationNs));
                 }
             }
         }
@@ -285,10 +299,14 @@ public class MetaServiceRateLimiter {
                 return false;
             }
             boolean acquired = false;
-            long startTime = System.currentTimeMillis();
             try {
                 acquired = costLimiter.acquire(cost, Config.meta_service_rpc_rate_limit_wait_timeout_ms,
                         TimeUnit.MILLISECONDS);
+                if (!acquired) {
+                    throw new RpcRateLimitException(
+                            "Meta service RPC rate limit timeout while waiting for cost limit for method: "
+                                    + methodName + ", cost: " + cost);
+                }
             } catch (InterruptedException e) {
                 throw new RpcRateLimitException(
                         "Meta service RPC rate limit interrupted while waiting for cost limit for method: "
@@ -298,13 +316,6 @@ public class MetaServiceRateLimiter {
                     if (!acquired) {
                         CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                     }
-                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
-                            .update(System.currentTimeMillis() - startTime);
-                }
-                if (!acquired) {
-                    throw new RpcRateLimitException(
-                            "Meta service RPC rate limit timeout while waiting for cost limit for method: "
-                                    + methodName + ", cost: " + cost);
                 }
             }
             return acquired;
@@ -323,7 +334,6 @@ public class MetaServiceRateLimiter {
                     + ", too many waiting requests (max=" + maxWaitRequestNum + ")");
             }
 
-            long startTime = System.currentTimeMillis();
             try {
                 long timeoutMs = Config.meta_service_rpc_rate_limit_wait_timeout_ms;
                 boolean acquired = rateLimiter.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
@@ -343,10 +353,6 @@ public class MetaServiceRateLimiter {
                     "Failed to acquire rate limit for method: " + methodName, e);
             } finally {
                 waitingSemaphore.release();
-                if (MetricRepo.isInit && Config.isCloudMode()) {
-                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
-                            .update(System.currentTimeMillis() - startTime);
-                }
             }
         }
 
@@ -362,11 +368,13 @@ public class MetaServiceRateLimiter {
                 waitingSemaphore = null;
                 return;
             }
-            if (maxWaitRequestNum != this.maxWaitRequestNum) {
+            if (this.waitingSemaphore == null || maxWaitRequestNum != this.maxWaitRequestNum) {
                 this.maxWaitRequestNum = maxWaitRequestNum;
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
             }
-            if (qps != rateLimiter.getRate()) {
+            if (rateLimiter == null) {
+                rateLimiter = RateLimiter.create(qps);
+            } else if (qps != rateLimiter.getRate()) {
                 rateLimiter.setRate(qps);
             }
             LOG.info("Updated rate limiter for method {}: qps={}", methodName, qps);
@@ -430,11 +438,9 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        boolean acquire(int cost, long timeout, TimeUnit unit) throws InterruptedException {
+        boolean acquire(int cost, long timeout, TimeUnit unit) throws InterruptedException, RpcRateLimitException {
             if (cost > limit) {
-                cost = limit;
-                LOG.warn("Method: {}, cost: {} exceeds the limit: {}, adjust to limit for acquire", methodName, cost,
-                        limit);
+                throw new RpcRateLimitException("Cost " + cost + " exceeds the limit " + limit);
             }
             long nanos = unit.toNanos(timeout);
             lock.lockInterruptibly();
