@@ -106,7 +106,6 @@ public class MetaServiceRateLimiterTest {
 
         // Disable rate limiter
         Config.meta_service_rpc_rate_limit_enabled = false;
-
         // After disabling, acquire should return false
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
         Assert.assertFalse(acquired.get());
@@ -189,7 +188,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(5, method.getAllowWaiting());
     }
 
-    @Test
+    /*@Test
     public void testParseQpsConfigNullConfig() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
@@ -203,7 +202,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertFalse(acquired.get());
         Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
         Assert.assertEquals(1, limiter.getMethodLimiters().size());
-    }
+    }*/
 
     @Test
     public void testParseQpsConfigInvalidFormat() {
@@ -211,15 +210,17 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         // Invalid format: no colon separator
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "invalidformat";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-        // Should use default QPS
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("testMethod", 0)));
-        Assert.assertFalse(acquired.get());
-        Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
-        Assert.assertEquals(1, limiter.getMethodLimiters().size());
+        String[] configs = {null, "invalidformat"};
+        for (String config : configs) {
+            Config.meta_service_rpc_rate_limit_qps_per_core_config = config;
+            MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+            // Should use default QPS
+            AtomicBoolean acquired = new AtomicBoolean(false);
+            Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("testMethod", 0)));
+            Assert.assertFalse(acquired.get());
+            Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
+            Assert.assertEquals(1, limiter.getMethodLimiters().size());
+        }
     }
 
     @Test
@@ -264,7 +265,6 @@ public class MetaServiceRateLimiterTest {
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
         Assert.assertFalse(acquired.get());
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method2", 0)));
-        Assert.assertFalse(acquired.get());
         Assert.assertFalse(acquired.get());
         Assert.assertEquals(1, limiter.getMethodQpsConfig().size());
         Assert.assertEquals(2, limiter.getMethodLimiters().size());
@@ -480,9 +480,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(3, costLimiter.getCurrentCost());
 
         // Release cost 3
-        if (acquired.get()) {
-            limiter.release("costMethod", 3);
-        }
+        limiter.release("costMethod", 3);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
 
         // Acquire cost 4 - should succeed
@@ -492,9 +490,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(4, costLimiter.getCurrentCost());
 
         // Release cost 4
-        if (acquired.get()) {
-            limiter.release("costMethod", 4);
-        }
+        limiter.release("costMethod", 4);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
 
         // Acquire cost 2 - should succeed
@@ -510,9 +506,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(2, costLimiter.getCurrentCost());
 
         // Release cost 2
-        if (acquired.get()) {
-            limiter.release("costMethod", 2);
-        }
+        limiter.release("costMethod", 2);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
     }
 
@@ -543,9 +537,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(8, costLimiter.getCurrentCost());
 
         // Release all
-        if (acquired.get()) {
-            limiter.release("reloadMethod", 7);
-        }
+        limiter.release("reloadMethod", 7);
         limiter.release("reloadMethod", 1);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
     }
@@ -567,9 +559,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertNotNull(costLimiter);
         Assert.assertEquals(4, costLimiter.getCurrentCost());
 
-        if (acquired.get()) {
-            limiter.release("goodMethod", 4);
-        }
+        limiter.release("goodMethod", 4);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
 
         // Acquire zero cost 1 - should succeed (cost 0 means no cost limit)
@@ -612,9 +602,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(5, costLimiter.getCurrentCost());
 
         // Release cost 1
-        if (acquired.get()) {
-            limiter.release("testCostMethod", 1);
-        }
+        limiter.release("testCostMethod", 1);
         Assert.assertEquals(4, costLimiter.getCurrentCost());
 
         // Step 3: Disable rate limit, try to acquire - should return false
@@ -658,9 +646,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(3, costLimiter.getCurrentCost());
 
         // Release and verify
-        if (acquired.get()) {
-            limiter.release("bothMethod", 3);
-        }
+        limiter.release("bothMethod", 3);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
     }
 
@@ -691,9 +677,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(100, methodLimiter.getAllowWaiting());
 
         // Release
-        if (acquired.get()) {
-            limiter.release("costFirst", 2);
-        }
+        limiter.release("costFirst", 2);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
     }
 
@@ -719,9 +703,7 @@ public class MetaServiceRateLimiterTest {
                 || exception.getMessage().contains("too many waiting requests"));
 
         // Release
-        if (acquired.get()) {
-            limiter.release("qpsFirst", 10);
-        }
+        limiter.release("qpsFirst", 10);
     }
 
     @Test
@@ -747,9 +729,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(5, costLimiter.getCurrentCost());
 
         // Release
-        if (acquired.get()) {
-            limiter.release("releaseTest", 2);
-        }
+        limiter.release("releaseTest", 2);
         Assert.assertEquals(3, costLimiter.getCurrentCost());
     }
 
@@ -789,9 +769,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(8, methodLimiter.getCostLimiter().getCurrentCost());
 
         // Release
-        if (acquired.get()) {
-            limiter.release("reloadBoth", 5);
-        }
+        limiter.release("reloadBoth", 5);
         limiter.release("reloadBoth", 3);
     }
 
@@ -819,9 +797,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(3, methodLimiter.getCostLimiter().getCurrentCost());
 
         // Release
-        if (acquired.get()) {
-            limiter.release("zeroQps", 3);
-        }
+        limiter.release("zeroQps", 3);
         Assert.assertEquals(0, methodLimiter.getCostLimiter().getCurrentCost());
     }
 
@@ -905,7 +881,7 @@ public class MetaServiceRateLimiterTest {
     }
 
     @Test
-    public void testCostExceedsLimit() {
+    public void testCostClampedToLimit() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
