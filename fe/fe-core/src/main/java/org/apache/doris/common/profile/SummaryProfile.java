@@ -95,6 +95,8 @@ public class SummaryProfile {
     public static final String WAIT_FETCH_RESULT_TIME = "Wait and Fetch Result Time";
     public static final String FETCH_RESULT_TIME = "Fetch Result Time";
     public static final String WRITE_RESULT_TIME = "Write Result Time";
+    public static final String WAIT_MS_RPC_RATE_LIMITER_TIME = "Wait MS RPC Rate Limiter Time";
+    public static final String WAIT_MS_RPC_RATE_LIMITER_COUNT = "Wait MS RPC Rate Limiter Count";
     public static final String GET_META_VERSION_TIME = "Get Meta Version Time";
     public static final String GET_PARTITION_VERSION_TIME = "Get Partition Version Time";
     public static final String GET_PARTITION_VERSION_COUNT = "Get Partition Version Count";
@@ -366,6 +368,10 @@ public class SummaryProfile {
     private long getTableVersionTime = 0;
     @SerializedName(value = "getTableVersionCount")
     private long getTableVersionCount = 0;
+    @SerializedName(value = "waitMsRpcLimiterTime")
+    private long waitMsRpcLimiterTime = 0;
+    @SerializedName(value = "waitMsRpcLimiterCount")
+    private long waitMsRpcLimiterCount = 0;
     @SerializedName(value = "transactionCommitBeginTime")
     private long transactionCommitBeginTime = -1;
     @SerializedName(value = "transactionCommitEndTime")
@@ -601,6 +607,8 @@ public class SummaryProfile {
                     getPrettyGetPartitionVersionByHasDataCount());
             executionSummaryProfile.addInfoString(GET_TABLE_VERSION_TIME, getPrettyGetTableVersionTime());
             executionSummaryProfile.addInfoString(GET_TABLE_VERSION_COUNT, getPrettyGetTableVersionCount());
+            executionSummaryProfile.addInfoString(WAIT_MS_RPC_RATE_LIMITER_TIME, getPrettyWaitMsRpcLimiterTime());
+            executionSummaryProfile.addInfoString(WAIT_MS_RPC_RATE_LIMITER_COUNT, getPrettyWaitMsRpcLimiterCount());
         }
     }
 
@@ -775,6 +783,11 @@ public class SummaryProfile {
 
     public void updateFragmentRpcCount(long count) {
         this.fragmentRpcCount += count;
+    }
+
+    public void addWaitMsRpcLimiterTime(long ns) {
+        this.waitMsRpcLimiterTime += ns;
+        this.waitMsRpcLimiterCount += 1;
     }
 
     public void addGetPartitionVersionTime(long ns) {
@@ -979,6 +992,25 @@ public class SummaryProfile {
 
     private String getPrettyGetTableVersionCount() {
         return RuntimeProfile.printCounter(getTableVersionCount, TUnit.UNIT);
+    }
+
+    public long getWaitMsRpcLimiterTime() {
+        return waitMsRpcLimiterTime;
+    }
+
+    public long getWaitMsRpcLimiterCount() {
+        return waitMsRpcLimiterCount;
+    }
+
+    private String getPrettyWaitMsRpcLimiterTime() {
+        if (waitMsRpcLimiterTime == 0) {
+            return "N/A";
+        }
+        return RuntimeProfile.printCounter(waitMsRpcLimiterTime, TUnit.TIME_NS);
+    }
+
+    private String getPrettyWaitMsRpcLimiterCount() {
+        return RuntimeProfile.printCounter(waitMsRpcLimiterCount, TUnit.UNIT);
     }
 
     public long getGetPartitionVersionTime() {
@@ -1222,11 +1254,13 @@ public class SummaryProfile {
 
     public String getMetaTime() {
         return "{"
-                + "\"get_partition_version_time_ms\"" + ":" + this.getGetPartitionVersionTime() + ","
+                + "\"get_partition_version_time_ns\"" + ":" + this.getGetPartitionVersionTime() + ","
                 + "\"get_partition_version_count_has_data\"" + ":" + this.getGetPartitionVersionByHasDataCount() + ","
                 + "\"get_partition_version_count\"" + ":" + this.getGetPartitionVersionCount() + ","
-                + "\"get_table_version_time_ms\"" + ":" + this.getGetTableVersionTime() + ","
-                + "\"get_table_version_count\"" + ":" + this.getGetTableVersionCount()
+                + "\"get_table_version_time_ns\"" + ":" + this.getGetTableVersionTime() + ","
+                + "\"get_table_version_count\"" + ":" + this.getGetTableVersionCount() + ","
+                + "\"wait_meta_service_rpc_rate_limit_time_ns\"" + ":" + this.getWaitMsRpcLimiterTime() + ","
+                + "\"wait_meta_service_rpc_rate_limit_count\"" + ":" + this.getWaitMsRpcLimiterCount()
                 + "}";
     }
 
