@@ -18,8 +18,10 @@
 package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.common.Config;
+import org.apache.doris.common.profile.SummaryProfile;
 import org.apache.doris.metric.CloudMetrics;
 import org.apache.doris.metric.MetricRepo;
+import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.RateLimiter;
@@ -265,9 +267,17 @@ public class MetaServiceRateLimiter {
         }
 
         boolean acquire(int cost) throws RpcRateLimitException {
-            boolean acquired = acquireCostLimit(cost);
-            acquireQpsRateLimit();
-            return acquired;
+            long startAt = System.nanoTime();
+            try {
+                boolean acquired = acquireCostLimit(cost);
+                acquireQpsRateLimit();
+                return acquired;
+            } finally {
+                SummaryProfile summaryProfile = SummaryProfile.getSummaryProfile(ConnectContext.get());
+                if (summaryProfile != null) {
+                    summaryProfile.addWaitMsRpcLimiterTime(System.nanoTime() - startAt);
+                }
+            }
         }
 
         boolean acquireCostLimit(int cost) throws RpcRateLimitException {
@@ -421,9 +431,6 @@ public class MetaServiceRateLimiter {
         }
 
         boolean acquire(int cost, long timeout, TimeUnit unit) throws InterruptedException {
-            if (cost < 0) {
-                throw new IllegalArgumentException("cost must be >= 0");
-            }
             if (cost > limit) {
                 cost = limit;
                 LOG.warn("Method: {}, cost: {} exceeds the limit: {}, adjust to limit for acquire", methodName, cost,
@@ -446,9 +453,6 @@ public class MetaServiceRateLimiter {
         }
 
         void release(int cost) {
-            if (cost < 0) {
-                throw new IllegalArgumentException("cost must be >= 0");
-            }
             lock.lock();
             try {
                 currentCost -= cost;
