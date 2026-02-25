@@ -901,8 +901,227 @@ public class MetaServiceRateLimiterTest {
         Assert.assertNotNull(costLimiter);
         Assert.assertEquals(5, costLimiter.getCurrentCost());
 
-        // Release
-        limiter.release("exceedCost", 10);
+        // Release - should only release if acquired
+        if (acquired.get()) {
+            limiter.release("exceedCost", 10);
+        }
         Assert.assertEquals(0, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testReleaseNonExistentMethod() {
+        // Test that releasing a non-existent method does not throw
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // Release should not throw even if method doesn't exist
+        Assertions.assertDoesNotThrow(() -> limiter.release("nonExistentMethod", 1));
+    }
+
+    @Test
+    public void testCostZero() {
+        // Test that cost=0 skips cost limiter
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "costZero:5";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // Acquire with cost=0 should return false (cost limiter not triggered)
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("costZero", 0)));
+        Assert.assertFalse(acquired.get());
+
+        // But method limiter should still exist
+        MethodRateLimiter methodLimiter = limiter.getMethodLimiters().get("costZero");
+        Assert.assertNotNull(methodLimiter);
+        // Cost limiter should be null since cost=0
+        Assert.assertNull(methodLimiter.getCostLimiter());
+    }
+
+    @Test
+    public void testNegativeCostThrowsException() {
+        // Test that negative cost throws IllegalArgumentException
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "negCost:5";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // Acquire with negative cost should throw IllegalArgumentException
+        IllegalArgumentException exception = Assertions.assertThrows(IllegalArgumentException.class,
+                () -> limiter.acquire("negCost", -1));
+        Assert.assertTrue(exception.getMessage().contains("must be >= 0"));
+    }
+
+    @Test
+    public void testNegativeCostReleaseThrowsException() {
+        // Test that releasing negative cost throws IllegalArgumentException
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "negRelease:5";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // First acquire
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("negRelease", 1)));
+        Assert.assertTrue(acquired.get());
+
+        // Release with negative cost should throw
+        IllegalArgumentException exception = Assertions.assertThrows(IllegalArgumentException.class,
+                () -> limiter.release("negRelease", -1));
+        Assert.assertTrue(exception.getMessage().contains("must be >= 0"));
+    }
+
+    @Test
+    public void testZeroMaxWaiting() {
+        // Test that maxWaitRequestNum=0 rejects all requests immediately
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_max_wait_request_num = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // Should fail immediately due to "too many waiting requests"
+        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("zeroWait", 0));
+        Assert.assertTrue(exception.getMessage().contains("too many waiting requests"));
+    }
+
+    @Test
+    public void testBothQpsAndCostZero() {
+        // Test that both QPS=0 and cost=0 means no rate limiting
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+        Config.meta_service_rpc_cost_limit_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // Should return false since both QPS and cost limiters are null
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("bothZero", 1)));
+        Assert.assertFalse(acquired.get());
+
+        // No method limiters should be created
+        Assert.assertEquals(0, limiter.getMethodLimiters().size());
+    }
+
+    @Test
+    public void testCostLimitExactBoundary() {
+        // Test exact boundary: current=4, limit=5, acquire=1 should succeed, acquire=2 should fail
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "boundary:5";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // Acquire cost 4 - should succeed
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("boundary", 4)));
+        Assert.assertTrue(acquired.get());
+
+        CostLimiter costLimiter = limiter.getMethodLimiters().get("boundary").getCostLimiter();
+        Assert.assertEquals(4, costLimiter.getCurrentCost());
+
+        // Acquire cost 1 - should succeed (4+1=5, exactly at limit)
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("boundary", 1)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(5, costLimiter.getCurrentCost());
+
+        // Acquire cost 1 again - should fail (5+1 > 5)
+        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("boundary", 1));
+        Assert.assertTrue(exception.getMessage().contains("cost limit"));
+        Assert.assertEquals(5, costLimiter.getCurrentCost());
+
+        // Release and verify
+        limiter.release("boundary", 4);
+        limiter.release("boundary", 1);
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testMultipleAcquireReleaseAccuracy() {
+        // Test multiple acquire/release cycles maintain correct currentCost
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "accuracy:10";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // Acquire 3 times
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("accuracy", 2)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(2, limiter.getMethodLimiters().get("accuracy").getCostLimiter().getCurrentCost());
+
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("accuracy", 3)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(5, limiter.getMethodLimiters().get("accuracy").getCostLimiter().getCurrentCost());
+
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("accuracy", 5)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(10, limiter.getMethodLimiters().get("accuracy").getCostLimiter().getCurrentCost());
+
+        // Release one
+        limiter.release("accuracy", 3);
+        Assert.assertEquals(7, limiter.getMethodLimiters().get("accuracy").getCostLimiter().getCurrentCost());
+
+        // Release all
+        limiter.release("accuracy", 2);
+        limiter.release("accuracy", 5);
+        Assert.assertEquals(0, limiter.getMethodLimiters().get("accuracy").getCostLimiter().getCurrentCost());
+    }
+
+    @Test
+    public void testReloadRecreatesRemovedMethod() {
+        // Test that re-adding a removed method works correctly
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "recreate:5";
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // First acquire
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("recreate", 1)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(1, limiter.getMethodLimiters().get("recreate").getCostLimiter().getCurrentCost());
+
+        // Remove from config
+        Config.meta_service_rpc_cost_limit_per_core_config = "";
+        limiter.reloadConfig();
+
+        // Method should be removed
+        Assert.assertNull(limiter.getMethodLimiters().get("recreate"));
+
+        // Add back to config
+        Config.meta_service_rpc_cost_limit_per_core_config = "recreate:10";
+        limiter.reloadConfig();
+
+        // Should work again
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("recreate", 5)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(5, limiter.getMethodLimiters().get("recreate").getCostLimiter().getCurrentCost());
+
+        limiter.release("recreate", 5);
+        limiter.release("recreate", 1);
     }
 }
