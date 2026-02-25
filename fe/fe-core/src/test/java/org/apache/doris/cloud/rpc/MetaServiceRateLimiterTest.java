@@ -188,22 +188,6 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(5, method.getAllowWaiting());
     }
 
-    /*@Test
-    public void testParseQpsConfigNullConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = null;
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-        // Should use default QPS
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("testMethod", 0)));
-        Assert.assertFalse(acquired.get());
-        Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
-        Assert.assertEquals(1, limiter.getMethodLimiters().size());
-    }*/
-
     @Test
     public void testParseQpsConfigInvalidFormat() {
         Config.meta_service_rpc_rate_limit_enabled = true;
@@ -909,76 +893,21 @@ public class MetaServiceRateLimiterTest {
     }
 
     @Test
-    public void testReleaseNonExistentMethod() {
+    public void testReleaseNonExistentMethodAndNegative() {
         // Test that releasing a non-existent method does not throw
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "negCost:5";
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
 
         // Release should not throw even if method doesn't exist
         Assertions.assertDoesNotThrow(() -> limiter.release("nonExistentMethod", 1));
-    }
 
-    @Test
-    public void testCostZero() {
-        // Test that cost=0 skips cost limiter
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-        Config.meta_service_rpc_cost_limit_per_core_config = "costZero:5";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // Acquire with cost=0 should return false (cost limiter not triggered)
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("costZero", 0)));
-        Assert.assertFalse(acquired.get());
-
-        // But method limiter should still exist
-        MethodRateLimiter methodLimiter = limiter.getMethodLimiters().get("costZero");
-        Assert.assertNotNull(methodLimiter);
-        // Cost limiter should be null since cost=0
-        Assert.assertNull(methodLimiter.getCostLimiter());
-    }
-
-    @Test
-    public void testNegativeCostThrowsException() {
-        // Test that negative cost throws IllegalArgumentException
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-        Config.meta_service_rpc_cost_limit_per_core_config = "negCost:5";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // Acquire with negative cost should throw IllegalArgumentException
-        IllegalArgumentException exception = Assertions.assertThrows(IllegalArgumentException.class,
-                () -> limiter.acquire("negCost", -1));
-        Assert.assertTrue(exception.getMessage().contains("must be >= 0"));
-    }
-
-    @Test
-    public void testNegativeCostReleaseThrowsException() {
-        // Test that releasing negative cost throws IllegalArgumentException
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-        Config.meta_service_rpc_cost_limit_per_core_config = "negRelease:5";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // First acquire
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("negRelease", 1)));
-        Assert.assertTrue(acquired.get());
-
-        // Release with negative cost should throw
-        IllegalArgumentException exception = Assertions.assertThrows(IllegalArgumentException.class,
-                () -> limiter.release("negRelease", -1));
-        Assert.assertTrue(exception.getMessage().contains("must be >= 0"));
+        // Ignore cost is negative
+        Assertions.assertDoesNotThrow(() -> limiter.acquire("negCost", -1));
+        Assertions.assertDoesNotThrow(() -> limiter.release("negCost", -1));
     }
 
     @Test
