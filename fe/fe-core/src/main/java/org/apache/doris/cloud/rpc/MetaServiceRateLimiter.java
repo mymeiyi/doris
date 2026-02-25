@@ -275,6 +275,7 @@ public class MetaServiceRateLimiter {
                 return false;
             }
             boolean acquired = false;
+            long startTime = System.currentTimeMillis();
             try {
                 acquired = costLimiter.acquire(cost, Config.meta_service_rpc_rate_limit_wait_timeout_ms,
                         TimeUnit.MILLISECONDS);
@@ -283,6 +284,13 @@ public class MetaServiceRateLimiter {
                         "Meta service RPC rate limit interrupted while waiting for cost limit for method: "
                                 + methodName, e);
             } finally {
+                if (MetricRepo.isInit && Config.isCloudMode()) {
+                    if (!acquired) {
+                        CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
+                    }
+                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
+                            .update(System.currentTimeMillis() - startTime);
+                }
                 if (!acquired) {
                     throw new RpcRateLimitException(
                             "Meta service RPC rate limit timeout while waiting for cost limit for method: "

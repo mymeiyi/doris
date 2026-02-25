@@ -715,6 +715,7 @@ public class MetaServiceProxy {
             return getVersionRequest.hasBatchMode() && getVersionRequest.getBatchMode()
                     ? getVersionRequest.getDbIdsCount() : 1;
         }
-        return 0;
+        // TODO the cost of other methods is not supported now
+        return 1;
     }
 }
