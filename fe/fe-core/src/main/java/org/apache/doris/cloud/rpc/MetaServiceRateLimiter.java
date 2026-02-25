@@ -148,7 +148,7 @@ public class MetaServiceRateLimiter {
 
     private Map<String, Integer> parseConfig(String config, String configName) {
         if (config == null || config.isEmpty()) {
-            return Collections.emptyMap();
+            return new HashMap<>(0);
         }
 
         Map<String, Integer> target = new HashMap<>();
@@ -416,7 +416,7 @@ public class MetaServiceRateLimiter {
             this.currentCost = 0;
         }
 
-        // modify list to newLimit(thread safe)
+        // modify limit to newLimit (thread safe)
         void setLimit(int newLimit) {
             if (newLimit < 0) {
                 throw new IllegalArgumentException("newLimit must be >= 0");

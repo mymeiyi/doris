@@ -317,11 +317,14 @@ public class MetaServiceProxy {
                 com.google.common.util.concurrent.ListenableFuture<Cloud.GetVersionResponse> listenableFuture =
                         (com.google.common.util.concurrent.ListenableFuture<Cloud.GetVersionResponse>) future;
                 MetaServiceClient finalClient = client;
+                boolean finalAcquired = acquired;
                 com.google.common.util.concurrent.Futures.addCallback(listenableFuture,
                         new com.google.common.util.concurrent.FutureCallback<Cloud.GetVersionResponse>() {
                             @Override
                             public void onSuccess(Cloud.GetVersionResponse result) {
-                                MetaServiceRateLimiter.getInstance().release(methodName, cost);
+                                if (finalAcquired) {
+                                    MetaServiceRateLimiter.getInstance().release(methodName, cost);
+                                }
                                 if (MetricRepo.isInit && Config.isCloudMode()) {
                                     CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
                                             .update(System.currentTimeMillis() - startTime);
@@ -330,7 +333,10 @@ public class MetaServiceProxy {
 
                             @Override
                             public void onFailure(Throwable t) {
-                                MetaServiceRateLimiter.getInstance().release(methodName, cost);
+                                if (finalAcquired) {
+                                    MetaServiceRateLimiter.getInstance().release(methodName, cost);
+                                }
+
                                 if (MetricRepo.isInit && Config.isCloudMode()) {
                                     CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
                                     CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
