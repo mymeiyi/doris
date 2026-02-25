@@ -265,7 +265,8 @@ public class MetaServiceProxy {
      * Execute RPC with comprehensive metrics tracking.
      * Tracks: total calls, failures, latency
      */
-    private <Response> Response executeWithMetrics(String methodName, int cost, Function<MetaServiceClient, Response> function)
+    private <Response> Response executeWithMetrics(String methodName, int cost,
+            Function<MetaServiceClient, Response> function)
             throws RpcException {
         long startTime = System.currentTimeMillis();
         if (MetricRepo.isInit && Config.isCloudMode()) {

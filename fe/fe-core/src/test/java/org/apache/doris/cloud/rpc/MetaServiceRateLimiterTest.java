@@ -57,7 +57,7 @@ public class MetaServiceRateLimiterTest {
         }
     }
 
-    /*@Before
+    @Before
     public void setUp() {
         originalEnabled = Config.meta_service_rpc_rate_limit_enabled;
         originalDefaultQps = Config.meta_service_rpc_rate_limit_default_qps_per_core;
@@ -81,7 +81,7 @@ public class MetaServiceRateLimiterTest {
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         Assertions.assertDoesNotThrow (() -> {
-            limiter.acquire("testMethod");
+            limiter.acquire("testMethod", 0);
             // limiter.release("testMethod");
         });
         Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
@@ -97,7 +97,7 @@ public class MetaServiceRateLimiterTest {
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         Assertions.assertDoesNotThrow (() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // // limiter.release("method1");
         });
 
@@ -106,7 +106,7 @@ public class MetaServiceRateLimiterTest {
 
         // After disabling, acquire/release should still work (no-op)
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // // limiter.release("method1");
         });
         Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
@@ -122,7 +122,7 @@ public class MetaServiceRateLimiterTest {
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(8);
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("testMethod");
+            limiter.acquire("testMethod", 0);
             // limiter.release("testMethod");
         });
         Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
@@ -142,9 +142,9 @@ public class MetaServiceRateLimiterTest {
         // With 4 processors, QPS should be 40 (10 * 4)
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(4);
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("testMethod");
+            limiter.acquire("testMethod", 0);
             // limiter.release("testMethod");
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // limiter.release("method1");
         });
         Assert.assertEquals(1, limiter.getMethodQpsConfig().size());
@@ -170,7 +170,7 @@ public class MetaServiceRateLimiterTest {
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         for (int i = 0; i < 10; i++) {
             try {
-                limiter.acquire("testWaitTimeout");
+                limiter.acquire("testWaitTimeout", 0);
             } catch (RpcRateLimitException e) {
                 LOG.warn("i={}", i, e);
                 if (e.getMessage().contains("too many waiting requests")) {
@@ -198,7 +198,7 @@ public class MetaServiceRateLimiterTest {
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         // Should use default QPS
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("testMethod");
+            limiter.acquire("testMethod", 0);
             // limiter.release("testMethod");
         });
         Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
@@ -216,7 +216,7 @@ public class MetaServiceRateLimiterTest {
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         // Should use default QPS
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("testMethod");
+            limiter.acquire("testMethod", 0);
             // limiter.release("testMethod");
         });
         Assert.assertEquals(0, limiter.getMethodQpsConfig().size());
@@ -234,11 +234,11 @@ public class MetaServiceRateLimiterTest {
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         // Should use default QPS
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // limiter.release("method1");
-            limiter.acquire("method2");
+            limiter.acquire("method2", 0);
             // limiter.release("method2");
-            limiter.acquire("otherMethod");
+            limiter.acquire("otherMethod", 0);
             // limiter.release("otherMethod");
         });
         Assert.assertEquals(1, limiter.getMethodQpsConfig().size());
@@ -254,9 +254,9 @@ public class MetaServiceRateLimiterTest {
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // limiter.release("method1");
-            limiter.acquire("method2");
+            limiter.acquire("method2", 0);
             // limiter.release("method2");
         });
 
@@ -265,9 +265,9 @@ public class MetaServiceRateLimiterTest {
 
         // method1 should be removed, use default QPS
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // limiter.release("method1");
-            limiter.acquire("method2");
+            limiter.acquire("method2", 0);
             // limiter.release("method2");
         });
         Assert.assertEquals(1, limiter.getMethodQpsConfig().size());
@@ -290,7 +290,7 @@ public class MetaServiceRateLimiterTest {
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         // When default QPS is 0, limiter should be null (no rate limiting)
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("testMethod");
+            limiter.acquire("testMethod", 0);
             // limiter.release("testMethod");
         });
         Assert.assertEquals(0, limiter.getMethodLimiters().size());
@@ -307,9 +307,9 @@ public class MetaServiceRateLimiterTest {
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         // method1 should have 0 QPS (no limiter), otherMethod uses default
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // limiter.release("method1");
-            limiter.acquire("otherMethod");
+            limiter.acquire("otherMethod", 0);
             // limiter.release("otherMethod");
         });
         Assert.assertEquals(1, limiter.getMethodQpsConfig().size());
@@ -332,7 +332,7 @@ public class MetaServiceRateLimiterTest {
 
         // Should still work normally
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // limiter.release("method1");
         });
         Assert.assertEquals(1, limiter.getMethodQpsConfig().size());
@@ -357,7 +357,7 @@ public class MetaServiceRateLimiterTest {
             executor.submit(() -> {
                 try {
                     startLatch.await();
-                    limiter.acquire("testMethod");
+                    limiter.acquire("testMethod", 0);
                     successCount.incrementAndGet();
                     // limiter.release("testMethod");
                 } catch (RpcRateLimitException e) {
@@ -389,7 +389,7 @@ public class MetaServiceRateLimiterTest {
 
         // Initial acquire creates limiter with default QPS (10)
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
         });
         Assert.assertEquals(1, limiter.getMethodLimiters().size());
         MethodRateLimiter method1 = limiter.getMethodLimiters().get("method1");
@@ -423,7 +423,7 @@ public class MetaServiceRateLimiterTest {
 
         // Acquire to create a limiter
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
         });
         Assert.assertEquals(1, limiter.getMethodLimiters().size());
 
@@ -452,7 +452,7 @@ public class MetaServiceRateLimiterTest {
 
         // Acquire to create a limiter
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
         });
         Assert.assertEquals(1, limiter.getMethodLimiters().size());
 
@@ -469,9 +469,9 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(1, limiter.getMethodLimiters().size());
 
         Assertions.assertDoesNotThrow(() -> {
-            limiter.acquire("method1");
+            limiter.acquire("method1", 0);
             // limiter.release("method1");
         });
         Assert.assertEquals(0, limiter.getMethodLimiters().size());
-    }*/
+    }
 }

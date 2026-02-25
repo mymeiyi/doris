@@ -110,23 +110,6 @@ public class MetaServiceRateLimiter {
             methodCostConfig = parseConfig(costConfig, "cost limit");
             // Update limiters
             updateMethodLimiters(defaultQpsPerCore, maxWaiting);
-            // methodLimiters.clear();
-            /*List<String> toRemove = new ArrayList<>();
-            for (Entry<String, MethodRateLimiter> entry : methodLimiters.entrySet()) {
-                String methodName = entry.getKey();
-                int qps = getMethodTotalQps(methodName, defaultQpsPerCore);
-                if (qps <= 0) {
-                    toRemove.add(methodName);
-                    continue;
-                }
-                MethodRateLimiter limiter = entry.getValue();
-                limiter.updateQps(qps);
-                limiter.updateCostLimit(getMethodTotalCostLimit(methodName));
-            }
-            LOG.info("Removed zero QPS rate limiter for methods: {}", toRemove);
-            for (String methodName : toRemove) {
-                methodLimiters.remove(methodName);
-            }*/
             // Update last config
             lastEnabled = enabled;
             lastMaxWaiting = maxWaiting;
@@ -161,14 +144,6 @@ public class MetaServiceRateLimiter {
         }
     }
 
-    /*private void parseQpsConfig(String config) {
-        parseMethodLimitConfig(config, methodQpsConfig, "QPS");
-    }
-
-    private void parseCostConfig(String config) {
-        parseMethodLimitConfig(config, methodCostConfig, "cost limit");
-    }*/
-
     private Map<String, Integer> parseConfig(String config, String configName) {
         if (config == null || config.isEmpty()) {
             return Collections.emptyMap();
@@ -195,31 +170,6 @@ public class MetaServiceRateLimiter {
         }
         return target;
     }
-
-    /*private void parseMethodLimitConfig(String config, Map<String, Integer> target, String configName) {
-        target.clear();
-        if (config == null || config.isEmpty()) {
-            return;
-        }
-
-        String[] entries = config.split(";");
-        for (String entry : entries) {
-            String[] parts = entry.trim().split(":");
-            if (parts.length == 2) {
-                try {
-                    String methodName = parts[0].trim();
-                    int limit = Integer.parseInt(parts[1].trim());
-                    target.put(methodName, limit);
-                    LOG.debug("Configured meta service RPC {} for method {}: {} per core",
-                            configName, methodName, limit);
-                } catch (NumberFormatException e) {
-                    LOG.warn("Invalid {} config entry: {}", configName, entry);
-                }
-            } else {
-                LOG.warn("Invalid {} config entry: {}", configName, entry);
-            }
-        }
-    }*/
 
     private int getMethodTotalQps(String methodName, int defaultQpsPerCore) {
         int qpsPerCore = methodQpsConfig.getOrDefault(methodName, defaultQpsPerCore);
@@ -306,14 +256,6 @@ public class MetaServiceRateLimiter {
         private RateLimiter rateLimiter;
         private CostLimiter costLimiter;
 
-        /*MethodRateLimiter(String methodName, int qps, int maxWaiting) {
-            this.methodName = methodName;
-            this.maxWaiting = maxWaiting;
-            this.rateLimiter = qps > 0 ? RateLimiter.create(qps) : RateLimiter.create(Double.MAX_VALUE);
-            this.waitingSemaphore = new Semaphore(maxWaiting);
-            LOG.info("Create rate limiter for method={}, qps={}, maxWaiting={}", methodName, qps, maxWaiting);
-        }*/
-
         MethodRateLimiter(String methodName, int maxWaiting, int qps, int costLimit) {
             this.methodName = methodName;
             if (qps > 0) {
@@ -399,10 +341,6 @@ public class MetaServiceRateLimiter {
                 costLimiter.release(cost);
             }
         }
-
-        /*void release() {
-            waitingSemaphore.release();
-        }*/
 
         void updateQps(int qps, int maxWaiting) {
             if (qps <= 0) {
@@ -522,7 +460,9 @@ public class MetaServiceRateLimiter {
         }
 
         public void release(int cost) {
-            if (cost < 0) throw new IllegalArgumentException("cost must be >= 0");
+            if (cost < 0) {
+                throw new IllegalArgumentException("cost must be >= 0");
+            }
             lock.lock();
             try {
                 currentCost -= cost;
@@ -533,9 +473,10 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        // 其他方法：tryAcquire, acquire 无限等待等（类似修改，需使用锁访问最新limit）
         public boolean tryAcquire(int cost) {
-            if (cost < 0) throw new IllegalArgumentException("cost must be >= 0");
+            if (cost < 0) {
+                throw new IllegalArgumentException("cost must be >= 0");
+            }
             lock.lock();
             try {
                 if (currentCost + cost <= limit) {
@@ -549,7 +490,9 @@ public class MetaServiceRateLimiter {
         }
 
         public void acquire(int cost) throws InterruptedException {
-            if (cost < 0) throw new IllegalArgumentException("cost must be >= 0");
+            if (cost < 0) {
+                throw new IllegalArgumentException("cost must be >= 0");
+            }
             lock.lockInterruptibly();
             try {
                 while (currentCost + cost > limit) {
