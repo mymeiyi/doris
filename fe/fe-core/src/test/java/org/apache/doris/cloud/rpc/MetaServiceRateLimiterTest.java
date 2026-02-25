@@ -17,6 +17,7 @@
 
 package org.apache.doris.cloud.rpc;
 
+import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.CostLimiter;
 import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.MethodRateLimiter;
 import org.apache.doris.common.Config;
 
@@ -517,6 +518,9 @@ public class MetaServiceRateLimiterTest {
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         Assertions.assertThrows(RpcRateLimitException.class, () -> limiter.acquire("reloadMethod", 7));
+        Assertions.assertDoesNotThrow(() -> {
+            limiter.acquire("reloadMethod", 1);
+        });
 
         Config.meta_service_rpc_cost_limit_per_core_config = "reloadMethod:8";
         // Assertions.assertTrue(limiter.reloadConfig());
@@ -525,6 +529,10 @@ public class MetaServiceRateLimiterTest {
             limiter.acquire("reloadMethod", 7);
         });
         limiter.release("reloadMethod", 7);
+        limiter.release("reloadMethod", 1);
+        CostLimiter costLimiter = limiter.getMethodLimiters().get("reloadMethod").getCostLimiter();
+        Assert.assertNotNull(costLimiter);
+        Assert.assertEquals(8, costLimiter.getCurrentCost());
     }
 
     @Test

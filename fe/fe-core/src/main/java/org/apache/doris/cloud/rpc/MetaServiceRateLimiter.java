@@ -376,8 +376,13 @@ public class MetaServiceRateLimiter {
         }
 
         @VisibleForTesting
-        public int getAllowWaiting() {
+        int getAllowWaiting() {
             return waitingSemaphore != null ? waitingSemaphore.availablePermits() : -1;
+        }
+
+        @VisibleForTesting
+        CostLimiter getCostLimiter() {
+            return costLimiter;
         }
     }
 
@@ -424,7 +429,8 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        public int getCurrentCost() {
+        @VisibleForTesting
+        int getCurrentCost() {
             lock.lock();
             try {
                 return currentCost;
