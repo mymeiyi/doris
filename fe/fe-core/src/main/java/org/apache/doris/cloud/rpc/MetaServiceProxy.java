@@ -200,14 +200,14 @@ public class MetaServiceProxy {
             this.proxy = proxy;
         }
 
-        public <Response> Response executeRequest(String methodName, Function<MetaServiceClient, Response> function)
-                throws RpcException {
+        public <Response> Response executeRequest(String methodName, int cost,
+                Function<MetaServiceClient, Response> function) throws RpcException {
             long maxRetries = Config.meta_service_rpc_retry_cnt;
             for (long tried = 1; tried <= maxRetries; tried++) {
                 MetaServiceClient client = null;
                 boolean requestFailed = false;
                 try {
-                    MetaServiceRateLimiter.getInstance().acquire(methodName, 0);
+                    MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
                     client = proxy.getProxy();
                     if (tried > 1 && MetricRepo.isInit && Config.isCloudMode()) {
                         CloudMetrics.META_SERVICE_RPC_ALL_RETRY.increase(1L);
@@ -240,7 +240,7 @@ public class MetaServiceProxy {
                         throw new RpcException("", e.getMessage(), e);
                     }
                 } finally {
-                    // MetaServiceRateLimiter.getInstance().release(methodName);
+                    MetaServiceRateLimiter.getInstance().release(methodName, cost);
                     if (requestFailed && proxy.needReconn() && client != null) {
                         client.shutdown(true);
                     }
@@ -265,7 +265,7 @@ public class MetaServiceProxy {
      * Execute RPC with comprehensive metrics tracking.
      * Tracks: total calls, failures, latency
      */
-    private <Response> Response executeWithMetrics(String methodName, Function<MetaServiceClient, Response> function)
+    private <Response> Response executeWithMetrics(String methodName, int cost, Function<MetaServiceClient, Response> function)
             throws RpcException {
         long startTime = System.currentTimeMillis();
         if (MetricRepo.isInit && Config.isCloudMode()) {
@@ -274,7 +274,7 @@ public class MetaServiceProxy {
         }
 
         try {
-            Response response = w.executeRequest(methodName, function);
+            Response response = w.executeRequest(methodName, cost, function);
             if (MetricRepo.isInit && Config.isCloudMode()) {
                 CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
                         .update(System.currentTimeMillis() - startTime);
@@ -460,7 +460,9 @@ public class MetaServiceProxy {
     }
 
     public Cloud.GetVersionResponse getVersion(Cloud.GetVersionRequest request) throws RpcException {
-        return executeWithMetrics("getVersion", (client) -> client.getVersion(request));
+        RequestType requestType = RequestType.GET_VERSION;
+        return executeWithMetrics(requestType.getMethodName(), getRequestCost(requestType, request),
+                (client) -> client.getVersion(request));
     }
 
     public Cloud.CreateTabletsResponse createTablets(Cloud.CreateTabletsRequest request) throws RpcException {
