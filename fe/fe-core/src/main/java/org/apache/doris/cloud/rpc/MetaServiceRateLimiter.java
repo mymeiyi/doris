@@ -45,8 +45,9 @@ public class MetaServiceRateLimiter {
     private volatile boolean lastEnabled = false;
     private volatile int lastDefaultQps = 0;
     private volatile String lastQpsConfig = "";
-
+    private volatile String lastCostConfig = "";
     private final Map<String, Integer> methodQpsConfig = new ConcurrentHashMap<>();
+    private final Map<String, Integer> methodCostConfig = new ConcurrentHashMap<>();
     private final Map<String, MethodRateLimiter> methodLimiters = new ConcurrentHashMap<>();
 
     public static MetaServiceRateLimiter getInstance() {
@@ -67,7 +68,8 @@ public class MetaServiceRateLimiter {
     private boolean isConfigChanged() {
         return Config.meta_service_rpc_rate_limit_enabled != lastEnabled
                 || Config.meta_service_rpc_rate_limit_default_qps_per_core != lastDefaultQps
-                || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig);
+                || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig)
+                || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig);
     }
 
     public boolean reloadConfig() {
@@ -83,13 +85,16 @@ public class MetaServiceRateLimiter {
             if (!enabled) {
                 methodLimiters.clear();
                 methodQpsConfig.clear();
+                methodCostConfig.clear();
                 lastEnabled = enabled;
                 return true;
             }
             // Parse the QPS config
             int defaultQpsPerCore = Config.meta_service_rpc_rate_limit_default_qps_per_core;
             String currentConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
+            String currentCostConfig = Config.meta_service_rpc_cost_limit_per_core_config;
             parseQpsConfig(currentConfig);
+            parseCostConfig(currentCostConfig);
             // Update existing limiters
             List<String> toRemove = new ArrayList<>();
             for (Entry<String, MethodRateLimiter> entry : methodLimiters.entrySet()) {
@@ -101,6 +106,7 @@ public class MetaServiceRateLimiter {
                 }
                 MethodRateLimiter limiter = entry.getValue();
                 limiter.updateQps(qps);
+                limiter.updateCostLimit(getMethodTotalCostLimit(methodName));
             }
             LOG.info("Removed zero QPS rate limiter for methods: {}", toRemove);
             for (String methodName : toRemove) {
@@ -110,6 +116,7 @@ public class MetaServiceRateLimiter {
             lastEnabled = enabled;
             lastDefaultQps = defaultQpsPerCore;
             lastQpsConfig = currentConfig;
+            lastCostConfig = currentCostConfig;
             LOG.info("Reloaded meta service RPC rate limit enabled: {}, defaultQps: {}, config: {}",
                     lastEnabled, lastDefaultQps, lastQpsConfig);
         }
@@ -117,7 +124,15 @@ public class MetaServiceRateLimiter {
     }
 
     private void parseQpsConfig(String config) {
-        methodQpsConfig.clear();
+        parseMethodLimitConfig(config, methodQpsConfig, "QPS");
+    }
+
+    private void parseCostConfig(String config) {
+        parseMethodLimitConfig(config, methodCostConfig, "cost limit");
+    }
+
+    private void parseMethodLimitConfig(String config, Map<String, Integer> target, String configName) {
+        target.clear();
         if (config == null || config.isEmpty()) {
             return;
         }
@@ -128,14 +143,15 @@ public class MetaServiceRateLimiter {
             if (parts.length == 2) {
                 try {
                     String methodName = parts[0].trim();
-                    int qps = Integer.parseInt(parts[1].trim());
-                    methodQpsConfig.put(methodName, qps);
-                    LOG.debug("Configured meta service RPC rate limit for method {}: {} QPS", methodName, qps);
+                    int limit = Integer.parseInt(parts[1].trim());
+                    target.put(methodName, limit);
+                    LOG.debug("Configured meta service RPC {} for method {}: {} per core",
+                            configName, methodName, limit);
                 } catch (NumberFormatException e) {
-                    LOG.warn("Invalid QPS config entry: {}", entry);
+                    LOG.warn("Invalid {} config entry: {}", configName, entry);
                 }
             } else {
-                LOG.warn("Invalid QPS config entry: {}", entry);
+                LOG.warn("Invalid {} config entry: {}", configName, entry);
             }
         }
     }
@@ -148,6 +164,14 @@ public class MetaServiceRateLimiter {
         return qpsPerCore * getAvailableProcessors();
     }
 
+    private int getMethodTotalCostLimit(String methodName) {
+        int costPerCore = methodCostConfig.getOrDefault(methodName, 0);
+        if (costPerCore <= 0) {
+            return 0;
+        }
+        return costPerCore * getAvailableProcessors();
+    }
+
     // TODO mock
     protected int getAvailableProcessors() {
         return Runtime.getRuntime().availableProcessors();
@@ -158,11 +182,12 @@ public class MetaServiceRateLimiter {
             if (limiter != null) {
                 return limiter;
             }
-            int processors = getAvailableProcessors();
-            int qps = methodQpsConfig.getOrDefault(name, Config.meta_service_rpc_rate_limit_default_qps_per_core)
-                    * processors;
+            int qps = getMethodTotalQps(name, Config.meta_service_rpc_rate_limit_default_qps_per_core);
             if (qps > 0) {
-                return new MethodRateLimiter(name, qps, Config.meta_service_rpc_rate_limit_max_waiting);
+                MethodRateLimiter newLimiter = new MethodRateLimiter(name, qps,
+                        Config.meta_service_rpc_rate_limit_max_waiting);
+                newLimiter.updateCostLimit(getMethodTotalCostLimit(name));
+                return newLimiter;
             }
             return null;
         });
@@ -198,6 +223,11 @@ public class MetaServiceRateLimiter {
     @VisibleForTesting
     public Map<String, Integer> getMethodQpsConfig() {
         return methodQpsConfig;
+    }
+
+    @VisibleForTesting
+    public Map<String, Integer> getMethodCostConfig() {
+        return methodCostConfig;
     }
 
     @VisibleForTesting
@@ -299,6 +329,18 @@ public class MetaServiceRateLimiter {
         void updateQps(int qps) {
             rateLimiter.setRate(qps);
             LOG.info("Updated rate limiter for method {}: qps={}", methodName, qps);
+        }
+
+        void updateCostLimit(int costLimit) {
+            if (costLimit <= 0) {
+                costLimiter = null;
+                return;
+            }
+            if (costLimiter == null) {
+                costLimiter = new CostLimiter(costLimit);
+            } else {
+                costLimiter.setLimit(costLimit);
+            }
         }
 
         @VisibleForTesting
