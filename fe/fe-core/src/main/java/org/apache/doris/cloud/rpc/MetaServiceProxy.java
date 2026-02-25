@@ -305,10 +305,9 @@ public class MetaServiceProxy {
             CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
         }
 
-        boolean acquired = false;
         int cost = getRequestCost(request);
         try {
-            acquired = MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
+            MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
             client = getProxy();
             Future<Cloud.GetVersionResponse> future = client.getVisibleVersionAsync(request);
             if (future instanceof com.google.common.util.concurrent.ListenableFuture) {
@@ -343,9 +342,7 @@ public class MetaServiceProxy {
             }
             return future;
         } catch (Exception e) {
-            if (acquired) {
-                MetaServiceRateLimiter.getInstance().release(methodName, cost);
-            }
+            MetaServiceRateLimiter.getInstance().release(methodName, cost);
             if (MetricRepo.isInit && Config.isCloudMode()) {
                 CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
                 CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);

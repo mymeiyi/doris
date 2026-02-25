@@ -3640,7 +3640,7 @@ public class Config extends ConfigBase {
             "Default QPS limit for each method (requests per second) in each cpu core, -1 means no limit"})
     public static int meta_service_rpc_rate_limit_default_qps_per_core = 10;
 
-    @ConfField(description = {
+    @ConfField(mutable = true, description = {
             "每个方法的最大等待请求数，超过此数量的请求将直接拒绝",
             "Maximum waiting requests per method, requests exceeding this will be rejected immediately"})
     public static int meta_service_rpc_rate_limit_max_waiting = 100;

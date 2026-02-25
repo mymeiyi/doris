@@ -27,6 +27,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -44,10 +46,11 @@ public class MetaServiceRateLimiter {
     private static volatile MetaServiceRateLimiter instance;
     private volatile boolean lastEnabled = false;
     private volatile int lastDefaultQps = 0;
+    private volatile int lastMaxWaiting = 0;
     private volatile String lastQpsConfig = "";
     private volatile String lastCostConfig = "";
-    private final Map<String, Integer> methodQpsConfig = new ConcurrentHashMap<>();
-    private final Map<String, Integer> methodCostConfig = new ConcurrentHashMap<>();
+    private Map<String, Integer> methodQpsConfig = new ConcurrentHashMap<>();
+    private Map<String, Integer> methodCostConfig = new ConcurrentHashMap<>();
     private final Map<String, MethodRateLimiter> methodLimiters = new ConcurrentHashMap<>();
 
     public static MetaServiceRateLimiter getInstance() {
@@ -66,13 +69,22 @@ public class MetaServiceRateLimiter {
     }
 
     private boolean isConfigChanged() {
-        return Config.meta_service_rpc_rate_limit_enabled != lastEnabled
-                || Config.meta_service_rpc_rate_limit_default_qps_per_core != lastDefaultQps
-                || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig)
-                || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig);
+        boolean enabled = Config.meta_service_rpc_rate_limit_enabled;
+        if (enabled != lastEnabled) {
+            return true;
+        } else if (!enabled) {
+            // If disabled, only check enabled flag
+            return false;
+        } else {
+            return Config.meta_service_rpc_rate_limit_default_qps_per_core != lastDefaultQps
+                    || Config.meta_service_rpc_rate_limit_max_waiting != lastMaxWaiting
+                    || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig)
+                    || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig);
+        }
     }
 
-    public boolean reloadConfig() {
+    @VisibleForTesting
+    protected boolean reloadConfig() {
         if (!isConfigChanged()) {
             return false;
         }
@@ -91,12 +103,14 @@ public class MetaServiceRateLimiter {
             }
             // Parse the QPS config
             int defaultQpsPerCore = Config.meta_service_rpc_rate_limit_default_qps_per_core;
-            String currentConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
-            String currentCostConfig = Config.meta_service_rpc_cost_limit_per_core_config;
-            parseQpsConfig(currentConfig);
-            parseCostConfig(currentCostConfig);
-            // Update existing limiters
-            List<String> toRemove = new ArrayList<>();
+            int maxWaiting = Config.meta_service_rpc_rate_limit_max_waiting;
+            String qpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
+            String costConfig = Config.meta_service_rpc_cost_limit_per_core_config;
+            methodQpsConfig = parseConfig(qpsConfig, "QPS");
+            methodCostConfig = parseConfig(costConfig, "cost limit");
+            // Update limiters
+            methodLimiters.clear();
+            /*List<String> toRemove = new ArrayList<>();
             for (Entry<String, MethodRateLimiter> entry : methodLimiters.entrySet()) {
                 String methodName = entry.getKey();
                 int qps = getMethodTotalQps(methodName, defaultQpsPerCore);
@@ -111,27 +125,56 @@ public class MetaServiceRateLimiter {
             LOG.info("Removed zero QPS rate limiter for methods: {}", toRemove);
             for (String methodName : toRemove) {
                 methodLimiters.remove(methodName);
-            }
+            }*/
             // Update last config
             lastEnabled = enabled;
+            lastMaxWaiting = maxWaiting;
             lastDefaultQps = defaultQpsPerCore;
-            lastQpsConfig = currentConfig;
-            lastCostConfig = currentCostConfig;
-            LOG.info("Reloaded meta service RPC rate limit enabled: {}, defaultQps: {}, config: {}",
-                    lastEnabled, lastDefaultQps, lastQpsConfig);
+            lastQpsConfig = qpsConfig;
+            lastCostConfig = costConfig;
+            LOG.info(
+                    "Reloaded meta service RPC rate limit enabled: {}, maxWaiting: {}, defaultQps: {}, qps config: {}, cost config: {}",
+                    lastEnabled, lastMaxWaiting, lastDefaultQps, lastQpsConfig, lastCostConfig);
         }
         return true;
     }
 
-    private void parseQpsConfig(String config) {
+    /*private void parseQpsConfig(String config) {
         parseMethodLimitConfig(config, methodQpsConfig, "QPS");
     }
 
     private void parseCostConfig(String config) {
         parseMethodLimitConfig(config, methodCostConfig, "cost limit");
+    }*/
+
+    private Map<String, Integer> parseConfig(String config, String configName) {
+        if (config == null || config.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<String, Integer> target = new HashMap<>();
+        String[] entries = config.split(";");
+        for (String entry : entries) {
+            if (entry.trim().isEmpty()) {
+                continue;
+            }
+            String[] parts = entry.trim().split(":");
+            if (parts.length == 2) {
+                try {
+                    String methodName = parts[0].trim();
+                    int limit = Integer.parseInt(parts[1].trim());
+                    target.put(methodName, limit);
+                } catch (NumberFormatException e) {
+                    LOG.warn("Invalid {} config entry: {}", configName, entry);
+                }
+            } else {
+                LOG.warn("Invalid {} config entry: {}", configName, entry);
+            }
+        }
+        return target;
     }
 
-    private void parseMethodLimitConfig(String config, Map<String, Integer> target, String configName) {
+    /*private void parseMethodLimitConfig(String config, Map<String, Integer> target, String configName) {
         target.clear();
         if (config == null || config.isEmpty()) {
             return;
@@ -154,7 +197,7 @@ public class MetaServiceRateLimiter {
                 LOG.warn("Invalid {} config entry: {}", configName, entry);
             }
         }
-    }
+    }*/
 
     private int getMethodTotalQps(String methodName, int defaultQpsPerCore) {
         int qpsPerCore = methodQpsConfig.getOrDefault(methodName, defaultQpsPerCore);
@@ -183,30 +226,29 @@ public class MetaServiceRateLimiter {
                 return limiter;
             }
             int qps = getMethodTotalQps(name, Config.meta_service_rpc_rate_limit_default_qps_per_core);
-            if (qps > 0) {
+            int costLimit = getMethodTotalCostLimit(name);
+            if (qps > 0 || costLimit > 0) {
                 MethodRateLimiter newLimiter = new MethodRateLimiter(name, qps,
-                        Config.meta_service_rpc_rate_limit_max_waiting);
-                newLimiter.updateCostLimit(getMethodTotalCostLimit(name));
+                        Config.meta_service_rpc_rate_limit_max_waiting, costLimit);
                 return newLimiter;
             }
             return null;
         });
     }
 
-    public boolean acquire(String methodName, int cost) throws RpcRateLimitException {
+    public void acquire(String methodName, int cost) throws RpcRateLimitException {
         if (isConfigChanged()) {
             reloadConfig();
         }
 
         if (!Config.meta_service_rpc_rate_limit_enabled) {
-            return true;
+            return;
         }
 
         MethodRateLimiter limiter = getMethodLimiter(methodName);
         if (limiter != null) {
-            return limiter.acquire(cost);
+            limiter.acquire(cost);
         }
-        return true;
     }
 
     public void release(String methodName, int cost) {
@@ -238,46 +280,60 @@ public class MetaServiceRateLimiter {
     protected static class MethodRateLimiter {
         private final String methodName;
         private volatile int maxWaiting;
-        private final Semaphore waitingSemaphore;
-        private final RateLimiter rateLimiter;
+        private Semaphore waitingSemaphore;
+        private RateLimiter rateLimiter;
         private CostLimiter costLimiter;
 
-        MethodRateLimiter(String methodName, int qps, int maxWaiting) {
+        /*MethodRateLimiter(String methodName, int qps, int maxWaiting) {
             this.methodName = methodName;
             this.maxWaiting = maxWaiting;
             this.rateLimiter = qps > 0 ? RateLimiter.create(qps) : RateLimiter.create(Double.MAX_VALUE);
             this.waitingSemaphore = new Semaphore(maxWaiting);
             LOG.info("Create rate limiter for method={}, qps={}, maxWaiting={}", methodName, qps, maxWaiting);
+        }*/
+
+        MethodRateLimiter(String methodName, int maxWaiting, int qps, int costLimit) {
+            this.methodName = methodName;
+            if (qps > 0) {
+                this.maxWaiting = maxWaiting;
+                this.waitingSemaphore = new Semaphore(maxWaiting);
+                this.rateLimiter = RateLimiter.create(qps);
+            }
+            this.costLimiter = costLimit > 0 ? new CostLimiter(costLimit) : null;
+            LOG.info("Create rate limiter for method={}, qps={}, maxWaiting={}, cost={}", methodName, qps, maxWaiting,
+                    costLimit);
         }
 
-        MethodRateLimiter(String methodName, int qps, int maxWaiting, int costLimit) {
-            this(methodName, qps, maxWaiting);
-            this.costLimiter = new CostLimiter(costLimit);
+        void acquire(int cost) throws RpcRateLimitException {
+            acquireCostLimit(cost);
+            acquireQpsRateLimit();
         }
 
-        boolean acquire(int cost) throws RpcRateLimitException {
+        void acquireCostLimit(int cost) throws RpcRateLimitException {
+            if (costLimiter == null || cost <= 0) {
+                return;
+            }
             boolean acquired = false;
-            if (costLimiter != null && cost > 0) {
-                try {
-                    acquired = costLimiter.acquire(cost, Config.meta_service_rpc_rate_limit_wait_timeout_ms,
-                            TimeUnit.MILLISECONDS);
-                    if (!acquired) {
-                        throw new RpcRateLimitException(
-                                "Meta service RPC rate limit timeout while waiting for cost limit for method: "
-                                        + methodName + ", cost: " + cost);
-                    }
-                } catch (InterruptedException e) {
+            try {
+                acquired = costLimiter.acquire(cost, Config.meta_service_rpc_rate_limit_wait_timeout_ms,
+                        TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                throw new RpcRateLimitException(
+                        "Meta service RPC rate limit interrupted while waiting for cost limit for method: "
+                                + methodName, e);
+            } finally {
+                if (!acquired) {
                     throw new RpcRateLimitException(
-                            "Meta service RPC rate limit interrupted while waiting for cost limit for method: "
-                                    + methodName, e);
+                            "Meta service RPC rate limit timeout while waiting for cost limit for method: "
+                                    + methodName + ", cost: " + cost);
                 }
             }
-
-            acquire();
-            return acquired;
         }
 
-        void acquire() throws RpcRateLimitException {
+        private void acquireQpsRateLimit() throws RpcRateLimitException {
+            if (rateLimiter == null || waitingSemaphore == null) {
+                return;
+            }
             if (!waitingSemaphore.tryAcquire()) {
                 if (MetricRepo.isInit && Config.isCloudMode()) {
                     CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
@@ -326,7 +382,7 @@ public class MetaServiceRateLimiter {
             waitingSemaphore.release();
         }*/
 
-        void updateQps(int qps) {
+        /*void updateQps(int qps) {
             rateLimiter.setRate(qps);
             LOG.info("Updated rate limiter for method {}: qps={}", methodName, qps);
         }
@@ -341,7 +397,7 @@ public class MetaServiceRateLimiter {
             } else {
                 costLimiter.setLimit(costLimit);
             }
-        }
+        }*/
 
         @VisibleForTesting
         RateLimiter getRateLimiter() {
@@ -350,7 +406,7 @@ public class MetaServiceRateLimiter {
 
         @VisibleForTesting
         public int getAllowWaiting() {
-            return waitingSemaphore.availablePermits();
+            return waitingSemaphore != null ? waitingSemaphore.availablePermits() : -1;
         }
     }
 
