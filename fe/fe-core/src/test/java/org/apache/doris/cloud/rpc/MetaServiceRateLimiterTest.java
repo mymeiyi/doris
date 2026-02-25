@@ -42,6 +42,7 @@ public class MetaServiceRateLimiterTest {
     private long originalWaitTimeout;
     private int originalMaxWaiting;
     private String originalQpsConfig;
+    private String originalCostConfig;
 
     private static class MockMetaServiceRateLimiter extends MetaServiceRateLimiter {
         private final int processors;
@@ -64,6 +65,7 @@ public class MetaServiceRateLimiterTest {
         originalWaitTimeout = Config.meta_service_rpc_rate_limit_wait_timeout_ms;
         originalMaxWaiting = Config.meta_service_rpc_rate_limit_max_waiting;
         originalQpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
+        originalCostConfig = Config.meta_service_rpc_cost_limit_per_core_config;
     }
 
     @After
@@ -73,6 +75,7 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = originalWaitTimeout;
         Config.meta_service_rpc_rate_limit_max_waiting = originalMaxWaiting;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = originalQpsConfig;
+        Config.meta_service_rpc_cost_limit_per_core_config = originalCostConfig;
     }
 
     @Test
@@ -473,5 +476,81 @@ public class MetaServiceRateLimiterTest {
             // limiter.release("method1");
         });
         Assert.assertEquals(0, limiter.getMethodLimiters().size());
+    }
+
+    @Test
+    public void testCostLimitAcquisitionAndFailure() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_cost_limit_per_core_config = "costMethod:5";
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        Assertions.assertDoesNotThrow(() -> {
+            limiter.acquire("costMethod", 3);
+        });
+        limiter.release("costMethod", 3);
+
+        Assertions.assertDoesNotThrow(() -> {
+            limiter.acquire("costMethod", 4);
+        });
+        limiter.release("costMethod", 4);
+
+        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("costMethod", 6));
+        Assert.assertTrue(exception.getMessage().contains("cost limit"));
+        Assertions.assertDoesNotThrow(() -> {
+            limiter.acquire("costMethod", 2);
+        });
+        exception = Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("costMethod", 4));
+        Assert.assertTrue(exception.getMessage().contains("cost limit"));
+        limiter.release("costMethod", 2);
+    }
+
+    @Test
+    public void testCostLimitReloadUpdatesLimit() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_cost_limit_per_core_config = "reloadMethod:5";
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        Assertions.assertThrows(RpcRateLimitException.class, () -> limiter.acquire("reloadMethod", 7));
+
+        Config.meta_service_rpc_cost_limit_per_core_config = "reloadMethod:8";
+        // Assertions.assertTrue(limiter.reloadConfig());
+
+        Assertions.assertDoesNotThrow(() -> {
+            limiter.acquire("reloadMethod", 7);
+        });
+        limiter.release("reloadMethod", 7);
+    }
+
+    @Test
+    public void testCostConfigParsingIgnoresInvalidEntries() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_cost_limit_per_core_config = "goodMethod:5;;bad;bad2:notnum;zero:0";
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        Assertions.assertDoesNotThrow(() -> {
+            limiter.acquire("goodMethod", 4);
+        });
+        limiter.release("goodMethod", 4);
+
+        Assertions.assertDoesNotThrow(() -> {
+            limiter.acquire("zero", 1);
+        });
+        limiter.release("zero", 1);
+
+        Assertions.assertDoesNotThrow(() -> {
+            limiter.acquire("bad2", 1);
+        });
+
+        Assert.assertTrue(limiter.getMethodCostConfig().containsKey("goodMethod"));
+        Assert.assertTrue(limiter.getMethodCostConfig().containsKey("zero"));
+        Assert.assertFalse(limiter.getMethodCostConfig().containsKey("bad2"));
     }
 }
