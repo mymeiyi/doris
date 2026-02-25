@@ -28,6 +28,8 @@ import io.grpc.StatusRuntimeException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Queue;
@@ -98,13 +100,15 @@ public class MetaServiceProxy {
     public Cloud.GetInstanceResponse getInstance(Cloud.GetInstanceRequest request)
             throws RpcException {
         long startTime = System.currentTimeMillis();
-        String methodName = "getInstance";
+        RequestType requestType = RequestType.CREATE_INSTANCE;
+        String methodName = requestType.getMethodName();
+        int cost = getRequestCost(requestType, request);
         if (MetricRepo.isInit && Config.isCloudMode()) {
             CloudMetrics.META_SERVICE_RPC_ALL_TOTAL.increase(1L);
             CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
         }
         try {
-            MetaServiceRateLimiter.getInstance().acquire(methodName, 0);
+            MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
             final MetaServiceClient client = getProxy();
             Cloud.GetInstanceResponse response = client.getInstance(request);
             if (MetricRepo.isInit && Config.isCloudMode()) {
@@ -120,9 +124,9 @@ public class MetaServiceProxy {
                         .update(System.currentTimeMillis() - startTime);
             }
             throw new RpcException("", e.getMessage(), e);
-        } /*finally {
-            MetaServiceRateLimiter.getInstance().release(methodName);
-        }*/
+        } finally {
+            MetaServiceRateLimiter.getInstance().release(methodName, cost);
+        }
     }
 
     public void removeProxy(String address) {
@@ -294,10 +298,109 @@ public class MetaServiceProxy {
         return 1;
     }
 
+    enum RequestType {
+        GET_VERSION("getVersion"),
+        CREATE_TABLETS("createTablets"),
+        UPDATE_TABLET("updateTablet"),
+        BEGIN_TXN("beginTxn"),
+        PRECOMMIT_TXN("precommitTxn"),
+        COMMIT_TXN("commitTxn"),
+        ABORT_TXN("abortTxn"),
+        GET_TXN("getTxn"),
+        GET_TXN_ID("getTxnId"),
+        GET_CURRENT_MAX_TXN_ID("getCurrentMaxTxnId"),
+        BEGIN_SUB_TXN("beginSubTxn"),
+        ABORT_SUB_TXN("abortSubTxn"),
+        CHECK_TXN_CONFLICT("checkTxnConflict"),
+        CLEAN_TXN_LABEL("cleanTxnLabel"),
+        GET_CLUSTER("getCluster"),
+        PREPARE_INDEX("prepareIndex"),
+        COMMIT_INDEX("commitIndex"),
+        CHECK_KV("checkKv"),
+        DROP_INDEX("dropIndex"),
+        PREPARE_PARTITION("preparePartition"),
+        COMMIT_PARTITION("commitPartition"),
+        DROP_PARTITION("dropPartition"),
+        GET_TABLET_STATS("getTabletStats"),
+        CREATE_STAGE("createStage"),
+        GET_STAGE("getStage"),
+        DROP_STAGE("dropStage"),
+        GET_IAM("getIam"),
+        BEGIN_COPY("beginCopy"),
+        FINISH_COPY("finishCopy"),
+        GET_COPY_JOB("getCopyJob"),
+        GET_COPY_FILES("getCopyFiles"),
+        FILTER_COPY_FILES("filterCopyFiles"),
+        ALTER_CLUSTER("alterCluster"),
+        GET_DELETE_BITMAP_UPDATE_LOCK("getDeleteBitmapUpdateLock"),
+        REMOVE_DELETE_BITMAP_UPDATE_LOCK("removeDeleteBitmapUpdateLock"),
+        ALTER_OBJ_STORE_INFO("alterObjStoreInfo"), // deprecated
+        ALTER_STORAGE_VAULT("alterStorageVault"), // new name for alter obj store info
+        FINISH_TABLET_JOB("finishTabletJob"),
+        GET_RL_TASK_COMMIT_ATTACH("getRLTaskCommitAttach"),
+        RESET_RL_PROGRESS("resetRLProgress"),
+        RESET_STREAMING_JOB_OFFSET("resetStreamingJobOffset"),
+        GET_OBJ_STORE_INFO("getObjStoreInfo"),
+        ABORT_TXN_WITH_COORDINATOR("abortTxnWithCoordinator"),
+        GET_PREPARE_TXN_BY_COORDINATOR("getPrepareTxnByCoordinator"),
+        CREATE_INSTANCE("createInstance"),
+        GET_STREAMING_TASK_COMMIT_ATTACH("getStreamingTaskCommitAttach"),
+        DELETE_STREAMING_JOB("deleteStreamingJob"),
+        ALTER_INSTANCE("alterInstance"),
+        BEGIN_SNAPSHOT("beginSnapshot"),
+        UPDATE_SNAPSHOT("updateSnapshot"),
+        COMMIT_SNAPSHOT("commitSnapshot"),
+        ABORT_SNAPSHOT("abortSnapshot"),
+        LIST_SNAPSHOT("listSnapshot"),
+        DROP_SNAPSHOT("dropSnapshot"),
+        CLONE_INSTANCE("cloneInstance"),
+        ;
+
+        private static final Map<String, RequestType> METHOD_NAME_LOOKUP;
+        static {
+            Map<String, RequestType> map = new HashMap<>();
+            for (RequestType type : values()) {
+                map.put(type.methodName, type);
+            }
+            METHOD_NAME_LOOKUP = Collections.unmodifiableMap(map);
+        }
+
+        private final String methodName;
+
+        RequestType(String methodName) {
+            this.methodName = methodName;
+        }
+
+        public String getMethodName() {
+            return methodName;
+        }
+
+        public static RequestType fromMethodName(String methodName) {
+            return METHOD_NAME_LOOKUP.get(methodName);
+        }
+    }
+
+    private int getRequestCost(RequestType requestType, Object request) {
+        int cost = 0;
+        switch (requestType) {
+            case GET_VERSION:
+                Cloud.GetVersionRequest getVersionRequest = (Cloud.GetVersionRequest) request;
+                if (getVersionRequest.hasBatchMode() && getVersionRequest.getBatchMode()) {
+                    cost = getVersionRequest.getDbIdsCount();
+                } else {
+                    cost = 1;
+                }
+            default:
+                break;
+        }
+        return cost;
+    }
+
     public Future<Cloud.GetVersionResponse> getVisibleVersionAsync(Cloud.GetVersionRequest request)
             throws RpcException {
         long startTime = System.currentTimeMillis();
-        String methodName = "getVersion";
+        RequestType requestType = RequestType.GET_VERSION;
+        String methodName = requestType.getMethodName();
         MetaServiceClient client = null;
 
         if (MetricRepo.isInit && Config.isCloudMode()) {
@@ -305,7 +408,7 @@ public class MetaServiceProxy {
             CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
         }
 
-        int cost = getRequestCost(request);
+        int cost = getRequestCost(requestType, request);
         try {
             MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
             client = getProxy();
