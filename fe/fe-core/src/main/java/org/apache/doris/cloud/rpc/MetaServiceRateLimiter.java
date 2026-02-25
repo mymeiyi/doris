@@ -109,7 +109,8 @@ public class MetaServiceRateLimiter {
             methodQpsConfig = parseConfig(qpsConfig, "QPS");
             methodCostConfig = parseConfig(costConfig, "cost limit");
             // Update limiters
-            methodLimiters.clear();
+            updateMethodLimiters(defaultQpsPerCore, maxWaiting);
+            // methodLimiters.clear();
             /*List<String> toRemove = new ArrayList<>();
             for (Entry<String, MethodRateLimiter> entry : methodLimiters.entrySet()) {
                 String methodName = entry.getKey();
@@ -137,6 +138,27 @@ public class MetaServiceRateLimiter {
                     lastEnabled, lastMaxWaiting, lastDefaultQps, lastQpsConfig, lastCostConfig);
         }
         return true;
+    }
+
+    private void updateMethodLimiters(int defaultQpsPerCore, int maxWaiting) {
+        List<String> toRemove = new ArrayList<>();
+        for (Entry<String, MethodRateLimiter> entry : methodLimiters.entrySet()) {
+            String methodName = entry.getKey();
+            int qps = getMethodTotalQps(methodName, defaultQpsPerCore);
+            int costLimit = getMethodTotalCostLimit(methodName);
+            if (qps <= 0 && costLimit <= 0) {
+                toRemove.add(methodName);
+                continue;
+            }
+            MethodRateLimiter limiter = entry.getValue();
+            limiter.updateQps(qps, maxWaiting);
+            limiter.updateCostLimit(costLimit);
+            LOG.info("Updated rate limiter for method {}: qps={}, cost={}", methodName, qps, costLimit);
+        }
+        LOG.info("Removed zero QPS rate limiter for methods: {}", toRemove);
+        for (String methodName : toRemove) {
+            methodLimiters.remove(methodName);
+        }
     }
 
     /*private void parseQpsConfig(String config) {
@@ -382,8 +404,19 @@ public class MetaServiceRateLimiter {
             waitingSemaphore.release();
         }*/
 
-        /*void updateQps(int qps) {
-            rateLimiter.setRate(qps);
+        void updateQps(int qps, int maxWaiting) {
+            if (qps <= 0) {
+                rateLimiter = null;
+                waitingSemaphore = null;
+                return;
+            }
+            if (maxWaiting != this.maxWaiting) {
+                this.maxWaiting = maxWaiting;
+                this.waitingSemaphore = new Semaphore(maxWaiting);
+            }
+            if (qps != rateLimiter.getRate()) {
+                rateLimiter.setRate(qps);
+            }
             LOG.info("Updated rate limiter for method {}: qps={}", methodName, qps);
         }
 
@@ -397,7 +430,7 @@ public class MetaServiceRateLimiter {
             } else {
                 costLimiter.setLimit(costLimit);
             }
-        }*/
+        }
 
         @VisibleForTesting
         RateLimiter getRateLimiter() {
