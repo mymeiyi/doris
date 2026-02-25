@@ -3651,9 +3651,14 @@ public class Config extends ConfigBase {
     public static long meta_service_rpc_rate_limit_wait_timeout_ms = 5000;
 
     @ConfField(mutable = true, description = {
-            "各方法的 QPS 在每个 CPU 内核的限制配置，格式: method1:qps1;method2:qps2，例如: getVersion:100;getTabletStats:50",
-            "QPS limit config per method in per cpu core, format: method1:qps1;method2:qps2, e.g.: getVersion:100;getTabletStats:50"})
+            "访问 meta service 的各 RPC 方法的 QPS 在每个 CPU 内核的限制配置，格式: method1:qps1;method2:qps2，例如: getVersion:100;getTabletStats:50",
+            "QPS limit config per rpc method to meta service in per cpu core, format: method1:qps1;method2:qps2, e.g.: getVersion:100;getTabletStats:50"})
     public static String meta_service_rpc_rate_limit_qps_per_core_config = "";
+
+    @ConfField(mutable = true, description = {
+            "各方法的 cost 在每个 CPU 内核的限制配置，格式: method1:cost1;method2:cost2，例如: getVersion:1000;getTabletStats:50。cost 的计算方式是预估 rpc 需要访问的 kv 数",
+            "Cost limit config per method in per cpu core, format: method1:cost1;method2:cost2, e.g.: getVersion:1000;getTabletStats:50. The cost is calculated based on the estimated number of kv accesses required by the rpc"})
+    public static String meta_service_rpc_cost_limit_per_core_config = "getVersion:1000";
 
     @ConfField(mutable = true, description = {"存算分离模式下自动启停功能，对于该配置中的数据库名不进行唤醒操作，"
             + "用于内部作业的数据库，例如统计信息用到的数据库，"

@@ -34,6 +34,9 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class MetaServiceRateLimiter {
     private static final Logger LOG = LogManager.getLogger(MetaServiceRateLimiter.class);
@@ -46,10 +49,6 @@ public class MetaServiceRateLimiter {
     private final Map<String, Integer> methodQpsConfig = new ConcurrentHashMap<>();
     private final Map<String, MethodRateLimiter> methodLimiters = new ConcurrentHashMap<>();
 
-    public MetaServiceRateLimiter() {
-        reloadConfig();
-    }
-
     public static MetaServiceRateLimiter getInstance() {
         if (instance == null) {
             synchronized (MetaServiceRateLimiter.class) {
@@ -59,6 +58,10 @@ public class MetaServiceRateLimiter {
             }
         }
         return instance;
+    }
+
+    public MetaServiceRateLimiter() {
+        reloadConfig();
     }
 
     private boolean isConfigChanged() {
@@ -145,6 +148,7 @@ public class MetaServiceRateLimiter {
         return qpsPerCore * getAvailableProcessors();
     }
 
+    // TODO mock
     protected int getAvailableProcessors() {
         return Runtime.getRuntime().availableProcessors();
     }
@@ -164,37 +168,49 @@ public class MetaServiceRateLimiter {
         });
     }
 
-    public void acquire(String methodName) throws RpcRateLimitException {
+    public boolean acquire(String methodName, int cost) throws RpcRateLimitException {
         if (isConfigChanged()) {
             reloadConfig();
         }
 
         if (!Config.meta_service_rpc_rate_limit_enabled) {
-            return;
+            return true;
         }
 
         MethodRateLimiter limiter = getMethodLimiter(methodName);
         if (limiter != null) {
-            limiter.acquire();
+            return limiter.acquire(cost);
         }
+        return true;
     }
 
-    /*public void release(String methodName) {
+    public void release(String methodName, int cost) {
         if (!Config.meta_service_rpc_rate_limit_enabled) {
             return;
         }
 
         MethodRateLimiter limiter = methodLimiters.get(methodName);
         if (limiter != null) {
-            limiter.release();
+            limiter.release(cost);
         }
-    }*/
+    }
+
+    @VisibleForTesting
+    public Map<String, Integer> getMethodQpsConfig() {
+        return methodQpsConfig;
+    }
+
+    @VisibleForTesting
+    public Map<String, MethodRateLimiter> getMethodLimiters() {
+        return methodLimiters;
+    }
 
     protected static class MethodRateLimiter {
         private final String methodName;
         private volatile int maxWaiting;
-        private final RateLimiter rateLimiter;
         private final Semaphore waitingSemaphore;
+        private final RateLimiter rateLimiter;
+        private CostLimiter costLimiter;
 
         MethodRateLimiter(String methodName, int qps, int maxWaiting) {
             this.methodName = methodName;
@@ -202,6 +218,33 @@ public class MetaServiceRateLimiter {
             this.rateLimiter = qps > 0 ? RateLimiter.create(qps) : RateLimiter.create(Double.MAX_VALUE);
             this.waitingSemaphore = new Semaphore(maxWaiting);
             LOG.info("Create rate limiter for method={}, qps={}, maxWaiting={}", methodName, qps, maxWaiting);
+        }
+
+        MethodRateLimiter(String methodName, int qps, int maxWaiting, int costLimit) {
+            this(methodName, qps, maxWaiting);
+            this.costLimiter = new CostLimiter(costLimit);
+        }
+
+        boolean acquire(int cost) throws RpcRateLimitException {
+            boolean acquired = false;
+            if (costLimiter != null && cost > 0) {
+                try {
+                    acquired = costLimiter.acquire(cost, Config.meta_service_rpc_rate_limit_wait_timeout_ms,
+                            TimeUnit.MILLISECONDS);
+                    if (!acquired) {
+                        throw new RpcRateLimitException(
+                                "Meta service RPC rate limit timeout while waiting for cost limit for method: "
+                                        + methodName + ", cost: " + cost);
+                    }
+                } catch (InterruptedException e) {
+                    throw new RpcRateLimitException(
+                            "Meta service RPC rate limit interrupted while waiting for cost limit for method: "
+                                    + methodName, e);
+                }
+            }
+
+            acquire();
+            return acquired;
         }
 
         void acquire() throws RpcRateLimitException {
@@ -243,6 +286,12 @@ public class MetaServiceRateLimiter {
             }
         }
 
+        void release(int cost) {
+            if (costLimiter != null && cost > 0) {
+                costLimiter.release(cost);
+            }
+        }
+
         /*void release() {
             waitingSemaphore.release();
         }*/
@@ -263,13 +312,122 @@ public class MetaServiceRateLimiter {
         }
     }
 
-    @VisibleForTesting
-    public Map<String, Integer> getMethodQpsConfig() {
-        return methodQpsConfig;
-    }
+    protected static class CostLimiter {
+        private volatile int limit;
+        private int currentCost;
+        private final Lock lock = new ReentrantLock();
+        private final Condition condition = lock.newCondition();
 
-    @VisibleForTesting
-    public Map<String, MethodRateLimiter> getMethodLimiters() {
-        return methodLimiters;
+        public CostLimiter(int limit) {
+            if (limit < 0) {
+                throw new IllegalArgumentException("limit must be >= 0");
+            }
+            this.limit = limit;
+            this.currentCost = 0;
+        }
+
+        /**
+         * 动态修改总代价上限（线程安全）
+         * @param newLimit 新的上限值，必须 >= 0
+         */
+        public void setLimit(int newLimit) {
+            if (newLimit < 0) {
+                throw new IllegalArgumentException("newLimit must be >= 0");
+            }
+            lock.lock();
+            try {
+                this.limit = newLimit;
+                // 无论上限增加还是减少，都唤醒所有等待线程，让它们重新检查条件
+                // 如果上限增加，部分线程可能现在可以获取令牌；如果上限减少，等待线程会继续等待
+                condition.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        public int getLimit() {
+            // limit 本身由锁保护，但为了无锁读取可以用 volatile（此处直接返回，因有锁可见性保证）
+            lock.lock();
+            try {
+                return limit;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        public int getCurrentCost() {
+            lock.lock();
+            try {
+                return currentCost;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        /**
+         * 尝试获取代价，最多等待指定时间
+         */
+        public boolean acquire(int cost, long timeout, TimeUnit unit) throws InterruptedException {
+            if (cost < 0) {
+                throw new IllegalArgumentException("cost must be >= 0");
+            }
+            if (cost > limit) {
+                return false;  // 单个代价超过上限直接拒绝
+            }
+            long nanos = unit.toNanos(timeout);
+            lock.lockInterruptibly();
+            try {
+                while (currentCost + cost > limit) {
+                    if (nanos <= 0) {
+                        return false;
+                    }
+                    nanos = condition.awaitNanos(nanos);
+                }
+                currentCost += cost;
+                return true;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        public void release(int cost) {
+            if (cost < 0) throw new IllegalArgumentException("cost must be >= 0");
+            lock.lock();
+            try {
+                currentCost -= cost;
+                if (currentCost < 0) currentCost = 0;  // 防御性清零
+                condition.signalAll();
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        // 其他方法：tryAcquire, acquire 无限等待等（类似修改，需使用锁访问最新limit）
+        public boolean tryAcquire(int cost) {
+            if (cost < 0) throw new IllegalArgumentException("cost must be >= 0");
+            lock.lock();
+            try {
+                if (currentCost + cost <= limit) {
+                    currentCost += cost;
+                    return true;
+                }
+                return false;
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        public void acquire(int cost) throws InterruptedException {
+            if (cost < 0) throw new IllegalArgumentException("cost must be >= 0");
+            lock.lockInterruptibly();
+            try {
+                while (currentCost + cost > limit) {
+                    condition.await();
+                }
+                currentCost += cost;
+            } finally {
+                lock.unlock();
+            }
+        }
     }
 }
