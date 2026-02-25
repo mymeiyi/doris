@@ -200,8 +200,8 @@ public class MetaServiceRateLimiter {
             int qps = getMethodTotalQps(name, Config.meta_service_rpc_rate_limit_default_qps_per_core);
             int costLimit = getMethodTotalCostLimit(name);
             if (qps > 0 || costLimit > 0) {
-                MethodRateLimiter newLimiter = new MethodRateLimiter(name, qps,
-                        Config.meta_service_rpc_rate_limit_max_waiting, costLimit);
+                MethodRateLimiter newLimiter = new MethodRateLimiter(name,
+                        Config.meta_service_rpc_rate_limit_max_waiting, qps, costLimit);
                 return newLimiter;
             }
             return null;
