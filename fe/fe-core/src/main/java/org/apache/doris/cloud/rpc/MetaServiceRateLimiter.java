@@ -440,7 +440,7 @@ public class MetaServiceRateLimiter {
 
         boolean acquire(int cost, long timeout, TimeUnit unit) throws InterruptedException, RpcRateLimitException {
             if (cost > limit) {
-                throw new RpcRateLimitException("Cost " + cost + " exceeds the limit " + limit);
+                throw new CostExceedLimitException("Cost " + cost + " exceeds the limit " + limit);
             }
             long nanos = unit.toNanos(timeout);
             lock.lockInterruptibly();

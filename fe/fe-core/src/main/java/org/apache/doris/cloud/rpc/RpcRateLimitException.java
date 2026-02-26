@@ -38,3 +38,21 @@ public class RpcRateLimitException extends RpcException {
         super("", message, cause);
     }
 }
+
+class TooManyWaitingRequestsException extends RpcRateLimitException {
+    public TooManyWaitingRequestsException(String message) {
+        super(message);
+    }
+}
+
+class WaitRateLimitTimeoutException extends RpcRateLimitException {
+    public WaitRateLimitTimeoutException(String message) {
+        super(message);
+    }
+}
+
+class CostExceedLimitException extends RpcRateLimitException {
+    public CostExceedLimitException(String message) {
+        super(message);
+    }
+}
