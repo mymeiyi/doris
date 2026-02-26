@@ -263,7 +263,7 @@ public class MetaServiceRateLimiter {
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
                 this.rateLimiter = RateLimiter.create(qps);
             }
-            this.costLimiter = costLimit > 0 ? new CostLimiter(methodName, costLimit) : null;
+            this.costLimiter = costLimit > 0 ? new CostLimiter(costLimit) : null;
             LOG.info("Create rate limiter for method={}: maxWaitRequestNum={}, qps={}, cost={}", methodName,
                     maxWaitRequestNum, qps, costLimit);
         }
@@ -327,6 +327,7 @@ public class MetaServiceRateLimiter {
             if (rateLimiter == null || waitingSemaphore == null) {
                 return;
             }
+            // Try to acquire waiting semaphore first to avoid too many waiting requests
             if (!waitingSemaphore.tryAcquire()) {
                 if (MetricRepo.isInit && Config.isCloudMode()) {
                     CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
@@ -334,7 +335,7 @@ public class MetaServiceRateLimiter {
                 throw new RpcRateLimitException("Meta service RPC rate limit exceeded for method: " + methodName
                         + ", too many waiting requests (max=" + maxWaitRequestNum + ")");
             }
-
+            // Try to acquire rate limiter permit with timeout
             try {
                 long timeoutMs = Config.meta_service_rpc_rate_limit_wait_timeout_ms;
                 boolean acquired = rateLimiter.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
@@ -381,7 +382,7 @@ public class MetaServiceRateLimiter {
             } else if (qps != rateLimiter.getRate()) {
                 rateLimiter.setRate(qps);
             }
-            LOG.info("Updated rate limiter for method {}: qps={}", methodName, qps);
+            LOG.info("Updated rate limiter for method {}: maxWaiting={}, qps={}", methodName, maxWaitRequestNum, qps);
         }
 
         private void updateCostLimit(int costLimit) {
@@ -390,7 +391,7 @@ public class MetaServiceRateLimiter {
                 return;
             }
             if (costLimiter == null) {
-                costLimiter = new CostLimiter(methodName, costLimit);
+                costLimiter = new CostLimiter(costLimit);
             } else {
                 costLimiter.setLimit(costLimit);
             }
@@ -413,17 +414,15 @@ public class MetaServiceRateLimiter {
     }
 
     protected static class CostLimiter {
-        private final String methodName;
         private volatile int limit;
         private int currentCost;
-        private final Lock lock = new ReentrantLock();
+        private final Lock lock = new ReentrantLock(true);
         private final Condition condition = lock.newCondition();
 
-        CostLimiter(String methodName, int limit) {
+        CostLimiter(int limit) {
             if (limit < 0) {
                 throw new IllegalArgumentException("limit must be >= 0");
             }
-            this.methodName = methodName;
             this.limit = limit;
             this.currentCost = 0;
         }
