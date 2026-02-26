@@ -29,6 +29,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
+import org.mockito.Mock;
 import org.mockito.Mockito;
 
 import java.util.concurrent.CountDownLatch;
@@ -1094,7 +1095,9 @@ public class MetaServiceRateLimiterTest {
 
     @Test
     public void test() throws RpcRateLimitException {
-        MethodRateLimiter methodRateLimiter = new MethodRateLimiter("testMethod", 8, 1, 7);
+        MethodRateLimiter realMethodRateLimiter = new MethodRateLimiter("testMethod", 8, 1, 7);
+        // MethodRateLimiter methodRateLimiter = Mockito.mock(MethodRateLimiter.class);
+        MethodRateLimiter methodRateLimiter = Mockito.spy(realMethodRateLimiter);
         Mockito.doThrow(new RpcRateLimitException("QPS limit exceeded"))
                 .when(methodRateLimiter)
                 .acquireQpsRateLimit();
