@@ -66,7 +66,7 @@ public class MetaServiceRateLimiter {
         return instance;
     }
 
-    public MetaServiceRateLimiter() {
+    MetaServiceRateLimiter() {
         reloadConfig();
     }
 
@@ -136,9 +136,9 @@ public class MetaServiceRateLimiter {
                 continue;
             }
             MethodRateLimiter limiter = entry.getValue();
-            limiter.updateQps(qps, maxWaitRequestNum);
-            limiter.updateCostLimit(costLimit);
-            LOG.info("Updated rate limiter for method {}: qps={}, cost={}", methodName, qps, costLimit);
+            limiter.update(maxWaitRequestNum, qps, costLimit);
+            LOG.info("Updated rate limiter for method {}: maxWaitRequestNum={}, qps={}, cost={}", methodName,
+                    maxWaitRequestNum, qps, costLimit);
         }
         if (!toRemove.isEmpty()) {
             LOG.info("Remove zero QPS rate limiter for methods: {}", toRemove);
@@ -221,10 +221,10 @@ public class MetaServiceRateLimiter {
         }
 
         MethodRateLimiter limiter = getMethodLimiter(methodName);
-        if (limiter != null) {
-            return limiter.acquire(cost);
+        if (limiter == null) {
+            return false;
         }
-        return false;
+        return limiter.acquire(cost);
     }
 
     public void release(String methodName, int cost) {
@@ -264,15 +264,15 @@ public class MetaServiceRateLimiter {
                 this.rateLimiter = RateLimiter.create(qps);
             }
             this.costLimiter = costLimit > 0 ? new CostLimiter(methodName, costLimit) : null;
-            LOG.info("Create rate limiter for method={}, qps={}, maxWaitRequestNum={}, cost={}", methodName, qps,
-                    maxWaitRequestNum, costLimit);
+            LOG.info("Create rate limiter for method={}: maxWaitRequestNum={}, qps={}, cost={}", methodName,
+                    maxWaitRequestNum, qps, costLimit);
         }
 
         boolean acquire(int cost) throws RpcRateLimitException {
             long startAt = System.nanoTime();
-            boolean acquired = acquireCostLimit(cost);
+            boolean acquired = acquireCostLimit(costLimiter, cost);
             try {
-                acquireQpsRateLimit();
+                acquireQpsRateLimit(waitingSemaphore, rateLimiter);
                 return acquired;
             } catch (RpcRateLimitException | RuntimeException e) {
                 if (acquired) {
@@ -297,7 +297,7 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        boolean acquireCostLimit(int cost) throws RpcRateLimitException {
+        boolean acquireCostLimit(CostLimiter costLimiter, int cost) throws RpcRateLimitException {
             if (costLimiter == null || cost <= 0) {
                 return false;
             }
@@ -316,16 +316,14 @@ public class MetaServiceRateLimiter {
                         + methodName + ", requestCost: " + cost + ", currentCost: "
                         + costLimiter.currentCost + ", limit: " + costLimiter.limit, e);
             } finally {
-                if (MetricRepo.isInit && Config.isCloudMode()) {
-                    if (!acquired) {
-                        CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
-                    }
+                if (MetricRepo.isInit && Config.isCloudMode() && !acquired) {
+                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                 }
             }
             return acquired;
         }
 
-        void acquireQpsRateLimit() throws RpcRateLimitException {
+        void acquireQpsRateLimit(Semaphore waitingSemaphore, RateLimiter rateLimiter) throws RpcRateLimitException {
             if (rateLimiter == null || waitingSemaphore == null) {
                 return;
             }
@@ -333,15 +331,13 @@ public class MetaServiceRateLimiter {
                 if (MetricRepo.isInit && Config.isCloudMode()) {
                     CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                 }
-                throw new RpcRateLimitException(
-                    "Meta service RPC rate limit exceeded for method: " + methodName
-                    + ", too many waiting requests (max=" + maxWaitRequestNum + ")");
+                throw new RpcRateLimitException("Meta service RPC rate limit exceeded for method: " + methodName
+                        + ", too many waiting requests (max=" + maxWaitRequestNum + ")");
             }
 
             try {
                 long timeoutMs = Config.meta_service_rpc_rate_limit_wait_timeout_ms;
                 boolean acquired = rateLimiter.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
-
                 if (!acquired) {
                     if (MetricRepo.isInit && Config.isCloudMode()) {
                         CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
@@ -353,8 +349,7 @@ public class MetaServiceRateLimiter {
             } catch (RpcRateLimitException e) {
                 throw e;
             } catch (Exception e) {
-                throw new RpcRateLimitException(
-                    "Failed to acquire rate limit for method: " + methodName, e);
+                throw new RpcRateLimitException("Failed to acquire rate limit for method: " + methodName, e);
             } finally {
                 waitingSemaphore.release();
             }
@@ -366,7 +361,12 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        void updateQps(int qps, int maxWaitRequestNum) {
+        void update(int maxWaitRequestNum, int qps, int costLimit) {
+            updateQps(maxWaitRequestNum, qps);
+            updateCostLimit(costLimit);
+        }
+
+        private void updateQps(int maxWaitRequestNum, int qps) {
             if (qps <= 0) {
                 rateLimiter = null;
                 waitingSemaphore = null;
@@ -384,7 +384,7 @@ public class MetaServiceRateLimiter {
             LOG.info("Updated rate limiter for method {}: qps={}", methodName, qps);
         }
 
-        void updateCostLimit(int costLimit) {
+        private void updateCostLimit(int costLimit) {
             if (costLimit <= 0) {
                 costLimiter = null;
                 return;
