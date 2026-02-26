@@ -297,7 +297,7 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        boolean acquireCostLimit(CostLimiter costLimiter, int cost) throws RpcRateLimitException {
+        private boolean acquireCostLimit(CostLimiter costLimiter, int cost) throws RpcRateLimitException {
             if (costLimiter == null || cost <= 0) {
                 return false;
             }
@@ -323,6 +323,7 @@ public class MetaServiceRateLimiter {
             return acquired;
         }
 
+        @VisibleForTesting
         void acquireQpsRateLimit(Semaphore waitingSemaphore, RateLimiter rateLimiter) throws RpcRateLimitException {
             if (rateLimiter == null || waitingSemaphore == null) {
                 return;

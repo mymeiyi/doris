@@ -22,6 +22,7 @@ import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.CostLimiter;
 import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.MethodRateLimiter;
 import org.apache.doris.common.Config;
 
+import com.google.common.util.concurrent.RateLimiter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.After;
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.Assertions;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1101,7 +1103,7 @@ public class MetaServiceRateLimiterTest {
             }
 
             @Override
-            void acquireQpsRateLimit() throws RpcRateLimitException {
+            void acquireQpsRateLimit(Semaphore waitingSemaphore, RateLimiter rateLimiter) throws RpcRateLimitException {
                 throw new RpcRateLimitException("QPS limit exceeded");
             }
         }
