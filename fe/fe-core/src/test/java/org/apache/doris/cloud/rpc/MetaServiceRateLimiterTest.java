@@ -1096,11 +1096,13 @@ public class MetaServiceRateLimiterTest {
     @Test
     public void test() throws RpcRateLimitException {
         MethodRateLimiter realMethodRateLimiter = new MethodRateLimiter("testMethod", 8, 1, 7);
-        // MethodRateLimiter methodRateLimiter = Mockito.mock(MethodRateLimiter.class);
         MethodRateLimiter methodRateLimiter = Mockito.spy(realMethodRateLimiter);
-        Mockito.doThrow(new RpcRateLimitException("QPS limit exceeded"))
+        /*Mockito.doThrow(new RpcRateLimitException("QPS limit exceeded"))
                 .when(methodRateLimiter)
-                .acquireQpsRateLimit();
+                .acquireQpsRateLimit();*/
+        Mockito.doAnswer(invocation -> {
+            throw new RpcRateLimitException("QPS limit exceeded");
+        }).when(methodRateLimiter).acquireQpsRateLimit();
         AtomicBoolean acquired = new AtomicBoolean(false);
         Assertions.assertThrows(RpcRateLimitException.class, () -> acquired.set(methodRateLimiter.acquire(3)));
         Assert.assertFalse(acquired.get());
