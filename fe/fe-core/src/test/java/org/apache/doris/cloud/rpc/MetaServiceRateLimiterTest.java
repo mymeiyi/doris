@@ -901,16 +901,14 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
         Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:5";
 
-        MetaServiceRateLimiter.getInstance().reloadConfig();
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
         Cloud.GetVersionRequest.Builder builder = Cloud.GetVersionRequest.newBuilder().setBatchMode(true);
         for (int i = 0; i < 10; i++) {
             builder.addDbIds(i);
             builder.addTableIds(i);
         }
-        int cost = MetaServiceRateLimiter.getInstance().getRequestCost("getVersion", builder.build());
-        LOG.info("sout: Calculated cost for getVersion: {}", cost);
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        int cost = limiter.getRequestCost("getVersion", builder.build());
 
         // Try to acquire cost greater than limit - should require limit (cost is clamped to 5)
         AtomicBoolean acquired = new AtomicBoolean(false);
