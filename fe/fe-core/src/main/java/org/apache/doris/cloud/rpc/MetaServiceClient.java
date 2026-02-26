@@ -22,6 +22,7 @@ import org.apache.doris.cloud.proto.MetaServiceGrpc;
 import org.apache.doris.common.Config;
 
 import com.google.common.base.Preconditions;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.gson.Gson;
 import com.google.gson.stream.JsonReader;
 import io.grpc.ConnectivityState;
@@ -36,7 +37,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Random;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 public class MetaServiceClient {
@@ -119,7 +119,7 @@ public class MetaServiceClient {
         }
     }
 
-    public Future<Cloud.GetVersionResponse> getVisibleVersionAsync(Cloud.GetVersionRequest request) {
+    public ListenableFuture<Cloud.GetVersionResponse> getVisibleVersionAsync(Cloud.GetVersionRequest request) {
         if (!request.hasCloudUniqueId()) {
             Cloud.GetVersionRequest.Builder builder = Cloud.GetVersionRequest.newBuilder();
             builder.mergeFrom(request);
