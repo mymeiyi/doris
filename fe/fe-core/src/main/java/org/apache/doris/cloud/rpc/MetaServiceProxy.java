@@ -19,6 +19,7 @@ package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.proto.Cloud.GetVersionResponse;
+import static org.apache.doris.cloud.rpc.MetaServiceRateLimiter.getRequestCost;
 import org.apache.doris.common.Config;
 import org.apache.doris.metric.CloudMetrics;
 import org.apache.doris.metric.MetricRepo;
@@ -711,15 +712,5 @@ public class MetaServiceProxy {
         String methodName = "cloneInstance";
         return executeWithMetrics(methodName, getRequestCost(methodName, request),
                 (client) -> client.cloneInstance(request));
-    }
-
-    private int getRequestCost(String methodName, Object request) {
-        if (methodName.equals("getVersion")) {
-            Cloud.GetVersionRequest getVersionRequest = (Cloud.GetVersionRequest) request;
-            return getVersionRequest.hasBatchMode() && getVersionRequest.getBatchMode()
-                    ? getVersionRequest.getDbIdsCount() : 1;
-        }
-        // TODO the cost of other methods is not supported now
-        return 1;
     }
 }

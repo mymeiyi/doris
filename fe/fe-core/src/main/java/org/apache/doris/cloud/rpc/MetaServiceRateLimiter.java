@@ -17,6 +17,7 @@
 
 package org.apache.doris.cloud.rpc;
 
+import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.profile.SummaryProfile;
 import org.apache.doris.metric.CloudMetrics;
@@ -480,5 +481,27 @@ public class MetaServiceRateLimiter {
                 lock.unlock();
             }
         }
+    }
+
+    public static int getRequestCost(String methodName, Object request) {
+        if (methodName.equals("getVersion")) {
+            Cloud.GetVersionRequest getVersionRequest = (Cloud.GetVersionRequest) request;
+            if (getVersionRequest.hasBatchMode() && getVersionRequest.getBatchMode()) {
+                int cost = getVersionRequest.getDbIdsCount();
+                if (Config.meta_service_rpc_cost_clamped_to_limit_enabled) {
+                    int limit = getInstance().getMethodTotalCostLimit(methodName);
+                    if (limit > 0 && cost > limit) {
+                        cost = limit;
+                        LOG.info("Clamped cost for method {} from {} to limit {}", methodName,
+                                getVersionRequest.getDbIdsCount(), limit);
+                    }
+                }
+                return cost;
+            } else {
+                return 1;
+            }
+        }
+        // TODO the cost of other methods is not supported now
+        return 1;
     }
 }

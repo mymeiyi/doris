@@ -3664,6 +3664,12 @@ public class Config extends ConfigBase {
                     + "The cost is calculated based on the estimated number of kv accesses required by the rpc"})
     public static String meta_service_rpc_cost_limit_per_core_config = "getVersion:5000";
 
+    @ConfField(mutable = true, description = {
+            "meta-service RPC cost 如果超出 limit，调整到 limit 值，防止 cost 较大的 RPC 无法成功执行，",
+            "If the meta-service RPC cost exceeds the limit, it will be adjusted to the limit value "
+                    + "to prevent RPCs with high costs from failing to execute."})
+    public static boolean meta_service_rpc_cost_clamped_to_limit_enabled = true;
+
     @ConfField(mutable = true, description = {"存算分离模式下自动启停功能，对于该配置中的数据库名不进行唤醒操作，"
             + "用于内部作业的数据库，例如统计信息用到的数据库，"
             + "举例：auto_start_ignore_db_names=__internal_schema, information_schema",
