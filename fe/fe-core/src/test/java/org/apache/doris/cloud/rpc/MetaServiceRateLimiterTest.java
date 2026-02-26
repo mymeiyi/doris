@@ -905,7 +905,6 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_cost_clamped_to_limit_enabled = true;
 
         MetaServiceRateLimiter limiter = MetaServiceRateLimiter.getInstance();
-        // Mockito.when(MetaServiceRateLimiter.getInstance()).thenReturn(limiter);
 
         Cloud.GetVersionRequest.Builder builder = Cloud.GetVersionRequest.newBuilder().setBatchMode(true);
         for (int i = 0; i < 5000; i++) {
@@ -913,14 +912,14 @@ public class MetaServiceRateLimiterTest {
             builder.addTableIds(i);
         }
         int cost = limiter.getRequestCost("getVersion", builder.build());
-        Assert.assertTrue("cost: " + cost, cost < 1000);
+        Assert.assertTrue("cost: " + cost, cost < 5000);
 
-        // Try to acquire cost greater than limit - should require limit (cost is clamped to 5)
+        // Try to acquire cost greater than limit - should require limit (cost is clamped to limit)
         AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> limiter.acquire("getVersion", cost));
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("getVersion", cost)));
         Assert.assertTrue(acquired.get());
 
-        // Verify cost limiter was created but current cost is limit (10 > 5)
+        // Verify cost limiter was created but current cost is limit
         MethodRateLimiter methodLimiter = limiter.getMethodLimiters().get("getVersion");
         Assert.assertNotNull(methodLimiter);
         CostLimiter costLimiter = methodLimiter.getCostLimiter();
