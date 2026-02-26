@@ -325,7 +325,7 @@ public class MetaServiceRateLimiter {
             return acquired;
         }
 
-        private void acquireQpsRateLimit() throws RpcRateLimitException {
+        void acquireQpsRateLimit() throws RpcRateLimitException {
             if (rateLimiter == null || waitingSemaphore == null) {
                 return;
             }
@@ -487,12 +487,18 @@ public class MetaServiceRateLimiter {
     }
 
     public static int getRequestCost(String methodName, Object request) {
+        LOG.info("sout: methodName={}, request={}, enabled: {}", methodName, request,
+                Config.meta_service_rpc_cost_clamped_to_limit_enabled);
         if (methodName.equals("getVersion")) {
             Cloud.GetVersionRequest getVersionRequest = (Cloud.GetVersionRequest) request;
             if (getVersionRequest.hasBatchMode() && getVersionRequest.getBatchMode()) {
                 int cost = getVersionRequest.getDbIdsCount();
+                LOG.info("sout: Clamped cost for method {} from {}", methodName,
+                        getVersionRequest.getDbIdsCount());
                 if (Config.meta_service_rpc_cost_clamped_to_limit_enabled) {
                     int limit = getInstance().getMethodTotalCostLimit(methodName);
+                    LOG.info("sout2: Clamped cost for method {} from {} to limit {}", methodName,
+                            getVersionRequest.getDbIdsCount(), limit);
                     if (limit > 0 && cost > limit) {
                         cost = limit;
                         LOG.info("Clamped cost for method {} from {} to limit {}", methodName,

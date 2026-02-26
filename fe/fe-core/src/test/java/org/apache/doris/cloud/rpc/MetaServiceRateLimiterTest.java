@@ -29,6 +29,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
+import org.mockito.Mockito;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -907,6 +908,7 @@ public class MetaServiceRateLimiterTest {
             builder.addTableIds(i);
         }
         int cost = MetaServiceRateLimiter.getInstance().getRequestCost("getVersion", builder.build());
+        LOG.info("sout: Calculated cost for getVersion: {}", cost);
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
 
@@ -1091,13 +1093,25 @@ public class MetaServiceRateLimiterTest {
         limiter.release("recreate", 1);
     }
 
+    @Test
+    public void test() throws RpcRateLimitException {
+        MethodRateLimiter methodRateLimiter = new MethodRateLimiter("testMethod", 8, 1, 7);
+        Mockito.doThrow(new RpcRateLimitException("QPS limit exceeded"))
+                .when(methodRateLimiter)
+                .acquireQpsRateLimit();
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertThrows(RpcRateLimitException.class, () -> acquired.set(methodRateLimiter.acquire(3)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(0, methodRateLimiter.getCostLimiter().getCurrentCost());
+    }
+
     /**
      * Test that when cost limit passes but rate limiter (QPS) fails,
      * the cost limiter's current cost should be released to 0.
      *
      * This test uses mock to simulate rate limiter failure.
      */
-    @Test
+    /*@Test
     public void testCostPassesButRateLimiterFails() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
@@ -1108,7 +1122,17 @@ public class MetaServiceRateLimiterTest {
         // Use atomic counter: first call succeeds, second call rate limiter throws
         final AtomicInteger callCount = new AtomicInteger(0);
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1) {
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        Mockito.when(limiter.acquire("rateFailMethod", 10)).thenThrow(invocation -> {
+            if (callCount.incrementAndGet() == 1) {
+                // First call succeeds
+                return true;
+            } else {
+                // Second call simulates rate limiter failure
+                throw new RpcRateLimitException("Rate limiter failed for method: rateFailMethod");
+            }
+        });
+        *//* {
             @Override
             protected MethodRateLimiter getMethodLimiter(String methodName) {
                 return methodLimiters.compute(methodName, (name, limiter) -> {
@@ -1135,7 +1159,7 @@ public class MetaServiceRateLimiterTest {
                     return null;
                 });
             }
-        };
+        };*//*
 
         // First acquire - should succeed
         AtomicBoolean acquired = new AtomicBoolean(false);
@@ -1159,5 +1183,5 @@ public class MetaServiceRateLimiterTest {
         // Release first acquisition
         limiter.release("rateFailMethod", 10);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
-    }
+    }*/
 }
