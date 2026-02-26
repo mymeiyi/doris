@@ -65,7 +65,7 @@ public class MetaServiceRateLimiterTest {
         originalEnabled = Config.meta_service_rpc_rate_limit_enabled;
         originalDefaultQps = Config.meta_service_rpc_rate_limit_default_qps_per_core;
         originalWaitTimeout = Config.meta_service_rpc_rate_limit_wait_timeout_ms;
-        originalMaxWaiting = Config.meta_service_rpc_rate_limit_max_wait_request_num;
+        originalMaxWaiting = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
         originalQpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
         originalCostConfig = Config.meta_service_rpc_cost_limit_per_core_config;
     }
@@ -75,7 +75,7 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_enabled = originalEnabled;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = originalDefaultQps;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = originalWaitTimeout;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = originalMaxWaiting;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = originalMaxWaiting;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = originalQpsConfig;
         Config.meta_service_rpc_cost_limit_per_core_config = originalCostConfig;
     }
@@ -161,7 +161,7 @@ public class MetaServiceRateLimiterTest {
     public void testWaitTimeout() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 1;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 5;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 5;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
         int maxWaitingFailCount = 0;
@@ -361,7 +361,7 @@ public class MetaServiceRateLimiterTest {
     public void testAcquireWithConfigChange() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 99;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 99;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
 
@@ -608,7 +608,7 @@ public class MetaServiceRateLimiterTest {
         // Set both QPS and cost limits
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_cost_limit_per_core_config = "bothMethod:5";
 
@@ -638,7 +638,7 @@ public class MetaServiceRateLimiterTest {
     public void testCostBlocksBeforeQpsWhenBothSet() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_cost_limit_per_core_config = "costFirst:3";
 
@@ -669,7 +669,7 @@ public class MetaServiceRateLimiterTest {
     public void testQpsBlocksBeforeCostWhenBothSet() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 1;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 1;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 1;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10; // Very short timeout
         Config.meta_service_rpc_cost_limit_per_core_config = "qpsFirst:100"; // High cost limit
 
@@ -694,7 +694,7 @@ public class MetaServiceRateLimiterTest {
     public void testReleaseOnlyAffectsCostNotQps() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_cost_limit_per_core_config = "releaseTest:5";
 
@@ -721,7 +721,7 @@ public class MetaServiceRateLimiterTest {
     public void testReloadUpdatesBothRateAndCost() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 50;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 50;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "reloadBoth:10";
         Config.meta_service_rpc_cost_limit_per_core_config = "reloadBoth:5";
@@ -762,7 +762,7 @@ public class MetaServiceRateLimiterTest {
         // QPS default is 0 but method-specific cost is set
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_cost_limit_per_core_config = "zeroQps:5";
 
@@ -790,7 +790,7 @@ public class MetaServiceRateLimiterTest {
         // Method-specific cost is 0 (disabled), but default QPS is set
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_cost_limit_per_core_config = "zeroCost:0";
 
@@ -816,7 +816,7 @@ public class MetaServiceRateLimiterTest {
     public void testConcurrentWithBothRateAndCostLimits() throws InterruptedException {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 50; // High QPS
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 10;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 10;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_cost_limit_per_core_config = "concurrentBoth:5";
 
@@ -865,7 +865,7 @@ public class MetaServiceRateLimiterTest {
     }
 
     @Test
-    public void testCostClampedToLimit() {
+    public void testCostExceedLimit() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
@@ -875,15 +875,16 @@ public class MetaServiceRateLimiterTest {
 
         // Try to acquire cost greater than limit - should require limit
         AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("exceedCost", 10)));
-        Assert.assertTrue(acquired.get());
+        Assertions.assertThrows(RpcRateLimitException.class, () -> limiter.acquire("exceedCost", 10));
+        // Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("exceedCost", 10)));
+        Assert.assertFalse(acquired.get());
 
         // Verify cost limiter was created but current cost is limit (10 > 5)
         MethodRateLimiter methodLimiter = limiter.getMethodLimiters().get("exceedCost");
         Assert.assertNotNull(methodLimiter);
         CostLimiter costLimiter = methodLimiter.getCostLimiter();
         Assert.assertNotNull(costLimiter);
-        Assert.assertEquals(5, costLimiter.getCurrentCost());
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
 
         // Release - should only release if acquired
         if (acquired.get()) {
@@ -915,7 +916,7 @@ public class MetaServiceRateLimiterTest {
         // Test that maxWaitRequestNum=0 rejects all requests immediately
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
-        Config.meta_service_rpc_rate_limit_max_wait_request_num = 0;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 0;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
 

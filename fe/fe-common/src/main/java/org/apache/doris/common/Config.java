@@ -3642,7 +3642,7 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true, description = {"每个方法的最大等待请求数，超过此数量的请求将直接拒绝",
             "Maximum waiting requests per method, requests exceeding this will be rejected immediately"})
-    public static int meta_service_rpc_rate_limit_max_wait_request_num = 100;
+    public static int meta_service_rpc_rate_limit_max_waiting_request_num = 100;
 
     @ConfField(mutable = true, description = {"获取令牌的最大等待时间（毫秒），超过此时间仍未获取到令牌则失败",
             "Maximum wait time (ms) to acquire a token, request fails if timeout"})

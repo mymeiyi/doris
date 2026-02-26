@@ -79,7 +79,7 @@ public class MetaServiceRateLimiter {
             return false;
         } else {
             return Config.meta_service_rpc_rate_limit_default_qps_per_core != lastDefaultQps
-                    || Config.meta_service_rpc_rate_limit_max_wait_request_num != lastMaxWaitRequestNum
+                    || Config.meta_service_rpc_rate_limit_max_waiting_request_num != lastMaxWaitRequestNum
                     || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig)
                     || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig);
         }
@@ -103,7 +103,7 @@ public class MetaServiceRateLimiter {
                 lastEnabled = enabled;
                 return true;
             }
-            int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_wait_request_num;
+            int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
             int defaultQpsPerCore = Config.meta_service_rpc_rate_limit_default_qps_per_core;
             String qpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
             String costConfig = Config.meta_service_rpc_cost_limit_per_core_config;
@@ -202,7 +202,7 @@ public class MetaServiceRateLimiter {
             int costLimit = getMethodTotalCostLimit(name);
             if (qps > 0 || costLimit > 0) {
                 MethodRateLimiter newLimiter = new MethodRateLimiter(name,
-                        Config.meta_service_rpc_rate_limit_max_wait_request_num, qps, costLimit);
+                        Config.meta_service_rpc_rate_limit_max_waiting_request_num, qps, costLimit);
                 return newLimiter;
             }
             return null;
@@ -305,13 +305,14 @@ public class MetaServiceRateLimiter {
                         TimeUnit.MILLISECONDS);
                 if (!acquired) {
                     throw new RpcRateLimitException(
-                            "Meta service RPC rate limit timeout while waiting for cost limit for method: "
-                                    + methodName + ", cost: " + cost);
+                            "Meta service RPC rate limit waiting timeout for cost limit for method: "
+                                    + methodName + ", requestCost: " + cost + ", currentCost: "
+                                    + costLimiter.currentCost + ", limit: " + costLimiter.limit);
                 }
             } catch (InterruptedException e) {
-                throw new RpcRateLimitException(
-                        "Meta service RPC rate limit interrupted while waiting for cost limit for method: "
-                                + methodName, e);
+                throw new RpcRateLimitException("Meta service RPC rate limit interrupted for cost limit for method: "
+                        + methodName + ", requestCost: " + cost + ", currentCost: "
+                        + costLimiter.currentCost + ", limit: " + costLimiter.limit, e);
             } finally {
                 if (MetricRepo.isInit && Config.isCloudMode()) {
                     if (!acquired) {
@@ -344,8 +345,8 @@ public class MetaServiceRateLimiter {
                         CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                     }
                     throw new RpcRateLimitException(
-                        "Meta service RPC rate limit timeout for method: " + methodName
-                        + ", waited " + timeoutMs + "ms");
+                            "Meta service RPC rate limit timeout for method: " + methodName + ", rate: "
+                                    + rateLimiter.getRate() + ", waited " + timeoutMs + "ms");
                 }
             } catch (RpcRateLimitException e) {
                 throw e;
