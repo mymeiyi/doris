@@ -140,9 +140,11 @@ public class MetaServiceRateLimiter {
             limiter.updateCostLimit(costLimit);
             LOG.info("Updated rate limiter for method {}: qps={}, cost={}", methodName, qps, costLimit);
         }
-        LOG.info("Removed zero QPS rate limiter for methods: {}", toRemove);
-        for (String methodName : toRemove) {
-            methodLimiters.remove(methodName);
+        if (!toRemove.isEmpty()) {
+            LOG.info("Remove zero QPS rate limiter for methods: {}", toRemove);
+            for (String methodName : toRemove) {
+                methodLimiters.remove(methodName);
+            }
         }
     }
 
