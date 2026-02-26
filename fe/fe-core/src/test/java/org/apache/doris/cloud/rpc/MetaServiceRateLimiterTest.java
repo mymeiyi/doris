@@ -902,6 +902,7 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:5";
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        Mockito.when(MetaServiceRateLimiter.getInstance()).thenReturn(limiter);
 
         Cloud.GetVersionRequest.Builder builder = Cloud.GetVersionRequest.newBuilder().setBatchMode(true);
         for (int i = 0; i < 10; i++) {
