@@ -118,8 +118,8 @@ public class MetaServiceRateLimiter {
             lastDefaultQps = defaultQpsPerCore;
             lastQpsConfig = qpsConfig;
             lastCostConfig = costConfig;
-            LOG.info("Reload meta service RPC rate limit config. enabled: {}, maxWaitRequestNum: {}, "
-                            + "defaultQps: {}, qps config: {}, cost config: {}", lastEnabled, lastMaxWaitRequestNum,
+            LOG.info("Reload meta service rpc rate limit config. enabled: {}, maxWaitRequestNum: {}, "
+                            + "defaultQps: {}, qpsConfig: {}, costConfig: {}", lastEnabled, lastMaxWaitRequestNum,
                     lastDefaultQps, lastQpsConfig, lastCostConfig);
         }
         return true;
@@ -137,11 +137,11 @@ public class MetaServiceRateLimiter {
             }
             MethodRateLimiter limiter = entry.getValue();
             limiter.update(maxWaitRequestNum, qps, costLimit);
-            LOG.info("Updated rate limiter for method {}: maxWaitRequestNum={}, qps={}, cost={}", methodName,
+            LOG.info("Updated rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}, cost: {}", methodName,
                     maxWaitRequestNum, qps, costLimit);
         }
         if (!toRemove.isEmpty()) {
-            LOG.info("Remove zero QPS rate limiter for methods: {}", toRemove);
+            LOG.info("Remove zero qps rate limiter for methods: {}", toRemove);
             for (String methodName : toRemove) {
                 methodLimiters.remove(methodName);
             }
@@ -191,6 +191,7 @@ public class MetaServiceRateLimiter {
         return costPerCore * getAvailableProcessors();
     }
 
+    @VisibleForTesting
     protected int getAvailableProcessors() {
         return Runtime.getRuntime().availableProcessors();
     }
@@ -234,17 +235,17 @@ public class MetaServiceRateLimiter {
         }
     }
 
-    @VisibleForTesting
+    // only used for testing
     Map<String, Integer> getMethodQpsConfig() {
         return methodQpsConfig;
     }
 
-    @VisibleForTesting
+    // only used for testing
     Map<String, Integer> getMethodCostConfig() {
         return methodCostConfig;
     }
 
-    @VisibleForTesting
+    // only used for testing
     Map<String, MethodRateLimiter> getMethodLimiters() {
         return methodLimiters;
     }
@@ -264,7 +265,7 @@ public class MetaServiceRateLimiter {
                 this.rateLimiter = RateLimiter.create(qps);
             }
             this.costLimiter = costLimit > 0 ? new CostLimiter(costLimit) : null;
-            LOG.info("Create rate limiter for method={}: maxWaitRequestNum={}, qps={}, cost={}", methodName,
+            LOG.info("Create rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}, cost: {}", methodName,
                     maxWaitRequestNum, qps, costLimit);
         }
 
@@ -307,12 +308,12 @@ public class MetaServiceRateLimiter {
                         TimeUnit.MILLISECONDS);
                 if (!acquired) {
                     throw new RpcRateLimitException(
-                            "Meta service RPC rate limit waiting timeout for cost limit for method: "
+                            "Meta service rpc rate limit waiting timeout for cost limit for method: "
                                     + methodName + ", requestCost: " + cost + ", currentCost: "
                                     + costLimiter.currentCost + ", limit: " + costLimiter.limit);
                 }
             } catch (InterruptedException e) {
-                throw new RpcRateLimitException("Meta service RPC rate limit interrupted for cost limit for method: "
+                throw new RpcRateLimitException("Meta service rpc rate limit interrupted for cost limit for method: "
                         + methodName + ", requestCost: " + cost + ", currentCost: "
                         + costLimiter.currentCost + ", limit: " + costLimiter.limit, e);
             } finally {
@@ -333,7 +334,7 @@ public class MetaServiceRateLimiter {
                 if (MetricRepo.isInit && Config.isCloudMode()) {
                     CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                 }
-                throw new RpcRateLimitException("Meta service RPC rate limit exceeded for method: " + methodName
+                throw new RpcRateLimitException("Meta service rpc rate limit exceeded for method: " + methodName
                         + ", too many waiting requests (max=" + maxWaitRequestNum + ")");
             }
             // Try to acquire rate limiter permit with timeout
@@ -345,8 +346,8 @@ public class MetaServiceRateLimiter {
                         CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                     }
                     throw new RpcRateLimitException(
-                            "Meta service RPC rate limit timeout for method: " + methodName + ", rate: "
-                                    + rateLimiter.getRate() + ", waited " + timeoutMs + "ms");
+                            "Meta service rpc rate limit timeout for method: " + methodName + ", rate: "
+                                    + rateLimiter.getRate() + ", waited " + timeoutMs + " ms");
                 }
             } catch (RpcRateLimitException e) {
                 throw e;
@@ -383,7 +384,8 @@ public class MetaServiceRateLimiter {
             } else if (qps != rateLimiter.getRate()) {
                 rateLimiter.setRate(qps);
             }
-            LOG.info("Updated rate limiter for method {}: maxWaiting={}, qps={}", methodName, maxWaitRequestNum, qps);
+            LOG.info("Update rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}", methodName,
+                    maxWaitRequestNum, qps);
         }
 
         private void updateCostLimit(int costLimit) {
@@ -398,17 +400,17 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        @VisibleForTesting
+        // only used for testing
         RateLimiter getRateLimiter() {
             return rateLimiter;
         }
 
-        @VisibleForTesting
+        // only used for testing
         int getAllowWaiting() {
             return waitingSemaphore != null ? waitingSemaphore.availablePermits() : -1;
         }
 
-        @VisibleForTesting
+        // only used for testing
         CostLimiter getCostLimiter() {
             return costLimiter;
         }
@@ -475,7 +477,7 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        @VisibleForTesting
+        // only used for testing
         int getCurrentCost() {
             lock.lock();
             try {
@@ -495,8 +497,8 @@ public class MetaServiceRateLimiter {
                     int limit = getInstance().getMethodTotalCostLimit(methodName);
                     if (limit > 0 && cost > limit) {
                         cost = limit;
-                        LOG.info("Clamped cost for method {} from {} to limit {}", methodName,
-                                getVersionRequest.getDbIdsCount(), limit);
+                        LOG.info("Clamped cost: {} for method: {} to limit: {}", getVersionRequest.getDbIdsCount(),
+                                methodName, limit);
                     }
                 }
                 return cost;
