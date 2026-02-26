@@ -873,13 +873,12 @@ public class MetaServiceRateLimiterTest {
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
 
-        // Try to acquire cost greater than limit - should require limit
+        // Try to acquire cost greater than limit - should not require limit
         AtomicBoolean acquired = new AtomicBoolean(false);
         Assertions.assertThrows(RpcRateLimitException.class, () -> limiter.acquire("exceedCost", 10));
-        // Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("exceedCost", 10)));
         Assert.assertFalse(acquired.get());
 
-        // Verify cost limiter was created but current cost is limit (10 > 5)
+        // Verify cost limiter was created but current cost is 0 (10 > 5)
         MethodRateLimiter methodLimiter = limiter.getMethodLimiters().get("exceedCost");
         Assert.assertNotNull(methodLimiter);
         CostLimiter costLimiter = methodLimiter.getCostLimiter();
@@ -889,6 +888,37 @@ public class MetaServiceRateLimiterTest {
         // Release - should only release if acquired
         if (acquired.get()) {
             limiter.release("exceedCost", 10);
+        }
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testCostClampedToLimit() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
+        Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:5";
+
+        MetaServiceRateLimiter.getInstance().reloadConfig();
+        int cost = MetaServiceRateLimiter.getInstance().getRequestCost("getVersion", 10);
+
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        // Try to acquire cost greater than limit - should require limit (cost is clamped to 5)
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> limiter.acquire("getVersion", cost));
+        Assert.assertTrue(acquired.get());
+
+        // Verify cost limiter was created but current cost is limit (10 > 5)
+        MethodRateLimiter methodLimiter = limiter.getMethodLimiters().get("getVersion");
+        Assert.assertNotNull(methodLimiter);
+        CostLimiter costLimiter = methodLimiter.getCostLimiter();
+        Assert.assertNotNull(costLimiter);
+        Assert.assertEquals(5, costLimiter.getCurrentCost());
+
+        // Release - should only release if acquired
+        if (acquired.get()) {
+            limiter.release("getVersion", cost);
         }
         Assert.assertEquals(0, costLimiter.getCurrentCost());
     }
