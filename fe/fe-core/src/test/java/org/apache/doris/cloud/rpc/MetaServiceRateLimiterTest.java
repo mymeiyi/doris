@@ -22,7 +22,6 @@ import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.CostLimiter;
 import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.MethodRateLimiter;
 import org.apache.doris.common.Config;
 
-import org.apache.kerby.config.Conf;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.After;
@@ -30,8 +29,6 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
-import org.mockito.Mock;
-import org.mockito.Mockito;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -49,6 +46,7 @@ public class MetaServiceRateLimiterTest {
     private int originalMaxWaiting;
     private String originalQpsConfig;
     private String originalCostConfig;
+    private boolean originalCostClamped;
 
     private static class MockMetaServiceRateLimiter extends MetaServiceRateLimiter {
         private final int processors;
@@ -72,6 +70,7 @@ public class MetaServiceRateLimiterTest {
         originalMaxWaiting = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
         originalQpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
         originalCostConfig = Config.meta_service_rpc_cost_limit_per_core_config;
+        originalCostClamped = Config.meta_service_rpc_cost_clamped_to_limit_enabled;
     }
 
     @After
@@ -82,6 +81,7 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = originalMaxWaiting;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = originalQpsConfig;
         Config.meta_service_rpc_cost_limit_per_core_config = originalCostConfig;
+        Config.meta_service_rpc_cost_clamped_to_limit_enabled = originalCostClamped;
     }
 
     @Test
@@ -904,7 +904,7 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:1";
         Config.meta_service_rpc_cost_clamped_to_limit_enabled = true;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = MetaServiceRateLimiter.getInstance();
         // Mockito.when(MetaServiceRateLimiter.getInstance()).thenReturn(limiter);
 
         Cloud.GetVersionRequest.Builder builder = Cloud.GetVersionRequest.newBuilder().setBatchMode(true);
