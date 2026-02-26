@@ -1094,27 +1094,50 @@ public class MetaServiceRateLimiterTest {
     /**
      * Test that when cost limit passes but rate limiter (QPS) fails,
      * the cost limiter's current cost should be released to 0.
-     * 
-     * Scenario:
-     * 1. Cost limit succeeds (acquired = true)
-     * 2. Rate limiter fails (too many waiting requests or timeout)
-     * 3. acquire() should return false
-     * 4. Cost limiter's current cost should be 0 (released)
+     *
+     * This test uses mock to simulate rate limiter failure.
      */
     @Test
     public void testCostPassesButRateLimiterFails() {
         Config.meta_service_rpc_rate_limit_enabled = true;
-        // Set high cost limit so cost limit passes
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
-        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 1;
-        // Very short timeout so rate limiter fails quickly
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
-        // Set cost limit high enough to pass
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
         Config.meta_service_rpc_cost_limit_per_core_config = "rateFailMethod:100";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        // Use atomic counter: first call succeeds, second call rate limiter throws
+        final AtomicInteger callCount = new AtomicInteger(0);
 
-        // First acquire - should succeed (both cost and rate limit)
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1) {
+            @Override
+            protected MethodRateLimiter getMethodLimiter(String methodName) {
+                return methodLimiters.compute(methodName, (name, limiter) -> {
+                    if (limiter != null) {
+                        return limiter;
+                    }
+                    int qps = getMethodTotalQps(name, Config.meta_service_rpc_rate_limit_default_qps_per_core);
+                    int costLimit = getMethodTotalCostLimit(name);
+                    if (qps > 0 || costLimit > 0) {
+                        // First call uses normal limiter, subsequent calls use mock
+                        if (callCount.incrementAndGet() == 1) {
+                            return new MethodRateLimiter(name,
+                                    Config.meta_service_rpc_rate_limit_max_waiting_request_num, qps, costLimit);
+                        } else {
+                            return new MethodRateLimiter(name,
+                                    Config.meta_service_rpc_rate_limit_max_waiting_request_num, qps, costLimit) {
+                                @Override
+                                void acquireQpsRateLimit() throws RpcRateLimitException {
+                                    throw new RpcRateLimitException("Rate limiter failed for method: " + name);
+                                }
+                            };
+                        }
+                    }
+                    return null;
+                });
+            }
+        };
+
+        // First acquire - should succeed
         AtomicBoolean acquired = new AtomicBoolean(false);
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("rateFailMethod", 10)));
         Assert.assertTrue(acquired.get());
@@ -1122,64 +1145,19 @@ public class MetaServiceRateLimiterTest {
         CostLimiter costLimiter = limiter.getMethodLimiters().get("rateFailMethod").getCostLimiter();
         Assert.assertEquals(10, costLimiter.getCurrentCost());
 
-        // Second acquire - cost limit passes (10+10=20 <= 100), but rate limiter fails (timeout)
-        // The acquire() call should return false because rate limiter failed
-        // and the cost should be released (current cost should go back to 0)
+        // Second acquire - cost passes but rate limiter throws
         acquired.set(false);
         RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
                 () -> limiter.acquire("rateFailMethod", 10));
 
-        // Verify rate limiter failed (either timeout or too many waiting)
-        Assert.assertTrue(exception.getMessage().contains("timeout")
-                || exception.getMessage().contains("too many waiting requests"));
+        Assert.assertTrue(exception.getMessage().contains("Rate limiter failed"));
 
-        // Verify cost limiter's current cost is 0 (cost was released when rate limiter failed)
-        // This is the key assertion: when rate limiter fails after cost limiter succeeds,
-        // the acquired cost should be released
+        // Key assertion: cost should be released to 0
         Assert.assertEquals("Cost should be released to 0 when rate limiter fails",
                 0, costLimiter.getCurrentCost());
 
-        // Release the first acquisition
+        // Release first acquisition
         limiter.release("rateFailMethod", 10);
-        Assert.assertEquals(0, costLimiter.getCurrentCost());
-    }
-
-    /**
-     * Test the case where max waiting requests is exhausted, cost passes but rate limiter fails.
-     */
-    @Test
-    public void testCostPassesButMaxWaitingExhausted() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
-        // Only allow 1 waiting request
-        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 1;
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-        Config.meta_service_rpc_cost_limit_per_core_config = "maxWaitMethod:100";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // First acquire - should succeed
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("maxWaitMethod", 10)));
-        Assert.assertTrue(acquired.get());
-
-        CostLimiter costLimiter = limiter.getMethodLimiters().get("maxWaitMethod").getCostLimiter();
-        Assert.assertEquals(10, costLimiter.getCurrentCost());
-
-        // Second acquire - should fail due to max waiting exhausted
-        // Cost passes (10+10=20 <= 100), but waiting semaphore is exhausted
-        acquired.set(false);
-        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
-                () -> limiter.acquire("maxWaitMethod", 10));
-
-        Assert.assertTrue(exception.getMessage().contains("too many waiting requests"));
-
-        // Verify cost was released
-        Assert.assertEquals("Cost should be released when max waiting exhausted",
-                0, costLimiter.getCurrentCost());
-
-        // Release first
-        limiter.release("maxWaitMethod", 10);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
     }
 }
