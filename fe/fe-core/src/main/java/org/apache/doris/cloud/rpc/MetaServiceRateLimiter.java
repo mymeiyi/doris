@@ -119,7 +119,7 @@ public class MetaServiceRateLimiter {
             lastQpsConfig = qpsConfig;
             lastCostConfig = costConfig;
             LOG.info("Reload meta service rpc rate limit config. enabled: {}, maxWaitRequestNum: {}, "
-                            + "defaultQps: {}, qpsConfig: {}, costConfig: {}", lastEnabled, lastMaxWaitRequestNum,
+                            + "defaultQps: {}, qpsConfig: [{}], costConfig: [{}]", lastEnabled, lastMaxWaitRequestNum,
                     lastDefaultQps, lastQpsConfig, lastCostConfig);
         }
         return true;
