@@ -198,6 +198,8 @@ public class SummaryProfile {
             GET_PARTITION_VERSION_COUNT,
             GET_TABLE_VERSION_TIME,
             GET_TABLE_VERSION_COUNT,
+            WAIT_MS_RPC_RATE_LIMITER_TIME,
+            WAIT_MS_RPC_RATE_LIMITER_COUNT,
             SCHEDULE_TIME,
             ASSIGN_FRAGMENT_TIME,
             FRAGMENT_SERIALIZE_TIME,
@@ -249,6 +251,8 @@ public class SummaryProfile {
             .put(GET_PARTITION_VERSION_BY_HAS_DATA_COUNT, 1)
             .put(GET_TABLE_VERSION_TIME, 1)
             .put(GET_TABLE_VERSION_COUNT, 1)
+            .put(WAIT_MS_RPC_RATE_LIMITER_TIME, 1)
+            .put(WAIT_MS_RPC_RATE_LIMITER_COUNT, 1)
             .put(ASSIGN_FRAGMENT_TIME, 1)
             .put(FRAGMENT_SERIALIZE_TIME, 1)
             .put(SEND_FRAGMENT_PHASE1_TIME, 1)

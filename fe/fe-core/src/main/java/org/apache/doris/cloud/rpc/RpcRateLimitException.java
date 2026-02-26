@@ -24,9 +24,10 @@ import org.apache.doris.rpc.RpcException;
  * This exception is used to indicate that the rate limit for meta-service RPC calls
  * has been exceeded and the request cannot be processed.
  *
- * There are two scenarios for this exception:
+ * There are multiple scenarios for this exception:
  * 1. Too many waiting requests - when the waiting queue is full, requests are rejected immediately
  * 2. Wait timeout - when a request waits too long to acquire a rate limit permit
+ * 3. Cost limit exceeded - when the cost limit is exceeded
  */
 public class RpcRateLimitException extends RpcException {
 
