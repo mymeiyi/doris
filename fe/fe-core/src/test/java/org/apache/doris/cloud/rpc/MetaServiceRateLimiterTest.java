@@ -17,6 +17,7 @@
 
 package org.apache.doris.cloud.rpc;
 
+import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.CostLimiter;
 import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.MethodRateLimiter;
 import org.apache.doris.common.Config;
@@ -900,7 +901,12 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:5";
 
         MetaServiceRateLimiter.getInstance().reloadConfig();
-        int cost = MetaServiceRateLimiter.getInstance().getRequestCost("getVersion", 10);
+        Cloud.GetVersionRequest.Builder builder = Cloud.GetVersionRequest.newBuilder().setBatchMode(true);
+        for (int i = 0; i < 10; i++) {
+            builder.addDbIds(i);
+            builder.addTableIds(i);
+        }
+        int cost = MetaServiceRateLimiter.getInstance().getRequestCost("getVersion", builder.build());
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
 
