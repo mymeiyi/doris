@@ -908,7 +908,7 @@ public class MetaServiceRateLimiterTest {
         // Mockito.when(MetaServiceRateLimiter.getInstance()).thenReturn(limiter);
 
         Cloud.GetVersionRequest.Builder builder = Cloud.GetVersionRequest.newBuilder().setBatchMode(true);
-        for (int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 5000; i++) {
             builder.addDbIds(i);
             builder.addTableIds(i);
         }
@@ -925,12 +925,10 @@ public class MetaServiceRateLimiterTest {
         Assert.assertNotNull(methodLimiter);
         CostLimiter costLimiter = methodLimiter.getCostLimiter();
         Assert.assertNotNull(costLimiter);
-        Assert.assertEquals(5, costLimiter.getCurrentCost());
+        Assert.assertEquals(cost, costLimiter.getCurrentCost());
 
         // Release - should only release if acquired
-        if (acquired.get()) {
-            limiter.release("getVersion", cost);
-        }
+        limiter.release("getVersion", cost);
         Assert.assertEquals(0, costLimiter.getCurrentCost());
     }
 
