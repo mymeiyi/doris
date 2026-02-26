@@ -346,6 +346,11 @@ public class MetaServiceProxy {
                             }
                         }
                     }, com.google.common.util.concurrent.MoreExecutors.directExecutor());
+            future.addListener(() -> {
+                if (future.isCancelled() && finalAcquired) {
+                    MetaServiceRateLimiter.getInstance().release(methodName, cost);
+                }
+            }, com.google.common.util.concurrent.MoreExecutors.directExecutor());
             return future;
         } catch (Exception e) {
             if (acquired) {

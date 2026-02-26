@@ -231,7 +231,11 @@ public class MetaServiceRateLimiter {
     public void release(String methodName, int cost) {
         MethodRateLimiter limiter = methodLimiters.get(methodName);
         if (limiter != null) {
-            limiter.release(cost);
+            try {
+                limiter.release(cost);
+            } catch (Exception e) {
+                LOG.warn("Failed to release rate limiter for method: {}, cost: {}", methodName, cost, e);
+            }
         }
     }
 
