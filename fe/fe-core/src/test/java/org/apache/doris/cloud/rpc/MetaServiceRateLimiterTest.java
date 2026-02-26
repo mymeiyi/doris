@@ -22,6 +22,7 @@ import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.CostLimiter;
 import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.MethodRateLimiter;
 import org.apache.doris.common.Config;
 
+import org.apache.kerby.config.Conf;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.After;
@@ -900,17 +901,19 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
-        Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:5";
+        Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:1";
+        Config.meta_service_rpc_cost_clamped_to_limit_enabled = true;
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-        Mockito.when(MetaServiceRateLimiter.getInstance()).thenReturn(limiter);
+        // Mockito.when(MetaServiceRateLimiter.getInstance()).thenReturn(limiter);
 
         Cloud.GetVersionRequest.Builder builder = Cloud.GetVersionRequest.newBuilder().setBatchMode(true);
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 1000; i++) {
             builder.addDbIds(i);
             builder.addTableIds(i);
         }
         int cost = limiter.getRequestCost("getVersion", builder.build());
+        Assert.assertTrue("cost: " + cost, cost < 1000);
 
         // Try to acquire cost greater than limit - should require limit (cost is clamped to 5)
         AtomicBoolean acquired = new AtomicBoolean(false);
