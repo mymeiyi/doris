@@ -17,6 +17,7 @@
 
 package org.apache.doris.cloud.rpc;
 
+import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.profile.SummaryProfile;
 import org.apache.doris.metric.CloudMetrics;
@@ -29,7 +30,6 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -79,7 +79,7 @@ public class MetaServiceRateLimiter {
             return false;
         } else {
             return Config.meta_service_rpc_rate_limit_default_qps_per_core != lastDefaultQps
-                    || Config.meta_service_rpc_rate_limit_max_wait_request_num != lastMaxWaitRequestNum
+                    || Config.meta_service_rpc_rate_limit_max_waiting_request_num != lastMaxWaitRequestNum
                     || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig)
                     || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig);
         }
@@ -103,7 +103,7 @@ public class MetaServiceRateLimiter {
                 lastEnabled = enabled;
                 return true;
             }
-            int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_wait_request_num;
+            int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
             int defaultQpsPerCore = Config.meta_service_rpc_rate_limit_default_qps_per_core;
             String qpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
             String costConfig = Config.meta_service_rpc_cost_limit_per_core_config;
@@ -140,15 +140,17 @@ public class MetaServiceRateLimiter {
             limiter.updateCostLimit(costLimit);
             LOG.info("Updated rate limiter for method {}: qps={}, cost={}", methodName, qps, costLimit);
         }
-        LOG.info("Removed zero QPS rate limiter for methods: {}", toRemove);
-        for (String methodName : toRemove) {
-            methodLimiters.remove(methodName);
+        if (!toRemove.isEmpty()) {
+            LOG.info("Remove zero QPS rate limiter for methods: {}", toRemove);
+            for (String methodName : toRemove) {
+                methodLimiters.remove(methodName);
+            }
         }
     }
 
     private Map<String, Integer> parseConfig(String config, String configName) {
         if (config == null || config.isEmpty()) {
-            return Collections.emptyMap();
+            return new HashMap<>(0);
         }
 
         Map<String, Integer> target = new HashMap<>();
@@ -202,7 +204,7 @@ public class MetaServiceRateLimiter {
             int costLimit = getMethodTotalCostLimit(name);
             if (qps > 0 || costLimit > 0) {
                 MethodRateLimiter newLimiter = new MethodRateLimiter(name,
-                        Config.meta_service_rpc_rate_limit_max_wait_request_num, qps, costLimit);
+                        Config.meta_service_rpc_rate_limit_max_waiting_request_num, qps, costLimit);
                 return newLimiter;
             }
             return null;
@@ -268,14 +270,29 @@ public class MetaServiceRateLimiter {
 
         boolean acquire(int cost) throws RpcRateLimitException {
             long startAt = System.nanoTime();
+            boolean acquired = acquireCostLimit(cost);
             try {
-                boolean acquired = acquireCostLimit(cost);
                 acquireQpsRateLimit();
                 return acquired;
+            } catch (RpcRateLimitException | RuntimeException e) {
+                if (acquired) {
+                    try {
+                        release(cost);
+                    } catch (Exception releaseEx) {
+                        LOG.warn("Failed to release cost reservation for method {} after QPS limit failure",
+                                methodName, releaseEx);
+                    }
+                }
+                throw e;
             } finally {
+                long durationNs = System.nanoTime() - startAt;
                 SummaryProfile summaryProfile = SummaryProfile.getSummaryProfile(ConnectContext.get());
                 if (summaryProfile != null) {
-                    summaryProfile.addWaitMsRpcLimiterTime(System.nanoTime() - startAt);
+                    summaryProfile.addWaitMsRpcRateLimiterTime(durationNs);
+                }
+                if (MetricRepo.isInit && Config.isCloudMode()) {
+                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
+                            .update(TimeUnit.NANOSECONDS.toMillis(durationNs));
                 }
             }
         }
@@ -285,32 +302,30 @@ public class MetaServiceRateLimiter {
                 return false;
             }
             boolean acquired = false;
-            long startTime = System.currentTimeMillis();
             try {
                 acquired = costLimiter.acquire(cost, Config.meta_service_rpc_rate_limit_wait_timeout_ms,
                         TimeUnit.MILLISECONDS);
+                if (!acquired) {
+                    throw new RpcRateLimitException(
+                            "Meta service RPC rate limit waiting timeout for cost limit for method: "
+                                    + methodName + ", requestCost: " + cost + ", currentCost: "
+                                    + costLimiter.currentCost + ", limit: " + costLimiter.limit);
+                }
             } catch (InterruptedException e) {
-                throw new RpcRateLimitException(
-                        "Meta service RPC rate limit interrupted while waiting for cost limit for method: "
-                                + methodName, e);
+                throw new RpcRateLimitException("Meta service RPC rate limit interrupted for cost limit for method: "
+                        + methodName + ", requestCost: " + cost + ", currentCost: "
+                        + costLimiter.currentCost + ", limit: " + costLimiter.limit, e);
             } finally {
                 if (MetricRepo.isInit && Config.isCloudMode()) {
                     if (!acquired) {
                         CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                     }
-                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
-                            .update(System.currentTimeMillis() - startTime);
-                }
-                if (!acquired) {
-                    throw new RpcRateLimitException(
-                            "Meta service RPC rate limit timeout while waiting for cost limit for method: "
-                                    + methodName + ", cost: " + cost);
                 }
             }
             return acquired;
         }
 
-        private void acquireQpsRateLimit() throws RpcRateLimitException {
+        void acquireQpsRateLimit() throws RpcRateLimitException {
             if (rateLimiter == null || waitingSemaphore == null) {
                 return;
             }
@@ -323,7 +338,6 @@ public class MetaServiceRateLimiter {
                     + ", too many waiting requests (max=" + maxWaitRequestNum + ")");
             }
 
-            long startTime = System.currentTimeMillis();
             try {
                 long timeoutMs = Config.meta_service_rpc_rate_limit_wait_timeout_ms;
                 boolean acquired = rateLimiter.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
@@ -333,8 +347,8 @@ public class MetaServiceRateLimiter {
                         CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
                     }
                     throw new RpcRateLimitException(
-                        "Meta service RPC rate limit timeout for method: " + methodName
-                        + ", waited " + timeoutMs + "ms");
+                            "Meta service RPC rate limit timeout for method: " + methodName + ", rate: "
+                                    + rateLimiter.getRate() + ", waited " + timeoutMs + "ms");
                 }
             } catch (RpcRateLimitException e) {
                 throw e;
@@ -343,10 +357,6 @@ public class MetaServiceRateLimiter {
                     "Failed to acquire rate limit for method: " + methodName, e);
             } finally {
                 waitingSemaphore.release();
-                if (MetricRepo.isInit && Config.isCloudMode()) {
-                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
-                            .update(System.currentTimeMillis() - startTime);
-                }
             }
         }
 
@@ -362,11 +372,13 @@ public class MetaServiceRateLimiter {
                 waitingSemaphore = null;
                 return;
             }
-            if (maxWaitRequestNum != this.maxWaitRequestNum) {
+            if (this.waitingSemaphore == null || maxWaitRequestNum != this.maxWaitRequestNum) {
                 this.maxWaitRequestNum = maxWaitRequestNum;
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
             }
-            if (qps != rateLimiter.getRate()) {
+            if (rateLimiter == null) {
+                rateLimiter = RateLimiter.create(qps);
+            } else if (qps != rateLimiter.getRate()) {
                 rateLimiter.setRate(qps);
             }
             LOG.info("Updated rate limiter for method {}: qps={}", methodName, qps);
@@ -416,7 +428,7 @@ public class MetaServiceRateLimiter {
             this.currentCost = 0;
         }
 
-        // modify list to newLimit(thread safe)
+        // modify limit to newLimit (thread safe)
         void setLimit(int newLimit) {
             if (newLimit < 0) {
                 throw new IllegalArgumentException("newLimit must be >= 0");
@@ -430,11 +442,9 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        boolean acquire(int cost, long timeout, TimeUnit unit) throws InterruptedException {
+        boolean acquire(int cost, long timeout, TimeUnit unit) throws InterruptedException, RpcRateLimitException {
             if (cost > limit) {
-                cost = limit;
-                LOG.warn("Method: {}, cost: {} exceeds the limit: {}, adjust to limit for acquire", methodName, cost,
-                        limit);
+                throw new RpcRateLimitException("Cost " + cost + " exceeds the limit " + limit);
             }
             long nanos = unit.toNanos(timeout);
             lock.lockInterruptibly();
@@ -474,5 +484,27 @@ public class MetaServiceRateLimiter {
                 lock.unlock();
             }
         }
+    }
+
+    public static int getRequestCost(String methodName, Object request) {
+        if (methodName.equals("getVersion")) {
+            Cloud.GetVersionRequest getVersionRequest = (Cloud.GetVersionRequest) request;
+            if (getVersionRequest.hasBatchMode() && getVersionRequest.getBatchMode()) {
+                int cost = getVersionRequest.getDbIdsCount();
+                if (Config.meta_service_rpc_cost_clamped_to_limit_enabled) {
+                    int limit = getInstance().getMethodTotalCostLimit(methodName);
+                    if (limit > 0 && cost > limit) {
+                        cost = limit;
+                        LOG.info("Clamped cost for method {} from {} to limit {}", methodName,
+                                getVersionRequest.getDbIdsCount(), limit);
+                    }
+                }
+                return cost;
+            } else {
+                return 1;
+            }
+        }
+        // TODO the cost of other methods is not supported now
+        return 1;
     }
 }

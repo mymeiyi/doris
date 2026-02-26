@@ -368,10 +368,10 @@ public class SummaryProfile {
     private long getTableVersionTime = 0;
     @SerializedName(value = "getTableVersionCount")
     private long getTableVersionCount = 0;
-    @SerializedName(value = "waitMsRpcLimiterTime")
-    private long waitMsRpcLimiterTime = 0;
-    @SerializedName(value = "waitMsRpcLimiterCount")
-    private long waitMsRpcLimiterCount = 0;
+    @SerializedName(value = "waitMsRpcRateLimiterTime")
+    private long waitMsRpcRateLimiterTime = 0;
+    @SerializedName(value = "waitMsRpcRateLimiterCount")
+    private long waitMsRpcRateLimiterCount = 0;
     @SerializedName(value = "transactionCommitBeginTime")
     private long transactionCommitBeginTime = -1;
     @SerializedName(value = "transactionCommitEndTime")
@@ -607,8 +607,8 @@ public class SummaryProfile {
                     getPrettyGetPartitionVersionByHasDataCount());
             executionSummaryProfile.addInfoString(GET_TABLE_VERSION_TIME, getPrettyGetTableVersionTime());
             executionSummaryProfile.addInfoString(GET_TABLE_VERSION_COUNT, getPrettyGetTableVersionCount());
-            executionSummaryProfile.addInfoString(WAIT_MS_RPC_RATE_LIMITER_TIME, getPrettyWaitMsRpcLimiterTime());
-            executionSummaryProfile.addInfoString(WAIT_MS_RPC_RATE_LIMITER_COUNT, getPrettyWaitMsRpcLimiterCount());
+            executionSummaryProfile.addInfoString(WAIT_MS_RPC_RATE_LIMITER_TIME, getPrettyWaitMsRpcRateLimiterTime());
+            executionSummaryProfile.addInfoString(WAIT_MS_RPC_RATE_LIMITER_COUNT, getPrettyWaitMsRpcRateLimiterCount());
         }
     }
 
@@ -785,9 +785,9 @@ public class SummaryProfile {
         this.fragmentRpcCount += count;
     }
 
-    public void addWaitMsRpcLimiterTime(long ns) {
-        this.waitMsRpcLimiterTime += ns;
-        this.waitMsRpcLimiterCount += 1;
+    public void addWaitMsRpcRateLimiterTime(long ns) {
+        this.waitMsRpcRateLimiterTime += ns;
+        this.waitMsRpcRateLimiterCount += 1;
     }
 
     public void addGetPartitionVersionTime(long ns) {
@@ -994,27 +994,27 @@ public class SummaryProfile {
         return RuntimeProfile.printCounter(getTableVersionCount, TUnit.UNIT);
     }
 
-    public long getWaitMsRpcLimiterTime() {
-        return waitMsRpcLimiterTime;
+    public long getWaitMsRpcRateLimiterTimeMs() {
+        return TimeUnit.NANOSECONDS.toMillis(waitMsRpcRateLimiterTime);
     }
 
-    public long getWaitMsRpcLimiterCount() {
-        return waitMsRpcLimiterCount;
+    public long getWaitMsRpcRateLimiterCount() {
+        return waitMsRpcRateLimiterCount;
     }
 
-    private String getPrettyWaitMsRpcLimiterTime() {
-        if (waitMsRpcLimiterTime == 0) {
+    private String getPrettyWaitMsRpcRateLimiterTime() {
+        if (waitMsRpcRateLimiterTime == 0) {
             return "N/A";
         }
-        return RuntimeProfile.printCounter(waitMsRpcLimiterTime, TUnit.TIME_NS);
+        return RuntimeProfile.printCounter(waitMsRpcRateLimiterTime, TUnit.TIME_NS);
     }
 
-    private String getPrettyWaitMsRpcLimiterCount() {
-        return RuntimeProfile.printCounter(waitMsRpcLimiterCount, TUnit.UNIT);
+    private String getPrettyWaitMsRpcRateLimiterCount() {
+        return RuntimeProfile.printCounter(waitMsRpcRateLimiterCount, TUnit.UNIT);
     }
 
-    public long getGetPartitionVersionTime() {
-        return getPartitionVersionTime;
+    public long getGetPartitionVersionTimeMs() {
+        return TimeUnit.NANOSECONDS.toMillis(getPartitionVersionTime);
     }
 
     public long getGetPartitionVersionCount() {
@@ -1025,8 +1025,8 @@ public class SummaryProfile {
         return getPartitionVersionByHasDataCount;
     }
 
-    public long getGetTableVersionTime() {
-        return getTableVersionTime;
+    public long getGetTableVersionTimeMs() {
+        return TimeUnit.NANOSECONDS.toMillis(getTableVersionTime);
     }
 
     public long getGetTableVersionCount() {
@@ -1254,13 +1254,13 @@ public class SummaryProfile {
 
     public String getMetaTime() {
         return "{"
-                + "\"get_partition_version_time_ns\"" + ":" + this.getGetPartitionVersionTime() + ","
+                + "\"get_partition_version_time_ms\"" + ":" + this.getGetPartitionVersionTimeMs() + ","
                 + "\"get_partition_version_count_has_data\"" + ":" + this.getGetPartitionVersionByHasDataCount() + ","
                 + "\"get_partition_version_count\"" + ":" + this.getGetPartitionVersionCount() + ","
-                + "\"get_table_version_time_ns\"" + ":" + this.getGetTableVersionTime() + ","
+                + "\"get_table_version_time_ms\"" + ":" + this.getGetTableVersionTimeMs() + ","
                 + "\"get_table_version_count\"" + ":" + this.getGetTableVersionCount() + ","
-                + "\"wait_meta_service_rpc_rate_limit_time_ns\"" + ":" + this.getWaitMsRpcLimiterTime() + ","
-                + "\"wait_meta_service_rpc_rate_limit_count\"" + ":" + this.getWaitMsRpcLimiterCount()
+                + "\"wait_meta_service_rpc_rate_limit_time_ms\"" + ":" + this.getWaitMsRpcRateLimiterTimeMs() + ","
+                + "\"wait_meta_service_rpc_rate_limit_count\"" + ":" + this.getWaitMsRpcRateLimiterCount()
                 + "}";
     }
 
