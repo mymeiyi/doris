@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -54,6 +55,8 @@ public class MetaServiceRateLimiter {
     private Map<String, Integer> methodQpsConfig = new ConcurrentHashMap<>();
     private Map<String, Integer> methodCostConfig = new ConcurrentHashMap<>();
     private final Map<String, MethodRateLimiter> methodLimiters = new ConcurrentHashMap<>();
+    // Track all methods that should be considered for adaptive throttle (from config + observed)
+    private final Set<String> adaptiveThrottleMethods = ConcurrentHashMap.newKeySet();
 
     public static MetaServiceRateLimiter getInstance() {
         if (instance == null) {
@@ -220,6 +223,11 @@ public class MetaServiceRateLimiter {
             reloadConfig();
         }
 
+        // Track this method for adaptive throttle
+        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+            adaptiveThrottleMethods.add(methodName);
+        }
+
         if (!Config.meta_service_rpc_rate_limit_enabled) {
             return false;
         }
@@ -268,8 +276,8 @@ public class MetaServiceRateLimiter {
 
         MethodRateLimiter(String methodName, int maxWaitRequestNum, int qps, int costLimit) {
             this.methodName = methodName;
+            this.maxWaitRequestNum = maxWaitRequestNum;
             if (qps > 0) {
-                this.maxWaitRequestNum = maxWaitRequestNum;
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
                 this.rateLimiter = RateLimiter.create(qps);
             }
@@ -309,12 +317,58 @@ public class MetaServiceRateLimiter {
         }
 
         void applyAdaptiveFactor(double factor) {
-            if (configuredQps <= 0) {
+            // Phase control: check if this method should be throttled in current phase
+            boolean isPhase1Method = isPhase1Method(methodName);
+            boolean isPhase2 = Config.meta_service_rpc_adaptive_throttle_phase2_enabled;
+
+            // If not phase1 method and not in phase2, skip throttling
+            if (!isPhase1Method && !isPhase2) {
+                LOG.debug("Skipping adaptive factor for method {} - not in phase1 and phase2 not enabled", methodName);
                 return;
             }
-            double effectiveQps = Math.max(1.0, configuredQps * factor);
-            rateLimiter.setRate(effectiveQps);
-            LOG.info("Applied adaptive factor {} to method {}, effective QPS now {}", factor, methodName, effectiveQps);
+
+            if (configuredQps > 0) {
+                // Normal case: apply factor to configured QPS
+                double effectiveQps = Math.max(1.0, configuredQps * factor);
+                rateLimiter.setRate(effectiveQps);
+                LOG.info("Applied adaptive factor {} to method {}, effective QPS now {}", factor, methodName, effectiveQps);
+            } else {
+                // configuredQps == 0: Create limiter on-the-fly when throttling kicks in
+                int baseQps = Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero;
+
+                if (factor < 1.0 && baseQps > 0) {
+                    // Throttling: create or update limiter
+                    int effectiveQps = Math.max(1, (int) (baseQps * factor));
+                    if (rateLimiter == null) {
+                        this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
+                        this.rateLimiter = RateLimiter.create(effectiveQps);
+                        LOG.info("Created adaptive rate limiter for method: {}, effective QPS: {}", methodName, effectiveQps);
+                    } else {
+                        rateLimiter.setRate(effectiveQps);
+                        LOG.info("Updated adaptive rate limiter for method: {}, effective QPS: {}", methodName, effectiveQps);
+                    }
+                } else if (factor >= 1.0 && rateLimiter != null) {
+                    // Recovered: remove the limiter to restore original behavior (no limit)
+                    rateLimiter = null;
+                    waitingSemaphore = null;
+                    LOG.info("Removed adaptive rate limiter for method: {} (service recovered)", methodName);
+                }
+            }
+        }
+
+        private boolean isPhase1Method(String methodName) {
+            String phase1Config = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
+            if (phase1Config == null || phase1Config.isEmpty()) {
+                // Empty config means all methods are considered phase1
+                return true;
+            }
+            String[] phase1Methods = phase1Config.split(",");
+            for (String m : phase1Methods) {
+                if (m.trim().equals(methodName)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void updateMetrics(boolean isRejected) {
@@ -543,10 +597,71 @@ public class MetaServiceRateLimiter {
     }
 
     public void setAdaptiveFactor(double factor) {
-        for (MethodRateLimiter limiter : methodLimiters.values()) {
-            limiter.applyAdaptiveFactor(factor);
+        // Parse phase1 methods from config and add to tracked methods
+        String phase1Config = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
+        if (phase1Config != null && !phase1Config.isEmpty()) {
+            for (String method : phase1Config.split(",")) {
+                String trimmed = method.trim();
+                if (!trimmed.isEmpty()) {
+                    adaptiveThrottleMethods.add(trimmed);
+                }
+            }
         }
-        LOG.info("Applied adaptive factor {} to {} method limiters", factor, methodLimiters.size());
+
+        // Apply factor to all tracked methods (create limiters on-the-fly if needed)
+        int appliedCount = 0;
+        for (String methodName : adaptiveThrottleMethods) {
+            // Check if method should be throttled based on phase config
+            boolean isPhase1 = isPhase1Method(methodName);
+            boolean isPhase2 = Config.meta_service_rpc_adaptive_throttle_phase2_enabled;
+
+            if (!isPhase1 && !isPhase2) {
+                continue;
+            }
+
+            // Get or create limiter for this method
+            MethodRateLimiter limiter = methodLimiters.get(methodName);
+            if (limiter == null) {
+                // Create limiter on-the-fly with the adaptive factor applied
+                int qps = getMethodTotalQps(methodName, Config.meta_service_rpc_rate_limit_default_qps_per_core);
+                int costLimit = getMethodTotalCostLimit(methodName);
+                int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
+
+                limiter = new MethodRateLimiter(methodName, maxWaitRequestNum, qps, costLimit);
+                MethodRateLimiter existing = methodLimiters.putIfAbsent(methodName, limiter);
+                if (existing != null) {
+                    limiter = existing; // Use existing if another thread created it
+                }
+            }
+
+            limiter.applyAdaptiveFactor(factor);
+            appliedCount++;
+        }
+
+        // Also apply to existing limiters not in adaptiveThrottleMethods (for backward compatibility)
+        for (MethodRateLimiter limiter : methodLimiters.values()) {
+            if (!adaptiveThrottleMethods.contains(limiter.methodName)) {
+                limiter.applyAdaptiveFactor(factor);
+                appliedCount++;
+            }
+        }
+
+        LOG.info("Applied adaptive factor {} to {} method limiters", factor, appliedCount);
+    }
+
+    private boolean isPhase1Method(String methodName) {
+        String phase1Config = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
+        if (phase1Config == null || phase1Config.isEmpty()) {
+            // Empty config means all methods are considered phase1
+            return true;
+        }
+        String[] phase1Methods = phase1Config.split(",");
+        for (String m : phase1Methods) {
+            if (m.trim().equals(methodName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @VisibleForTesting
@@ -554,6 +669,7 @@ public class MetaServiceRateLimiter {
         methodLimiters.clear();
         methodQpsConfig.clear();
         lastQpsConfig = "";
+        adaptiveThrottleMethods.clear();
     }
 
     @VisibleForTesting
