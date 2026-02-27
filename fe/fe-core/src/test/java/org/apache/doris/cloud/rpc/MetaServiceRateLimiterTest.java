@@ -345,10 +345,8 @@ public class MetaServiceRateLimiterTest {
                     Assert.assertFalse(acquired); // cost limit is disabled
                     successCount.incrementAndGet();
                 } catch (RpcRateLimitException e) {
-                    LOG.info("sout: fail 2", e);
                     failCount.incrementAndGet();
                 } catch (InterruptedException e) {
-                    LOG.info("sout: fail 3", e);
                     failCount.incrementAndGet();
                     Thread.currentThread().interrupt();
                 }
@@ -366,12 +364,8 @@ public class MetaServiceRateLimiterTest {
         }
         int successes = successCount.get();
         int failures = failCount.get();
-        LOG.info("sout: successes={}, failures={}", successes, failures);
         Assert.assertEquals("Total results should match thread count", threadCount, successes + failures);
-        // With QPS=100, 10 threads, and a 5s timeout, we expect most requests to succeed.
-        Assert.assertTrue(
-                "Expected most concurrent requests to succeed, but successes=" + successes + ", failures=" + failures,
-                successes >= (int) (threadCount * 0.8));
+        Assert.assertEquals(10, successes);
     }
 
     @Test
