@@ -344,11 +344,14 @@ public class MetaServiceRateLimiterTest {
                     if (acquired) {
                         successCount.incrementAndGet();
                     } else {
+                        LOG.info("sout: fail 1");
                         failCount.incrementAndGet();
                     }
                 } catch (RpcRateLimitException e) {
+                    LOG.info("sout: fail 2", e);
                     failCount.incrementAndGet();
                 } catch (InterruptedException e) {
+                    LOG.info("sout: fail 3", e);
                     failCount.incrementAndGet();
                     Thread.currentThread().interrupt();
                 }
