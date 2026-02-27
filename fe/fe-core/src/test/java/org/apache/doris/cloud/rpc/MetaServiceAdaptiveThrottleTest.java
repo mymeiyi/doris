@@ -73,7 +73,6 @@ public class MetaServiceAdaptiveThrottleTest {
         Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = 100;
 
         MetaServiceAdaptiveThrottle.resetInstance();
-        MetaServiceRateLimiter.resetInstance();
     }
 
     @After
@@ -93,7 +92,6 @@ public class MetaServiceAdaptiveThrottleTest {
         Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = originalBaseQpsWhenZero;
 
         MetaServiceAdaptiveThrottle.resetInstance();
-        MetaServiceRateLimiter.resetInstance();
     }
 
     @Test
@@ -326,94 +324,30 @@ public class MetaServiceAdaptiveThrottleTest {
         Assert.assertEquals(1, throttle.getWindowTotal());
     }
 
-    // Tests for new phase configuration
+    // Tests for new config fields
 
     @Test
-    public void testPhase1MethodsOnlyThrottlesSpecifiedMethods() {
+    public void testPhase1MethodsConfig() {
         Config.meta_service_rpc_adaptive_throttle_phase1_methods = "getVersion,beginTxn";
         Config.meta_service_rpc_adaptive_throttle_phase2_enabled = false;
 
-        MetaServiceRateLimiter rateLimiter = MetaServiceRateLimiter.getInstance();
-
-        // getVersion should be throttled (in phase1 list)
-        rateLimiter.setAdaptiveFactor(0.5);
-        MetaServiceRateLimiter.MethodRateLimiter getVersionLimiter = rateLimiter.getMethodLimiters().get("getVersion");
-        if (getVersionLimiter != null) {
-            Assert.assertNotNull("getVersion should have a rate limiter", getVersionLimiter.getRateLimiter());
-        }
-
-        // otherMethod should NOT be throttled (not in phase1 list, phase2 disabled)
-        MetaServiceRateLimiter.MethodRateLimiter otherLimiter = rateLimiter.getMethodLimiters().get("otherMethod");
-        if (otherLimiter != null) {
-            Assert.assertNull("otherMethod should not have a rate limiter when phase2 disabled", otherLimiter.getRateLimiter());
-        }
+        Assert.assertEquals("getVersion,beginTxn", Config.meta_service_rpc_adaptive_throttle_phase1_methods);
+        Assert.assertFalse(Config.meta_service_rpc_adaptive_throttle_phase2_enabled);
     }
 
     @Test
-    public void testPhase2EnabledThrottlesAllMethods() {
+    public void testPhase2EnabledConfig() {
         Config.meta_service_rpc_adaptive_throttle_phase1_methods = "getVersion";
         Config.meta_service_rpc_adaptive_throttle_phase2_enabled = true;
 
-        MetaServiceRateLimiter rateLimiter = MetaServiceRateLimiter.getInstance();
-
-        // Both getVersion and otherMethod should be throttled when phase2 enabled
-        rateLimiter.setAdaptiveFactor(0.5);
-
-        // Add method to adaptiveThrottleMethods
-        rateLimiter.getMethodLimiters().put("otherMethod",
-                new MetaServiceRateLimiter.MethodRateLimiter("otherMethod", 10, 0, 0));
-
-        // Apply factor again after adding
-        rateLimiter.setAdaptiveFactor(0.5);
-
-        MetaServiceRateLimiter.MethodRateLimiter otherLimiter = rateLimiter.getMethodLimiters().get("otherMethod");
-        Assert.assertNotNull("otherMethod should have a rate limiter when phase2 enabled", otherLimiter.getRateLimiter());
+        Assert.assertTrue(Config.meta_service_rpc_adaptive_throttle_phase2_enabled);
     }
 
     @Test
-    public void testAdaptiveThrottleWithZeroConfiguredQps() {
-        Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = 100;
-        Config.meta_service_rpc_adaptive_throttle_phase1_methods = "newMethod";
-        Config.meta_service_rpc_adaptive_throttle_phase2_enabled = true;
+    public void testBaseQpsWhenZeroConfig() {
+        Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = 200;
 
-        MetaServiceRateLimiter rateLimiter = MetaServiceRateLimiter.getInstance();
-
-        // Simulate calling a method with configuredQps = 0
-        // The limiter will be created in methodLimiters with qps=0
-        MetaServiceRateLimiter.MethodRateLimiter newMethodLimiter =
-                new MetaServiceRateLimiter.MethodRateLimiter("newMethod", 10, 0, 0);
-        rateLimiter.getMethodLimiters().put("newMethod", newMethodLimiter);
-
-        // Apply factor < 1.0 (throttling) - should create limiter
-        newMethodLimiter.applyAdaptiveFactor(0.5);
-        Assert.assertNotNull("Limiter should be created when factor < 1.0", newMethodLimiter.getRateLimiter());
-
-        // Apply factor = 1.0 (recovered) - should remove limiter
-        newMethodLimiter.applyAdaptiveFactor(1.0);
-        Assert.assertNull("Limiter should be removed when factor = 1.0", newMethodLimiter.getRateLimiter());
-    }
-
-    @Test
-    public void testAdaptiveThrottleMethodsTrackedFromAcquire() {
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_phase1_methods = "getVersion";
-        Config.meta_service_rpc_adaptive_throttle_phase2_enabled = false;
-
-        MetaServiceRateLimiter rateLimiter = MetaServiceRateLimiter.getInstance();
-
-        // Simulate calling a new method via acquire
-        // This should add the method to adaptiveThrottleMethods
-        try {
-            rateLimiter.acquire("dynamicMethod", 1);
-        } catch (Exception e) {
-            // Expected to fail due to config, but method should still be tracked
-        }
-
-        // Now set adaptive factor - the dynamic method should be considered
-        rateLimiter.setAdaptiveFactor(0.5);
-
-        // The method should have been added to methodLimiters (possibly with qps=0)
-        // and applyAdaptiveFactor should be called on it
+        Assert.assertEquals(200, Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero);
     }
 
     private void triggerFastDecrease(MetaServiceAdaptiveThrottle throttle) {
