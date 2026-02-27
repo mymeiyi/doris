@@ -328,6 +328,7 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 5000;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+        Config.meta_service_rpc_cost_limit_per_core_config = "";
 
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
         int threadCount = 10;
@@ -341,12 +342,8 @@ public class MetaServiceRateLimiterTest {
                 try {
                     startLatch.await();
                     boolean acquired = limiter.acquire("testMethod", 0);
-                    if (acquired) {
-                        successCount.incrementAndGet();
-                    } else {
-                        LOG.info("sout: fail 1");
-                        failCount.incrementAndGet();
-                    }
+                    Assert.assertFalse(acquired); // cost limit is disabled
+                    successCount.incrementAndGet();
                 } catch (RpcRateLimitException e) {
                     LOG.info("sout: fail 2", e);
                     failCount.incrementAndGet();
