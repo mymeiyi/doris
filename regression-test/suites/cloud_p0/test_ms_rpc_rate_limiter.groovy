@@ -103,7 +103,7 @@ suite("test_ms_rpc_rate_limiter") {
         break
     }
     if (audit_log.size() == 0) {
-        LOG.warn("No audit log found for query_id: ${profileId}")
+        logger.warn("No audit log found for query_id: ${profileId}")
         return
     }
     assertEquals(audit_log.size(), 1)
