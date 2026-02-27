@@ -349,6 +349,7 @@ public class MetaServiceRateLimiterTest {
                 } catch (RpcRateLimitException e) {
                     failCount.incrementAndGet();
                 } catch (InterruptedException e) {
+                    failCount.incrementAndGet();
                     Thread.currentThread().interrupt();
                 }
             });
@@ -357,10 +358,20 @@ public class MetaServiceRateLimiterTest {
         startLatch.countDown();
         executor.shutdown();
         try {
-            executor.awaitTermination(10, TimeUnit.SECONDS);
+            boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
+            Assert.assertTrue("Executor did not terminate in the expected time", terminated);
         } catch (Exception e) {
             LOG.error("Test interrupted", e);
+            Assert.fail("Test was interrupted: " + e.getMessage());
         }
+        int successes = successCount.get();
+        int failures = failCount.get();
+        LOG.info("sout: successes={}, failures={}", successes, failures);
+        Assert.assertEquals("Total results should match thread count", threadCount, successes + failures);
+        // With QPS=100, 10 threads, and a 5s timeout, we expect most requests to succeed.
+        Assert.assertTrue(
+                "Expected most concurrent requests to succeed, but successes=" + successes + ", failures=" + failures,
+                successes >= (int) (threadCount * 0.8));
     }
 
     @Test
