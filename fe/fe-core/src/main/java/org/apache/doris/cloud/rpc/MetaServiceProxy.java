@@ -305,11 +305,16 @@ public class MetaServiceProxy {
         String methodName = "getVersion";
         int cost = MetaServiceRateLimiter.getRequestCost(methodName, request);
         boolean acquired = false;
+        if (MetricRepo.isInit && Config.isCloudMode()) {
+            CloudMetrics.META_SERVICE_RPC_ALL_TOTAL.increase(1L);
+            CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
+        }
+
         long deadline = System.currentTimeMillis() + timeoutMs;
         Cloud.GetVersionResponse resp = null;
         try {
             acquired = MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
-            Future<Cloud.GetVersionResponse> future = MetaServiceProxy.getInstance().getVisibleVersionAsync(request);
+            Future<Cloud.GetVersionResponse> future = getVisibleVersionAsync(request);
             while (resp == null) {
                 try {
                     resp = future.get(Math.max(0, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
@@ -338,14 +343,7 @@ public class MetaServiceProxy {
     @VisibleForTesting
     protected Future<Cloud.GetVersionResponse> getVisibleVersionAsync(Cloud.GetVersionRequest request)
             throws RpcException {
-        String methodName = "getVersion";
         MetaServiceClient client = null;
-
-        if (MetricRepo.isInit && Config.isCloudMode()) {
-            CloudMetrics.META_SERVICE_RPC_ALL_TOTAL.increase(1L);
-            CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
-        }
-
         try {
             client = getProxy();
             Future<Cloud.GetVersionResponse> future = client.getVisibleVersionAsync(request);

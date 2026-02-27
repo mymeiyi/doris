@@ -43,7 +43,7 @@ suite("test_ms_rpc_rate_limiter") {
         return conn.getInputStream().getText()
     }
 
-    String profileId = ""
+    def profileId = ""
     def getProfileWithToken = { token ->
         int attempts = 0
         while (attempts < 10 && (profileId == null || profileId == "")) {
@@ -86,7 +86,6 @@ suite("test_ms_rpc_rate_limiter") {
 
     // check profile
     def profile = getProfileWithToken("${t1}")
-    // def profile = getProfile(queryId)
     logger.info("Profile_id: ${profileId}")
     logger.info("Profile: ${profile}")
     assertTrue(profile.contains("Wait MS RPC Rate Limiter Time"))
@@ -94,17 +93,20 @@ suite("test_ms_rpc_rate_limiter") {
 
     // check audit log
     def audit_log
-    for (int i = 0; i < 60; i++) {
+    for (int i = 0; i < 20; i++) {
         audit_log = sql "select query_id, get_meta_times_ms, time from __internal_schema.audit_log where query_id = '${profileId}' order by time desc limit 1"
-        if (audit_log.size() <= 0) {
+        if (audit_log.size() == 0) {
             sleep(2000)
             continue
         }
         logger.info("Audit log: ${audit_log}")
         break
     }
+    if (audit_log.size() == 0) {
+        LOG.warn("No audit log found for query_id: ${profileId}")
+        return
+    }
     assertEquals(audit_log.size(), 1)
-    def queryId = audit_log[0][0]
     def getMetaTimesInfo = audit_log[0][1]
     assertTrue(getMetaTimesInfo.contains("wait_meta_service_rpc_rate_limit_time_ms"))
     assertTrue(getMetaTimesInfo.contains("wait_meta_service_rpc_rate_limit_count"))

@@ -494,6 +494,10 @@ public class MetaServiceRateLimiter {
 
     public static int getRequestCost(String methodName, Object request) {
         if (methodName.equals("getVersion")) {
+            if (request == null || !(request instanceof Cloud.GetVersionRequest)) {
+                LOG.warn("Failed to get request cost for method: {}, invalid request: {}", methodName, request);
+                return 1;
+            }
             Cloud.GetVersionRequest getVersionRequest = (Cloud.GetVersionRequest) request;
             if (getVersionRequest.hasBatchMode() && getVersionRequest.getBatchMode()) {
                 int cost = getVersionRequest.getDbIdsCount();
