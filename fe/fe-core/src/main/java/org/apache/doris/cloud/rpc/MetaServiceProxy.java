@@ -293,7 +293,7 @@ public class MetaServiceProxy {
                         .update(System.currentTimeMillis() - startTime);
             }
             if (Config.meta_service_rpc_adaptive_throttle_enabled) {
-                MetaServiceAdaptiveThrottle.Signal signal = MetaServiceCodeExtractor.isMaxQpsLimit(response)
+                MetaServiceAdaptiveThrottle.Signal signal = isMetaServiceBusy(methodName, response)
                         ? MetaServiceAdaptiveThrottle.Signal.BACKPRESSURE
                         : MetaServiceAdaptiveThrottle.Signal.SUCCESS;
                 MetaServiceAdaptiveThrottle.getInstance().recordSignal(signal);
@@ -736,5 +736,281 @@ public class MetaServiceProxy {
         String methodName = "cloneInstance";
         return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
                 (client) -> client.cloneInstance(request));
+    }
+
+    public boolean isMetaServiceBusy(String methodName, Object response) {
+        if (response == null) {
+            return false;
+        }
+        switch (methodName) {
+            case "getVersion":
+                if (response instanceof Cloud.GetVersionResponse) {
+                    return isMetaServiceBusy(((Cloud.GetVersionResponse) response).getStatus());
+                }
+                break;
+            case "getInstance":
+                if (response instanceof Cloud.GetInstanceResponse) {
+                    return isMetaServiceBusy(((Cloud.GetInstanceResponse) response).getStatus());
+                }
+                break;
+            case "createTablets":
+                if (response instanceof Cloud.CreateTabletsResponse) {
+                    return isMetaServiceBusy(((Cloud.CreateTabletsResponse) response).getStatus());
+                }
+                break;
+            case "updateTablet":
+                if (response instanceof Cloud.UpdateTabletResponse) {
+                    return isMetaServiceBusy(((Cloud.UpdateTabletResponse) response).getStatus());
+                }
+                break;
+            case "beginTxn":
+                if (response instanceof Cloud.BeginTxnResponse) {
+                    return isMetaServiceBusy(((Cloud.BeginTxnResponse) response).getStatus());
+                }
+                break;
+            case "precommitTxn":
+                if (response instanceof Cloud.PrecommitTxnResponse) {
+                    return isMetaServiceBusy(((Cloud.PrecommitTxnResponse) response).getStatus());
+                }
+                break;
+            case "commitTxn":
+                if (response instanceof Cloud.CommitTxnResponse) {
+                    return isMetaServiceBusy(((Cloud.CommitTxnResponse) response).getStatus());
+                }
+                break;
+            case "abortTxn":
+                if (response instanceof Cloud.AbortTxnResponse) {
+                    return isMetaServiceBusy(((Cloud.AbortTxnResponse) response).getStatus());
+                }
+                break;
+            case "getTxn":
+                if (response instanceof Cloud.GetTxnResponse) {
+                    return isMetaServiceBusy(((Cloud.GetTxnResponse) response).getStatus());
+                }
+                break;
+            case "getTxnId":
+                if (response instanceof Cloud.GetTxnIdResponse) {
+                    return isMetaServiceBusy(((Cloud.GetTxnIdResponse) response).getStatus());
+                }
+                break;
+            case "getCurrentMaxTxnId":
+                if (response instanceof Cloud.GetCurrentMaxTxnResponse) {
+                    return isMetaServiceBusy(((Cloud.GetCurrentMaxTxnResponse) response).getStatus());
+                }
+                break;
+            case "beginSubTxn":
+                if (response instanceof Cloud.BeginSubTxnResponse) {
+                    return isMetaServiceBusy(((Cloud.BeginSubTxnResponse) response).getStatus());
+                }
+                break;
+            case "abortSubTxn":
+                if (response instanceof Cloud.AbortSubTxnResponse) {
+                    return isMetaServiceBusy(((Cloud.AbortSubTxnResponse) response).getStatus());
+                }
+                break;
+            case "checkTxnConflict":
+                if (response instanceof Cloud.CheckTxnConflictResponse) {
+                    return isMetaServiceBusy(((Cloud.CheckTxnConflictResponse) response).getStatus());
+                }
+                break;
+            case "cleanTxnLabel":
+                if (response instanceof Cloud.CleanTxnLabelResponse) {
+                    return isMetaServiceBusy(((Cloud.CleanTxnLabelResponse) response).getStatus());
+                }
+                break;
+            case "getCluster":
+                if (response instanceof Cloud.GetClusterResponse) {
+                    return isMetaServiceBusy(((Cloud.GetClusterResponse) response).getStatus());
+                }
+                break;
+            case "prepareIndex":
+            case "commitIndex":
+            case "dropIndex":
+                if (response instanceof Cloud.IndexResponse) {
+                    return isMetaServiceBusy(((Cloud.IndexResponse) response).getStatus());
+                }
+                break;
+            case "checkKv":
+                if (response instanceof Cloud.CheckKVResponse) {
+                    return isMetaServiceBusy(((Cloud.CheckKVResponse) response).getStatus());
+                }
+                break;
+            case "preparePartition":
+            case "commitPartition":
+            case "dropPartition":
+                if (response instanceof Cloud.PartitionResponse) {
+                    return isMetaServiceBusy(((Cloud.PartitionResponse) response).getStatus());
+                }
+                break;
+            case "getTabletStats":
+                if (response instanceof Cloud.GetTabletStatsResponse) {
+                    return isMetaServiceBusy(((Cloud.GetTabletStatsResponse) response).getStatus());
+                }
+                break;
+            case "createStage":
+                if (response instanceof Cloud.CreateStageResponse) {
+                    return isMetaServiceBusy(((Cloud.CreateStageResponse) response).getStatus());
+                }
+                break;
+            case "getStage":
+                if (response instanceof Cloud.GetStageResponse) {
+                    return isMetaServiceBusy(((Cloud.GetStageResponse) response).getStatus());
+                }
+                break;
+            case "dropStage":
+                if (response instanceof Cloud.DropStageResponse) {
+                    return isMetaServiceBusy(((Cloud.DropStageResponse) response).getStatus());
+                }
+                break;
+            case "getIam":
+                if (response instanceof Cloud.GetIamResponse) {
+                    return isMetaServiceBusy(((Cloud.GetIamResponse) response).getStatus());
+                }
+                break;
+            case "beginCopy":
+                if (response instanceof Cloud.BeginCopyResponse) {
+                    return isMetaServiceBusy(((Cloud.BeginCopyResponse) response).getStatus());
+                }
+                break;
+            case "finishCopy":
+                if (response instanceof Cloud.FinishCopyResponse) {
+                    return isMetaServiceBusy(((Cloud.FinishCopyResponse) response).getStatus());
+                }
+                break;
+            case "getCopyJob":
+                if (response instanceof Cloud.GetCopyJobResponse) {
+                    return isMetaServiceBusy(((Cloud.GetCopyJobResponse) response).getStatus());
+                }
+                break;
+            case "getCopyFiles":
+                if (response instanceof Cloud.GetCopyFilesResponse) {
+                    return isMetaServiceBusy(((Cloud.GetCopyFilesResponse) response).getStatus());
+                }
+                break;
+            case "filterCopyFiles":
+                if (response instanceof Cloud.FilterCopyFilesResponse) {
+                    return isMetaServiceBusy(((Cloud.FilterCopyFilesResponse) response).getStatus());
+                }
+                break;
+            case "alterCluster":
+                if (response instanceof Cloud.AlterClusterResponse) {
+                    return isMetaServiceBusy(((Cloud.AlterClusterResponse) response).getStatus());
+                }
+                break;
+            case "alterObjStoreInfo":
+            case "alterStorageVault":
+                if (response instanceof Cloud.AlterObjStoreInfoResponse) {
+                    return isMetaServiceBusy(((Cloud.AlterObjStoreInfoResponse) response).getStatus());
+                }
+                break;
+            case "getDeleteBitmapUpdateLock":
+                if (response instanceof Cloud.GetDeleteBitmapUpdateLockResponse) {
+                    return isMetaServiceBusy(((Cloud.GetDeleteBitmapUpdateLockResponse) response).getStatus());
+                }
+                break;
+            case "removeDeleteBitmapUpdateLock":
+                if (response instanceof Cloud.RemoveDeleteBitmapUpdateLockResponse) {
+                    return isMetaServiceBusy(((Cloud.RemoveDeleteBitmapUpdateLockResponse) response).getStatus());
+                }
+                break;
+            case "getRLTaskCommitAttach":
+                if (response instanceof Cloud.GetRLTaskCommitAttachResponse) {
+                    return isMetaServiceBusy(((Cloud.GetRLTaskCommitAttachResponse) response).getStatus());
+                }
+                break;
+            case "resetRLProgress":
+                if (response instanceof Cloud.ResetRLProgressResponse) {
+                    return isMetaServiceBusy(((Cloud.ResetRLProgressResponse) response).getStatus());
+                }
+                break;
+            case "resetStreamingJobOffset":
+                if (response instanceof Cloud.ResetStreamingJobOffsetResponse) {
+                    return isMetaServiceBusy(((Cloud.ResetStreamingJobOffsetResponse) response).getStatus());
+                }
+                break;
+            case "getObjStoreInfo":
+                if (response instanceof Cloud.GetObjStoreInfoResponse) {
+                    return isMetaServiceBusy(((Cloud.GetObjStoreInfoResponse) response).getStatus());
+                }
+                break;
+            case "abortTxnWithCoordinator":
+                if (response instanceof Cloud.AbortTxnWithCoordinatorResponse) {
+                    return isMetaServiceBusy(((Cloud.AbortTxnWithCoordinatorResponse) response).getStatus());
+                }
+                break;
+            case "getPrepareTxnByCoordinator":
+                if (response instanceof Cloud.GetPrepareTxnByCoordinatorResponse) {
+                    return isMetaServiceBusy(((Cloud.GetPrepareTxnByCoordinatorResponse) response).getStatus());
+                }
+                break;
+            case "createInstance":
+                if (response instanceof Cloud.CreateInstanceResponse) {
+                    return isMetaServiceBusy(((Cloud.CreateInstanceResponse) response).getStatus());
+                }
+                break;
+            case "getStreamingTaskCommitAttach":
+                if (response instanceof Cloud.GetStreamingTaskCommitAttachResponse) {
+                    return isMetaServiceBusy(((Cloud.GetStreamingTaskCommitAttachResponse) response).getStatus());
+                }
+                break;
+            case "deleteStreamingJob":
+                if (response instanceof Cloud.DeleteStreamingJobResponse) {
+                    return isMetaServiceBusy(((Cloud.DeleteStreamingJobResponse) response).getStatus());
+                }
+                break;
+            case "alterInstance":
+                if (response instanceof Cloud.AlterInstanceResponse) {
+                    return isMetaServiceBusy(((Cloud.AlterInstanceResponse) response).getStatus());
+                }
+                break;
+            case "beginSnapshot":
+                if (response instanceof Cloud.BeginSnapshotResponse) {
+                    return isMetaServiceBusy(((Cloud.BeginSnapshotResponse) response).getStatus());
+                }
+                break;
+            case "updateSnapshot":
+                if (response instanceof Cloud.UpdateSnapshotResponse) {
+                    return isMetaServiceBusy(((Cloud.UpdateSnapshotResponse) response).getStatus());
+                }
+                break;
+            case "commitSnapshot":
+                if (response instanceof Cloud.CommitSnapshotResponse) {
+                    return isMetaServiceBusy(((Cloud.CommitSnapshotResponse) response).getStatus());
+                }
+                break;
+            case "abortSnapshot":
+                if (response instanceof Cloud.AbortSnapshotResponse) {
+                    return isMetaServiceBusy(((Cloud.AbortSnapshotResponse) response).getStatus());
+                }
+                break;
+            case "listSnapshot":
+                if (response instanceof Cloud.ListSnapshotResponse) {
+                    return isMetaServiceBusy(((Cloud.ListSnapshotResponse) response).getStatus());
+                }
+                break;
+            case "dropSnapshot":
+                if (response instanceof Cloud.DropSnapshotResponse) {
+                    return isMetaServiceBusy(((Cloud.DropSnapshotResponse) response).getStatus());
+                }
+                break;
+            case "cloneInstance":
+                if (response instanceof Cloud.CloneInstanceResponse) {
+                    return isMetaServiceBusy(((Cloud.CloneInstanceResponse) response).getStatus());
+                }
+                break;
+            case "finishTabletJob":
+                if (response instanceof Cloud.FinishTabletJobResponse) {
+                    return isMetaServiceBusy(((Cloud.FinishTabletJobResponse) response).getStatus());
+                }
+                break;
+            default:
+                LOG.debug("Unknown method name for isMetaServiceBusy: {}", methodName);
+                break;
+        }
+        return false;
+    }
+
+    private boolean isMetaServiceBusy(Cloud.MetaServiceResponseStatus status) {
+        return status != null && status.hasCode() && status.getCode() == Cloud.MetaServiceCode.MAX_QPS_LIMIT;
     }
 }
