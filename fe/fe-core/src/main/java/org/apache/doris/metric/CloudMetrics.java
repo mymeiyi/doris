@@ -67,6 +67,13 @@ public class CloudMetrics {
     // Per-method meta-service RPC Rate limiting metrics
     public static AutoMappedMetric<LongCounterMetric> META_SERVICE_RPC_RATE_LIMIT_THROTTLED;
     public static AutoMappedMetric<Histogram> META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY;
+    public static AutoMappedMetric<LongCounterMetric> META_SERVICE_RPC_RATE_LIMIT_REJECTED;
+
+    // Adaptive throttle metrics
+    public static GaugeMetricImpl<Double> META_SERVICE_RPC_ADAPTIVE_THROTTLE_FACTOR;
+    public static GaugeMetricImpl<String> META_SERVICE_RPC_ADAPTIVE_THROTTLE_STATE;
+    public static LongCounterMetric META_SERVICE_RPC_ADAPTIVE_THROTTLE_TIMEOUT_SIGNALS;
+    public static LongCounterMetric META_SERVICE_RPC_ADAPTIVE_THROTTLE_BACKPRESSURE_SIGNALS;
 
     protected static void init() {
         if (Config.isNotCloudMode()) {
@@ -186,5 +193,25 @@ public class CloudMetrics {
                     "method=" + methodName);
             return MetricRepo.METRIC_REGISTER.histogram(metricName);
         });
+
+        META_SERVICE_RPC_RATE_LIMIT_REJECTED = MetricRepo.addLabeledMetrics("method", () ->
+                new LongCounterMetric("meta_service_rpc_rate_limit_rejected", MetricUnit.NOUNIT,
+                        "meta service RPC rate limit rejected count"));
+
+        META_SERVICE_RPC_ADAPTIVE_THROTTLE_FACTOR = new GaugeMetricImpl<>("meta_service_rpc_adaptive_throttle_factor",
+                MetricUnit.NOUNIT, "current adaptive throttle factor (0.1-1.0)", 1.0);
+        MetricRepo.DORIS_METRIC_REGISTER.addMetrics(META_SERVICE_RPC_ADAPTIVE_THROTTLE_FACTOR);
+        META_SERVICE_RPC_ADAPTIVE_THROTTLE_STATE = new GaugeMetricImpl<>("meta_service_rpc_adaptive_throttle_state",
+                MetricUnit.NOUNIT, "current adaptive throttle state", "NORMAL");
+        MetricRepo.DORIS_METRIC_REGISTER.addMetrics(META_SERVICE_RPC_ADAPTIVE_THROTTLE_STATE);
+        META_SERVICE_RPC_ADAPTIVE_THROTTLE_TIMEOUT_SIGNALS = new LongCounterMetric(
+                "meta_service_rpc_adaptive_throttle_timeout_signals", MetricUnit.NOUNIT,
+                "total timeout signals received by adaptive throttle");
+        MetricRepo.DORIS_METRIC_REGISTER.addMetrics(META_SERVICE_RPC_ADAPTIVE_THROTTLE_TIMEOUT_SIGNALS);
+        META_SERVICE_RPC_ADAPTIVE_THROTTLE_BACKPRESSURE_SIGNALS = new LongCounterMetric(
+                "meta_service_rpc_adaptive_throttle_backpressure_signals", MetricUnit.NOUNIT,
+                "total backpressure signals received by adaptive throttle");
+        MetricRepo.DORIS_METRIC_REGISTER.addMetrics(META_SERVICE_RPC_ADAPTIVE_THROTTLE_BACKPRESSURE_SIGNALS);
+
     }
 }

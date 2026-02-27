@@ -68,6 +68,9 @@ public class MetaServiceRateLimiter {
 
     MetaServiceRateLimiter() {
         reloadConfig();
+        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+            MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
+        }
     }
 
     private boolean isConfigChanged() {
@@ -257,9 +260,11 @@ public class MetaServiceRateLimiter {
     protected static class MethodRateLimiter {
         private final String methodName;
         private volatile int maxWaitRequestNum;
+        private final int configuredQps;
         private Semaphore waitingSemaphore;
         private RateLimiter rateLimiter;
         private CostLimiter costLimiter;
+        private final java.util.concurrent.atomic.AtomicInteger rejectedCount = new java.util.concurrent.atomic.AtomicInteger(0);
 
         MethodRateLimiter(String methodName, int maxWaitRequestNum, int qps, int costLimit) {
             this.methodName = methodName;
@@ -268,6 +273,7 @@ public class MetaServiceRateLimiter {
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
                 this.rateLimiter = RateLimiter.create(qps);
             }
+            this.configuredQps = qps;
             this.costLimiter = costLimit > 0 ? new CostLimiter(costLimit) : null;
             LOG.info("Create rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}, cost: {}", methodName,
                     maxWaitRequestNum, qps, costLimit);
@@ -298,6 +304,24 @@ public class MetaServiceRateLimiter {
                 if (MetricRepo.isInit && Config.isCloudMode()) {
                     CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
                             .update(TimeUnit.NANOSECONDS.toMillis(durationNs));
+                }
+            }
+        }
+
+        void applyAdaptiveFactor(double factor) {
+            if (configuredQps <= 0) {
+                return;
+            }
+            double effectiveQps = Math.max(1.0, configuredQps * factor);
+            rateLimiter.setRate(effectiveQps);
+            LOG.info("Applied adaptive factor {} to method {}, effective QPS now {}", factor, methodName, effectiveQps);
+        }
+
+        private void updateMetrics(boolean isRejected) {
+            if (MetricRepo.isInit && Config.isCloudMode()) {
+                CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
+                if (isRejected) {
+                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_REJECTED.getOrAdd(methodName).increase(1L);
                 }
             }
         }
@@ -516,5 +540,29 @@ public class MetaServiceRateLimiter {
         }
         // TODO the cost of other methods is not supported now
         return 1;
+    }
+
+    public void setAdaptiveFactor(double factor) {
+        for (MethodRateLimiter limiter : methodLimiters.values()) {
+            limiter.applyAdaptiveFactor(factor);
+        }
+        LOG.info("Applied adaptive factor {} to {} method limiters", factor, methodLimiters.size());
+    }
+
+    @VisibleForTesting
+    public void reset() {
+        methodLimiters.clear();
+        methodQpsConfig.clear();
+        lastQpsConfig = "";
+    }
+
+    @VisibleForTesting
+    public static void setInstanceForTest(MetaServiceRateLimiter testInstance) {
+        instance = testInstance;
+    }
+
+    @VisibleForTesting
+    public static void resetInstance() {
+        instance = null;
     }
 }
