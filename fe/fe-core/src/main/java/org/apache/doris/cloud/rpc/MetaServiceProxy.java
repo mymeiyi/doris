@@ -23,6 +23,7 @@ import org.apache.doris.metric.CloudMetrics;
 import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.rpc.RpcException;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Maps;
 import io.grpc.StatusRuntimeException;
 import org.apache.logging.log4j.LogManager;
@@ -32,7 +33,10 @@ import java.util.LinkedList;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Random;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
@@ -99,12 +103,15 @@ public class MetaServiceProxy {
             throws RpcException {
         long startTime = System.currentTimeMillis();
         String methodName = "getInstance";
+        int cost = MetaServiceRateLimiter.getRequestCost(methodName, request);
         if (MetricRepo.isInit && Config.isCloudMode()) {
             CloudMetrics.META_SERVICE_RPC_ALL_TOTAL.increase(1L);
             CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
         }
 
+        boolean acquired = false;
         try {
+            acquired = MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
             final MetaServiceClient client = getProxy();
             Cloud.GetInstanceResponse response = client.getInstance(request);
             if (MetricRepo.isInit && Config.isCloudMode()) {
@@ -120,6 +127,10 @@ public class MetaServiceProxy {
                         .update(System.currentTimeMillis() - startTime);
             }
             throw new RpcException("", e.getMessage(), e);
+        } finally {
+            if (acquired) {
+                MetaServiceRateLimiter.getInstance().release(methodName, cost);
+            }
         }
     }
 
@@ -194,13 +205,15 @@ public class MetaServiceProxy {
             this.proxy = proxy;
         }
 
-        public <Response> Response executeRequest(String methodName, Function<MetaServiceClient, Response> function)
-                throws RpcException {
+        public <Response> Response executeRequest(String methodName, int cost,
+                Function<MetaServiceClient, Response> function) throws RpcException {
             long maxRetries = Config.meta_service_rpc_retry_cnt;
             for (long tried = 1; tried <= maxRetries; tried++) {
                 MetaServiceClient client = null;
                 boolean requestFailed = false;
+                boolean acquired = false;
                 try {
+                    acquired = MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
                     client = proxy.getProxy();
                     if (tried > 1 && MetricRepo.isInit && Config.isCloudMode()) {
                         CloudMetrics.META_SERVICE_RPC_ALL_RETRY.increase(1L);
@@ -233,6 +246,9 @@ public class MetaServiceProxy {
                         throw new RpcException("", e.getMessage(), e);
                     }
                 } finally {
+                    if (acquired) {
+                        MetaServiceRateLimiter.getInstance().release(methodName, cost);
+                    }
                     if (requestFailed && proxy.needReconn() && client != null) {
                         client.shutdown(true);
                     }
@@ -257,7 +273,8 @@ public class MetaServiceProxy {
      * Execute RPC with comprehensive metrics tracking.
      * Tracks: total calls, failures, latency
      */
-    private <Response> Response executeWithMetrics(String methodName, Function<MetaServiceClient, Response> function)
+    private <Response> Response executeWithMetrics(String methodName, int cost,
+            Function<MetaServiceClient, Response> function)
             throws RpcException {
         long startTime = System.currentTimeMillis();
         if (MetricRepo.isInit && Config.isCloudMode()) {
@@ -266,7 +283,7 @@ public class MetaServiceProxy {
         }
 
         try {
-            Response response = w.executeRequest(methodName, function);
+            Response response = w.executeRequest(methodName, cost, function);
             if (MetricRepo.isInit && Config.isCloudMode()) {
                 CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
                         .update(System.currentTimeMillis() - startTime);
@@ -283,17 +300,50 @@ public class MetaServiceProxy {
         }
     }
 
-    public Future<Cloud.GetVersionResponse> getVisibleVersionAsync(Cloud.GetVersionRequest request)
-            throws RpcException {
+    public Cloud.GetVersionResponse getVisibleVersion(Cloud.GetVersionRequest request, int timeoutMs) {
         long startTime = System.currentTimeMillis();
         String methodName = "getVersion";
-        MetaServiceClient client = null;
-
+        int cost = MetaServiceRateLimiter.getRequestCost(methodName, request);
+        boolean acquired = false;
         if (MetricRepo.isInit && Config.isCloudMode()) {
             CloudMetrics.META_SERVICE_RPC_ALL_TOTAL.increase(1L);
             CloudMetrics.META_SERVICE_RPC_TOTAL.getOrAdd(methodName).increase(1L);
         }
 
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        Cloud.GetVersionResponse resp = null;
+        try {
+            acquired = MetaServiceRateLimiter.getInstance().acquire(methodName, cost);
+            Future<Cloud.GetVersionResponse> future = getVisibleVersionAsync(request);
+            while (resp == null) {
+                try {
+                    resp = future.get(Math.max(0, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    LOG.warn("get version from meta service: future get interrupted exception", e);
+                }
+            }
+        } catch (RpcException | ExecutionException | TimeoutException | RuntimeException e) {
+            LOG.warn("get version from meta service failed, exception: ", e);
+        } finally {
+            if (acquired) {
+                MetaServiceRateLimiter.getInstance().release(methodName, cost);
+            }
+            if (MetricRepo.isInit && Config.isCloudMode()) {
+                CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
+                        .update(System.currentTimeMillis() - startTime);
+                if (resp == null) {
+                    CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
+                    CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
+                }
+            }
+        }
+        return resp;
+    }
+
+    @VisibleForTesting
+    protected Future<Cloud.GetVersionResponse> getVisibleVersionAsync(Cloud.GetVersionRequest request)
+            throws RpcException {
+        MetaServiceClient client = null;
         try {
             client = getProxy();
             Future<Cloud.GetVersionResponse> future = client.getVisibleVersionAsync(request);
@@ -305,20 +355,10 @@ public class MetaServiceProxy {
                         new com.google.common.util.concurrent.FutureCallback<Cloud.GetVersionResponse>() {
                             @Override
                             public void onSuccess(Cloud.GetVersionResponse result) {
-                                if (MetricRepo.isInit && Config.isCloudMode()) {
-                                    CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
-                                            .update(System.currentTimeMillis() - startTime);
-                                }
                             }
 
                             @Override
                             public void onFailure(Throwable t) {
-                                if (MetricRepo.isInit && Config.isCloudMode()) {
-                                    CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
-                                    CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
-                                    CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
-                                            .update(System.currentTimeMillis() - startTime);
-                                }
                                 if (finalClient != null) {
                                     finalClient.shutdown(true);
                                 }
@@ -327,12 +367,6 @@ public class MetaServiceProxy {
             }
             return future;
         } catch (Exception e) {
-            if (MetricRepo.isInit && Config.isCloudMode()) {
-                CloudMetrics.META_SERVICE_RPC_ALL_FAILED.increase(1L);
-                CloudMetrics.META_SERVICE_RPC_FAILED.getOrAdd(methodName).increase(1L);
-                CloudMetrics.META_SERVICE_RPC_LATENCY.getOrAdd(methodName)
-                        .update(System.currentTimeMillis() - startTime);
-            }
             if (client != null) {
                 client.shutdown(true);
             }
@@ -341,163 +375,216 @@ public class MetaServiceProxy {
     }
 
     public Cloud.GetVersionResponse getVersion(Cloud.GetVersionRequest request) throws RpcException {
-        return executeWithMetrics("getVersion", (client) -> client.getVersion(request));
+        String methodName = "getVersion";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getVersion(request));
     }
 
     public Cloud.CreateTabletsResponse createTablets(Cloud.CreateTabletsRequest request) throws RpcException {
-        return executeWithMetrics("createTablets", (client) -> client.createTablets(request));
+        String methodName = "createTablets";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.createTablets(request));
     }
 
     public Cloud.UpdateTabletResponse updateTablet(Cloud.UpdateTabletRequest request) throws RpcException {
-        return executeWithMetrics("updateTablet", (client) -> client.updateTablet(request));
+        String methodName = "updateTablet";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.updateTablet(request));
     }
 
-    public Cloud.BeginTxnResponse beginTxn(Cloud.BeginTxnRequest request)
-            throws RpcException {
-        return executeWithMetrics("beginTxn", (client) -> client.beginTxn(request));
+    public Cloud.BeginTxnResponse beginTxn(Cloud.BeginTxnRequest request) throws RpcException {
+        String methodName = "beginTxn";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.beginTxn(request));
     }
 
-    public Cloud.PrecommitTxnResponse precommitTxn(Cloud.PrecommitTxnRequest request)
-            throws RpcException {
-        return executeWithMetrics("precommitTxn", (client) -> client.precommitTxn(request));
+    public Cloud.PrecommitTxnResponse precommitTxn(Cloud.PrecommitTxnRequest request) throws RpcException {
+        String methodName = "precommitTxn";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.precommitTxn(request));
     }
 
-    public Cloud.CommitTxnResponse commitTxn(Cloud.CommitTxnRequest request)
-            throws RpcException {
-        return executeWithMetrics("commitTxn", (client) -> client.commitTxn(request));
+    public Cloud.CommitTxnResponse commitTxn(Cloud.CommitTxnRequest request) throws RpcException {
+        String methodName = "commitTxn";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.commitTxn(request));
     }
 
-    public Cloud.AbortTxnResponse abortTxn(Cloud.AbortTxnRequest request)
-            throws RpcException {
-        return executeWithMetrics("abortTxn", (client) -> client.abortTxn(request));
+    public Cloud.AbortTxnResponse abortTxn(Cloud.AbortTxnRequest request) throws RpcException {
+        String methodName = "abortTxn";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.abortTxn(request));
     }
 
-    public Cloud.GetTxnResponse getTxn(Cloud.GetTxnRequest request)
-            throws RpcException {
-        return executeWithMetrics("getTxn", (client) -> client.getTxn(request));
+    public Cloud.GetTxnResponse getTxn(Cloud.GetTxnRequest request) throws RpcException {
+        String methodName = "getTxn";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getTxn(request));
     }
 
-    public Cloud.GetTxnIdResponse getTxnId(Cloud.GetTxnIdRequest request)
-            throws RpcException {
-        return executeWithMetrics("getTxnId", (client) -> client.getTxnId(request));
+    public Cloud.GetTxnIdResponse getTxnId(Cloud.GetTxnIdRequest request) throws RpcException {
+        String methodName = "getTxnId";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getTxnId(request));
     }
 
     public Cloud.GetCurrentMaxTxnResponse getCurrentMaxTxnId(Cloud.GetCurrentMaxTxnRequest request)
             throws RpcException {
-        return executeWithMetrics("getCurrentMaxTxnId", (client) -> client.getCurrentMaxTxnId(request));
+        String methodName = "getCurrentMaxTxnId";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getCurrentMaxTxnId(request));
     }
 
-    public Cloud.BeginSubTxnResponse beginSubTxn(Cloud.BeginSubTxnRequest request)
-            throws RpcException {
-        return executeWithMetrics("beginSubTxn", (client) -> client.beginSubTxn(request));
+    public Cloud.BeginSubTxnResponse beginSubTxn(Cloud.BeginSubTxnRequest request) throws RpcException {
+        String methodName = "beginSubTxn";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.beginSubTxn(request));
     }
 
-    public Cloud.AbortSubTxnResponse abortSubTxn(Cloud.AbortSubTxnRequest request)
-            throws RpcException {
-        return executeWithMetrics("abortSubTxn", (client) -> client.abortSubTxn(request));
+    public Cloud.AbortSubTxnResponse abortSubTxn(Cloud.AbortSubTxnRequest request) throws RpcException {
+        String methodName = "abortSubTxn";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.abortSubTxn(request));
     }
 
     public Cloud.CheckTxnConflictResponse checkTxnConflict(Cloud.CheckTxnConflictRequest request)
             throws RpcException {
-        return executeWithMetrics("checkTxnConflict", (client) -> client.checkTxnConflict(request));
+        String methodName = "checkTxnConflict";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.checkTxnConflict(request));
     }
 
-    public Cloud.CleanTxnLabelResponse cleanTxnLabel(Cloud.CleanTxnLabelRequest request)
-            throws RpcException {
-        return executeWithMetrics("cleanTxnLabel", (client) -> client.cleanTxnLabel(request));
+    public Cloud.CleanTxnLabelResponse cleanTxnLabel(Cloud.CleanTxnLabelRequest request) throws RpcException {
+        String methodName = "cleanTxnLabel";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.cleanTxnLabel(request));
     }
 
     public Cloud.GetClusterResponse getCluster(Cloud.GetClusterRequest request) throws RpcException {
-        return executeWithMetrics("getCluster", (client) -> client.getCluster(request));
+        String methodName = "getCluster";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getCluster(request));
     }
 
     public Cloud.IndexResponse prepareIndex(Cloud.IndexRequest request) throws RpcException {
-        return executeWithMetrics("prepareIndex", (client) -> client.prepareIndex(request));
+        String methodName = "prepareIndex";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.prepareIndex(request));
     }
 
     public Cloud.IndexResponse commitIndex(Cloud.IndexRequest request) throws RpcException {
-        return executeWithMetrics("commitIndex", (client) -> client.commitIndex(request));
+        String methodName = "commitIndex";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.commitIndex(request));
     }
 
     public Cloud.CheckKVResponse checkKv(Cloud.CheckKVRequest request) throws RpcException {
-        return executeWithMetrics("checkKv", (client) -> client.checkKv(request));
+        String methodName = "checkKv";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.checkKv(request));
     }
 
     public Cloud.IndexResponse dropIndex(Cloud.IndexRequest request) throws RpcException {
-        return executeWithMetrics("dropIndex", (client) -> client.dropIndex(request));
+        String methodName = "dropIndex";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.dropIndex(request));
     }
 
-    public Cloud.PartitionResponse preparePartition(Cloud.PartitionRequest request)
-            throws RpcException {
-        return executeWithMetrics("preparePartition", (client) -> client.preparePartition(request));
+    public Cloud.PartitionResponse preparePartition(Cloud.PartitionRequest request) throws RpcException {
+        String methodName = "preparePartition";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.preparePartition(request));
     }
 
     public Cloud.PartitionResponse commitPartition(Cloud.PartitionRequest request) throws RpcException {
-        return executeWithMetrics("commitPartition", (client) -> client.commitPartition(request));
+        String methodName = "commitPartition";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.commitPartition(request));
     }
 
     public Cloud.PartitionResponse dropPartition(Cloud.PartitionRequest request) throws RpcException {
-        return executeWithMetrics("dropPartition", (client) -> client.dropPartition(request));
+        String methodName = "dropPartition";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.dropPartition(request));
     }
 
     public Cloud.GetTabletStatsResponse getTabletStats(Cloud.GetTabletStatsRequest request) throws RpcException {
-        return executeWithMetrics("getTabletStats", (client) -> client.getTabletStats(request));
+        String methodName = "getTabletStats";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getTabletStats(request));
     }
 
     public Cloud.CreateStageResponse createStage(Cloud.CreateStageRequest request) throws RpcException {
-        return executeWithMetrics("createStage", (client) -> client.createStage(request));
+        String methodName = "createStage";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.createStage(request));
     }
 
     public Cloud.GetStageResponse getStage(Cloud.GetStageRequest request) throws RpcException {
-        return executeWithMetrics("getStage", (client) -> client.getStage(request));
+        String methodName = "getStage";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getStage(request));
     }
 
     public Cloud.DropStageResponse dropStage(Cloud.DropStageRequest request) throws RpcException {
-        return executeWithMetrics("dropStage", (client) -> client.dropStage(request));
+        String methodName = "dropStage";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.dropStage(request));
     }
 
     public Cloud.GetIamResponse getIam(Cloud.GetIamRequest request) throws RpcException {
-        return executeWithMetrics("getIam", (client) -> client.getIam(request));
+        String methodName = "getIam";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getIam(request));
     }
 
     public Cloud.BeginCopyResponse beginCopy(Cloud.BeginCopyRequest request) throws RpcException {
-        return executeWithMetrics("beginCopy", (client) -> client.beginCopy(request));
+        String methodName = "beginCopy";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.beginCopy(request));
     }
 
     public Cloud.FinishCopyResponse finishCopy(Cloud.FinishCopyRequest request) throws RpcException {
-        return executeWithMetrics("finishCopy", (client) -> client.finishCopy(request));
+        String methodName = "finishCopy";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.finishCopy(request));
     }
 
     public Cloud.GetCopyJobResponse getCopyJob(Cloud.GetCopyJobRequest request) throws RpcException {
-        return executeWithMetrics("getCopyJob", (client) -> client.getCopyJob(request));
+        String methodName = "getCopyJob";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getCopyJob(request));
     }
 
-    public Cloud.GetCopyFilesResponse getCopyFiles(Cloud.GetCopyFilesRequest request)
-            throws RpcException {
-        return executeWithMetrics("getCopyFiles", (client) -> client.getCopyFiles(request));
+    public Cloud.GetCopyFilesResponse getCopyFiles(Cloud.GetCopyFilesRequest request) throws RpcException {
+        String methodName = "getCopyFiles";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getCopyFiles(request));
     }
 
-    public Cloud.FilterCopyFilesResponse filterCopyFiles(Cloud.FilterCopyFilesRequest request)
-            throws RpcException {
-        return executeWithMetrics("filterCopyFiles", (client) -> client.filterCopyFiles(request));
+    public Cloud.FilterCopyFilesResponse filterCopyFiles(Cloud.FilterCopyFilesRequest request) throws RpcException {
+        String methodName = "filterCopyFiles";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.filterCopyFiles(request));
     }
 
-    public Cloud.AlterClusterResponse alterCluster(Cloud.AlterClusterRequest request)
-            throws RpcException {
-        return executeWithMetrics("alterCluster", (client) -> client.alterCluster(request));
+    public Cloud.AlterClusterResponse alterCluster(Cloud.AlterClusterRequest request) throws RpcException {
+        String methodName = "alterCluster";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.alterCluster(request));
     }
 
     public Cloud.GetDeleteBitmapUpdateLockResponse getDeleteBitmapUpdateLock(
-            Cloud.GetDeleteBitmapUpdateLockRequest request)
-            throws RpcException {
-        return executeWithMetrics("getDeleteBitmapUpdateLock",
+            Cloud.GetDeleteBitmapUpdateLockRequest request) throws RpcException {
+        String methodName = "getDeleteBitmapUpdateLock";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
                 (client) -> client.getDeleteBitmapUpdateLock(request));
     }
 
     public Cloud.RemoveDeleteBitmapUpdateLockResponse removeDeleteBitmapUpdateLock(
-            Cloud.RemoveDeleteBitmapUpdateLockRequest request)
-            throws RpcException {
-        return executeWithMetrics("removeDeleteBitmapUpdateLock",
+            Cloud.RemoveDeleteBitmapUpdateLockRequest request) throws RpcException {
+        String methodName = "removeDeleteBitmapUpdateLock";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
                 (client) -> client.removeDeleteBitmapUpdateLock(request));
     }
 
@@ -507,98 +594,131 @@ public class MetaServiceProxy {
     @Deprecated
     public Cloud.AlterObjStoreInfoResponse alterObjStoreInfo(Cloud.AlterObjStoreInfoRequest request)
             throws RpcException {
-        return executeWithMetrics("alterObjStoreInfo", (client) -> client.alterObjStoreInfo(request));
+        String methodName = "alterObjStoreInfo";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.alterObjStoreInfo(request));
     }
 
     public Cloud.AlterObjStoreInfoResponse alterStorageVault(Cloud.AlterObjStoreInfoRequest request)
             throws RpcException {
-        return executeWithMetrics("alterStorageVault", (client) -> client.alterStorageVault(request));
+        String methodName = "alterStorageVault";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.alterStorageVault(request));
     }
 
     public Cloud.FinishTabletJobResponse finishTabletJob(Cloud.FinishTabletJobRequest request)
             throws RpcException {
-        return executeWithMetrics("finishTabletJob", (client) -> client.finishTabletJob(request));
+        String methodName = "finishTabletJob";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.finishTabletJob(request));
     }
 
-    public Cloud.GetRLTaskCommitAttachResponse
-            getRLTaskCommitAttach(Cloud.GetRLTaskCommitAttachRequest request)
+    public Cloud.GetRLTaskCommitAttachResponse getRLTaskCommitAttach(Cloud.GetRLTaskCommitAttachRequest request)
             throws RpcException {
-        return executeWithMetrics("getRLTaskCommitAttach",
+        String methodName = "getRLTaskCommitAttach";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
                 (client) -> client.getRLTaskCommitAttach(request));
     }
 
     public Cloud.ResetRLProgressResponse resetRLProgress(Cloud.ResetRLProgressRequest request)
             throws RpcException {
-        return executeWithMetrics("resetRLProgress", (client) -> client.resetRLProgress(request));
+        String methodName = "resetRLProgress";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.resetRLProgress(request));
     }
 
-    public Cloud.ResetStreamingJobOffsetResponse resetStreamingJobOffset(Cloud.ResetStreamingJobOffsetRequest request)
-            throws RpcException {
-        return executeWithMetrics("resetStreamingJobOffset",
+    public Cloud.ResetStreamingJobOffsetResponse resetStreamingJobOffset(
+            Cloud.ResetStreamingJobOffsetRequest request) throws RpcException {
+        String methodName = "resetStreamingJobOffset";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
                 (client) -> client.resetStreamingJobOffset(request));
     }
 
-    public Cloud.GetObjStoreInfoResponse
-            getObjStoreInfo(Cloud.GetObjStoreInfoRequest request) throws RpcException {
-        return executeWithMetrics("getObjStoreInfo", (client) -> client.getObjStoreInfo(request));
+    public Cloud.GetObjStoreInfoResponse getObjStoreInfo(Cloud.GetObjStoreInfoRequest request) throws RpcException {
+        String methodName = "getObjStoreInfo";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.getObjStoreInfo(request));
     }
 
-    public Cloud.AbortTxnWithCoordinatorResponse
-            abortTxnWithCoordinator(Cloud.AbortTxnWithCoordinatorRequest request) throws RpcException {
-        return executeWithMetrics("abortTxnWithCoordinator",
+    public Cloud.AbortTxnWithCoordinatorResponse abortTxnWithCoordinator(
+            Cloud.AbortTxnWithCoordinatorRequest request) throws RpcException {
+        String methodName = "abortTxnWithCoordinator";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
                 (client) -> client.abortTxnWithCoordinator(request));
     }
 
-    public Cloud.GetPrepareTxnByCoordinatorResponse
-            getPrepareTxnByCoordinator(Cloud.GetPrepareTxnByCoordinatorRequest request) throws RpcException {
-        return executeWithMetrics("getPrepareTxnByCoordinator",
+    public Cloud.GetPrepareTxnByCoordinatorResponse getPrepareTxnByCoordinator(
+            Cloud.GetPrepareTxnByCoordinatorRequest request) throws RpcException {
+        String methodName = "getPrepareTxnByCoordinator";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
                 (client) -> client.getPrepareTxnByCoordinator(request));
     }
 
     public Cloud.CreateInstanceResponse createInstance(Cloud.CreateInstanceRequest request) throws RpcException {
-        return executeWithMetrics("createInstance", (client) -> client.createInstance(request));
+        String methodName = "createInstance";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.createInstance(request));
     }
 
     public Cloud.GetStreamingTaskCommitAttachResponse getStreamingTaskCommitAttach(
             Cloud.GetStreamingTaskCommitAttachRequest request) throws RpcException {
-        return executeWithMetrics("getStreamingTaskCommitAttach",
+        String methodName = "getStreamingTaskCommitAttach";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
                 (client) -> client.getStreamingTaskCommitAttach(request));
     }
 
     public Cloud.DeleteStreamingJobResponse deleteStreamingJob(Cloud.DeleteStreamingJobRequest request)
             throws RpcException {
-        return executeWithMetrics("deleteStreamingJob", (client) -> client.deleteStreamingJob(request));
+        String methodName = "deleteStreamingJob";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.deleteStreamingJob(request));
     }
 
     public Cloud.AlterInstanceResponse alterInstance(Cloud.AlterInstanceRequest request) throws RpcException {
-        return executeWithMetrics("alterInstance", (client) -> client.alterInstance(request));
+        String methodName = "alterInstance";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.alterInstance(request));
     }
 
     public Cloud.BeginSnapshotResponse beginSnapshot(Cloud.BeginSnapshotRequest request) throws RpcException {
-        return executeWithMetrics("beginSnapshot", (client) -> client.beginSnapshot(request));
+        String methodName = "beginSnapshot";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.beginSnapshot(request));
     }
 
     public Cloud.UpdateSnapshotResponse updateSnapshot(Cloud.UpdateSnapshotRequest request) throws RpcException {
-        return executeWithMetrics("updateSnapshot", (client) -> client.updateSnapshot(request));
+        String methodName = "updateSnapshot";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.updateSnapshot(request));
     }
 
     public Cloud.CommitSnapshotResponse commitSnapshot(Cloud.CommitSnapshotRequest request) throws RpcException {
-        return executeWithMetrics("commitSnapshot", (client) -> client.commitSnapshot(request));
+        String methodName = "commitSnapshot";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.commitSnapshot(request));
     }
 
     public Cloud.AbortSnapshotResponse abortSnapshot(Cloud.AbortSnapshotRequest request) throws RpcException {
-        return executeWithMetrics("abortSnapshot", (client) -> client.abortSnapshot(request));
+        String methodName = "abortSnapshot";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.abortSnapshot(request));
     }
 
     public Cloud.ListSnapshotResponse listSnapshot(Cloud.ListSnapshotRequest request) throws RpcException {
-        return executeWithMetrics("listSnapshot", (client) -> client.listSnapshot(request));
+        String methodName = "listSnapshot";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.listSnapshot(request));
     }
 
     public Cloud.DropSnapshotResponse dropSnapshot(Cloud.DropSnapshotRequest request) throws RpcException {
-        return executeWithMetrics("dropSnapshot", (client) -> client.dropSnapshot(request));
+        String methodName = "dropSnapshot";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.dropSnapshot(request));
     }
 
     public Cloud.CloneInstanceResponse cloneInstance(Cloud.CloneInstanceRequest request) throws RpcException {
-        return executeWithMetrics("cloneInstance", (client) -> client.cloneInstance(request));
+        String methodName = "cloneInstance";
+        return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
+                (client) -> client.cloneInstance(request));
     }
 }
