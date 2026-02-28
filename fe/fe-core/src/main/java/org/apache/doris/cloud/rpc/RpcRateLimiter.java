@@ -1,8 +1,6 @@
 package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.common.Config;
-import org.apache.doris.metric.CloudMetrics;
-import org.apache.doris.metric.MetricRepo;
 
 import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.RateLimiter;
@@ -25,13 +23,13 @@ public class RpcRateLimiter {
         private volatile Semaphore waitingSemaphore;
         private RateLimiter rateLimiter;
 
-        protected QpsLimiter(String methodName, int maxWaitRequestNum, int qps) {
+        QpsLimiter(String methodName, int maxWaitRequestNum, int qps) {
             Preconditions.checkArgument(qps > 0, "qps must be > 0");
             Preconditions.checkArgument(maxWaitRequestNum > 0, "maxWaitRequestNum must be > 0");
             this.methodName = methodName;
             this.maxWaitRequestNum = maxWaitRequestNum;
-            this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
             this.qps = qps;
+            this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
             this.rateLimiter = RateLimiter.create(qps);
             LOG.info("Create rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}", methodName,
                     maxWaitRequestNum, qps);
@@ -41,53 +39,38 @@ public class RpcRateLimiter {
             acquireQpsRateLimit(waitingSemaphore, rateLimiter);
         }
 
-        private void acquireQpsRateLimit(Semaphore waitingSemaphore, RateLimiter rateLimiter) throws RpcRateLimitException {
+        private void acquireQpsRateLimit(Semaphore waitingSemaphore, RateLimiter rateLimiter)
+                throws RpcRateLimitException {
             // TODO
             if (waitingSemaphore == null) {
                 return;
             }
             // Try to acquire waiting semaphore first to avoid too many waiting requests
             if (!waitingSemaphore.tryAcquire()) {
-                /*if (MetricRepo.isInit && Config.isCloudMode()) {
-                    CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
-                }*/
                 throw new RpcRateLimitException("Meta service rpc rate limit exceeded for method: " + methodName
                         + ", too many waiting requests (max=" + maxWaitRequestNum + ")");
             }
             // Try to acquire rate limiter permit with timeout
             try {
                 long timeoutMs = Config.meta_service_rpc_rate_limit_wait_timeout_ms;
-                boolean acquired = rateLimiter.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS);
-                if (!acquired) {
-                    /*if (MetricRepo.isInit && Config.isCloudMode()) {
-                        CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
-                    }*/
+                if (!rateLimiter.tryAcquire(timeoutMs, TimeUnit.MILLISECONDS)) {
                     throw new RpcRateLimitException(
                             "Meta service rpc rate limit timeout for method: " + methodName + ", rate: "
                                     + rateLimiter.getRate() + ", waited " + timeoutMs + " ms");
                 }
-            } /*catch (RpcRateLimitException e) {
-                throw e;
-            }*/ /*catch (Exception e) {
-                throw new RpcRateLimitException("Failed to acquire rate limit for method: " + methodName, e);
-            }*/ finally {
+            } finally {
                 waitingSemaphore.release();
             }
         }
 
-        protected void updateQps(int maxWaitRequestNum, int qps) {
+        void updateQps(int maxWaitRequestNum, int qps) {
             Preconditions.checkArgument(qps > 0, "qps must be > 0");
             Preconditions.checkArgument(maxWaitRequestNum > 0, "maxWaitRequestNum must be > 0");
-            /*if (qps <= 0) {
-                rateLimiter = null;
-                waitingSemaphore = null;
-                return;
-            }*/
             if (maxWaitRequestNum != this.maxWaitRequestNum) {
                 this.maxWaitRequestNum = maxWaitRequestNum;
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
             }
-            if (qps != rateLimiter.getRate()) {
+            if (qps != this.qps) {
                 this.qps = qps;
                 this.rateLimiter.setRate(qps);
             }
@@ -105,23 +88,21 @@ public class RpcRateLimiter {
             return waitingSemaphore != null ? waitingSemaphore.availablePermits() : -1;
         }
 
-        // Get max wait request number - for subclass access
-        protected int getMaxWaitRequestNum() {
+        int getMaxWaitRequestNum() {
             return maxWaitRequestNum;
         }
     }
 
     protected static class BackpressureQpsLimiter extends QpsLimiter {
-        // int baseQps;
+
         BackpressureQpsLimiter(String methodName, int maxWaitRequestNum, int qps, double factor) {
             super(methodName, maxWaitRequestNum, qps);
             applyFactor(factor);
         }
 
         void applyFactor(double factor) {
-            // this.currentFactor = factor;
             int effectiveQps = Math.max(1, (int) (qps * factor));
-            updateQps(Config.meta_service_rpc_rate_limit_max_waiting_request_num, effectiveQps);
+            updateQps(getMaxWaitRequestNum(), effectiveQps);
             LOG.info("Applied factor {} to backpressure limiter for method {}, effective QPS: {}",
                     factor, methodName, effectiveQps);
         }
@@ -155,14 +136,15 @@ public class RpcRateLimiter {
 
         boolean acquire(int cost) throws RpcRateLimitException {
             if (cost > limit) {
-                throw new RpcRateLimitException("Cost " + cost + " exceeds the limit " + limit);
+                throw new RpcRateLimitException(
+                        "method: " + methodName + ", cost " + cost + " exceeds the limit " + limit);
             }
             try {
                 lock.lockInterruptibly();
             } catch (InterruptedException e) {
-                throw new RpcRateLimitException("Meta service rpc rate limit interrupted while acquiring lock for method: "
-                        + methodName + ", requestCost: " + cost + ", currentCost: "
-                        + currentCost + ", limit: " + limit, new InterruptedException());
+                throw new RpcRateLimitException(
+                        "Meta service rpc rate limit interrupted while acquiring lock for method: " + methodName
+                                + ", requestCost: " + cost + ", currentCost: " + currentCost + ", limit: " + limit, e);
             }
             try {
                 long nanos = TimeUnit.MILLISECONDS.toNanos(Config.meta_service_rpc_rate_limit_wait_timeout_ms);
@@ -176,9 +158,8 @@ public class RpcRateLimiter {
                 return true;
             } catch (InterruptedException e) {
                 throw new RpcRateLimitException(
-                        "Meta service rpc rate limit interrupted while acquiring lock for method: "
-                                + methodName + ", requestCost: " + cost + ", currentCost: "
-                                + currentCost + ", limit: " + limit, new InterruptedException());
+                        "Meta service rpc rate limit interrupted while acquiring lock for method: " + methodName
+                                + ", requestCost: " + cost + ", currentCost: " + currentCost + ", limit: " + limit, e);
             } finally {
                 lock.unlock();
             }
@@ -197,6 +178,7 @@ public class RpcRateLimiter {
             }
         }
 
+        // only used for testing
         int getLimit()  {
             return limit;
         }
