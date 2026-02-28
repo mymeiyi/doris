@@ -89,7 +89,7 @@ public class RpcRateLimiterTest2 {
         String methodName = "testMethod";
         int maxWaitRequestNum = 2;
         int qps = 1;
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
 
         RpcRateLimiter.QpsLimiter limiter = new RpcRateLimiter.QpsLimiter(methodName, maxWaitRequestNum, qps);
 
@@ -108,10 +108,10 @@ public class RpcRateLimiterTest2 {
                     successCount.incrementAndGet();
                 } catch (RpcRateLimitException e) {
                     if (e.getMessage().contains("too many waiting requests")) {
-                        LOG.info("Acquire failed due to waiting queue full as expected: {}", e.getMessage());
+                        // LOG.info("Acquire failed due to waiting queue full as expected: {}", e.getMessage());
                         tooManyWaitingFailCount.incrementAndGet();
                     } else {
-                        LOG.error("Acquire failed with unexpected rate limit exception", e);
+                        // LOG.error("Acquire failed with unexpected rate limit exception", e);
                         rateLimiterFailCount.incrementAndGet();
                     }
                     failCount.incrementAndGet();
@@ -134,13 +134,14 @@ public class RpcRateLimiterTest2 {
         int successes = successCount.get();
         int failures = failCount.get();
         Assert.assertEquals("Total results should match thread count", threadCount, successes + failures);
-        // TODO
         LOG.info(
                 "sout: Acquire results: {} successes, {} failures, tooManyWaitingFailCount: {}, rateLimiterFailCount: {}",
                 successes, failures,
                 tooManyWaitingFailCount.get(), rateLimiterFailCount.get());
         Assert.assertEquals(1, successes);
         Assert.assertEquals(threadCount - successes, failures);
+        Assert.assertEquals(8, tooManyWaitingFailCount.get());
+        Assert.assertEquals(1, rateLimiterFailCount.get());
     }
 
     @Test
@@ -239,13 +240,11 @@ public class RpcRateLimiterTest2 {
         int maxWaitRequestNum = 10;
         int qps = 100;
         double factor = 1.0;
-
         RpcRateLimiter.BackpressureQpsLimiter limiter =
                 new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
 
         // Apply factor 1.0 - QPS should remain 100
         limiter.applyFactor(factor);
-
         Assert.assertEquals(100, limiter.qps);
         Assert.assertEquals(100, limiter.getRateLimiter().getRate(), 0.001);
     }
