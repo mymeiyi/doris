@@ -312,12 +312,12 @@ public class MetaServiceRateLimiter {
         }
 
         // Step3 Check cost limiter
-        boolean acquired = false;
         CostLimiter costLimiter = getCostLimiter(methodName);
-        if (costLimiter != null) {
-            acquired = costLimiter.acquire(cost);
+        if (costLimiter != null && cost > 0) {
+            costLimiter.acquire(cost);
+            return true;
         }
-        return acquired;
+        return false;
     }
 
     /*public boolean acquire(String methodName, int cost) throws RpcRateLimitException {

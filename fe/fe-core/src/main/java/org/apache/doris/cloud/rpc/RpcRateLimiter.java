@@ -148,9 +148,9 @@ public class RpcRateLimiter {
             }
         }
 
-        boolean acquire(int cost) throws RpcRateLimitException {
+        void acquire(int cost) throws RpcRateLimitException {
             if (cost <= 0) {
-                return true;
+                return;
             }
             if (cost > limit) {
                 throw new RpcRateLimitException(
@@ -174,7 +174,6 @@ public class RpcRateLimiter {
                     nanos = condition.awaitNanos(nanos);
                 }
                 currentCost += cost;
-                return true;
             } catch (InterruptedException e) {
                 throw new RpcRateLimitException(
                         "Meta service rpc rate limit interrupted while acquiring lock for method: " + methodName
