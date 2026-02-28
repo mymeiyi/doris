@@ -1,10 +1,8 @@
 package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.common.Config;
-import org.apache.doris.common.profile.SummaryProfile;
 import org.apache.doris.metric.CloudMetrics;
 import org.apache.doris.metric.MetricRepo;
-import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.RateLimiter;
@@ -31,13 +29,13 @@ public class RpcRateLimiter {
         void update(int maxWaitRequestNum, int qps, int costLimit);
     }*/
 
-    protected static class QpsRateLimiter /*implements MsRpcRateLimiter*/ {
+    protected static class QpsLimiter /*implements MsRpcRateLimiter*/ {
         protected final String methodName;
         private volatile int maxWaitRequestNum;
         private Semaphore waitingSemaphore;
         private RateLimiter rateLimiter;
 
-        protected QpsRateLimiter(String methodName, int maxWaitRequestNum, int qps) {
+        protected QpsLimiter(String methodName, int maxWaitRequestNum, int qps) {
             this.methodName = methodName;
             this.maxWaitRequestNum = maxWaitRequestNum;
             if (qps > 0) {
@@ -229,9 +227,9 @@ public class RpcRateLimiter {
         }
     }
 
-    protected static class BackpressureQpsRateLimiter extends QpsRateLimiter {
+    protected static class BackpressureQpsLimiter extends QpsLimiter {
         int baseQps;
-        BackpressureQpsRateLimiter(String methodName, int maxWaitRequestNum, int qps, double factor) {
+        BackpressureQpsLimiter(String methodName, int maxWaitRequestNum, int qps, double factor) {
             super(methodName, maxWaitRequestNum, Math.max(1, (int) (qps * factor)));
             this.baseQps = qps;
         }

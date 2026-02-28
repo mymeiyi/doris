@@ -3737,7 +3737,7 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, description = {
             "是否启用自适应限流（根据超时和服务端背压自动调整QPS）",
             "Whether to enable adaptive rate limiting (auto-adjust QPS based on timeout and server backpressure)"})
-    public static boolean meta_service_rpc_adaptive_throttle_enabled = false;
+    public static boolean meta_service_rpc_adaptive_throttle_enabled = true;
 
     @ConfField(mutable = true, description = {
             "自适应限流最小因子，限流值不会低于 configuredQps * minFactor",
@@ -3791,10 +3791,10 @@ public class Config extends ConfigBase {
             })
     public static String meta_service_rpc_adaptive_throttle_phase1_methods = "";
 
-    @ConfField(mutable = true, description = {
+    /*@ConfField(mutable = true, description = {
             "自适应限流是否进入第二阶段（对所有RPC生效）",
             "Adaptive throttle phase 2 - whether to apply to all RPCs"})
-    public static boolean meta_service_rpc_adaptive_throttle_phase2_enabled = false;
+    public static boolean meta_service_rpc_adaptive_throttle_phase2_enabled = false;*/
 
     @ConfField(mutable = true, description = {
             "自适应限流当 configuredQps=0 时的基础QPS（用于过载时临时限流）",
