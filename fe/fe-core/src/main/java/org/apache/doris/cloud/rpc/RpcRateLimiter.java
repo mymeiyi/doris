@@ -138,7 +138,7 @@ public class RpcRateLimiter {
 
         // modify limit to newLimit (thread safe)
         void setLimit(int newLimit) {
-            Preconditions.checkArgument(limit > 0, "limit must be > 0");
+            Preconditions.checkArgument(newLimit > 0, "limit must be > 0");
             lock.lock();
             try {
                 this.limit = newLimit;

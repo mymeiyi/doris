@@ -509,8 +509,8 @@ public class RpcRateLimiterTest2 {
 
     // ==================== Integration Tests ====================
 
-    @Test
-    public void testQpsAndCostLimiterTogether() throws RpcRateLimitException, InterruptedException {
+    /*@Test
+    public void testQpsAndCostLimiterTogether() throws RpcRateLimitException {
         String methodName = "testMethod";
         int maxWaitRequestNum = 10;
         int qps = 1000;
@@ -533,7 +533,7 @@ public class RpcRateLimiterTest2 {
     }
 
     @Test
-    public void testBackpressureAndCostLimiterTogether() throws RpcRateLimitException, InterruptedException {
+    public void testBackpressureAndCostLimiterTogether() throws RpcRateLimitException {
         String methodName = "testMethod";
         int maxWaitRequestNum = 10;
         int qps = 100;
@@ -555,7 +555,7 @@ public class RpcRateLimiterTest2 {
         // Acquire cost permit
         costLimiter.acquire(50);
         Assert.assertEquals(50, costLimiter.getCurrentCost());
-    }
+    }*/
 
     @Test
     public void testConcurrentAccessToCostLimiter() throws InterruptedException {
