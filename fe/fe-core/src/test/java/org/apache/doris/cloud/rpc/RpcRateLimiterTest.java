@@ -219,7 +219,7 @@ public class RpcRateLimiterTest {
                 new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
         Assert.assertEquals(methodName, limiter.methodName);
         // Effective QPS should be qps * factor = 100 * 1.0 = 100
-        Assert.assertEquals(100, limiter.baseQps);
+        Assert.assertEquals(100, limiter.getBaseQps());
         Assert.assertEquals(100, limiter.qps);
         Assert.assertEquals(100, limiter.getRateLimiter().getRate(), 0.001);
 
@@ -227,7 +227,7 @@ public class RpcRateLimiterTest {
         factor = 0.9;
         limiter = new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
         // Effective QPS should be qps * factor = 100 * 0.9 = 90
-        Assert.assertEquals(100, limiter.baseQps);
+        Assert.assertEquals(100, limiter.getBaseQps());
         Assert.assertEquals(90, limiter.qps);
         Assert.assertEquals(90, limiter.getRateLimiter().getRate(), 0.001);
     }
@@ -241,31 +241,31 @@ public class RpcRateLimiterTest {
         // Start with factor 0.9 - effective QPS should be 90
         RpcRateLimiter.BackpressureQpsLimiter limiter =
                 new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, 0.9);
-        Assert.assertEquals(100, limiter.baseQps);
+        Assert.assertEquals(100, limiter.getBaseQps());
         Assert.assertEquals(90, limiter.qps);
         Assert.assertEquals(90, limiter.getRateLimiter().getRate(), 0.001);
 
         // Apply factor 0.8 - effective QPS should be 80
         limiter.applyFactor(0.8);
-        Assert.assertEquals(100, limiter.baseQps);
+        Assert.assertEquals(100, limiter.getBaseQps());
         Assert.assertEquals(80, limiter.qps);
         Assert.assertEquals(80, limiter.getRateLimiter().getRate(), 0.001);
 
         // Apply factor 0.85 - effective QPS should be 85
         limiter.applyFactor(0.85);
-        Assert.assertEquals(100, limiter.baseQps);
+        Assert.assertEquals(100, limiter.getBaseQps());
         Assert.assertEquals(85, limiter.qps);
         Assert.assertEquals(85, limiter.getRateLimiter().getRate(), 0.001);
 
         // Even with very small factor, should be at least 1
         limiter.applyFactor(0.0001);
-        Assert.assertEquals(100, limiter.baseQps);
+        Assert.assertEquals(100, limiter.getBaseQps());
         Assert.assertEquals(1, limiter.qps);
         Assert.assertEquals(1, limiter.getRateLimiter().getRate(), 0.001);
 
         // Apply factor 0.0 - effective QPS should be at least 1
         limiter.applyFactor(0);
-        Assert.assertEquals(100, limiter.baseQps);
+        Assert.assertEquals(100, limiter.getBaseQps());
         Assert.assertEquals(1, limiter.qps);
         Assert.assertEquals(1, limiter.getRateLimiter().getRate(), 0.001);
 

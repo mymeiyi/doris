@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.common.Config;
@@ -18,10 +35,10 @@ public class RpcRateLimiter {
 
     protected static class QpsLimiter {
         protected final String methodName;
-        private volatile int maxWaitRequestNum;
+        protected volatile int maxWaitRequestNum;
         protected volatile int qps;
         private volatile Semaphore waitingSemaphore;
-        protected RateLimiter rateLimiter;
+        private RateLimiter rateLimiter;
 
         QpsLimiter(String methodName, int maxWaitRequestNum, int qps) {
             Preconditions.checkArgument(qps > 0, "qps must be > 0");
@@ -88,22 +105,23 @@ public class RpcRateLimiter {
         }
 
         // only used for testing
-        RateLimiter getRateLimiter() {
-            return rateLimiter;
+        int getMaxWaitRequestNum() {
+            return maxWaitRequestNum;
         }
 
         // only used for testing
         int getAllowWaiting() {
-            return waitingSemaphore != null ? waitingSemaphore.availablePermits() : -1;
+            return waitingSemaphore.availablePermits();
         }
 
-        int getMaxWaitRequestNum() {
-            return maxWaitRequestNum;
+        // only used for testing
+        RateLimiter getRateLimiter() {
+            return rateLimiter;
         }
     }
 
     protected static class BackpressureQpsLimiter extends QpsLimiter {
-        protected volatile int baseQps;
+        private volatile int baseQps;
 
         BackpressureQpsLimiter(String methodName, int maxWaitRequestNum, int qps, double factor) {
             super(methodName, maxWaitRequestNum, qps);
@@ -115,10 +133,15 @@ public class RpcRateLimiter {
             Preconditions.checkArgument(Double.compare(factor, 1) <= 0, "factor must be <= 1");
             int effectiveQps = Math.max(1, (int) (baseQps * factor));
             if (effectiveQps != this.qps) {
-                update(getMaxWaitRequestNum(), effectiveQps);
+                update(maxWaitRequestNum, effectiveQps);
                 LOG.info("Applied factor {} to backpressure limiter for method {}, effective QPS: {}",
                         factor, methodName, effectiveQps);
             }
+        }
+
+        // only used for testing
+        int getBaseQps() {
+            return baseQps;
         }
     }
 
