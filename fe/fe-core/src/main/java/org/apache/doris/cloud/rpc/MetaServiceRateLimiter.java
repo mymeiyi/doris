@@ -29,6 +29,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -49,7 +50,7 @@ public class MetaServiceRateLimiter {
     private volatile String lastAdaptiveThrottlePhase1Methods = "";
     private Map<String, Integer> methodQpsConfig = new ConcurrentHashMap<>();
     private Map<String, Integer> methodCostConfig = new ConcurrentHashMap<>();
-    private final Set<String> adaptiveThrottleMethods = ConcurrentHashMap.newKeySet();
+    private Set<String> adaptiveThrottleMethods = ConcurrentHashMap.newKeySet();
 
     private final Map<String, QpsLimiter> qpsLimiters = new ConcurrentHashMap<>();
     private final Map<String, CostLimiter> costLimiters = new ConcurrentHashMap<>();
@@ -103,18 +104,6 @@ public class MetaServiceRateLimiter {
             }
             boolean enabled = Config.meta_service_rpc_rate_limit_enabled;
             boolean adaptiveThrottleEnabled = Config.meta_service_rpc_adaptive_throttle_enabled;
-            String adaptiveThrottlePhase1Methods = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
-
-            // Parse adaptive throttle phase1 methods
-            adaptiveThrottleMethods.clear();
-            if (adaptiveThrottlePhase1Methods != null && !adaptiveThrottlePhase1Methods.isEmpty()) {
-                for (String method : adaptiveThrottlePhase1Methods.split(",")) {
-                    String trimmed = method.trim();
-                    if (!trimmed.isEmpty()) {
-                        adaptiveThrottleMethods.add(trimmed);
-                    }
-                }
-            }
 
             // If disabled, clear all limiters
             if (!enabled) {
@@ -125,32 +114,55 @@ public class MetaServiceRateLimiter {
                 methodQpsConfig.clear();
                 methodCostConfig.clear();
                 lastEnabled = enabled;
+                return true;
+            } else {
+                int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
+                int defaultQpsPerCore = Config.meta_service_rpc_rate_limit_default_qps_per_core;
+                String qpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
+                String costConfig = Config.meta_service_rpc_cost_limit_per_core_config;
+                // Parse the qps and cost config
+                methodQpsConfig = parseConfig(qpsConfig, "QPS");
+                methodCostConfig = parseConfig(costConfig, "cost limit");
+                // Update limiters
+                updateMethodLimiters(defaultQpsPerCore, maxWaitRequestNum);
+                // Update last config
+                lastEnabled = enabled;
+                lastMaxWaitRequestNum = maxWaitRequestNum;
+                lastDefaultQps = defaultQpsPerCore;
+                lastQpsConfig = qpsConfig;
+                lastCostConfig = costConfig;
+                LOG.info("Reload meta service rpc rate limit config. enabled: {}, maxWaitRequestNum: {}, "
+                                + "defaultQps: {}, qpsConfig: [{}], costConfig: [{}], adaptiveThrottleEnabled: {}, "
+                                + "adaptiveThrottlePhase1Methods: [{}]", lastEnabled, lastMaxWaitRequestNum,
+                        lastDefaultQps, lastQpsConfig, lastCostConfig, lastAdaptiveThrottleEnabled,
+                        lastAdaptiveThrottlePhase1Methods);
+            }
+
+            String adaptiveThrottlePhase1Methods = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
+            if (!adaptiveThrottleEnabled) {
+                adaptiveThrottleMethods.clear();
+                adaptiveThrottleMethods.clear();
                 lastAdaptiveThrottleEnabled = adaptiveThrottleEnabled;
                 lastAdaptiveThrottlePhase1Methods = adaptiveThrottlePhase1Methods;
-                return true;
+            } else {
+                // adaptiveThrottleMethods.clear();
+
+                Set<String> newAdaptiveThrottleMethods = new HashSet<>();
+                if (adaptiveThrottlePhase1Methods != null && !adaptiveThrottlePhase1Methods.isEmpty()) {
+                    for (String method : adaptiveThrottlePhase1Methods.split(",")) {
+                        String trimmed = method.trim();
+                        if (!trimmed.isEmpty()) {
+                            newAdaptiveThrottleMethods.add(trimmed);
+                        }
+                    }
+                }
+                adaptiveThrottleMethods.addAll(newAdaptiveThrottleMethods);
+
+                // Remove backpressure limiters for methods that are no longer in phase 1
+                backpressureQpsLimiters.keySet().removeIf(method -> !adaptiveThrottleMethods.contains(method));
+                lastAdaptiveThrottleEnabled = adaptiveThrottleEnabled;
+                lastAdaptiveThrottlePhase1Methods = adaptiveThrottlePhase1Methods;
             }
-            int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
-            int defaultQpsPerCore = Config.meta_service_rpc_rate_limit_default_qps_per_core;
-            String qpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
-            String costConfig = Config.meta_service_rpc_cost_limit_per_core_config;
-            // Parse the qps and cost config
-            methodQpsConfig = parseConfig(qpsConfig, "QPS");
-            methodCostConfig = parseConfig(costConfig, "cost limit");
-            // Update limiters
-            updateMethodLimiters(defaultQpsPerCore, maxWaitRequestNum);
-            // Update last config
-            lastEnabled = enabled;
-            lastMaxWaitRequestNum = maxWaitRequestNum;
-            lastDefaultQps = defaultQpsPerCore;
-            lastQpsConfig = qpsConfig;
-            lastCostConfig = costConfig;
-            lastAdaptiveThrottleEnabled = adaptiveThrottleEnabled;
-            lastAdaptiveThrottlePhase1Methods = adaptiveThrottlePhase1Methods;
-            LOG.info("Reload meta service rpc rate limit config. enabled: {}, maxWaitRequestNum: {}, "
-                            + "defaultQps: {}, qpsConfig: [{}], costConfig: [{}], adaptiveThrottleEnabled: {}, "
-                            + "adaptiveThrottlePhase1Methods: [{}]", lastEnabled, lastMaxWaitRequestNum,
-                    lastDefaultQps, lastQpsConfig, lastCostConfig, lastAdaptiveThrottleEnabled,
-                    lastAdaptiveThrottlePhase1Methods);
         }
         return true;
     }
