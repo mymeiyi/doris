@@ -69,9 +69,9 @@ public class MetaServiceRateLimiter {
 
     MetaServiceRateLimiter() {
         reloadConfig();
-        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+        /*if (Config.meta_service_rpc_adaptive_throttle_enabled) {
             MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
-        }
+        }*/
     }
 
     private boolean isConfigChanged() {
