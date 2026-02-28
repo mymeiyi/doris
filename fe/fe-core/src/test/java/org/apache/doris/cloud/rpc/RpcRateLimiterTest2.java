@@ -389,7 +389,7 @@ public class RpcRateLimiterTest2 {
     }
 
     @Test
-    public void testCostLimiterWaitForCapacity() throws InterruptedException, RpcRateLimitException {
+    public void testCostLimiterWaitForCapacity() {
         String methodName = "testMethod";
         int limit = 50;
 
@@ -398,7 +398,7 @@ public class RpcRateLimiterTest2 {
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
 
         // Acquire full capacity
-        limiter.acquire(50);
+        Assertions.assertDoesNotThrow(() -> limiter.acquire(50));
         Assert.assertEquals(50, limiter.getCurrentCost());
 
         // Try to acquire more - should wait and fail due to timeout
@@ -422,7 +422,6 @@ public class RpcRateLimiterTest2 {
         CountDownLatch latch = new CountDownLatch(2);
         AtomicBoolean acquired1 = new AtomicBoolean(false);
         AtomicBoolean acquired2 = new AtomicBoolean(false);
-        // AtomicInteger result = new AtomicInteger(-1);
 
         Thread waiter1 = new Thread(() -> {
             try {
@@ -465,75 +464,47 @@ public class RpcRateLimiterTest2 {
         }
 
         // The waiter should have succeeded
-        // Assert.assertEquals(1, result.get());
         Assert.assertFalse(acquired1.get());
         Assert.assertTrue(acquired2.get());
     }
 
-    /*@Test
-    public void testCostLimiterGetLimit() {
-        String methodName = "testMethod";
-        int limit = 100;
-
-        RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
-
-        Assert.assertEquals(limit, limiter.getLimit());
-    }*/
-
-    /*@Test
-    public void testCostLimiterGetCurrentCost() throws RpcRateLimitException, InterruptedException {
-        String methodName = "testMethod";
-        int limit = 100;
-
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-
-        RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
-
-        Assert.assertEquals(0, limiter.getCurrentCost());
-
-        limiter.acquire(30);
-        Assert.assertEquals(30, limiter.getCurrentCost());
-
-        limiter.acquire(20);
-        Assert.assertEquals(50, limiter.getCurrentCost());
-
-        limiter.release(10);
-        Assert.assertEquals(40, limiter.getCurrentCost());
-    }*/
-
     @Test
-    public void testCostLimiterAcquireInterrupted() throws InterruptedException, RpcRateLimitException {
+    public void testCostLimiterAcquireInterrupted() {
         String methodName = "testMethod";
         int limit = 100;
         int cost = 50;
-
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10000; // Long timeout
-
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
 
         // Acquire full capacity
-        limiter.acquire(100);
+        Assertions.assertDoesNotThrow(() -> limiter.acquire(100));
         Assert.assertEquals(100, limiter.getCurrentCost());
 
         // Create a thread that will try to acquire and get interrupted
+        AtomicBoolean acquired = new AtomicBoolean(false);
         Thread waiter = new Thread(() -> {
             try {
                 limiter.acquire(cost);
+                acquired.set(true);
             } catch (RpcRateLimitException e) {
-                // Expected when interrupted
+                acquired.set(false);
+                Assert.assertTrue(e.getMessage(), e.getMessage().contains("interrupted"));
             }
         });
         waiter.start();
 
         // Give the waiter time to block
-        Thread.sleep(100);
-
-        // Interrupt the waiter
-        waiter.interrupt();
-        waiter.join(1000);
-
+        try {
+            Thread.sleep(100);
+            // Interrupt the waiter
+            waiter.interrupt();
+            waiter.join(1000);
+        } catch (InterruptedException e) {
+            LOG.error("Test interrupted", e);
+        }
         // The thread should have been interrupted
         Assert.assertFalse(waiter.isAlive());
+        Assert.assertFalse(acquired.get());
     }
 
     // ==================== Integration Tests ====================
