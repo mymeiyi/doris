@@ -3789,7 +3789,7 @@ public class Config extends ConfigBase {
             "Adaptive throttle phase 1 RPC methods (comma-separated), empty means all RPCs",
             "例如：getVersion,beginTxn,getTxn"
             })
-    public static String meta_service_rpc_adaptive_throttle_phase1_methods = "";
+    public static String meta_service_rpc_adaptive_throttle_methods = "";
 
     /*@ConfField(mutable = true, description = {
             "自适应限流是否进入第二阶段（对所有RPC生效）",
