@@ -264,102 +264,6 @@ public class RpcRateLimiterTest2 {
         Assertions.assertThrows(IllegalArgumentException.class, () -> limiter.applyFactor(2.0));
     }
 
-    /*@Test
-    public void tes        limiter.applyFactor(1.0);
-        Assert.assertEquals(100, limiter.qps);
-        Assert.assertEquals(100, limiter.getRateLimiter().getRate(), 0.001);
-tBackpressureQpsLimiterApplyFactorHalf() {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 100;
-        double factor = 0.5;
-
-        RpcRateLimiter.BackpressureQpsLimiter limiter =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
-
-        // Apply factor 0.5 - effective QPS should be qps * 0.5 = 50
-        Assert.assertEquals(50, limiter.qps);
-        Assert.assertEquals(50, limiter.getRateLimiter().getRate(), 0.001);
-    }
-
-    @Test
-    public void testBackpressureQpsLimiterApplyFactorQuarter() {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 100;
-        double factor = 0.25;
-
-        RpcRateLimiter.BackpressureQpsLimiter limiter =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
-
-        // Apply factor 0.25 - effective QPS should be 25
-        Assert.assertEquals(25, limiter.qps);
-    }*/
-
-    /*@Test
-    public void testBackpressureQpsLimiterApplyFactorZero() {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 100;
-        double factor = 0.0;
-
-        RpcRateLimiter.BackpressureQpsLimiter limiter =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
-
-        // Apply factor 0.0 - effective QPS should be at least 1 (Math.max(1, ...))
-        Assert.assertEquals(1, limiter.qps);
-        Assert.assertEquals(1, limiter.getRateLimiter().getRate(), 0.001);
-    }*/
-
-    /*@Test
-    public void testBackpressureQpsLimiterApplyFactorVerySmall() {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 100;
-        double factor = 0.001;
-
-        RpcRateLimiter.BackpressureQpsLimiter limiter =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
-
-        // Even with very small factor, should be at least 1
-        Assert.assertEquals(1, limiter.qps);
-    }*/
-
-    /*@Test
-    public void testBackpressureQpsLimiterApplyFactorChanging() {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 100;
-
-        RpcRateLimiter.BackpressureQpsLimiter limiter =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, 0.8);
-
-        // Initial factor 0.8
-        Assert.assertEquals(80, limiter.qps);
-
-        // Change to factor 0.3
-        limiter.applyFactor(0.3);
-        Assert.assertEquals(30, limiter.qps);
-
-        // Change back to factor 1.0
-        limiter.applyFactor(1.0);
-        Assert.assertEquals(100, limiter.qps);
-    }*/
-
-    /*@Test
-    public void testBackpressureQpsLimiterApplyFactorLargeQps() {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 10000;
-        double factor = 0.5;
-
-        RpcRateLimiter.BackpressureQpsLimiter limiter =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
-
-        // 10000 * 0.5 = 5000
-        Assert.assertEquals(5000, limiter.qps);
-    }*/
-
     // ==================== CostLimiter Tests ====================
 
     @Test
@@ -368,26 +272,13 @@ tBackpressureQpsLimiterApplyFactorHalf() {
         int limit = 100;
 
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
-
-        // Assert.assertEquals(methodName, limiter.methodName);
         Assert.assertEquals(limit, limiter.getLimit());
         Assert.assertEquals(0, limiter.getCurrentCost());
-    }
 
-    @Test(expected = IllegalArgumentException.class)
-    public void testCostLimiterConstructorZeroLimit() {
-        String methodName = "testMethod";
-        int limit = 0;
-
-        new RpcRateLimiter.CostLimiter(methodName, limit);
-    }
-
-    @Test(expected = IllegalArgumentException.class)
-    public void testCostLimiterConstructorNegativeLimit() {
-        String methodName = "testMethod";
-        int limit = -1;
-
-        new RpcRateLimiter.CostLimiter(methodName, limit);
+        // zero limit
+        Assert.assertThrows(IllegalArgumentException.class, () -> new RpcRateLimiter.CostLimiter(methodName, 0));
+        // negative limit
+        Assert.assertThrows(IllegalArgumentException.class, () -> new RpcRateLimiter.CostLimiter(methodName, -1));
     }
 
     @Test

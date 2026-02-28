@@ -21,7 +21,7 @@ public class RpcRateLimiter {
         private volatile int maxWaitRequestNum;
         protected volatile int qps;
         private volatile Semaphore waitingSemaphore;
-        private RateLimiter rateLimiter;
+        protected RateLimiter rateLimiter;
 
         QpsLimiter(String methodName, int maxWaitRequestNum, int qps) {
             Preconditions.checkArgument(qps > 0, "qps must be > 0");
@@ -64,18 +64,27 @@ public class RpcRateLimiter {
         }
 
         void updateQps(int maxWaitRequestNum, int qps) {
-            Preconditions.checkArgument(qps > 0, "qps must be > 0");
+            updateMaxWaitRequestNum(maxWaitRequestNum);
+            updateQps(qps);
+        }
+
+        private void updateMaxWaitRequestNum(int maxWaitRequestNum) {
             Preconditions.checkArgument(maxWaitRequestNum > 0, "maxWaitRequestNum must be > 0");
             if (maxWaitRequestNum != this.maxWaitRequestNum) {
+                LOG.info("Update rpc limiter for method: {}, maxWaitRequestNum: from {} to {}", methodName,
+                        this.maxWaitRequestNum, maxWaitRequestNum);
                 this.maxWaitRequestNum = maxWaitRequestNum;
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
             }
+        }
+
+        private void updateQps(int qps) {
+            Preconditions.checkArgument(qps > 0, "qps must be > 0");
             if (qps != this.qps) {
+                LOG.info("Update rpc limiter for method: {}, qps: from {} to {}", methodName, this.qps, qps);
                 this.qps = qps;
                 this.rateLimiter.setRate(qps);
             }
-            LOG.info("Update rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}", methodName,
-                    maxWaitRequestNum, qps);
         }
 
         // only used for testing
@@ -94,6 +103,7 @@ public class RpcRateLimiter {
     }
 
     protected static class BackpressureQpsLimiter extends QpsLimiter {
+        protected volatile int baseQps;
 
         BackpressureQpsLimiter(String methodName, int maxWaitRequestNum, int qps, double factor) {
             super(methodName, maxWaitRequestNum, qps);
@@ -102,11 +112,23 @@ public class RpcRateLimiter {
 
         void applyFactor(double factor) {
             Preconditions.checkArgument(Double.compare(factor, 1) < 0, "factor must be < 1");
-            int effectiveQps = Math.max(1, (int) (qps * factor));
-            updateQps(getMaxWaitRequestNum(), effectiveQps);
+            int effectiveQps = Math.max(1, (int) (baseQps * factor));
+            if (effectiveQps != this.qps) {
+                updateQps(getMaxWaitRequestNum(), effectiveQps);
+            }
             LOG.info("Applied factor {} to backpressure limiter for method {}, effective QPS: {}",
                     factor, methodName, effectiveQps);
         }
+        
+        /*@Override
+        void updateQps(int qps) {
+            Preconditions.checkArgument(qps > 0, "qps must be > 0");
+            if (qps != this.effectiveQps) {
+                LOG.info("Update rpc limiter for method: {}, qps: from {} to {}", methodName, this.qps, qps);
+                this.effectiveQps = qps;
+                this.rateLimiter.setRate(qps);
+            }
+        }*/
     }
 
     protected static class CostLimiter  {
