@@ -31,6 +31,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class RpcRateLimiterTest2 {
@@ -308,22 +309,50 @@ public class RpcRateLimiterTest2 {
     }
 
     @Test
-    public void testCostLimiterAcquireSuccess() throws RpcRateLimitException, InterruptedException {
+    public void testCostLimiterAcquireSuccess() {
         String methodName = "testMethod";
         int limit = 100;
-        int cost = 50;
-
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
 
-        boolean acquired = limiter.acquire(cost);
+        // acquire with cost exceeds limit - should fail
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assert.assertThrows("exceeds the limit", RpcRateLimitException.class, () -> acquired.set(limiter.acquire(200)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(0, limiter.getCurrentCost());
 
-        Assert.assertTrue(acquired);
-        Assert.assertEquals(cost, limiter.getCurrentCost());
+        // acquire with cost less than limit: 50
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire(50)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(50, limiter.getCurrentCost());
+
+        // acquire 0 cost - should succeed and not change current cost
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire(0)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(50, limiter.getCurrentCost());
+
+        // acquire 20 cost - should succeed and current cost should be 70
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire(20)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(70, limiter.getCurrentCost());
+
+        // acquire 30 cost - should fail because 70 + 30 = 100 > limit
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire(30)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(100, limiter.getCurrentCost());
+
+        // acquire 1 cost - should fail because 100 + 1 > limit
+        acquired.set(false);
+        Assert.assertThrows("timeout", RpcRateLimitException.class, () -> acquired.set(limiter.acquire(1)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(100, limiter.getCurrentCost());
     }
 
-    @Test
+    /*@Test
     public void testCostLimiterAcquireZeroCost() throws RpcRateLimitException, InterruptedException {
         String methodName = "testMethod";
         int limit = 100;
@@ -337,7 +366,7 @@ public class RpcRateLimiterTest2 {
 
         Assert.assertTrue(acquired);
         Assert.assertEquals(0, limiter.getCurrentCost());
-    }
+    }*/
 
     @Test(expected = RpcRateLimitException.class)
     public void testCostLimiterAcquireExceedsLimit() throws RpcRateLimitException, InterruptedException {
@@ -382,7 +411,7 @@ public class RpcRateLimiterTest2 {
     }
 
     @Test
-    public void testCostLimiterRelease() throws RpcRateLimitException, InterruptedException {
+    public void testCostLimiterRelease() throws RpcRateLimitException {
         String methodName = "testMethod";
         int limit = 100;
         int cost = 50;

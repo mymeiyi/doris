@@ -149,6 +149,9 @@ public class RpcRateLimiter {
         }
 
         boolean acquire(int cost) throws RpcRateLimitException {
+            if (cost <= 0) {
+                return true;
+            }
             if (cost > limit) {
                 throw new RpcRateLimitException(
                         "method: " + methodName + ", cost " + cost + " exceeds the limit " + limit);
@@ -164,7 +167,9 @@ public class RpcRateLimiter {
                 long nanos = TimeUnit.MILLISECONDS.toNanos(Config.meta_service_rpc_rate_limit_wait_timeout_ms);
                 while (currentCost + cost > limit) {
                     if (nanos <= 0) {
-                        return false;
+                        throw new RpcRateLimitException(
+                                "Meta service rpc rate limit timeout for method: " + methodName + ", requestCost: " + cost + ", currentCost: "
+                                        + currentCost + ", limit: " + limit);
                     }
                     nanos = condition.awaitNanos(nanos);
                 }
