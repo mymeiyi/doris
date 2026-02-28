@@ -19,7 +19,6 @@ package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.common.Config;
 
-import com.google.common.util.concurrent.RateLimiter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.Assert;
@@ -67,11 +66,8 @@ public class RpcRateLimiterTest2 {
         Assert.assertNotNull(limiter.getRateLimiter());
         Assert.assertEquals(qps, limiter.getRateLimiter().getRate(), 0.001);
         Assert.assertEquals(maxWaitRequestNum, limiter.getAllowWaiting());
-    }
 
-    @Test
-    public void testQpsLimiterConstructorInvalidArguments() {
-        String methodName = "testMethod";
+        // Invalid Arguments
         Assert.assertThrows(IllegalArgumentException.class, () -> new RpcRateLimiter.QpsLimiter(methodName, 10, 0));
         Assert.assertThrows(IllegalArgumentException.class, () -> new RpcRateLimiter.QpsLimiter(methodName, 10, -1));
         Assert.assertThrows(IllegalArgumentException.class, () -> new RpcRateLimiter.QpsLimiter(methodName, 0, 10));
@@ -85,33 +81,15 @@ public class RpcRateLimiterTest2 {
         int qps = 1000;
 
         RpcRateLimiter.QpsLimiter limiter = new RpcRateLimiter.QpsLimiter(methodName, maxWaitRequestNum, qps);
-        // Should not throw exception
         Assertions.assertDoesNotThrow(() -> limiter.acquire());
     }
 
-    /*@Test
-    public void testQpsLimiterAcquireWithNullSemaphore() throws RpcRateLimitException {
-        // This test is tricky because we cannot create a QpsLimiter with null semaphore
-        // The constructor requires maxWaitRequestNum > 0
-        // But we can test the acquire logic through other means
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 100;
-
-        RpcRateLimiter.QpsLimiter limiter = new RpcRateLimiter.QpsLimiter(methodName, maxWaitRequestNum, qps);
-
-        // Normal acquire should work
-        limiter.acquire();
-    }*/
-
     @Test
-    public void testQpsLimiterAcquireWaitingQueueFull() throws InterruptedException {
+    public void testQpsLimiterAcquireWaitingQueueFull() {
         String methodName = "testMethod";
         int maxWaitRequestNum = 2;
         int qps = 1;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1;
-
-        // Config.meta_service_rpc_rate_limit_max_waiting_request_num = maxWaitRequestNum;
 
         RpcRateLimiter.QpsLimiter limiter = new RpcRateLimiter.QpsLimiter(methodName, maxWaitRequestNum, qps);
 
@@ -148,23 +126,8 @@ public class RpcRateLimiterTest2 {
         int failures = failCount.get();
         Assert.assertEquals("Total results should match thread count", threadCount, successes + failures);
         // TODO
-
+        LOG.info("Acquire results: {} successes, {} failures", successes, failures);
     }
-
-    /*@Test
-    public void testQpsLimiterUpdateQpsSameValue() {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 100;
-
-        RpcRateLimiter.QpsLimiter limiter = new RpcRateLimiter.QpsLimiter(methodName, maxWaitRequestNum, qps);
-
-        // Update with same values - should not throw
-        limiter.updateQps(maxWaitRequestNum, qps);
-        Assert.assertEquals(qps, limiter.qps);
-        Assert.assertEquals(maxWaitRequestNum, limiter.getMaxWaitRequestNum());
-        Assert.assertEquals(maxWaitRequestNum, limiter.getAllowWaiting());
-    }*/
 
     @Test
     public void testQpsLimiterUpdateQps() {
@@ -199,6 +162,7 @@ public class RpcRateLimiterTest2 {
         Assertions.assertThrows(IllegalArgumentException.class, () -> limiter.updateQps(maxWaitRequestNum, -1));
     }
 
+    @Test
     public void testQpsLimiterUpdateMaxWait() {
         String methodName = "testMethod";
         int maxWaitRequestNum = 10;
@@ -229,34 +193,6 @@ public class RpcRateLimiterTest2 {
         // negative maxWaitRequestNum
         Assert.assertThrows(IllegalArgumentException.class, () -> limiter.updateQps(-1, qps));
     }
-
-    /*@Test
-    public void testQpsLimiterUpdateMaxWaitRequestNum() {
-        String methodName = "testMethod";
-        int initialMaxWait = 10;
-        int newMaxWait = 20;
-        int qps = 100;
-
-        RpcRateLimiter.QpsLimiter limiter = new RpcRateLimiter.QpsLimiter(methodName, initialMaxWait, qps);
-
-        int initialAllowWaiting = limiter.getAllowWaiting();
-        Assert.assertEquals(initialMaxWait, initialAllowWaiting);
-
-        limiter.updateQps(newMaxWait, qps);
-
-        Assert.assertEquals(newMaxWait, limiter.getAllowWaiting());
-    }*/
-
-    /*@Test
-    public void testQpsLimiterGetMaxWaitRequestNum() {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 15;
-        int qps = 100;
-
-        RpcRateLimiter.QpsLimiter limiter = new RpcRateLimiter.QpsLimiter(methodName, maxWaitRequestNum, qps);
-
-        Assert.assertEquals(maxWaitRequestNum, limiter.getMaxWaitRequestNum());
-    }*/
 
     // ==================== BackpressureQpsLimiter Tests ====================
 
