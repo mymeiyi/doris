@@ -217,6 +217,7 @@ public class RpcRateLimiterTest2 {
                 new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
         Assert.assertEquals(methodName, limiter.methodName);
         // Effective QPS should be qps * factor = 100 * 1.0 = 100
+        Assert.assertEquals(100, limiter.baseQps);
         Assert.assertEquals(100, limiter.qps);
         Assert.assertEquals(100, limiter.getRateLimiter().getRate(), 0.001);
 
@@ -224,7 +225,8 @@ public class RpcRateLimiterTest2 {
         factor = 0.9;
         limiter = new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
         // Effective QPS should be qps * factor = 100 * 0.9 = 90
-        Assert.assertEquals(100, limiter.qps);
+        Assert.assertEquals(100, limiter.baseQps);
+        Assert.assertEquals(90, limiter.qps);
         Assert.assertEquals(90, limiter.getRateLimiter().getRate(), 0.001);
     }
 
@@ -304,39 +306,6 @@ public class RpcRateLimiterTest2 {
         // negative limit
         Assert.assertThrows(IllegalArgumentException.class, () -> limiter.setLimit(-1));
     }
-
-    /*@Test
-    public void testCostLimiterSetLimitSameValue() {
-        String methodName = "testMethod";
-        int limit = 100;
-
-        RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
-
-        // Set to same value - should not throw
-        limiter.setLimit(limit);
-
-        Assert.assertEquals(limit, limiter.getLimit());
-    }*/
-
-    /*@Test(expected = IllegalArgumentException.class)
-    public void testCostLimiterSetLimitZero() {
-        String methodName = "testMethod";
-        int limit = 100;
-
-        RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
-
-        limiter.setLimit(0);
-    }*/
-
-    /*@Test(expected = IllegalArgumentException.class)
-    public void testCostLimiterSetLimitNegative() {
-        String methodName = "testMethod";
-        int limit = 100;
-
-        RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
-
-        limiter.setLimit(-1);
-    }*/
 
     @Test
     public void testCostLimiterAcquireSuccess() throws RpcRateLimitException, InterruptedException {

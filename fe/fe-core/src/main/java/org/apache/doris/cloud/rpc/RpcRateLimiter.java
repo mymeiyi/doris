@@ -120,16 +120,6 @@ public class RpcRateLimiter {
                         factor, methodName, effectiveQps);
             }
         }
-
-        /*@Override
-        void updateQps(int qps) {
-            Preconditions.checkArgument(qps > 0, "qps must be > 0");
-            if (qps != this.effectiveQps) {
-                LOG.info("Update rpc limiter for method: {}, qps: from {} to {}", methodName, this.qps, qps);
-                this.effectiveQps = qps;
-                this.rateLimiter.setRate(qps);
-            }
-        }*/
     }
 
     protected static class CostLimiter  {
