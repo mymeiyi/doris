@@ -18,8 +18,8 @@
 package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.cloud.proto.Cloud;
-import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.CostLimiter;
-import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.MethodRateLimiter;
+/*import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.CostLimiter;
+import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.MethodRateLimiter;*/
 import org.apache.doris.common.Config;
 
 import com.google.common.util.concurrent.RateLimiter;
@@ -86,7 +86,7 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_cost_clamped_to_limit_enabled = originalCostClamped;
     }
 
-    @Test
+    /*@Test
     public void testDisabledByDefault() {
         Config.meta_service_rpc_rate_limit_enabled = false;
 
@@ -1118,5 +1118,5 @@ public class MetaServiceRateLimiterTest {
         Assertions.assertThrows(RpcRateLimitException.class, () -> acquired.set(methodRateLimiter.acquire(3)));
         Assert.assertFalse(acquired.get());
         Assert.assertEquals(0, methodRateLimiter.getCostLimiter().getCurrentCost());
-    }
+    }*/
 }

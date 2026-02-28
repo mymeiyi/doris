@@ -18,6 +18,9 @@
 package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.cloud.proto.Cloud;
+import org.apache.doris.cloud.rpc.RpcRateLimiter.BackpressureQpsRateLimiter;
+import org.apache.doris.cloud.rpc.RpcRateLimiter.CostLimiter;
+import org.apache.doris.cloud.rpc.RpcRateLimiter.QpsRateLimiter;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.profile.SummaryProfile;
 import org.apache.doris.metric.CloudMetrics;
@@ -35,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -53,7 +57,16 @@ public class MetaServiceRateLimiter {
     private volatile String lastCostConfig = "";
     private Map<String, Integer> methodQpsConfig = new ConcurrentHashMap<>();
     private Map<String, Integer> methodCostConfig = new ConcurrentHashMap<>();
-    private final Map<String, MethodRateLimiter> methodLimiters = new ConcurrentHashMap<>();
+    // private final Map<String, MethodRateLimiter> methodLimiters = new ConcurrentHashMap<>();
+
+    // Separate map for backpressure throttling - independent of active rate limiting
+    // private final Map<String, BackpressureMethodRateLimiter> backpressureMethodLimiters = new ConcurrentHashMap<>();
+    // Track all methods that should be considered for adaptive throttle (from config + observed)
+    private final Set<String> adaptiveThrottleMethods = ConcurrentHashMap.newKeySet();
+
+    private final Map<String, QpsRateLimiter> qpsLimiters = new ConcurrentHashMap<>();
+    private final Map<String, CostLimiter> costLimiters = new ConcurrentHashMap<>();
+    private final Map<String, BackpressureQpsRateLimiter> backpressureLimiters = new ConcurrentHashMap<>();
 
     public static MetaServiceRateLimiter getInstance() {
         if (instance == null) {
@@ -68,6 +81,9 @@ public class MetaServiceRateLimiter {
 
     MetaServiceRateLimiter() {
         reloadConfig();
+        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+            MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
+        }
     }
 
     private boolean isConfigChanged() {
@@ -97,7 +113,10 @@ public class MetaServiceRateLimiter {
             boolean enabled = Config.meta_service_rpc_rate_limit_enabled;
             // If disabled, clear all limiters
             if (!enabled) {
-                methodLimiters.clear();
+                costLimiters.clear();
+                qpsLimiters.clear();
+                // methodLimiters.clear();
+                // backpressureMethodLimiters.clear();
                 methodQpsConfig.clear();
                 methodCostConfig.clear();
                 lastEnabled = enabled;
@@ -127,23 +146,23 @@ public class MetaServiceRateLimiter {
 
     private void updateMethodLimiters(int defaultQpsPerCore, int maxWaitRequestNum) {
         List<String> toRemove = new ArrayList<>();
-        for (Entry<String, MethodRateLimiter> entry : methodLimiters.entrySet()) {
+        for (Entry<String, QpsRateLimiter> entry : qpsLimiters.entrySet()) {
             String methodName = entry.getKey();
             int qps = getMethodTotalQps(methodName, defaultQpsPerCore);
-            int costLimit = getMethodTotalCostLimit(methodName);
-            if (qps <= 0 && costLimit <= 0) {
+            // int costLimit = getMethodTotalCostLimit(methodName);
+            if (qps <= 0 /*&& costLimit <= 0*/) {
                 toRemove.add(methodName);
                 continue;
             }
-            MethodRateLimiter limiter = entry.getValue();
-            limiter.update(maxWaitRequestNum, qps, costLimit);
+            QpsRateLimiter limiter = entry.getValue();
+            limiter.updateQps(maxWaitRequestNum, qps);
             LOG.info("Updated rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}, cost: {}", methodName,
-                    maxWaitRequestNum, qps, costLimit);
+                    maxWaitRequestNum, qps);
         }
         if (!toRemove.isEmpty()) {
             LOG.info("Remove zero qps rate limiter for methods: {}", toRemove);
             for (String methodName : toRemove) {
-                methodLimiters.remove(methodName);
+                qpsLimiters.remove(methodName);
             }
         }
     }
@@ -196,16 +215,47 @@ public class MetaServiceRateLimiter {
         return Runtime.getRuntime().availableProcessors();
     }
 
-    private MethodRateLimiter getMethodLimiter(String methodName) {
-        return methodLimiters.compute(methodName, (name, limiter) -> {
+    private CostLimiter getCostLimiter(String methodName) {
+        return costLimiters.compute(methodName, (name, limiter) -> {
+            if (limiter != null) {
+                return limiter;
+            }
+            // int qps = getMethodTotalQps(name, Config.meta_service_rpc_rate_limit_default_qps_per_core);
+            int costLimit = getMethodTotalCostLimit(name);
+            if (/*qps > 0 || */costLimit > 0) {
+                CostLimiter newLimiter = new CostLimiter(methodName, costLimit);
+                return newLimiter;
+            }
+            return null;
+        });
+    }
+
+    private QpsRateLimiter getMethodLimiter(String methodName) {
+        return qpsLimiters.compute(methodName, (name, limiter) -> {
+            if (limiter != null) {
+                return limiter;
+            }
+            int qps = getMethodTotalQps(name, Config.meta_service_rpc_rate_limit_default_qps_per_core);
+            // int costLimit = getMethodTotalCostLimit(name);
+            if (qps > 0 /*|| costLimit > 0*/) {
+                QpsRateLimiter newLimiter = new QpsRateLimiter(name,
+                        Config.meta_service_rpc_rate_limit_max_waiting_request_num, qps);
+                return newLimiter;
+            }
+            return null;
+        });
+    }
+
+    private BackpressureQpsRateLimiter getBackpressureMethodLimiter(String methodName, double factor) {
+        return backpressureLimiters.compute(methodName, (name, limiter) -> {
             if (limiter != null) {
                 return limiter;
             }
             int qps = getMethodTotalQps(name, Config.meta_service_rpc_rate_limit_default_qps_per_core);
             int costLimit = getMethodTotalCostLimit(name);
             if (qps > 0 || costLimit > 0) {
-                MethodRateLimiter newLimiter = new MethodRateLimiter(name,
-                        Config.meta_service_rpc_rate_limit_max_waiting_request_num, qps, costLimit);
+                BackpressureQpsRateLimiter newLimiter = new BackpressureQpsRateLimiter(name, qps,
+                        Config.meta_service_rpc_rate_limit_max_waiting_request_num, factor);
                 return newLimiter;
             }
             return null;
@@ -217,19 +267,81 @@ public class MetaServiceRateLimiter {
             reloadConfig();
         }
 
+        // Step1: Check backpressure limiter first (if adaptive throttle is active with factor < 1.0)
+        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+            double factor = MetaServiceAdaptiveThrottle.getInstance().getFactor();
+            if (factor < 1.0) {
+                QpsRateLimiter backpressureLimiter = getBackpressureMethodLimiter(methodName, factor);
+                if (backpressureLimiter != null) {
+                    backpressureLimiter.acquire();
+                }
+            }
+        }
+
         if (!Config.meta_service_rpc_rate_limit_enabled) {
             return false;
         }
 
+        // Step2: Check qps limiter
+        QpsRateLimiter qpsRateLimiter = getMethodLimiter(methodName);
+        if (qpsRateLimiter != null) {
+            qpsRateLimiter.acquire();
+        }
+
+        // Step3 Check cost limiter
+        boolean acquired = false;
+        CostLimiter costLimiter = getCostLimiter(methodName);
+        if (costLimiter != null) {
+            acquired = costLimiter.acquire(cost);
+        }
+        return acquired;
+    }
+
+    /*public boolean acquire(String methodName, int cost) throws RpcRateLimitException {
+        if (isConfigChanged()) {
+            reloadConfig();
+        }
+
+        // Track this method for adaptive throttle
+        *//*if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+            adaptiveThrottleMethods.add(methodName);
+        }*//*
+        // Step 1: Check backpressure limiter first (if adaptive throttle is active with factor < 1.0)
+        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+            double factor = MetaServiceAdaptiveThrottle.getInstance().getFactor();
+            if (factor < 1.0) {
+                BackpressureMethodRateLimiter backpressureLimiter = getBackpressureMethodLimiter(methodName, factor);
+                // BackpressureMethodRateLimiter backpressureLimiter = backpressureMethodLimiters.get(methodName);
+                if (backpressureLimiter != null) {
+                    try {
+                        // Try to acquire backpressure limiter
+                        if (!backpressureLimiter.acquire()) {
+                            // Backpressure throttling triggered - return failure immediately
+                            LOG.debug("Backpressure throttle triggered for method: {}", methodName);
+                            return false;
+                        }
+                    } catch (RpcRateLimitException e) {
+                        // Backpressure throttling triggered - return failure
+                        LOG.debug("Backpressure throttle exception for method: {}", methodName);
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Step 2: Check active rate limiter
+        if (!Config.meta_service_rpc_rate_limit_enabled) {
+            return false;
+        }
         MethodRateLimiter limiter = getMethodLimiter(methodName);
         if (limiter == null) {
             return false;
         }
         return limiter.acquire(cost);
-    }
+    }*/
 
     public void release(String methodName, int cost) {
-        MethodRateLimiter limiter = methodLimiters.get(methodName);
+        CostLimiter limiter = costLimiters.get(methodName);
         if (limiter != null) {
             try {
                 limiter.release(cost);
@@ -250,12 +362,49 @@ public class MetaServiceRateLimiter {
     }
 
     // only used for testing
-    Map<String, MethodRateLimiter> getMethodLimiters() {
+    /*Map<String, MethodRateLimiter> getMethodLimiters() {
         return methodLimiters;
+    }*/
+
+    // Get backpressure method limiters - for testing
+    /*Map<String, BackpressureMethodRateLimiter> getBackpressureMethodLimiters() {
+        return backpressureMethodLimiters;
+    }*/
+
+    // Backpressure-specific rate limiter that uses qps * factor, cost limit = null
+    /*protected static class BackpressureMethodRateLimiter extends MethodRateLimiter {
+        // private final String methodName;
+        private final int baseQps;
+        private volatile double currentFactor = 1.0;
+        private volatile int effectiveQps;
+
+        BackpressureMethodRateLimiter(String methodName, int baseQps, int maxWaitRequestNum, int effectiveQps) {
+            super(methodName, maxWaitRequestNum, baseQps, 0); // costLimit = 0 (null)
+            // this.methodName = methodName;
+            this.baseQps = baseQps;
+            this.effectiveQps = effectiveQps;
+            LOG.info("Created backpressure rate limiter for method: {}, baseQps: {}", methodName, baseQps);
+        }
+
+        void applyFactor(double factor) {
+            this.currentFactor = factor;
+            this.effectiveQps = Math.max(1, (int) (baseQps * factor));
+            updateQps(getMaxWaitRequestNum(), effectiveQps);
+            LOG.info("Applied factor {} to backpressure limiter for method {}, effective QPS: {}", 
+                    factor, methodName, effectiveQps);
+        }
+
+        int getEffectiveQps() {
+            return effectiveQps;
+        }
+
+        double getCurrentFactor() {
+            return currentFactor;
+        }
     }
 
     protected static class MethodRateLimiter {
-        private final String methodName;
+        protected final String methodName;
         private volatile int maxWaitRequestNum;
         private Semaphore waitingSemaphore;
         private RateLimiter rateLimiter;
@@ -263,8 +412,8 @@ public class MetaServiceRateLimiter {
 
         MethodRateLimiter(String methodName, int maxWaitRequestNum, int qps, int costLimit) {
             this.methodName = methodName;
+            this.maxWaitRequestNum = maxWaitRequestNum;
             if (qps > 0) {
-                this.maxWaitRequestNum = maxWaitRequestNum;
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
                 this.rateLimiter = RateLimiter.create(qps);
             }
@@ -362,6 +511,31 @@ public class MetaServiceRateLimiter {
             }
         }
 
+        // Try to acquire without throwing - returns true if acquired, false otherwise
+        *//*boolean tryAcquire() {
+            if (rateLimiter == null || waitingSemaphore == null) {
+                return true; // No limiting
+            }
+            // Try to acquire waiting semaphore
+            if (!waitingSemaphore.tryAcquire()) {
+                return false;
+            }
+            // Try to acquire rate limiter permit (non-blocking)
+            try {
+                boolean acquired = rateLimiter.tryAcquire(0, TimeUnit.MILLISECONDS);
+                if (!acquired) {
+                    waitingSemaphore.release();
+                    return false;
+                }
+                // Successfully acquired, release semaphore permit (it will be reacquired in actual acquire)
+                waitingSemaphore.release();
+                return true;
+            } catch (Exception e) {
+                waitingSemaphore.release();
+                return false;
+            }
+        }*//*
+
         void release(int cost) {
             if (costLimiter != null && cost > 0) {
                 costLimiter.release(cost);
@@ -373,7 +547,7 @@ public class MetaServiceRateLimiter {
             updateCostLimit(costLimit);
         }
 
-        private void updateQps(int maxWaitRequestNum, int qps) {
+        protected void updateQps(int maxWaitRequestNum, int qps) {
             if (qps <= 0) {
                 rateLimiter = null;
                 waitingSemaphore = null;
@@ -418,6 +592,11 @@ public class MetaServiceRateLimiter {
         CostLimiter getCostLimiter() {
             return costLimiter;
         }
+
+        // Get max wait request number - for subclass access
+        protected int getMaxWaitRequestNum() {
+            return maxWaitRequestNum;
+        }
     }
 
     protected static class CostLimiter {
@@ -448,11 +627,11 @@ public class MetaServiceRateLimiter {
             }
         }
 
-        boolean acquire(int cost, long timeout, TimeUnit unit) throws InterruptedException, RpcRateLimitException {
+        boolean acquire(int cost) throws InterruptedException, RpcRateLimitException {
             if (cost > limit) {
                 throw new RpcRateLimitException("Cost " + cost + " exceeds the limit " + limit);
             }
-            long nanos = unit.toNanos(timeout);
+            long nanos = TimeUnit.MILLISECONDS.toNanos(Config.meta_service_rpc_rate_limit_wait_timeout_ms);
             lock.lockInterruptibly();
             try {
                 while (currentCost + cost > limit) {
@@ -490,7 +669,7 @@ public class MetaServiceRateLimiter {
                 lock.unlock();
             }
         }
-    }
+    }*/
 
     public static int getRequestCost(String methodName, Object request) {
         if (methodName.equals("getVersion")) {
@@ -516,5 +695,91 @@ public class MetaServiceRateLimiter {
         }
         // TODO the cost of other methods is not supported now
         return 1;
+    }
+
+    public void setAdaptiveFactor(double factor) {
+        // Parse phase1 methods from config and add to tracked methods
+        String phase1Config = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
+        if (phase1Config != null && !phase1Config.isEmpty()) {
+            for (String method : phase1Config.split(",")) {
+                String trimmed = method.trim();
+                if (!trimmed.isEmpty()) {
+                    adaptiveThrottleMethods.add(trimmed);
+                }
+            }
+        }
+
+        for (Entry<String, BackpressureQpsRateLimiter> entry : backpressureLimiters.entrySet()) {
+            BackpressureQpsRateLimiter limiter = entry.getValue();
+            limiter.applyFactor(factor);
+        }
+
+        // Apply factor to all tracked methods using separate backpressure limiters
+        /*int appliedCount = 0;
+        for (String methodName : adaptiveThrottleMethods) {
+            // Check if method should be throttled based on phase config
+            boolean isPhase1 = isPhase1Method(methodName);
+            boolean isPhase2 = Config.meta_service_rpc_adaptive_throttle_phase2_enabled;
+
+            if (!isPhase1 && !isPhase2) {
+                continue;
+            }
+
+            // Get or create backpressure limiter for this method (separate from active rate limiting)
+            BackpressureMethodRateLimiter limiter = backpressureMethodLimiters.get(methodName);
+            if (limiter == null) {
+                // Create backpressure limiter with base QPS
+                int baseQps = getMethodTotalQps(methodName, Config.meta_service_rpc_rate_limit_default_qps_per_core);
+                int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
+
+                // Only create if baseQps > 0
+                if (baseQps > 0) {
+                    limiter = new BackpressureMethodRateLimiter(methodName, baseQps, maxWaitRequestNum);
+                    BackpressureMethodRateLimiter existing = backpressureMethodLimiters.putIfAbsent(methodName, limiter);
+                    if (existing != null) {
+                        limiter = existing; // Use existing if another thread created it
+                    }
+                }
+            }
+
+            if (limiter != null) {
+                limiter.applyFactor(factor);
+                appliedCount++;
+            }
+        }
+
+        // Also apply to existing backpressure limiters not in adaptiveThrottleMethods
+        for (BackpressureMethodRateLimiter limiter : backpressureMethodLimiters.values()) {
+            if (!adaptiveThrottleMethods.contains(limiter.methodName)) {
+                limiter.applyFactor(factor);
+                appliedCount++;
+            }
+        }*/
+
+        LOG.info("Applied adaptive factor {} to {} backpressure method limiters", factor);
+    }
+
+    private boolean isPhase1Method(String methodName) {
+        String phase1Config = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
+        if (phase1Config == null || phase1Config.isEmpty()) {
+            // Empty config means all methods are considered phase1
+            return true;
+        }
+        String[] phase1Methods = phase1Config.split(",");
+        for (String m : phase1Methods) {
+            if (m.trim().equals(methodName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @VisibleForTesting
+    public void reset() {
+        // methodLimiters.clear();
+        // backpressureMethodLimiters.clear();
+        methodQpsConfig.clear();
+        lastQpsConfig = "";
+        // adaptiveThrottleMethods.clear();
     }
 }
