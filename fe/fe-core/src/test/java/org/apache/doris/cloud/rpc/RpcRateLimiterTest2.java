@@ -407,7 +407,7 @@ public class RpcRateLimiterTest2 {
     }
 
     @Test
-    public void testCostLimiterReleaseSignalsWaiting() throws InterruptedException, RpcRateLimitException {
+    public void testCostLimiterAcquireAwait() {
         String methodName = "testMethod";
         int limit = 50;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 20;
@@ -415,7 +415,7 @@ public class RpcRateLimiterTest2 {
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
 
         // Acquire full capacity
-        limiter.acquire(50);
+        Assertions.assertDoesNotThrow(() -> limiter.acquire(50));
         Assert.assertEquals(50, limiter.getCurrentCost());
 
         // Start a thread that will try to acquire
@@ -450,15 +450,19 @@ public class RpcRateLimiterTest2 {
         waiter2.start();
 
         // waiter1 is timeout, waiter2 is sleep for 100ms and then try to acquire
-        Thread.sleep(40);
+        Assertions.assertDoesNotThrow(() -> Thread.sleep(40));
         // Release some capacity
         limiter.release(20);
         Assert.assertEquals(30, limiter.getCurrentCost());
 
         // Wait for the waiter to complete
-        latch.await(2, TimeUnit.SECONDS);
-        waiter1.join(1000);
-        waiter2.join(1000);
+        try {
+            latch.await(2, TimeUnit.SECONDS);
+            waiter1.join(1000);
+            waiter2.join(1000);
+        } catch (InterruptedException e) {
+            LOG.error("Test interrupted", e);
+        }
 
         // The waiter should have succeeded
         // Assert.assertEquals(1, result.get());
