@@ -47,7 +47,7 @@ public class MetaServiceRateLimiter {
     private volatile String lastQpsConfig = "";
     private volatile String lastCostConfig = "";
     private volatile boolean lastAdaptiveThrottleEnabled = false;
-    private volatile String lastAdaptiveThrottlePhase1Methods = "";
+    private volatile String lastAdaptiveThrottleMethods = "";
     private Map<String, Integer> methodQpsConfig = new ConcurrentHashMap<>();
     private Map<String, Integer> methodCostConfig = new ConcurrentHashMap<>();
     private Set<String> adaptiveThrottleMethods = ConcurrentHashMap.newKeySet();
@@ -89,7 +89,7 @@ public class MetaServiceRateLimiter {
                     || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig)
                     || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig)
                     || !Objects.equals(Config.meta_service_rpc_adaptive_throttle_methods,
-                    lastAdaptiveThrottlePhase1Methods);
+                    lastAdaptiveThrottleMethods);
         }
     }
 
@@ -157,11 +157,11 @@ public class MetaServiceRateLimiter {
                     }
                 }
             }
+            this.adaptiveThrottleMethods.clear();
             this.adaptiveThrottleMethods.addAll(newAdaptiveThrottleMethods);
-            this.adaptiveThrottleMethods.retainAll(newAdaptiveThrottleMethods);
         }
         lastAdaptiveThrottleEnabled = adaptiveThrottleEnabled;
-        lastAdaptiveThrottlePhase1Methods = adaptiveThrottleMethods;
+        lastAdaptiveThrottleMethods = adaptiveThrottleMethods;
     }
 
     private void updateQpsLimiters(int defaultQpsPerCore, int maxWaitRequestNum) {
@@ -368,7 +368,7 @@ public class MetaServiceRateLimiter {
         return 1;
     }
 
-    public void setAdaptiveFactor(double factor) {
+    /*public void setAdaptiveFactor(double factor) {
         // Parse phase1 methods from config and add to tracked methods
         String phase1Config = Config.meta_service_rpc_adaptive_throttle_methods;
         if (phase1Config != null && !phase1Config.isEmpty()) {
@@ -386,7 +386,7 @@ public class MetaServiceRateLimiter {
         }
 
         // Apply factor to all tracked methods using separate backpressure limiters
-        /*int appliedCount = 0;
+        *//*int appliedCount = 0;
         for (String methodName : adaptiveThrottleMethods) {
             // Check if method should be throttled based on phase config
             boolean isPhase1 = isPhase1Method(methodName);
@@ -425,10 +425,10 @@ public class MetaServiceRateLimiter {
                 limiter.applyFactor(factor);
                 appliedCount++;
             }
-        }*/
+        }*//*
 
         LOG.info("Applied adaptive factor {} to {} backpressure method limiters", factor);
-    }
+    }*/
 
     /*private boolean isPhase1Method(String methodName) {
         String phase1Config = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
@@ -455,12 +455,12 @@ public class MetaServiceRateLimiter {
         return methodCostConfig;
     }
 
-    @VisibleForTesting
+    /*@VisibleForTesting
     public void reset() {
         // methodLimiters.clear();
         // backpressureMethodLimiters.clear();
         methodQpsConfig.clear();
         lastQpsConfig = "";
         // adaptiveThrottleMethods.clear();
-    }
+    }*/
 }
