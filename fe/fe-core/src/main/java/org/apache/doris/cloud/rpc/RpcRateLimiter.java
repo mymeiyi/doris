@@ -101,6 +101,7 @@ public class RpcRateLimiter {
         }
 
         void applyFactor(double factor) {
+            Preconditions.checkArgument(Double.compare(factor, 1) < 0, "factor must be < 1");
             int effectiveQps = Math.max(1, (int) (qps * factor));
             updateQps(getMaxWaitRequestNum(), effectiveQps);
             LOG.info("Applied factor {} to backpressure limiter for method {}, effective QPS: {}",
