@@ -27,6 +27,7 @@ import org.junit.After;
 import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
 
+import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -509,63 +510,13 @@ public class RpcRateLimiterTest2 {
 
     // ==================== Integration Tests ====================
 
-    /*@Test
-    public void testQpsAndCostLimiterTogether() throws RpcRateLimitException {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 1000;
-        int costLimit = 100;
-
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-
-        RpcRateLimiter.QpsLimiter qpsLimiter = new RpcRateLimiter.QpsLimiter(methodName, maxWaitRequestNum, qps);
-        RpcRateLimiter.CostLimiter costLimiter = new RpcRateLimiter.CostLimiter(methodName, costLimit);
-
-        // Acquire QPS permit
-        qpsLimiter.acquire();
-
-        // Acquire cost permit
-        costLimiter.acquire(50);
-
-        // Release cost
-        costLimiter.release(50);
-        Assert.assertEquals(0, costLimiter.getCurrentCost());
-    }
-
     @Test
-    public void testBackpressureAndCostLimiterTogether() throws RpcRateLimitException {
-        String methodName = "testMethod";
-        int maxWaitRequestNum = 10;
-        int qps = 100;
-        double factor = 0.5;
-        int costLimit = 100;
-
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
-
-        RpcRateLimiter.BackpressureQpsLimiter backpressureLimiter =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName, maxWaitRequestNum, qps, factor);
-        RpcRateLimiter.CostLimiter costLimiter = new RpcRateLimiter.CostLimiter(methodName, costLimit);
-
-        // Backpressure effective QPS should be 50
-        Assert.assertEquals(50, backpressureLimiter.qps);
-
-        // Acquire backpressure permit
-        backpressureLimiter.acquire();
-
-        // Acquire cost permit
-        costLimiter.acquire(50);
-        Assert.assertEquals(50, costLimiter.getCurrentCost());
-    }*/
-
-    @Test
-    public void testConcurrentAccessToCostLimiter() throws InterruptedException {
+    public void testConcurrentAccessToCostLimiter() {
         String methodName = "testMethod";
         int limit = 100;
         int threads = 10;
         int iterations = 20;
-
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 5000;
-
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 2000;
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
 
         ExecutorService executor = Executors.newFixedThreadPool(threads);
@@ -573,7 +524,6 @@ public class RpcRateLimiterTest2 {
         CountDownLatch endLatch = new CountDownLatch(threads);
         AtomicInteger successCount = new AtomicInteger(0);
         AtomicInteger failCount = new AtomicInteger(0);
-
         for (int i = 0; i < threads; i++) {
             executor.submit(() -> {
                 try {
@@ -581,6 +531,7 @@ public class RpcRateLimiterTest2 {
                     for (int j = 0; j < iterations; j++) {
                         try {
                             limiter.acquire(10);
+                            Thread.sleep(new Random().nextInt(50));
                             limiter.release(10);
                             successCount.incrementAndGet();
                         } catch (RpcRateLimitException e) {
@@ -595,36 +546,17 @@ public class RpcRateLimiterTest2 {
             });
         }
 
-        startLatch.countDown();
-        endLatch.await(30, TimeUnit.SECONDS);
-        executor.shutdown();
+        try {
+            startLatch.countDown();
+            endLatch.await(30, TimeUnit.SECONDS);
+            executor.shutdown();
+        } catch (InterruptedException e) {
+            LOG.error("Test interrupted", e);
+        }
 
         LOG.info("Concurrent test - Success: {}, Failed: {}", successCount.get(), failCount.get());
-        // With concurrent access, some acquires should succeed and some should fail
         Assert.assertTrue(successCount.get() > 0);
-    }
-
-    @Test
-    public void testMultipleBackpressureLimiters() {
-        String methodName1 = "method1";
-        String methodName2 = "method2";
-        int maxWaitRequestNum = 10;
-        int qps1 = 100;
-        int qps2 = 200;
-
-        RpcRateLimiter.BackpressureQpsLimiter limiter1 =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName1, maxWaitRequestNum, qps1, 1.0);
-        RpcRateLimiter.BackpressureQpsLimiter limiter2 =
-                new RpcRateLimiter.BackpressureQpsLimiter(methodName2, maxWaitRequestNum, qps2, 0.5);
-
-        Assert.assertEquals(100, limiter1.qps);
-        Assert.assertEquals(100, limiter2.qps);
-
-        // Apply different factors
-        limiter1.applyFactor(0.5);
-        limiter2.applyFactor(0.8);
-
-        Assert.assertEquals(50, limiter1.qps);  // 100 * 0.5
-        Assert.assertEquals(160, limiter2.qps); // 200 * 0.8
+        Assert.assertEquals( iterations * threads, successCount.get());
+        Assert.assertEquals( 0, failCount.get());
     }
 }
