@@ -35,8 +35,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class RpcRateLimiterTest2 {
-    private static final Logger LOG = LogManager.getLogger(RpcRateLimiterTest2.class);
+public class RpcRateLimiterTest {
+    private static final Logger LOG = LogManager.getLogger(RpcRateLimiterTest.class);
 
     private long originalWaitTimeout;
     private int originalMaxWaiting;
