@@ -112,7 +112,7 @@ public class RpcRateLimiter {
         }
 
         void applyFactor(double factor) {
-            Preconditions.checkArgument(Double.compare(factor, 1) < 0, "factor must be < 1");
+            Preconditions.checkArgument(Double.compare(factor, 1) <= 0, "factor must be <= 1");
             int effectiveQps = Math.max(1, (int) (baseQps * factor));
             if (effectiveQps != this.qps) {
                 update(getMaxWaitRequestNum(), effectiveQps);

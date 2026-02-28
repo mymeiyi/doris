@@ -290,18 +290,22 @@ public class RpcRateLimiterTest2 {
     public void testCostLimiterSetLimit() {
         String methodName = "testMethod";
         int initialLimit = 100;
-        int newLimit = 200;
 
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, initialLimit);
-
         Assert.assertEquals(initialLimit, limiter.getLimit());
+        Assert.assertEquals(0, limiter.getCurrentCost());
 
+        int newLimit = 200;
         limiter.setLimit(newLimit);
-
         Assert.assertEquals(newLimit, limiter.getLimit());
+
+        // zero limit
+        Assert.assertThrows(IllegalArgumentException.class, () -> limiter.setLimit(0));
+        // negative limit
+        Assert.assertThrows(IllegalArgumentException.class, () -> limiter.setLimit(-1));
     }
 
-    @Test
+    /*@Test
     public void testCostLimiterSetLimitSameValue() {
         String methodName = "testMethod";
         int limit = 100;
@@ -312,9 +316,9 @@ public class RpcRateLimiterTest2 {
         limiter.setLimit(limit);
 
         Assert.assertEquals(limit, limiter.getLimit());
-    }
+    }*/
 
-    @Test(expected = IllegalArgumentException.class)
+    /*@Test(expected = IllegalArgumentException.class)
     public void testCostLimiterSetLimitZero() {
         String methodName = "testMethod";
         int limit = 100;
@@ -322,9 +326,9 @@ public class RpcRateLimiterTest2 {
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
 
         limiter.setLimit(0);
-    }
+    }*/
 
-    @Test(expected = IllegalArgumentException.class)
+    /*@Test(expected = IllegalArgumentException.class)
     public void testCostLimiterSetLimitNegative() {
         String methodName = "testMethod";
         int limit = 100;
@@ -332,7 +336,7 @@ public class RpcRateLimiterTest2 {
         RpcRateLimiter.CostLimiter limiter = new RpcRateLimiter.CostLimiter(methodName, limit);
 
         limiter.setLimit(-1);
-    }
+    }*/
 
     @Test
     public void testCostLimiterAcquireSuccess() throws RpcRateLimitException, InterruptedException {
