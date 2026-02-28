@@ -1,6 +1,5 @@
 package org.apache.doris.cloud.rpc;
 
-import org.apache.doris.cloud.rpc.MetaServiceRateLimiter.BackpressureMethodRateLimiter;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.profile.SummaryProfile;
 import org.apache.doris.metric.CloudMetrics;
@@ -297,6 +296,11 @@ public class RpcRateLimiter {
                 }
                 currentCost += cost;
                 return true;
+            } catch (InterruptedException e) {
+                throw new RpcRateLimitException(
+                        "Meta service rpc rate limit interrupted while acquiring lock for method: "
+                                + methodName + ", requestCost: " + cost + ", currentCost: "
+                                + currentCost + ", limit: " + limit, new InterruptedException());
             } finally {
                 lock.unlock();
             }
