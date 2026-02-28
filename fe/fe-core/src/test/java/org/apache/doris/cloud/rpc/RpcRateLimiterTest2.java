@@ -508,8 +508,6 @@ public class RpcRateLimiterTest2 {
         Assert.assertFalse(acquired.get());
     }
 
-    // ==================== Integration Tests ====================
-
     @Test
     public void testConcurrentAccessToCostLimiter() {
         String methodName = "testMethod";
