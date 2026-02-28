@@ -178,7 +178,7 @@ public class MetaServiceRateLimiter {
                 continue;
             }
             QpsLimiter limiter = entry.getValue();
-            limiter.updateQps(maxWaitRequestNum, qps);
+            limiter.update(maxWaitRequestNum, qps);
             LOG.info("Updated rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}, cost: {}", methodName,
                     maxWaitRequestNum, qps);
         }

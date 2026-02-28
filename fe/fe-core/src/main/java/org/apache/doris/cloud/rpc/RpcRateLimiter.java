@@ -63,7 +63,7 @@ public class RpcRateLimiter {
             }
         }
 
-        void updateQps(int maxWaitRequestNum, int qps) {
+        void update(int maxWaitRequestNum, int qps) {
             updateMaxWaitRequestNum(maxWaitRequestNum);
             updateQps(qps);
         }
@@ -107,6 +107,7 @@ public class RpcRateLimiter {
 
         BackpressureQpsLimiter(String methodName, int maxWaitRequestNum, int qps, double factor) {
             super(methodName, maxWaitRequestNum, qps);
+            this.baseQps = qps;
             applyFactor(factor);
         }
 
@@ -114,10 +115,10 @@ public class RpcRateLimiter {
             Preconditions.checkArgument(Double.compare(factor, 1) < 0, "factor must be < 1");
             int effectiveQps = Math.max(1, (int) (baseQps * factor));
             if (effectiveQps != this.qps) {
-                updateQps(getMaxWaitRequestNum(), effectiveQps);
+                update(getMaxWaitRequestNum(), effectiveQps);
+                LOG.info("Applied factor {} to backpressure limiter for method {}, effective QPS: {}",
+                        factor, methodName, effectiveQps);
             }
-            LOG.info("Applied factor {} to backpressure limiter for method {}, effective QPS: {}",
-                    factor, methodName, effectiveQps);
         }
 
         /*@Override

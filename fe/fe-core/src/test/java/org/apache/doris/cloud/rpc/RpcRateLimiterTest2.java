@@ -149,26 +149,26 @@ public class RpcRateLimiterTest2 {
         Assert.assertEquals(maxWaitRequestNum, limiter.getAllowWaiting());
 
         // Update with same values - do nothing
-        limiter.updateQps(maxWaitRequestNum, initialQps);
+        limiter.update(maxWaitRequestNum, initialQps);
         Assert.assertEquals(initialQps, limiter.qps);
         Assert.assertEquals(maxWaitRequestNum, limiter.getMaxWaitRequestNum());
         Assert.assertEquals(maxWaitRequestNum, limiter.getAllowWaiting());
 
         // increase QPS
         int newQps = 200;
-        limiter.updateQps(maxWaitRequestNum, newQps);
+        limiter.update(maxWaitRequestNum, newQps);
         Assert.assertEquals(newQps, limiter.qps);
         Assert.assertEquals(newQps, limiter.getRateLimiter().getRate(), 0.001);
 
         // decrease QPS back to initial
-        limiter.updateQps(maxWaitRequestNum, initialQps);
+        limiter.update(maxWaitRequestNum, initialQps);
         Assert.assertEquals(initialQps, limiter.qps);
         Assert.assertEquals(initialQps, limiter.getRateLimiter().getRate(), 0.001);
 
         // zero qps
-        Assertions.assertThrows(IllegalArgumentException.class, () -> limiter.updateQps(maxWaitRequestNum, 0));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> limiter.update(maxWaitRequestNum, 0));
         // negative qps
-        Assertions.assertThrows(IllegalArgumentException.class, () -> limiter.updateQps(maxWaitRequestNum, -1));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> limiter.update(maxWaitRequestNum, -1));
     }
 
     @Test
@@ -182,25 +182,25 @@ public class RpcRateLimiterTest2 {
         Assert.assertEquals(maxWaitRequestNum, limiter.getAllowWaiting());
 
         // same value - should do nothing
-        limiter.updateQps(maxWaitRequestNum, qps);
+        limiter.update(maxWaitRequestNum, qps);
         Assert.assertEquals(maxWaitRequestNum, limiter.getMaxWaitRequestNum());
         Assert.assertEquals(maxWaitRequestNum, limiter.getAllowWaiting());
 
         // increase maxWaitRequestNum
         int newMaxWait = 20;
-        limiter.updateQps(newMaxWait, qps);
+        limiter.update(newMaxWait, qps);
         Assert.assertEquals(newMaxWait, limiter.getMaxWaitRequestNum());
         Assert.assertEquals(newMaxWait, limiter.getAllowWaiting());
 
         // decrease maxWaitRequestNum back to initial
-        limiter.updateQps(maxWaitRequestNum, qps);
+        limiter.update(maxWaitRequestNum, qps);
         Assert.assertEquals(maxWaitRequestNum, limiter.getMaxWaitRequestNum());
         Assert.assertEquals(maxWaitRequestNum, limiter.getAllowWaiting());
 
         // zero maxWaitRequestNum
-        Assert.assertThrows(IllegalArgumentException.class, () -> limiter.updateQps(0, qps));
+        Assert.assertThrows(IllegalArgumentException.class, () -> limiter.update(0, qps));
         // negative maxWaitRequestNum
-        Assert.assertThrows(IllegalArgumentException.class, () -> limiter.updateQps(-1, qps));
+        Assert.assertThrows(IllegalArgumentException.class, () -> limiter.update(-1, qps));
     }
 
     // ==================== BackpressureQpsLimiter Tests ====================

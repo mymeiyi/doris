@@ -153,7 +153,7 @@ public class RpcRateLimiterTest {
 
         Assert.assertEquals(initialQps, limiter.getRateLimiter().getRate(), 0.001);
 
-        limiter.updateQps(maxWaitRequestNum, newQps);
+        limiter.update(maxWaitRequestNum, newQps);
 
         Assert.assertEquals(newQps, limiter.getRateLimiter().getRate(), 0.001);
     }
@@ -169,7 +169,7 @@ public class RpcRateLimiterTest {
 
         Assert.assertEquals(initialQps, limiter.getRateLimiter().getRate(), 0.001);
 
-        limiter.updateQps(maxWaitRequestNum, newQps);
+        limiter.update(maxWaitRequestNum, newQps);
 
         Assert.assertEquals(newQps, limiter.getRateLimiter().getRate(), 0.001);
     }
@@ -185,7 +185,7 @@ public class RpcRateLimiterTest {
 
         Assert.assertNotNull(limiter.getRateLimiter());
 
-        limiter.updateQps(maxWaitRequestNum, newQps);
+        limiter.update(maxWaitRequestNum, newQps);
 
         Assert.assertNull(limiter.getRateLimiter());
     }
@@ -202,7 +202,7 @@ public class RpcRateLimiterTest {
         int initialAllowWaiting = limiter.getAllowWaiting();
         Assert.assertEquals(initialMaxWait, initialAllowWaiting);
 
-        limiter.updateQps(newMaxWait, qps);
+        limiter.update(newMaxWait, qps);
 
         Assert.assertEquals(newMaxWait, limiter.getAllowWaiting());
     }
