@@ -17,6 +17,7 @@
 
 package org.apache.doris.cloud.rpc;
 
+import org.apache.doris.cloud.rpc.RpcRateLimiter.QpsLimiter;
 import org.apache.doris.common.Config;
 
 import org.junit.After;
@@ -214,7 +215,7 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertEquals(30, costConfig.get("method1").intValue());
         Assert.assertEquals(20, costConfig.get("method2").intValue());
 
-        Config.meta_service_rpc_cost_limit_per_core_config = "invalidformat;another:bad;negative:-10;normal:100";
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "invalidformat;another:bad;negative:-10;normal:100";
         Assert.assertTrue(limiter.reloadConfig());
         qpsConfig = limiter.getMethodQpsConfig();
         Assert.assertEquals(1, qpsConfig.size());
@@ -445,5 +446,36 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertEquals(10, limiter.getClampedCost("getVersion", 10));
         Assert.assertEquals(20, limiter.getClampedCost("getVersion", 30));
         Assert.assertEquals(40, limiter.getClampedCost("other", 40));
+    }
+
+    @Test
+    public void testWaitTimeout() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 1;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 5;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+        int maxWaitingFailCount = 0;
+        int acquireFailCount = 0;
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+        for (int i = 0; i < 10; i++) {
+            try {
+                limiter.acquire("testWaitTimeout", 0);
+            } catch (RpcRateLimitException e) {
+                // LOG.warn("i={}", i, e);
+                if (e.getMessage().contains("too many waiting requests")) {
+                    maxWaitingFailCount++;
+                } else if (e.getMessage().contains("timeout for method")) {
+                    acquireFailCount++;
+                }
+            }
+        }
+        Assert.assertEquals(0, maxWaitingFailCount);
+        Assert.assertEquals(9, acquireFailCount);
+        Assert.assertEquals(1, limiter.getQpsLimiters().size());
+        QpsLimiter qpsLimiter = limiter.getQpsLimiters().get("testWaitTimeout");
+        Assert.assertNotNull(qpsLimiter);
+        Assert.assertEquals(5, qpsLimiter.getAllowWaiting());
     }
 }
