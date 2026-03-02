@@ -58,10 +58,10 @@ public class MetaServiceRateLimiterTest {
             this.processors = processors;
         }
 
-        @Override
+        /*@Override
         protected int getAvailableProcessors() {
             return processors;
-        }
+        }*/
     }
 
     @Before

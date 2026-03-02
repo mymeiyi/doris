@@ -237,17 +237,17 @@ public class MetaServiceRateLimiter {
         return target;
     }
 
-    @VisibleForTesting
+    /*@VisibleForTesting
     protected int getAvailableProcessors() {
         return Runtime.getRuntime().availableProcessors();
-    }
+    }*/
 
     private int getMethodTotalQps(String methodName, int defaultQpsPerCore) {
         int qpsPerCore = methodQpsConfig.getOrDefault(methodName, defaultQpsPerCore);
         if (qpsPerCore <= 0) {
             return 0;
         }
-        return qpsPerCore * getAvailableProcessors();
+        return qpsPerCore * processorCount;
     }
 
     protected int getClampedCost(String methodName, int cost) {
@@ -267,7 +267,7 @@ public class MetaServiceRateLimiter {
         if (costPerCore <= 0) {
             return 0;
         }
-        return costPerCore * getAvailableProcessors();
+        return costPerCore * processorCount;
     }
 
     private QpsLimiter getQpsLimiter(String methodName) {
