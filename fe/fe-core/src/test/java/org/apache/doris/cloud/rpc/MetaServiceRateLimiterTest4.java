@@ -480,6 +480,7 @@ public class MetaServiceRateLimiterTest4 {
 
         // qps disabled, cost disabled
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:0";
+        Config.meta_service_rpc_cost_limit_per_core_config = "method1:0";
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 1)));
         Assert.assertFalse(acquired.get());
         Assert.assertEquals(0, limiter.getQpsLimiters().size());
