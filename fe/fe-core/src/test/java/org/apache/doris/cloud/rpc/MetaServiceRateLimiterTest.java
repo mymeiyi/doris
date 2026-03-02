@@ -54,7 +54,7 @@ public class MetaServiceRateLimiterTest {
         private final int processors;
 
         public MockMetaServiceRateLimiter(int processors) {
-            super();
+            super(processors);
             this.processors = processors;
         }
 
