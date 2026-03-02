@@ -40,6 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class MetaServiceRateLimiter {
     private static final Logger LOG = LogManager.getLogger(MetaServiceRateLimiter.class);
 
+    private static int processorCount;
     private static volatile MetaServiceRateLimiter instance;
     private volatile boolean lastEnabled = false;
     private volatile int lastMaxWaitRequestNum = 0;
@@ -60,14 +61,15 @@ public class MetaServiceRateLimiter {
         if (instance == null) {
             synchronized (MetaServiceRateLimiter.class) {
                 if (instance == null) {
-                    instance = new MetaServiceRateLimiter();
+                    instance = new MetaServiceRateLimiter(Runtime.getRuntime().availableProcessors());
                 }
             }
         }
         return instance;
     }
 
-    MetaServiceRateLimiter() {
+    MetaServiceRateLimiter(int processorCount) {
+        this.processorCount = processorCount;
         reloadConfig();
         /*if (Config.meta_service_rpc_adaptive_throttle_enabled) {
             MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
@@ -355,83 +357,6 @@ public class MetaServiceRateLimiter {
         }
     }
 
-    /*public void setAdaptiveFactor(double factor) {
-        // Parse phase1 methods from config and add to tracked methods
-        String phase1Config = Config.meta_service_rpc_adaptive_throttle_methods;
-        if (phase1Config != null && !phase1Config.isEmpty()) {
-            for (String method : phase1Config.split(",")) {
-                String trimmed = method.trim();
-                if (!trimmed.isEmpty()) {
-                    adaptiveThrottleMethods.add(trimmed);
-                }
-            }
-        }
-
-        for (Entry<String, BackpressureQpsLimiter> entry : backpressureQpsLimiters.entrySet()) {
-            BackpressureQpsLimiter limiter = entry.getValue();
-            limiter.applyFactor(factor);
-        }
-
-        // Apply factor to all tracked methods using separate backpressure limiters
-        *//*int appliedCount = 0;
-        for (String methodName : adaptiveThrottleMethods) {
-            // Check if method should be throttled based on phase config
-            boolean isPhase1 = isPhase1Method(methodName);
-            boolean isPhase2 = Config.meta_service_rpc_adaptive_throttle_phase2_enabled;
-
-            if (!isPhase1 && !isPhase2) {
-                continue;
-            }
-
-            // Get or create backpressure limiter for this method (separate from active rate limiting)
-            BackpressureMethodRateLimiter limiter = backpressureMethodLimiters.get(methodName);
-            if (limiter == null) {
-                // Create backpressure limiter with base QPS
-                int baseQps = getMethodTotalQps(methodName, Config.meta_service_rpc_rate_limit_default_qps_per_core);
-                int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
-
-                // Only create if baseQps > 0
-                if (baseQps > 0) {
-                    limiter = new BackpressureMethodRateLimiter(methodName, baseQps, maxWaitRequestNum);
-                    BackpressureMethodRateLimiter existing = backpressureMethodLimiters.putIfAbsent(methodName, limiter);
-                    if (existing != null) {
-                        limiter = existing; // Use existing if another thread created it
-                    }
-                }
-            }
-
-            if (limiter != null) {
-                limiter.applyFactor(factor);
-                appliedCount++;
-            }
-        }
-
-        // Also apply to existing backpressure limiters not in adaptiveThrottleMethods
-        for (BackpressureMethodRateLimiter limiter : backpressureMethodLimiters.values()) {
-            if (!adaptiveThrottleMethods.contains(limiter.methodName)) {
-                limiter.applyFactor(factor);
-                appliedCount++;
-            }
-        }*//*
-
-        LOG.info("Applied adaptive factor {} to {} backpressure method limiters", factor);
-    }*/
-
-    /*private boolean isPhase1Method(String methodName) {
-        String phase1Config = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
-        if (phase1Config == null || phase1Config.isEmpty()) {
-            // Empty config means all methods are considered phase1
-            return true;
-        }
-        String[] phase1Methods = phase1Config.split(",");
-        for (String m : phase1Methods) {
-            if (m.trim().equals(methodName)) {
-                return true;
-            }
-        }
-        return false;
-    }*/
-
     // only used for testing
     Map<String, Integer> getMethodQpsConfig() {
         return methodQpsConfig;
@@ -442,14 +367,17 @@ public class MetaServiceRateLimiter {
         return methodCostConfig;
     }
 
+    // only used for testing
     Map<String, QpsLimiter> getQpsLimiters() {
         return qpsLimiters;
     }
 
+    // only used for testing
     Map<String, CostLimiter> getCostLimiters() {
         return costLimiters;
     }
 
+    // only used for testing
     Map<String, BackpressureQpsLimiter> getBackpressureQpsLimiters() {
         return backpressureQpsLimiters;
     }

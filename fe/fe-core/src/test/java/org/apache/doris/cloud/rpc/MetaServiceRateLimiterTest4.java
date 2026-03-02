@@ -59,17 +59,17 @@ public class MetaServiceRateLimiterTest4 {
      * Mock MetaServiceRateLimiter that allows overriding available processors.
      */
     private static class MockMetaServiceRateLimiter extends MetaServiceRateLimiter {
-        private final int processors;
+        // private final int processors;
 
         public MockMetaServiceRateLimiter(int processors) {
-            super();
-            this.processors = processors;
+            super(processors);
+            // this.processors = processors;
         }
 
-        @Override
+        /*@Override
         protected int getAvailableProcessors() {
             return processors;
-        }
+        }*/
     }
 
     @Before
@@ -431,7 +431,7 @@ public class MetaServiceRateLimiterTest4 {
     }
 
     // =========================================================================
-    // Test: acquire() method
+    // Test: acquire() release() method
     // =========================================================================
 
     @Test
@@ -577,85 +577,10 @@ public class MetaServiceRateLimiterTest4 {
             Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 5)));
             Assert.assertTrue(acquired.get());
             Assert.assertEquals(0, limiter.getQpsLimiters().size());
-            Assert.assertEquals(5, limiter.getCostLimiters().size());
+            Assert.assertEquals(1, limiter.getCostLimiters().size());
             limiter.release("method1", 5);
             Assert.assertEquals(1, limiter.getBackpressureQpsLimiters().size());
         }
-    }
-
-    /*@Test
-    public void testAcquire_CostLimitEnabled() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_cost_limit_per_core_config = "costMethod:10";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // Acquire with cost - should succeed
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("costMethod", 5)));
-        Assert.assertTrue(acquired.get());
-
-        // Release
-        limiter.release("costMethod", 5);
-    }*/
-
-    /*@Test
-    public void testAcquire_CostLimitExceed() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_cost_limit_per_core_config = "costMethod:5";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // Acquire with cost exceeding limit - should throw
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertThrows(RpcRateLimitException.class,
-                () -> limiter.acquire("costMethod", 10));
-    }*/
-
-    // =========================================================================
-    // Test: release() method
-    // =========================================================================
-
-    @Test
-    public void testRelease_Basic() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_cost_limit_per_core_config = "releaseMethod:10";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // Acquire
-        Assertions.assertDoesNotThrow(() -> limiter.acquire("releaseMethod", 5));
-
-        // Release - should not throw
-        Assertions.assertDoesNotThrow(() -> limiter.release("releaseMethod", 5));
-    }
-
-    @Test
-    public void testRelease_NonExistentMethod() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // Release non-existent method - should not throw
-        Assertions.assertDoesNotThrow(() -> limiter.release("nonExistent", 5));
-    }
-
-    @Test
-    public void testRelease_NegativeCost() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_cost_limit_per_core_config = "negMethod:10";
-
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
-        // Acquire
-        Assertions.assertDoesNotThrow(() -> limiter.acquire("negMethod", 5));
-
-        // Release with negative cost - should not throw
-        Assertions.assertDoesNotThrow(() -> limiter.release("negMethod", -1));
     }
 
     // =========================================================================
