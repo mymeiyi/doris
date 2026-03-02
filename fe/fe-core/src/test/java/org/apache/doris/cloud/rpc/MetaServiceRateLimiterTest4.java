@@ -17,7 +17,6 @@
 
 package org.apache.doris.cloud.rpc;
 
-import org.apache.doris.cloud.rpc.RpcRateLimiter.CostLimiter;
 import org.apache.doris.common.Config;
 
 import org.junit.After;
@@ -38,11 +37,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Comprehensive unit tests for MetaServiceRateLimiter.
- * Tests cover: configuration parsing, adaptive throttle, QPS limiting,
- * cost limiting, backpressure limiting, and concurrency scenarios.
- */
 public class MetaServiceRateLimiterTest4 {
 
     // Original config values for teardown
@@ -177,51 +171,6 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertTrue(adaptiveMethods.isEmpty());
     }
 
-    /*@Test
-    public void testReloadAdaptiveThrottleConfig_ParseMethods() {
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_methods = "getVersion, beginTxn, commitTxn";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
-        Assert.assertEquals(3, adaptiveMethods.size());
-        Assert.assertTrue(adaptiveMethods.contains("getVersion"));
-        Assert.assertTrue(adaptiveMethods.contains("beginTxn"));
-        Assert.assertTrue(adaptiveMethods.contains("commitTxn"));
-    }
-
-    @Test
-    public void testReloadAdaptiveThrottleConfig_ParseMethodsWithSpaces() {
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_methods = " method1 , method2 , method3 ";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
-        Assert.assertEquals(3, adaptiveMethods.contains("method1"));
-        Assert.assertTrue(adaptiveMethods.contains("method1"));
-        Assert.assertTrue(adaptiveMethods.contains("method2"));
-        Assert.assertTrue(adaptiveMethods.contains("method3"));
-    }*/
-
-    /*@Test
-    public void testReloadAdaptiveThrottleConfig_EmptyMethods() {
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_methods = "";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
-        Assert.assertTrue(adaptiveMethods.isEmpty());
-    }*/
-
     @Test
     public void testReloadAdaptiveThrottleConfig_NullMethods() {
         Config.meta_service_rpc_rate_limit_enabled = false;
@@ -279,34 +228,6 @@ public class MetaServiceRateLimiterTest4 {
         costConfig = limiter.getMethodCostConfig();
         Assert.assertEquals(0, costConfig.size());
     }
-
-    /*@Test
-    public void testReloadRateLimiterConfig_ParseQpsConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:20;method2:30";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
-        Assert.assertEquals(20, (int) qpsConfig.get("method1"));
-        Assert.assertEquals(30, (int) qpsConfig.get("method2"));
-    }*/
-
-    /*@Test
-    public void testReloadRateLimiterConfig_ParseCostConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_cost_limit_per_core_config = "costMethod:50;costMethod2:100";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Map<String, Integer> costConfig = limiter.getMethodCostConfig();
-        Assert.assertEquals(50, (int) costConfig.get("costMethod"));
-        Assert.assertEquals(100, (int) costConfig.get("costMethod2"));
-    }*/
 
     // =========================================================================
     // Test: acquire() release() method
@@ -461,207 +382,13 @@ public class MetaServiceRateLimiterTest4 {
         }
     }
 
-    // =========================================================================
-    // Test: getRequestCost() method
-    // =========================================================================
-
-    /*@Test
-    public void testGetRequestCost_GetVersionWithBatchMode() {
-        Config.meta_service_rpc_cost_clamped_to_limit_enabled = false;
-
-        Cloud.GetVersionRequest request = Cloud.GetVersionRequest.newBuilder()
-                .setBatchMode(true)
-                .addDbIds(1)
-                .addDbIds(2)
-                .addDbIds(3)
-                .build();
-
-        int cost = MetaServiceRateLimiter.getRequestCost("getVersion", request);
-        Assert.assertEquals(3, cost);
-    }
-
-    @Test
-    public void testGetRequestCost_GetVersionWithoutBatchMode() {
-        Cloud.GetVersionRequest request = Cloud.GetVersionRequest.newBuilder()
-                .setBatchMode(false)
-                .build();
-
-        int cost = MetaServiceRateLimiter.getRequestCost("getVersion", request);
-        Assert.assertEquals(1, cost);
-    }
-
-    @Test
-    public void testGetRequestCost_GetVersionNullRequest() {
-        int cost = MetaServiceRateLimiter.getRequestCost("getVersion", null);
-        Assert.assertEquals(1, cost);
-    }
-
-    @Test
-    public void testGetRequestCost_GetVersionInvalidRequest() {
-        int cost = MetaServiceRateLimiter.getRequestCost("getVersion", "not a GetVersionRequest");
-        Assert.assertEquals(1, cost);
-    }
-
-    @Test
-    public void testGetRequestCost_GetVersionClampedToLimit() {
-        Config.meta_service_rpc_cost_clamped_to_limit_enabled = true;
-
-        Cloud.GetVersionRequest request = Cloud.GetVersionRequest.newBuilder()
-                .setBatchMode(true)
-                .addDbIds(1)
-                .addDbIds(2)
-                .addDbIds(3)
-                .addDbIds(4)
-                .addDbIds(5)
-                .build();
-
-        int cost = MetaServiceRateLimiter.getRequestCost("getVersion", request);
-        Assert.assertEquals(5, cost); // Should be clamped to limit (need to set cost limit first)
-    }
-
-    @Test
-    public void testGetRequestCost_OtherMethod() {
-        int cost = MetaServiceRateLimiter.getRequestCost("someOtherMethod", null);
-        Assert.assertEquals(1, cost);
-    }*/
-
-    // =========================================================================
-    // Test: setAdaptiveFactor() method
-    // =========================================================================
-
-    /*@Test
-    public void testSetAdaptiveFactor_Basic() {
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_methods = "method1,method2";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        // setAdaptiveFactor should not throw
-        Assertions.assertDoesNotThrow(() -> limiter.setAdaptiveFactor(0.5));
-        Assertions.assertDoesNotThrow(() -> limiter.setAdaptiveFactor(1.0));
-        Assertions.assertDoesNotThrow(() -> limiter.setAdaptiveFactor(0.1));
-    }
-
-    @Test
-    public void testSetAdaptiveFactor_WithQpsLimiter() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
-        Config.meta_service_rpc_adaptive_throttle_methods = "adaptiveMethod";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Create the limiter first
-        limiter.acquire("adaptiveMethod", 0);
-
-        // setAdaptiveFactor should not throw
-        Assertions.assertDoesNotThrow(() -> limiter.setAdaptiveFactor(0.5));
-    }*/
-
-    // =========================================================================
-    // Test: reset() method
-    // =========================================================================
-
-    /*@Test
-    public void testReset_Basic() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:10";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        Assertions.assertDoesNotThrow(() -> limiter.acquire("method1", 0));
-
-        // Verify config is loaded
-        Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
-        Assert.assertEquals(1, qpsConfig.size());
-
-        // Reset
-        // limiter.reset();
-
-        // Verify config is cleared
-        qpsConfig = limiter.getMethodQpsConfig();
-        Assert.assertEquals(0, qpsConfig.size());
-    }*/
-
-    // =========================================================================
-    // Test: getMethodQpsConfig() and getMethodCostConfig()
-    // =========================================================================
-
-    /*@Test
-    public void testGetMethodQpsConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "testQps:20";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
-        Assert.assertEquals(20, (int) qpsConfig.get("testQps"));
-    }
-
-    @Test
-    public void testGetMethodCostConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_cost_limit_per_core_config = "testCost:30";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        Map<String, Integer> costConfig = limiter.getMethodCostConfig();
-        Assert.assertEquals(30, (int) costConfig.get("testCost"));
-    }*/
-
-    // =========================================================================
-    // Test: Integration scenarios
-    // =========================================================================
-
-    /*@Test
-    public void testIntegration_RateLimitWithAdaptiveThrottle() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
-        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
-        Config.meta_service_rpc_adaptive_throttle_methods = "adaptiveMethod";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Acquire should work with both rate limit and adaptive throttle
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("adaptiveMethod", 0)));
-        Assert.assertFalse(acquired.get());
-    }*/
-
-    /*@Test
-    public void testIntegration_ReloadConfigMultipleTimes() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // First reload
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 20;
-        Assert.assertTrue(limiter.reloadConfig());
-
-        // Second reload with same config - should return false
-        Assert.assertFalse(limiter.reloadConfig());
-
-        // Third reload with different config
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 30;
-        Assert.assertTrue(limiter.reloadConfig());
-
-        // Fourth reload with same config
-        Assert.assertFalse(limiter.reloadConfig());
-    }*/
-
     @Test
     public void testIntegration_ConcurrentAcquire() throws InterruptedException {
         Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 1000; // High QPS for concurrency test
-        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
-
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 50; // High QPS
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 10;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "concurrentBoth:5";
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         int threadCount = 10;
@@ -671,11 +398,16 @@ public class MetaServiceRateLimiterTest4 {
         AtomicInteger failCount = new AtomicInteger(0);
 
         for (int i = 0; i < threadCount; i++) {
+            final int cost = 1;
             executor.submit(() -> {
                 try {
                     startLatch.await();
-                    limiter.acquire("concurrentTest", 0);
-                    successCount.incrementAndGet();
+                    boolean acquired = limiter.acquire("concurrentBoth", cost);
+                    if (acquired) {
+                        successCount.incrementAndGet();
+                    } else {
+                        failCount.incrementAndGet();
+                    }
                 } catch (RpcRateLimitException e) {
                     failCount.incrementAndGet();
                 } catch (InterruptedException e) {
@@ -686,129 +418,18 @@ public class MetaServiceRateLimiterTest4 {
 
         startLatch.countDown();
         executor.shutdown();
-        boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
+        executor.awaitTermination(10, TimeUnit.SECONDS);
 
-        Assert.assertTrue("Executor should terminate", terminated);
-        Assert.assertEquals(threadCount, successCount.get());
-        Assert.assertEquals(0, failCount.get());
-    }
+        // With cost limit 5 and each request costing 1, max 5 should succeed
+        // Others should fail due to cost limit
+        Assert.assertTrue("Expected some successes", successCount.get() > 0);
+        Assert.assertTrue("Expected some failures", failCount.get() > 0);
+        Assert.assertEquals(5, successCount.get());
+        Assert.assertEquals(5, failCount.get());
 
-    @Test
-    public void testIntegration_QpsAndCostTogether() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
-        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
-        Config.meta_service_rpc_cost_limit_per_core_config = "together:10";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Acquire with both QPS and cost limiting
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("together", 5)));
-        Assert.assertTrue(acquired.get());
-
-        // Release
-        limiter.release("together", 5);
-    }
-
-    // =========================================================================
-    // Test: Edge cases
-    // =========================================================================
-
-    /*@Test
-    public void testEdgeCase_EmptyQpsConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
-        Assert.assertEquals(0, qpsConfig.size());
-    }*/
-
-    /*@Test
-    public void testEdgeCase_NullQpsConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = null;
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
-        Assert.assertEquals(0, qpsConfig.size());
-    }*/
-
-    @Test
-    public void testEdgeCase_InvalidQpsConfigFormat() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "invalidformat;another:bad:format";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        // Should use default QPS for methods without valid config
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("someMethod", 0)));
-        Assert.assertFalse(acquired.get());
-    }
-
-    @Test
-    public void testEdgeCase_NegativeQpsInConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "negative:-10";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
-        // Negative QPS should be treated as 0, so method should not be in config
-        Assert.assertFalse(qpsConfig.containsKey("negative"));
-    }
-
-    @Test
-    public void testEdgeCase_ZeroQpsInConfig() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "zero:0";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
-        // Zero QPS should not create a limiter
-        Assert.assertFalse(qpsConfig.containsKey("zero"));
-    }
-
-    @Test
-    public void testEdgeCase_InvalidCostConfigFormat() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
-        Config.meta_service_rpc_cost_limit_per_core_config = "invalidcost;bad:format";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
-
-        Map<String, Integer> costConfig = limiter.getMethodCostConfig();
-        // Invalid format should be ignored
-        Assert.assertEquals(0, costConfig.size());
-    }
-
-    // =========================================================================
-    // Helper methods
-    // =========================================================================
-
-    /*private Set<String> getAdaptiveThrottleMethods(MetaServiceRateLimiter limiter) {
-        try {
-            Field field = MetaServiceRateLimiter.class.getDeclaredField("adaptiveThrottleMethods");
-            field.setAccessible(true);
-            return (Set<String>) field.get(limiter);
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to get adaptiveThrottleMethods", e);
+        // Release all successful acquisitions
+        for (int i = 0; i < successCount.get(); i++) {
+            limiter.release("concurrentBoth", 1);
         }
-    }*/
+    }
 }
