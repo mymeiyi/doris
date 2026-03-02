@@ -256,6 +256,7 @@ public class MetaServiceRateLimiter {
         if (costPerCore <= 0) {
             return 0;
         }
+        LOG.info("sout: process count={}", processorCount );
         return costPerCore * processorCount;
     }
 
