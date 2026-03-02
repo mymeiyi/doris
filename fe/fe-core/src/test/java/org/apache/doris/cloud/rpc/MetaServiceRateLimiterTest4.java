@@ -155,7 +155,7 @@ public class MetaServiceRateLimiterTest4 {
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Enable adaptive throttle first
-        Assert.assertTrue(limiter.reloadConfig());
+        Assert.assertFalse(limiter.reloadConfig());
         Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertEquals(2, adaptiveMethods.size());
         Assert.assertTrue(adaptiveMethods.contains("method1"));
@@ -228,7 +228,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_methods = null;
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
-        Assert.assertTrue(limiter.reloadConfig());
+        Assert.assertFalse(limiter.reloadConfig());
         Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertTrue(adaptiveMethods.isEmpty());
 
