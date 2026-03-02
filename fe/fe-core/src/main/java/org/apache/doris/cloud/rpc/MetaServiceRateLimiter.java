@@ -74,7 +74,8 @@ public class MetaServiceRateLimiter {
         }*/
     }
 
-    private boolean isConfigChanged() {
+    @VisibleForTesting
+    boolean isConfigChanged() {
         boolean enabled = Config.meta_service_rpc_rate_limit_enabled;
         boolean adaptiveThrottleEnabled = Config.meta_service_rpc_adaptive_throttle_enabled;
 
@@ -453,6 +454,18 @@ public class MetaServiceRateLimiter {
     // only used for testing
     Map<String, Integer> getMethodCostConfig() {
         return methodCostConfig;
+    }
+
+    Map<String, QpsLimiter> getQpsLimiters() {
+        return qpsLimiters;
+    }
+
+    Map<String, CostLimiter> getCostLimiters() {
+        return costLimiters;
+    }
+
+    Map<String, BackpressureQpsLimiter> getBackpressureQpsLimiters() {
+        return backpressureQpsLimiters;
     }
 
     /*@VisibleForTesting
