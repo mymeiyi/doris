@@ -236,8 +236,12 @@ public class MetaServiceRateLimiter {
     }
 
     protected int getClampedCost(String methodName, int cost) {
+        LOG.info("sout: Original cost: {} for method: {}, enabled: {}", cost, methodName,
+                Config.meta_service_rpc_cost_clamped_to_limit_enabled);
         if (Config.meta_service_rpc_cost_clamped_to_limit_enabled) {
             int limit = getInstance().getMethodTotalCostLimit(methodName);
+            LOG.info("sout: Original cost: {} for method: {}, enabled: {}, limit: {}", cost, methodName,
+                    Config.meta_service_rpc_cost_clamped_to_limit_enabled, limit);
             if (limit > 0 && cost > limit) {
                 LOG.info("Clamped cost: {} for method: {} to limit: {}", cost,
                         methodName, limit);
