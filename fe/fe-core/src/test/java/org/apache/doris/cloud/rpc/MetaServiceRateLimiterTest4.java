@@ -25,6 +25,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
+import org.mockito.Mockito;
 
 import java.lang.reflect.Field;
 import java.util.Map;
@@ -440,6 +441,9 @@ public class MetaServiceRateLimiterTest4 {
         AtomicBoolean acquired = new AtomicBoolean(false);
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("anyMethod", 1)));
         Assert.assertFalse(acquired.get());
+        Assert.assertEquals(0, limiter.getQpsLimiters().size());
+        Assert.assertEquals(0, limiter.getCostLimiters().size());
+        Assert.assertEquals(0, limiter.getBackpressureQpsLimiters().size());
     }
 
     @Test
@@ -488,6 +492,28 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertEquals(0, limiter.getQpsLimiters().size());
         Assert.assertEquals(5, limiter.getCostLimiters().size());
         limiter.release("method1", 5);
+    }
+
+    @Test
+    public void testAcquire_AdaptiveThrottleEnabled() {
+        Config.meta_service_rpc_rate_limit_enabled = false;
+        Config.meta_service_rpc_adaptive_throttle_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+        Config.meta_service_rpc_adaptive_throttle_methods = "method1";
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+
+        MetaServiceAdaptiveThrottle throttle = Mockito.mock(MetaServiceAdaptiveThrottle.class);
+        Mockito.when(MetaServiceAdaptiveThrottle.getInstance()).thenReturn(throttle);
+        Mockito.when(throttle.getFactor()).thenReturn(0.9);
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 1)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(0, limiter.getQpsLimiters().size());
+        Assert.assertEquals(0, limiter.getCostLimiters().size());
+        Assert.assertEquals(1, limiter.getBackpressureQpsLimiters().size());
+        Assert.assertEquals(100, limiter.getBackpressureQpsLimiters().get("method1").getBaseQps());
+        Assert.assertEquals(90, limiter.getBackpressureQpsLimiters().get("method1").getRateLimiter().getRate());
     }
 
     /*@Test
