@@ -24,6 +24,7 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class MetaServiceAdaptiveThrottleTest {
@@ -87,7 +88,17 @@ public class MetaServiceAdaptiveThrottleTest {
         Config.meta_service_rpc_adaptive_throttle_methods = originalThrottleMethods;
         Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = originalBaseQpsWhenZero;
 
-        MetaServiceAdaptiveThrottle.resetInstance();
+        resetSingleton();
+    }
+
+    private void resetSingleton() {
+        try {
+            Field instanceField = MetaServiceAdaptiveThrottle.class.getDeclaredField("instance");
+            instanceField.setAccessible(true);
+            instanceField.set(null, (MetaServiceAdaptiveThrottle) null);
+        } catch (Exception e) {
+            // Ignore
+        }
     }
 
     @Test
@@ -105,9 +116,9 @@ public class MetaServiceAdaptiveThrottleTest {
         for (int i = 0; i < 100; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
         }
-
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
         Assert.assertEquals(1.0, throttle.getFactor(), 0.001);
+        Assert.assertEquals(0, throttle.getWindowTotal());
     }
 
     @Test
@@ -117,13 +128,17 @@ public class MetaServiceAdaptiveThrottleTest {
         for (int i = 0; i < 50; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
-
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
         Assert.assertEquals(1.0, throttle.getFactor(), 0.001);
+        Assert.assertEquals(50, throttle.getWindowTotal());
+        Assert.assertEquals(0, throttle.getWindowBad());
     }
 
     @Test
     public void testTimeoutTriggersDecrease() {
+        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
+        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 5;
+        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.5;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         for (int i = 0; i < 5; i++) {
@@ -132,9 +147,8 @@ public class MetaServiceAdaptiveThrottleTest {
         for (int i = 0; i < 3; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
         }
-
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
-        Assert.assertTrue(throttle.getFactor() < 1.0);
+        Assert.assertTrue("factor: " + throttle.getFactor(), throttle.getFactor() < 1.0);
     }
 
     @Test

@@ -278,10 +278,10 @@ public class MetaServiceAdaptiveThrottle {
         listenerRef.set(null);
     }
 
-    @VisibleForTesting
+    /*@VisibleForTesting
     public static void setInstanceForTest(MetaServiceAdaptiveThrottle testInstance) {
         instance = testInstance;
-    }
+    }*/
 
     @VisibleForTesting
     public static void resetInstance() {
