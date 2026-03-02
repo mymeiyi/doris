@@ -205,7 +205,7 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertEquals(10, qpsConfig.get("method1").intValue());
 
         Config.meta_service_rpc_cost_limit_per_core_config = "method1:30; method2:20";
-        Assert.assertFalse(limiter.reloadConfig());
+        Assert.assertTrue(limiter.reloadConfig());
         qpsConfig = limiter.getMethodQpsConfig();
         Assert.assertEquals(1, qpsConfig.size());
         Assert.assertEquals(10, qpsConfig.get("method1").intValue());
@@ -215,14 +215,14 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertEquals(20, costConfig.get("method2").intValue());
 
         Config.meta_service_rpc_cost_limit_per_core_config = "invalidformat;another:bad;negative:-10;normal:100";
-        Assert.assertFalse(limiter.reloadConfig());
+        Assert.assertTrue(limiter.reloadConfig());
         qpsConfig = limiter.getMethodQpsConfig();
         Assert.assertEquals(1, qpsConfig.size());
         Assert.assertEquals(100, qpsConfig.get("normal").intValue());
 
         // Disable rate limiter
         Config.meta_service_rpc_rate_limit_enabled = false;
-        limiter.reloadConfig();
+        Assert.assertTrue(limiter.reloadConfig());
         qpsConfig = limiter.getMethodQpsConfig();
         Assert.assertEquals(0, qpsConfig.size());
         costConfig = limiter.getMethodCostConfig();
@@ -383,7 +383,7 @@ public class MetaServiceRateLimiterTest4 {
     }
 
     @Test
-    public void testIntegration_ConcurrentAcquire() throws InterruptedException {
+    public void testConcurrentAcquire() throws InterruptedException {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 50; // High QPS
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 10;
@@ -431,5 +431,19 @@ public class MetaServiceRateLimiterTest4 {
         for (int i = 0; i < successCount.get(); i++) {
             limiter.release("concurrentBoth", 1);
         }
+    }
+
+    @Test
+    public void testCostClampedToLimit() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
+        Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:10";
+        Config.meta_service_rpc_cost_clamped_to_limit_enabled = true;
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(2);
+        Assert.assertEquals(10, limiter.getClampedCost("getVersion", 10));
+        Assert.assertEquals(20, limiter.getClampedCost("getVersion", 30));
+        Assert.assertEquals(40, limiter.getClampedCost("other", 40));
     }
 }
