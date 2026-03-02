@@ -17,7 +17,6 @@
 
 package org.apache.doris.cloud.rpc;
 
-import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.RpcRateLimiter.BackpressureQpsLimiter;
 import org.apache.doris.cloud.rpc.RpcRateLimiter.CostLimiter;
 import org.apache.doris.cloud.rpc.RpcRateLimiter.QpsLimiter;
@@ -78,7 +77,15 @@ public class MetaServiceRateLimiter {
 
     @VisibleForTesting
     boolean isConfigChanged() {
-        boolean enabled = Config.meta_service_rpc_rate_limit_enabled;
+        return Config.meta_service_rpc_rate_limit_enabled != lastEnabled
+                || Config.meta_service_rpc_rate_limit_default_qps_per_core != lastDefaultQps
+                || Config.meta_service_rpc_rate_limit_max_waiting_request_num != lastMaxWaitRequestNum
+                || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig)
+                || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig)
+                || Config.meta_service_rpc_adaptive_throttle_enabled != lastAdaptiveThrottleEnabled
+                || !Objects.equals(Config.meta_service_rpc_adaptive_throttle_methods,
+                lastAdaptiveThrottleMethods);
+        /*boolean enabled = Config.meta_service_rpc_rate_limit_enabled;
         boolean adaptiveThrottleEnabled = Config.meta_service_rpc_adaptive_throttle_enabled;
 
         if (enabled != lastEnabled || adaptiveThrottleEnabled != lastAdaptiveThrottleEnabled) {
@@ -93,7 +100,7 @@ public class MetaServiceRateLimiter {
                     || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig)
                     || !Objects.equals(Config.meta_service_rpc_adaptive_throttle_methods,
                     lastAdaptiveThrottleMethods);
-        }
+        }*/
     }
 
     @VisibleForTesting
@@ -113,6 +120,13 @@ public class MetaServiceRateLimiter {
 
     private void reloadRateLimiterConfig() {
         boolean enabled = Config.meta_service_rpc_rate_limit_enabled;
+        int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
+        int defaultQpsPerCore = Config.meta_service_rpc_rate_limit_default_qps_per_core;
+        String qpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
+        String costConfig = Config.meta_service_rpc_cost_limit_per_core_config;
+        // Parse the qps and cost config
+        methodQpsConfig = parseConfig(qpsConfig, "QPS");
+        methodCostConfig = parseConfig(costConfig, "cost limit");
 
         // If disabled, clear all limiters
         if (!enabled) {
@@ -120,28 +134,20 @@ public class MetaServiceRateLimiter {
             methodCostConfig.clear();
             qpsLimiters.clear();
             costLimiters.clear();
-            lastEnabled = enabled;
         } else {
-            int maxWaitRequestNum = Config.meta_service_rpc_rate_limit_max_waiting_request_num;
-            int defaultQpsPerCore = Config.meta_service_rpc_rate_limit_default_qps_per_core;
-            String qpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
-            String costConfig = Config.meta_service_rpc_cost_limit_per_core_config;
-            // Parse the qps and cost config
-            methodQpsConfig = parseConfig(qpsConfig, "QPS");
-            methodCostConfig = parseConfig(costConfig, "cost limit");
             // Update limiters
             updateQpsLimiters(defaultQpsPerCore, maxWaitRequestNum);
             updateCostLimiters();
-            // Update last config
-            lastEnabled = enabled;
-            lastMaxWaitRequestNum = maxWaitRequestNum;
-            lastDefaultQps = defaultQpsPerCore;
-            lastQpsConfig = qpsConfig;
-            lastCostConfig = costConfig;
-            LOG.info("Reload meta service rpc rate limit config. enabled: {}, maxWaitRequestNum: {}, "
-                            + "defaultQps: {}, qpsConfig: [{}], costConfig: [{}]", lastEnabled, lastMaxWaitRequestNum,
-                    lastDefaultQps, lastQpsConfig, lastCostConfig);
         }
+        // Update last config
+        lastEnabled = enabled;
+        lastMaxWaitRequestNum = maxWaitRequestNum;
+        lastDefaultQps = defaultQpsPerCore;
+        lastQpsConfig = qpsConfig;
+        lastCostConfig = costConfig;
+        LOG.info("Reload meta service rpc rate limit config. enabled: {}, maxWaitRequestNum: {}, "
+                        + "defaultQps: {}, qpsConfig: [{}], costConfig: [{}]", lastEnabled, lastMaxWaitRequestNum,
+                lastDefaultQps, lastQpsConfig, lastCostConfig);
     }
 
     private void reloadAdaptiveThrottleConfig() {
@@ -376,13 +382,4 @@ public class MetaServiceRateLimiter {
     Map<String, BackpressureQpsLimiter> getBackpressureQpsLimiters() {
         return backpressureQpsLimiters;
     }
-
-    /*@VisibleForTesting
-    public void reset() {
-        // methodLimiters.clear();
-        // backpressureMethodLimiters.clear();
-        methodQpsConfig.clear();
-        lastQpsConfig = "";
-        // adaptiveThrottleMethods.clear();
-    }*/
 }
