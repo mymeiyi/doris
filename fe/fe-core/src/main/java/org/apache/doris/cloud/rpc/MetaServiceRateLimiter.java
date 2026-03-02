@@ -248,6 +248,18 @@ public class MetaServiceRateLimiter {
         return qpsPerCore * getAvailableProcessors();
     }
 
+    protected int getClampedCost(String methodName, int cost) {
+        if (Config.meta_service_rpc_cost_clamped_to_limit_enabled) {
+            int limit = getInstance().getMethodTotalCostLimit(methodName);
+            if (limit > 0 && cost > limit) {
+                LOG.info("Clamped cost: {} for method: {} to limit: {}", cost,
+                        methodName, limit);
+                cost = limit;
+            }
+        }
+        return cost;
+    }
+
     private int getMethodTotalCostLimit(String methodName) {
         int costPerCore = methodCostConfig.getOrDefault(methodName, 0);
         if (costPerCore <= 0) {
@@ -343,7 +355,7 @@ public class MetaServiceRateLimiter {
         }
     }
 
-    public static int getRequestCost(String methodName, Object request) {
+    /*public static int getRequestCost(String methodName, Object request) {
         if (methodName.equals("getVersion")) {
             if (request == null || !(request instanceof Cloud.GetVersionRequest)) {
                 LOG.warn("Failed to get request cost for method: {}, invalid request: {}", methodName, request);
@@ -367,7 +379,7 @@ public class MetaServiceRateLimiter {
         }
         // TODO the cost of other methods is not supported now
         return 1;
-    }
+    }*/
 
     /*public void setAdaptiveFactor(double factor) {
         // Parse phase1 methods from config and add to tracked methods
