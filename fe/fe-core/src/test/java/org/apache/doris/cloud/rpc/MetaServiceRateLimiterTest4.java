@@ -738,4 +738,479 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertEquals(4, costLimiter.getCurrentCost());
         Assert.assertNull(limiter.getCostLimiters().get("testCostMethod"));
     }
+
+    @Test
+    public void testBothRateAndCostLimiterBasic() {
+        // Set both QPS and cost limits
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "bothMethod:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Acquire with cost within both limits
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("bothMethod", 3)));
+        Assert.assertTrue(acquired.get());
+
+        // Verify cost limiter is created and has correct values
+        QpsLimiter methodLimiter = limiter.getQpsLimiters().get("bothMethod");
+        Assert.assertNotNull(methodLimiter);
+        Assert.assertNotNull(methodLimiter.getRateLimiter());
+        Assert.assertEquals(10, (int) methodLimiter.getRateLimiter().getRate());
+
+        RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("bothMethod");
+        Assert.assertNotNull(costLimiter);
+        Assert.assertEquals(3, costLimiter.getCurrentCost());
+
+        // Release and verify
+        limiter.release("bothMethod", 3);
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testCostBlocksBeforeQpsWhenBothSet() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "costFirst:3";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Acquire cost 2 - should succeed
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("costFirst", 2)));
+        Assert.assertTrue(acquired.get());
+        RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("costFirst");
+        Assert.assertEquals(2, costLimiter.getCurrentCost());
+
+        // Acquire cost 2 again - total cost would be 4, limit is 3, should fail
+        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("costFirst", 2));
+        Assert.assertTrue(exception.getMessage().contains("cost limit"));
+
+        // Verify QPS rate limiter was never touched (cost blocked first)
+        QpsLimiter methodLimiter = limiter.getQpsLimiters().get("costFirst");
+        Assert.assertEquals(100, methodLimiter.getAllowWaiting());
+
+        // Release
+        limiter.release("costFirst", 2);
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testQpsBlocksBeforeCostWhenBothSet() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 1;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 1;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10; // Very short timeout
+        Config.meta_service_rpc_cost_limit_per_core_config = "qpsFirst:100"; // High cost limit
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // First acquire - should succeed
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("qpsFirst", 10)));
+        Assert.assertTrue(acquired.get());
+
+        // Second acquire - QPS limit should block (only 1 request allowed at a time)
+        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("qpsFirst", 10));
+        Assert.assertTrue(exception.getMessage().contains("timeout")
+                || exception.getMessage().contains("too many waiting requests"));
+
+        // Release
+        limiter.release("qpsFirst", 10);
+    }
+
+    @Test
+    public void testReleaseOnlyAffectsCostNotQps() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "releaseTest:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Acquire - uses both QPS slot and cost
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("releaseTest", 3)));
+        Assert.assertTrue(acquired.get());
+        RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("releaseTest");
+        Assert.assertEquals(3, costLimiter.getCurrentCost());
+
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("releaseTest", 2)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(5, costLimiter.getCurrentCost());
+
+        // Release
+        limiter.release("releaseTest", 2);
+        Assert.assertEquals(3, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testReloadUpdatesBothRateAndCost() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 50;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "reloadBoth:10";
+        Config.meta_service_rpc_cost_limit_per_core_config = "reloadBoth:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Initial acquire
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("reloadBoth", 3)));
+        Assert.assertTrue(acquired.get());
+
+        QpsLimiter methodLimiter = limiter.getQpsLimiters().get("reloadBoth");
+        Assert.assertEquals(10, (int) methodLimiter.getRateLimiter().getRate());
+        RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("reloadBoth");
+        Assert.assertEquals(3, costLimiter.getCurrentCost());
+
+        // Reload with new values
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "reloadBoth:20";
+        Config.meta_service_rpc_cost_limit_per_core_config = "reloadBoth:8";
+        limiter.reloadConfig();
+
+        // Verify both were updated
+        methodLimiter = limiter.getQpsLimiters().get("reloadBoth");
+        Assert.assertEquals(20, (int) methodLimiter.getRateLimiter().getRate());
+
+        // Cost limit increased, can acquire more
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("reloadBoth", 5)));
+        Assert.assertTrue(acquired.get());
+        costLimiter = limiter.getCostLimiters().get("reloadBoth");
+        Assert.assertEquals(8, costLimiter.getCurrentCost());
+
+        // Release
+        limiter.release("reloadBoth", 5);
+        limiter.release("reloadBoth", 3);
+    }
+
+    @Test
+    public void testCostAndQpsWithZeroDefaultQps() {
+        // QPS default is 0 but method-specific cost is set
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "zeroQps:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Should still work with only cost limit (QPS is 0 so no rate limiting)
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("zeroQps", 3)));
+        Assert.assertTrue(acquired.get());
+
+        QpsLimiter methodLimiter = limiter.getQpsLimiters().get("zeroQps");
+        // Rate limiter should be null since QPS is 0
+        Assert.assertNull(methodLimiter.getRateLimiter());
+        // But cost limiter should exist
+        RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("zeroQps");
+        Assert.assertNotNull(costLimiter);
+        Assert.assertEquals(3, costLimiter.getCurrentCost());
+
+        // Release
+        limiter.release("zeroQps", 3);
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testCostAndQpsWithZeroMethodCost() {
+        // Method-specific cost is 0 (disabled), but default QPS is set
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "zeroCost:0";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Should work with only QPS limit (cost is 0)
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("zeroCost", 0)));
+        Assert.assertFalse(acquired.get());
+
+        QpsLimiter methodLimiter = limiter.getQpsLimiters().get("zeroCost");
+        Assert.assertNotNull(methodLimiter.getRateLimiter());
+        // Cost limiter should be null since cost config is 0
+        RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("zeroQps");
+        Assert.assertNull(methodLimiter);
+
+        // Can acquire with any cost value since cost limiting is disabled
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("zeroCost", 100)));
+        Assert.assertFalse(acquired.get());
+    }
+
+    @Test
+    public void testConcurrentWithBothRateAndCostLimits() throws InterruptedException {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 50; // High QPS
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 10;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "concurrentBoth:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        int threadCount = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger failCount = new AtomicInteger(0);
+
+        for (int i = 0; i < threadCount; i++) {
+            final int cost = 1;
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    boolean acquired = limiter.acquire("concurrentBoth", cost);
+                    if (acquired) {
+                        successCount.incrementAndGet();
+                    } else {
+                        failCount.incrementAndGet();
+                    }
+                } catch (RpcRateLimitException e) {
+                    failCount.incrementAndGet();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+
+        startLatch.countDown();
+        executor.shutdown();
+        executor.awaitTermination(10, TimeUnit.SECONDS);
+
+        // With cost limit 5 and each request costing 1, max 5 should succeed
+        // Others should fail due to cost limit
+        Assert.assertTrue("Expected some successes", successCount.get() > 0);
+        Assert.assertTrue("Expected some failures", failCount.get() > 0);
+        Assert.assertEquals(5, successCount.get());
+        Assert.assertEquals(5, failCount.get());
+
+        // Release all successful acquisitions
+        for (int i = 0; i < successCount.get(); i++) {
+            limiter.release("concurrentBoth", 1);
+        }
+    }
+
+    @Test
+    public void testCostExceedLimit() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
+        Config.meta_service_rpc_cost_limit_per_core_config = "exceedCost:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Try to acquire cost greater than limit - should not require limit
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertThrows(RpcRateLimitException.class, () -> limiter.acquire("exceedCost", 10));
+        Assert.assertFalse(acquired.get());
+
+        // Verify cost limiter was created but current cost is 0 (10 > 5)
+        QpsLimiter methodLimiter = limiter.getQpsLimiters().get("exceedCost");
+        Assert.assertNotNull(methodLimiter);
+        RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("exceedCost");
+        Assert.assertNotNull(costLimiter);
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
+
+        // Release - should only release if acquired
+        if (acquired.get()) {
+            limiter.release("exceedCost", 10);
+        }
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testReleaseNonExistentMethodAndNegative() {
+        // Test that releasing a non-existent method does not throw
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "negCost:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Release should not throw even if method doesn't exist
+        Assertions.assertDoesNotThrow(() -> limiter.release("nonExistentMethod", 1));
+
+        // Ignore cost is negative
+        Assertions.assertDoesNotThrow(() -> limiter.acquire("negCost", -1));
+        Assertions.assertDoesNotThrow(() -> limiter.release("negCost", -1));
+    }
+
+    @Test
+    public void testZeroMaxWaiting() {
+        // Test that maxWaitRequestNum=0 rejects all requests immediately
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Should fail immediately due to "too many waiting requests"
+        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("zeroWait", 0));
+        Assert.assertTrue(exception.getMessage().contains("too many waiting requests"));
+    }
+
+    @Test
+    public void testBothQpsAndCostZero() {
+        // Test that both QPS=0 and cost=0 means no rate limiting
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+        Config.meta_service_rpc_cost_limit_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Should return false since both QPS and cost limiters are null
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("bothZero", 1)));
+        Assert.assertFalse(acquired.get());
+
+        // No method limiters should be created
+        Assert.assertEquals(0, limiter.getQpsLimiters().size());
+    }
+
+    @Test
+    public void testCostLimitExactBoundary() {
+        // Test exact boundary: current=4, limit=5, acquire=1 should succeed, acquire=2 should fail
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "boundary:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Acquire cost 4 - should succeed
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("boundary", 4)));
+        Assert.assertTrue(acquired.get());
+
+        RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("boundary");
+        Assert.assertEquals(4, costLimiter.getCurrentCost());
+
+        // Acquire cost 1 - should succeed (4+1=5, exactly at limit)
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("boundary", 1)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(5, costLimiter.getCurrentCost());
+
+        // Acquire cost 1 again - should fail (5+1 > 5)
+        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("boundary", 1));
+        Assert.assertTrue(exception.getMessage().contains("cost limit"));
+        Assert.assertEquals(5, costLimiter.getCurrentCost());
+
+        // Release and verify
+        limiter.release("boundary", 4);
+        limiter.release("boundary", 1);
+        Assert.assertEquals(0, costLimiter.getCurrentCost());
+    }
+
+    @Test
+    public void testMultipleAcquireReleaseAccuracy() {
+        // Test multiple acquire/release cycles maintain correct currentCost
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "accuracy:10";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Acquire 3 times
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("accuracy", 2)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(2, limiter.getCostLimiters().get("accuracy").getCurrentCost());
+
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("accuracy", 3)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(5, limiter.getCostLimiters().get("accuracy").getCurrentCost());
+
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("accuracy", 5)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(10, limiter.getCostLimiters().get("accuracy").getCurrentCost());
+
+        // Release one
+        limiter.release("accuracy", 3);
+        Assert.assertEquals(7, limiter.getCostLimiters().get("accuracy").getCurrentCost());
+
+        // Release all
+        limiter.release("accuracy", 2);
+        limiter.release("accuracy", 5);
+        Assert.assertEquals(0, limiter.getCostLimiters().get("accuracy").getCurrentCost());
+    }
+
+    @Test
+    public void testReloadRecreatesRemovedMethod() {
+        // Test that re-adding a removed method works correctly
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_cost_limit_per_core_config = "recreate:5";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // First acquire
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("recreate", 1)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(1, limiter.getCostLimiters().get("recreate").getCurrentCost());
+
+        // Remove from config
+        Config.meta_service_rpc_cost_limit_per_core_config = "";
+        limiter.reloadConfig();
+
+        // Method should be removed
+        Assert.assertNull(limiter.getQpsLimiters().get("recreate"));
+
+        // Add back to config
+        Config.meta_service_rpc_cost_limit_per_core_config = "recreate:10";
+        limiter.reloadConfig();
+
+        // Should work again
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("recreate", 5)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(5, limiter.getCostLimiters().get("recreate").getCurrentCost());
+
+        limiter.release("recreate", 5);
+        limiter.release("recreate", 1);
+    }
+
+    /*@Test
+    public void testCostLimitPassButRateLimitFail() {
+        class MockMethodRateLimiter extends MetaServiceRateLimiter.QpsLimiter {
+            MockMethodRateLimiter(String methodName, int maxWaitRequestNum, int qps, int costLimit) {
+                super(methodName, maxWaitRequestNum, qps, costLimit);
+            }
+
+            @Override
+            void acquireQpsRateLimit(Semaphore waitingSemaphore, RateLimiter rateLimiter) throws RpcRateLimitException {
+                throw new RpcRateLimitException("QPS limit exceeded");
+            }
+        }
+
+        QpsLimiter methodRateLimiter = new MockMethodRateLimiter("testMethod", 8, 1, 7);
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertThrows(RpcRateLimitException.class, () -> acquired.set(methodRateLimiter.acquire(3)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(0, methodRateLimiter.getCostLimiter().getCurrentCost());
+    }*/
 }
