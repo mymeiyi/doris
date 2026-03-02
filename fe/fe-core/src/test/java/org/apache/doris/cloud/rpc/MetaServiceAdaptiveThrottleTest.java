@@ -26,6 +26,7 @@ import org.junit.Test;
 
 import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class MetaServiceAdaptiveThrottleTest {
 
@@ -40,7 +41,6 @@ public class MetaServiceAdaptiveThrottleTest {
     private int originalBadTriggerCount;
     private double originalBadRateTrigger;
     private String originalThrottleMethods;
-    private int originalBaseQpsWhenZero;
 
     @Before
     public void setUp() {
@@ -55,7 +55,6 @@ public class MetaServiceAdaptiveThrottleTest {
         originalBadTriggerCount = Config.meta_service_rpc_adaptive_throttle_bad_trigger_count;
         originalBadRateTrigger = Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger;
         originalThrottleMethods = Config.meta_service_rpc_adaptive_throttle_methods;
-        originalBaseQpsWhenZero = Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero;
 
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_min_factor = 0.1;
@@ -66,9 +65,8 @@ public class MetaServiceAdaptiveThrottleTest {
         Config.meta_service_rpc_adaptive_throttle_window_seconds = 10;
         Config.meta_service_rpc_adaptive_throttle_min_window_requests = 5;
         Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
-        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.05;
+        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.3;
         Config.meta_service_rpc_adaptive_throttle_methods = "";
-        Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = 100;
 
         MetaServiceAdaptiveThrottle.resetInstance();
     }
@@ -86,7 +84,6 @@ public class MetaServiceAdaptiveThrottleTest {
         Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = originalBadTriggerCount;
         Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = originalBadRateTrigger;
         Config.meta_service_rpc_adaptive_throttle_methods = originalThrottleMethods;
-        Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = originalBaseQpsWhenZero;
 
         resetSingleton();
     }
@@ -106,6 +103,8 @@ public class MetaServiceAdaptiveThrottleTest {
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
         Assert.assertEquals(1.0, throttle.getFactor(), 0.001);
+        Assert.assertEquals(0, throttle.getWindowTotal());
+        Assert.assertEquals(0, throttle.getWindowBad());
     }
 
     @Test
@@ -135,20 +134,58 @@ public class MetaServiceAdaptiveThrottleTest {
     }
 
     @Test
+    public void testRestWindow() {
+        Config.meta_service_rpc_adaptive_throttle_window_seconds = 2;
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        for (int i = 0; i < 50; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
+        Assert.assertEquals(1.0, throttle.getFactor(), 0.001);
+        Assert.assertEquals(50, throttle.getWindowTotal());
+        Assert.assertEquals(0, throttle.getWindowBad());
+        try {
+            Thread.sleep(3000);
+        } catch (InterruptedException e) {}
+        for (int i = 0; i < 1; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        Assert.assertEquals(1, throttle.getWindowTotal());
+    }
+
+    @Test
+    public void testRestWindow2() {
+        Config.meta_service_rpc_adaptive_throttle_window_seconds = 1;
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        for (int i = 0; i < 3; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        Assert.assertEquals(3, throttle.getWindowTotal());
+
+        throttle.setWindowStartMs(System.currentTimeMillis() - 2000);
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        Assert.assertEquals(1, throttle.getWindowTotal());
+    }
+
+    @Test
     public void testTimeoutTriggersDecrease() {
-        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
-        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 5;
-        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.5;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         for (int i = 0; i < 5; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 2; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
         }
+        Assert.assertEquals(7, throttle.getWindowTotal());
+        Assert.assertEquals(2, throttle.getWindowBad());
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
-        Assert.assertTrue("factor: " + throttle.getFactor(), throttle.getFactor() < 1.0);
+        Assert.assertEquals(0, throttle.getWindowTotal());
+        Assert.assertEquals(0, throttle.getWindowBad());
+        Assert.assertEquals( throttle.getFactor(), 0.7, 0.01);
     }
 
     @Test
@@ -158,12 +195,16 @@ public class MetaServiceAdaptiveThrottleTest {
         for (int i = 0; i < 5; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 2; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.BACKPRESSURE);
         }
-
+        Assert.assertEquals(7, throttle.getWindowTotal());
+        Assert.assertEquals(2, throttle.getWindowBad());
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
-        Assert.assertTrue(throttle.getFactor() < 1.0);
+        Assert.assertEquals(0, throttle.getWindowTotal());
+        Assert.assertEquals(0, throttle.getWindowBad());
+        Assert.assertEquals( throttle.getFactor(), 0.7, 0.01);
     }
 
     @Test
@@ -178,8 +219,8 @@ public class MetaServiceAdaptiveThrottleTest {
                 throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
             }
         }
-
-        Assert.assertTrue(throttle.getFactor() >= Config.meta_service_rpc_adaptive_throttle_min_factor);
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.COOLDOWN, throttle.getState());
+        Assert.assertEquals(Config.meta_service_rpc_adaptive_throttle_min_factor, throttle.getFactor(), 0.01);
     }
 
     @Test
@@ -227,8 +268,12 @@ public class MetaServiceAdaptiveThrottleTest {
         double factorBefore = throttle.getFactor();
         throttle.setLastRecoveryMs(System.currentTimeMillis() - 6000);
         throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
-
-        Assert.assertTrue(throttle.getFactor() > factorBefore);
+        Assert.assertEquals(factorBefore + 0.05, throttle.getFactor(), 0.01);
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        Assert.assertEquals(factorBefore + 0.05, throttle.getFactor(), 0.01);
+        throttle.setLastRecoveryMs(System.currentTimeMillis() - 6000);
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        Assert.assertEquals(factorBefore + 0.1, throttle.getFactor(), 0.01);
     }
 
     @Test
@@ -264,10 +309,7 @@ public class MetaServiceAdaptiveThrottleTest {
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.COOLDOWN, throttle.getState());
 
         double factorInCooldown = throttle.getFactor();
-        for (int i = 0; i < 5; i++) {
-            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
-        }
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < 9; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
         }
 
@@ -306,50 +348,12 @@ public class MetaServiceAdaptiveThrottleTest {
         Assert.assertTrue(callCount.get() > 0);
     }
 
-    @Test
-    public void testBelowMinWindowRequestsDoesNotTrigger() {
-        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 100;
-        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
-
-        for (int i = 0; i < 50; i++) {
-            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
-        }
-
-        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
-        Assert.assertEquals(1.0, throttle.getFactor(), 0.001);
-    }
-
-    @Test
-    public void testWindowResets() {
-        Config.meta_service_rpc_adaptive_throttle_window_seconds = 1;
-        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
-
-        for (int i = 0; i < 3; i++) {
-            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
-        }
-        Assert.assertEquals(3, throttle.getWindowTotal());
-
-        throttle.setWindowStartMs(System.currentTimeMillis() - 2000);
-        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
-        Assert.assertEquals(1, throttle.getWindowTotal());
-    }
-
-    // Tests for new config fields
-
-    @Test
-    public void testPhase1MethodsConfig() {
-        Config.meta_service_rpc_adaptive_throttle_methods = "getVersion,beginTxn";
-        Assert.assertEquals("getVersion,beginTxn", Config.meta_service_rpc_adaptive_throttle_methods);
-    }
-
-    @Test
-    public void testBaseQpsWhenZeroConfig() {
-        Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = 200;
-
-        Assert.assertEquals(200, Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero);
-    }
-
     private void triggerFastDecrease(MetaServiceAdaptiveThrottle throttle) {
+        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
+        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 5;
+        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.3;
+        Config.meta_service_rpc_adaptive_throttle_decrease_multiplier = 0.7;
+        Config.meta_service_rpc_adaptive_throttle_min_factor = 0.1;
         for (int i = 0; i < 5; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
@@ -364,5 +368,182 @@ public class MetaServiceAdaptiveThrottleTest {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.COOLDOWN, throttle.getState());
+    }
+
+    // ==================== Basic Functionality Tests ====================
+
+    @Test
+    public void testMixedSignalsInNORMAL() {
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.55;
+
+        // Mix of success and bad signals - should trigger decrease
+        for (int i = 0; i < 3; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        for (int i = 0; i < 2; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
+        }
+        for (int i = 0; i < 2; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.BACKPRESSURE);
+        }
+        // Total: 3 success, 4 bad out of 7 = 57% bad rate > 5% threshold
+
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
+        Assert.assertTrue(throttle.getFactor() < 1.0);
+    }
+
+    @Test
+    public void testFASTDECREASEStaysWhenOverloaded() {
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        triggerFastDecrease(throttle);
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
+
+        // Continue to record bad signals - should stay in FAST_DECREASE
+        for (int i = 0; i < 6; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
+        }
+
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
+    }
+
+    // ==================== Overload Detection Tests ====================
+
+    @Test
+    public void testIsOverloaded_falseWhenBelowMinRequests() {
+        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 100;
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        // Record some bad signals but below min threshold
+        for (int i = 0; i < 50; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
+        }
+
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
+    }
+
+    @Test
+    public void testIsOverloaded_falseWhenBelowBadCount() {
+        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 10;
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        // Record bad signals but below threshold
+        for (int i = 0; i < 20; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        for (int i = 0; i < 5; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
+        }
+
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
+    }
+
+    @Test
+    public void testIsOverloaded_falseWhenBelowBadRate() {
+        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.5;
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        // Many successes, few timeouts - rate below threshold
+        for (int i = 0; i < 20; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        for (int i = 0; i < 5; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
+        }
+        // 5/25 = 20% bad rate < 50% threshold
+
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
+    }
+
+    @Test
+    public void testIsOverloaded_trueWhenAllConditionsMet() {
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        // All conditions met: min_requests=5, bad_count=2, bad_rate=5%
+        for (int i = 0; i < 5; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        for (int i = 0; i < 3; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
+        }
+        // 3/8 = 37.5% bad rate > 5% threshold
+
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
+    }
+
+    // ==================== Listener Tests ====================
+
+    @Test
+    public void testFactorChangeListenerCalledOnDecrease() {
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+        AtomicInteger callCount = new AtomicInteger(0);
+        AtomicReference<Double> lastFactor = new AtomicReference<>(1.0);
+
+        throttle.setFactorChangeListener(newFactor -> {
+            callCount.incrementAndGet();
+            lastFactor.set(newFactor);
+        });
+
+        triggerFastDecrease(throttle);
+
+        Assert.assertTrue(callCount.get() > 0);
+        Assert.assertTrue(lastFactor.get() < 1.0);
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    @Test
+    public void testZeroRecoveryStep() {
+        Config.meta_service_rpc_adaptive_throttle_recovery_step = 0.0;
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        // Decrease first
+        triggerFastDecrease(throttle);
+        double decreasedFactor = throttle.getFactor();
+
+        // Try to recover with zero step
+        transitionToCooldown(throttle);
+        throttle.setCooldownStartMs(System.currentTimeMillis() - 31000);
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+
+        // Set last recovery to past
+        throttle.setLastRecoveryMs(System.currentTimeMillis() - 6000);
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+
+        // Factor should not increase with zero step
+        Assert.assertEquals(decreasedFactor, throttle.getFactor(), 0.0001);
+    }
+
+    @Test
+    public void testZeroCooldownPeriod() {
+        Config.meta_service_rpc_adaptive_throttle_cooldown_ms = 0;
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        // Transition to FAST_DECREASE
+        triggerFastDecrease(throttle);
+
+        // Record success - should transition immediately due to zero cooldown
+        for (int i = 0; i < 5; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+
+        // Should go to SLOW_RECOVERY directly (skip COOLDOWN)
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.SLOW_RECOVERY, throttle.getState());
+    }
+
+    @Test
+    public void testVerySmallWindow() {
+        Config.meta_service_rpc_adaptive_throttle_window_seconds = 0;
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+
+        // Window should reset frequently with 0 second window
+        for (int i = 0; i < 10; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.TIMEOUT);
+        }
+
+        // With 0 second window, should always be reset, so should not trigger overload
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
     }
 }
