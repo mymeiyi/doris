@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class MetaServiceRateLimiterTest4 {
+public class MetaServiceRateLimiterTest {
 
     // Original config values for teardown
     private boolean originalRateLimitEnabled;
