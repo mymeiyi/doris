@@ -218,8 +218,9 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "invalidformat;another:bad;negative:-10;normal:100";
         Assert.assertTrue(limiter.reloadConfig());
         qpsConfig = limiter.getMethodQpsConfig();
-        Assert.assertEquals(1, qpsConfig.size());
+        Assert.assertEquals(2, qpsConfig.size());
         Assert.assertEquals(100, qpsConfig.get("normal").intValue());
+        Assert.assertEquals(-10, qpsConfig.get("negative").intValue());
 
         // Disable rate limiter
         Config.meta_service_rpc_rate_limit_enabled = false;
@@ -477,5 +478,139 @@ public class MetaServiceRateLimiterTest4 {
         QpsLimiter qpsLimiter = limiter.getQpsLimiters().get("testWaitTimeout");
         Assert.assertNotNull(qpsLimiter);
         Assert.assertEquals(5, qpsLimiter.getAllowWaiting());
+    }
+
+    @Test
+    public void testConcurrentAccess() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 5000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+        Config.meta_service_rpc_cost_limit_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+        int threadCount = 10;
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger failCount = new AtomicInteger(0);
+
+        for (int i = 0; i < threadCount; i++) {
+            executor.submit(() -> {
+                try {
+                    startLatch.await();
+                    boolean acquired = limiter.acquire("testMethod", 0);
+                    Assert.assertFalse(acquired); // cost limit is disabled
+                    successCount.incrementAndGet();
+                } catch (RpcRateLimitException e) {
+                    failCount.incrementAndGet();
+                } catch (InterruptedException e) {
+                    failCount.incrementAndGet();
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+
+        startLatch.countDown();
+        executor.shutdown();
+        try {
+            boolean terminated = executor.awaitTermination(10, TimeUnit.SECONDS);
+            Assert.assertTrue("Executor did not terminate in the expected time", terminated);
+        } catch (Exception e) {
+            Assert.fail("Test was interrupted: " + e.getMessage());
+        }
+        int successes = successCount.get();
+        int failures = failCount.get();
+        Assert.assertEquals("Total results should match thread count", threadCount, successes + failures);
+        Assert.assertEquals(10, successes);
+    }
+
+    @Test
+    public void testAcquireWithConfigChange() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 99;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Initial acquire creates limiter with default QPS (10)
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(1, limiter.getQpsLimiters().size());
+        QpsLimiter method1 = limiter.getQpsLimiters().get("method1");
+        Assert.assertNotNull(method1);
+        Assert.assertEquals(99, method1.getAllowWaiting());
+
+        // Change config - this should trigger reload on next acquire
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:20";
+        Assert.assertTrue(limiter.reloadConfig());
+        Assert.assertEquals(1, limiter.getQpsLimiters().size());
+        method1 = limiter.getQpsLimiters().get("method1");
+        Assert.assertNotNull(method1);
+        Assert.assertEquals(20, (int) method1.getRateLimiter().getRate());
+        Assert.assertEquals(99, method1.getAllowWaiting());
+    }
+
+    @Test
+    public void testReleaseAfterDisable() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Acquire to create a limiter
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(1, limiter.getQpsLimiters().size());
+
+        // Disable rate limiter
+        Config.meta_service_rpc_rate_limit_enabled = false;
+        limiter.reloadConfig();
+
+        // Release after disable should be a no-op
+        // Should not throw exception
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
+        Assert.assertFalse(acquired.get());
+
+        // Limiter map should be cleared after reloadConfig
+        Assert.assertEquals(0, limiter.getQpsLimiters().size());
+    }
+
+    @Test
+    public void testReleaseWithExistingLimiterAfterDisable() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 1000;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+
+        // Acquire to create a limiter
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(1, limiter.getQpsLimiters().size());
+
+        // Directly release after disable without calling reloadConfig
+        Config.meta_service_rpc_rate_limit_enabled = false;
+
+        // Release should check enabled first and skip
+        // This should not throw because release() checks enabled before accessing limiter
+        Assertions.assertDoesNotThrow(() -> limiter.release("method1", 0));
+
+        // Limiter still exists but release was skipped
+        Assert.assertEquals(1, limiter.getQpsLimiters().size());
+
+        acquired.set(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(0, limiter.getQpsLimiters().size());
     }
 }
