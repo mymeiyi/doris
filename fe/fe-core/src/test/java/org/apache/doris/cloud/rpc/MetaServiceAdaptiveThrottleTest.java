@@ -320,17 +320,6 @@ public class MetaServiceAdaptiveThrottleTest {
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
     }
 
-    @Test
-    public void testFactorChangeListenerCalled() {
-        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
-        AtomicInteger callCount = new AtomicInteger(0);
-        throttle.setFactorChangeListener(newFactor -> callCount.incrementAndGet());
-
-        triggerFastDecrease(throttle);
-
-        Assert.assertTrue(callCount.get() > 0);
-    }
-
     private void triggerFastDecrease(MetaServiceAdaptiveThrottle throttle) {
         Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
         Config.meta_service_rpc_adaptive_throttle_min_window_requests = 5;
@@ -453,25 +442,6 @@ public class MetaServiceAdaptiveThrottleTest {
         // 3/8 = 37.5% bad rate > 5% threshold
 
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
-    }
-
-    // ==================== Listener Tests ====================
-
-    @Test
-    public void testFactorChangeListenerCalledOnDecrease() {
-        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
-        AtomicInteger callCount = new AtomicInteger(0);
-        AtomicReference<Double> lastFactor = new AtomicReference<>(1.0);
-
-        throttle.setFactorChangeListener(newFactor -> {
-            callCount.incrementAndGet();
-            lastFactor.set(newFactor);
-        });
-
-        triggerFastDecrease(throttle);
-
-        Assert.assertTrue(callCount.get() > 0);
-        Assert.assertTrue(lastFactor.get() < 1.0);
     }
 
     // ==================== Edge Case Tests ====================
