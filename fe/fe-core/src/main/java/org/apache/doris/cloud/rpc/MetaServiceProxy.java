@@ -449,7 +449,7 @@ public class MetaServiceProxy {
             throws RpcException {
         String methodName = "createMetaSyncPoint";
         return executeWithMetrics(methodName, MetaServiceRateLimiter.getRequestCost(methodName, request),
-                (client) -> client.createMetaSyncPoint(request));
+                (client) -> client.createMetaSyncPoint(request), Cloud.CreateMetaSyncPointResponse::getStatus);
     }
 
     public Cloud.BeginSubTxnResponse beginSubTxn(Cloud.BeginSubTxnRequest request)
