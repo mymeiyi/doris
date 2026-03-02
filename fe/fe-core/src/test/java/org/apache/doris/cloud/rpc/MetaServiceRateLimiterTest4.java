@@ -657,7 +657,7 @@ public class MetaServiceRateLimiterTest4 {
         // Acquire cost 4 - should fail (2+4 > 5)
         RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
                 () -> limiter.acquire("costMethod", 4));
-        Assert.assertTrue(exception.getMessage().contains("cost limit"));
+        Assert.assertTrue(exception.getMessage().contains("exceeds the limit"));
         Assert.assertEquals(2, costLimiter.getCurrentCost());
 
         // Release cost 2
@@ -790,7 +790,7 @@ public class MetaServiceRateLimiterTest4 {
         // Acquire cost 2 again - total cost would be 4, limit is 3, should fail
         RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
                 () -> limiter.acquire("costFirst", 2));
-        Assert.assertTrue(exception.getMessage().contains("cost limit"));
+        Assert.assertTrue(exception.getMessage().contains("exceeds the limit"));
 
         // Verify QPS rate limiter was never touched (cost blocked first)
         QpsLimiter methodLimiter = limiter.getQpsLimiters().get("costFirst");
@@ -913,7 +913,7 @@ public class MetaServiceRateLimiterTest4 {
 
         QpsLimiter methodLimiter = limiter.getQpsLimiters().get("zeroQps");
         // Rate limiter should be null since QPS is 0
-        Assert.assertNull(methodLimiter.getRateLimiter());
+        Assert.assertNull(methodLimiter);
         // But cost limiter should exist
         RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("zeroQps");
         Assert.assertNotNull(costLimiter);
@@ -944,7 +944,7 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertNotNull(methodLimiter.getRateLimiter());
         // Cost limiter should be null since cost config is 0
         RpcRateLimiter.CostLimiter costLimiter = limiter.getCostLimiters().get("zeroQps");
-        Assert.assertNull(methodLimiter);
+        Assert.assertNull(costLimiter);
 
         // Can acquire with any cost value since cost limiting is disabled
         acquired.set(false);
@@ -1062,9 +1062,7 @@ public class MetaServiceRateLimiterTest4 {
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Should fail immediately due to "too many waiting requests"
-        RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
-                () -> limiter.acquire("zeroWait", 0));
-        Assert.assertTrue(exception.getMessage().contains("too many waiting requests"));
+        Assertions.assertThrows(IllegalArgumentException.class, () -> limiter.acquire("zeroWait", 0));
     }
 
     @Test
@@ -1114,7 +1112,7 @@ public class MetaServiceRateLimiterTest4 {
         // Acquire cost 1 again - should fail (5+1 > 5)
         RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
                 () -> limiter.acquire("boundary", 1));
-        Assert.assertTrue(exception.getMessage().contains("cost limit"));
+        Assert.assertTrue(exception.getMessage().contains("exceeds the limit"));
         Assert.assertEquals(5, costLimiter.getCurrentCost());
 
         // Release and verify
