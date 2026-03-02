@@ -491,7 +491,8 @@ public class MetaServiceRateLimiterTest4 {
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 5)));
         Assert.assertTrue(acquired.get());
         Assert.assertEquals(0, limiter.getQpsLimiters().size());
-        Assert.assertEquals(5, limiter.getCostLimiters().size());
+        Assert.assertEquals(1, limiter.getCostLimiters().size());
+        Assert.assertEquals(5, limiter.getCostLimiters().get("method1").getCurrentCost());
         limiter.release("method1", 5);
     }
 
@@ -503,10 +504,10 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_adaptive_throttle_methods = "method1";
         MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
-
         MetaServiceAdaptiveThrottle throttle = Mockito.mock(MetaServiceAdaptiveThrottle.class);
         Mockito.when(MetaServiceAdaptiveThrottle.getInstance()).thenReturn(throttle);
         Mockito.when(throttle.getFactor()).thenReturn(0.9);
+
         AtomicBoolean acquired = new AtomicBoolean(false);
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 1)));
         Assert.assertTrue(acquired.get());
@@ -515,6 +516,59 @@ public class MetaServiceRateLimiterTest4 {
         Assert.assertEquals(1, limiter.getBackpressureQpsLimiters().size());
         Assert.assertEquals(100, limiter.getBackpressureQpsLimiters().get("method1").getBaseQps());
         Assert.assertEquals(90, limiter.getBackpressureQpsLimiters().get("method1").getRateLimiter().getRate());
+    }
+
+    @Test
+    public void testAcquire_BothEnabled() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_adaptive_throttle_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+        Config.meta_service_rpc_adaptive_throttle_methods = "method1";
+        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceAdaptiveThrottle throttle = Mockito.mock(MetaServiceAdaptiveThrottle.class);
+        Mockito.when(MetaServiceAdaptiveThrottle.getInstance()).thenReturn(throttle);
+        Mockito.when(throttle.getFactor()).thenReturn(0.9);
+
+        // qps enabled, cost disabled
+        AtomicBoolean acquired = new AtomicBoolean(false);
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 1)));
+        // Returns false because method1 is not in Config.meta_service_rpc_cost_limit_per_core_config
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(1, limiter.getQpsLimiters().size());
+        Assert.assertEquals(0, limiter.getCostLimiters().size());
+        Assert.assertEquals(0, limiter.getBackpressureQpsLimiters().size());
+
+        // qps enabled, cost enabled
+        Config.meta_service_rpc_cost_limit_per_core_config = "method1:10";
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 1)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(1, limiter.getQpsLimiters().size());
+        Assert.assertEquals(1, limiter.getCostLimiters().size());
+        Assert.assertEquals(1, limiter.getCostLimiters().get("method1").getCurrentCost());
+        limiter.release("method1", 1);
+        Assert.assertEquals(0, limiter.getCostLimiters().get("method1").getCurrentCost());
+
+        // qps enabled, cost enabled but exceeds limit
+        Assertions.assertThrows(RpcRateLimitException.class,
+                () -> limiter.acquire("method1", 11));
+        Assert.assertEquals(0, limiter.getCostLimiters().get("method1").getCurrentCost());
+
+        // qps disabled, cost disabled
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:0";
+        Config.meta_service_rpc_cost_limit_per_core_config = "method1:0";
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 1)));
+        Assert.assertFalse(acquired.get());
+        Assert.assertEquals(0, limiter.getQpsLimiters().size());
+        Assert.assertEquals(0, limiter.getCostLimiters().size());
+
+        // qps disabled, cost enabled
+        Config.meta_service_rpc_cost_limit_per_core_config = "method1:10";
+        Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 5)));
+        Assert.assertTrue(acquired.get());
+        Assert.assertEquals(0, limiter.getQpsLimiters().size());
+        Assert.assertEquals(5, limiter.getCostLimiters().size());
+        limiter.release("method1", 5);
     }
 
     /*@Test
