@@ -55,23 +55,6 @@ public class MetaServiceRateLimiterTest4 {
     private String originalAdaptiveThrottleMethods;
     private boolean originalCostClampedEnabled;
 
-    /**
-     * Mock MetaServiceRateLimiter that allows overriding available processors.
-     */
-    private static class MockMetaServiceRateLimiter extends MetaServiceRateLimiter {
-        // private final int processors;
-
-        public MockMetaServiceRateLimiter(int processors) {
-            super(processors);
-            // this.processors = processors;
-        }
-
-        /*@Override
-        protected int getAvailableProcessors() {
-            return processors;
-        }*/
-    }
-
     @Before
     public void setUp() {
         // Save original config values
@@ -121,7 +104,7 @@ public class MetaServiceRateLimiterTest4 {
     @Test
     public void testIsConfigChangedRateLimitEnabledToggle() {
         Config.meta_service_rpc_rate_limit_enabled = true;
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // true -> true
         Config.meta_service_rpc_rate_limit_enabled = true;
@@ -143,7 +126,7 @@ public class MetaServiceRateLimiterTest4 {
     @Test
     public void testIsConfigChangedRateLimitEnabledToggle2() {
         Config.meta_service_rpc_rate_limit_enabled = true;
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // true -> true
         Config.meta_service_rpc_rate_limit_enabled = true;
@@ -167,7 +150,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Initial state - should not detect change after construction
         Assert.assertFalse(limiter.isConfigChanged());
@@ -182,7 +165,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_enabled = false;
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Initial state
         Assert.assertFalse(limiter.isConfigChanged());
@@ -198,7 +181,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Initial state
         Assert.assertFalse(limiter.reloadConfig());
@@ -214,7 +197,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Initial state
         Assert.assertFalse(limiter.reloadConfig());
@@ -230,7 +213,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:10";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Initial state
         Assert.assertFalse(limiter.reloadConfig());
@@ -246,7 +229,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
         Config.meta_service_rpc_cost_limit_per_core_config = "method1:10";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Initial state
         Assert.assertFalse(limiter.reloadConfig());
@@ -262,7 +245,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = "method1,method2";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Initial state
         Assert.assertFalse(limiter.reloadConfig());
@@ -277,7 +260,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_enabled = false;
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Initial state
         Assert.assertFalse(limiter.reloadConfig());
@@ -302,7 +285,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = "method1,method2";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Enable adaptive throttle first
         limiter.reloadConfig();
@@ -326,7 +309,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = "getVersion, beginTxn, commitTxn";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
@@ -342,7 +325,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = " method1 , method2 , method3 ";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
@@ -358,7 +341,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = "";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
@@ -371,7 +354,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = null;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
@@ -388,7 +371,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:10";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         Assertions.assertDoesNotThrow(() -> limiter.acquire("method1", 0));
 
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
@@ -408,7 +391,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:20;method2:30";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
@@ -422,7 +405,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
         Config.meta_service_rpc_cost_limit_per_core_config = "costMethod:50;costMethod2:100";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Map<String, Integer> costConfig = limiter.getMethodCostConfig();
@@ -438,7 +421,7 @@ public class MetaServiceRateLimiterTest4 {
     public void testAcquire_BothDisabled() {
         Config.meta_service_rpc_rate_limit_enabled = false;
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         AtomicBoolean acquired = new AtomicBoolean(false);
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("anyMethod", 1)));
         Assert.assertFalse(acquired.get());
@@ -453,7 +436,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // qps enabled, cost disabled
         AtomicBoolean acquired = new AtomicBoolean(false);
@@ -504,7 +487,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_adaptive_throttle_methods = "method1";
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         try (MockedStatic<MetaServiceAdaptiveThrottle> mockedStatic = Mockito.mockStatic(
                 MetaServiceAdaptiveThrottle.class)) {
             MetaServiceAdaptiveThrottle throttle = Mockito.mock(MetaServiceAdaptiveThrottle.class);
@@ -530,7 +513,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_adaptive_throttle_methods = "method1";
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         try (MockedStatic<MetaServiceAdaptiveThrottle> mockedStatic = Mockito.mockStatic(
                 MetaServiceAdaptiveThrottle.class)) {
             MetaServiceAdaptiveThrottle throttle = Mockito.mock(MetaServiceAdaptiveThrottle.class);
@@ -657,7 +640,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = "method1,method2";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         // setAdaptiveFactor should not throw
@@ -673,7 +656,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_adaptive_throttle_methods = "adaptiveMethod";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Create the limiter first
         limiter.acquire("adaptiveMethod", 0);
@@ -692,7 +675,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:10";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         Assertions.assertDoesNotThrow(() -> limiter.acquire("method1", 0));
 
         // Verify config is loaded
@@ -717,7 +700,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "testQps:20";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
         Assert.assertEquals(20, (int) qpsConfig.get("testQps"));
@@ -729,7 +712,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
         Config.meta_service_rpc_cost_limit_per_core_config = "testCost:30";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         Map<String, Integer> costConfig = limiter.getMethodCostConfig();
         Assert.assertEquals(30, (int) costConfig.get("testCost"));
@@ -747,7 +730,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_adaptive_throttle_methods = "adaptiveMethod";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Acquire should work with both rate limit and adaptive throttle
         AtomicBoolean acquired = new AtomicBoolean(false);
@@ -761,7 +744,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // First reload
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 20;
@@ -784,7 +767,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 1000; // High QPS for concurrency test
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         int threadCount = 10;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
@@ -822,7 +805,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         Config.meta_service_rpc_cost_limit_per_core_config = "together:10";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Acquire with both QPS and cost limiting
         AtomicBoolean acquired = new AtomicBoolean(false);
@@ -843,7 +826,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
@@ -856,7 +839,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = null;
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
@@ -869,7 +852,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "invalidformat;another:bad:format";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         // Should use default QPS for methods without valid config
@@ -884,7 +867,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "negative:-10";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
@@ -898,7 +881,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 50;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "zero:0";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
@@ -912,7 +895,7 @@ public class MetaServiceRateLimiterTest4 {
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
         Config.meta_service_rpc_cost_limit_per_core_config = "invalidcost;bad:format";
 
-        MetaServiceRateLimiter limiter = new MockMetaServiceRateLimiter(1);
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
         Map<String, Integer> costConfig = limiter.getMethodCostConfig();

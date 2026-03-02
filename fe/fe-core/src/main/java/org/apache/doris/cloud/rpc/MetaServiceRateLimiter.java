@@ -237,11 +237,6 @@ public class MetaServiceRateLimiter {
         return target;
     }
 
-    /*@VisibleForTesting
-    protected int getAvailableProcessors() {
-        return Runtime.getRuntime().availableProcessors();
-    }*/
-
     private int getMethodTotalQps(String methodName, int defaultQpsPerCore) {
         int qpsPerCore = methodQpsConfig.getOrDefault(methodName, defaultQpsPerCore);
         if (qpsPerCore <= 0) {
