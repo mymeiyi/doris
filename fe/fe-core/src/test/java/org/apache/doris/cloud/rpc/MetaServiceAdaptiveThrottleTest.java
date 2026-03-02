@@ -25,8 +25,6 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 public class MetaServiceAdaptiveThrottleTest {
 
@@ -145,7 +143,9 @@ public class MetaServiceAdaptiveThrottleTest {
         Assert.assertEquals(0, throttle.getWindowBad());
         try {
             Thread.sleep(3000);
-        } catch (InterruptedException e) {}
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
         for (int i = 0; i < 1; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
@@ -168,7 +168,7 @@ public class MetaServiceAdaptiveThrottleTest {
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
         Assert.assertEquals(0, throttle.getWindowTotal());
         Assert.assertEquals(0, throttle.getWindowBad());
-        Assert.assertEquals( throttle.getFactor(), 0.7, 0.01);
+        Assert.assertEquals(throttle.getFactor(), 0.7, 0.01);
     }
 
     @Test
@@ -187,7 +187,7 @@ public class MetaServiceAdaptiveThrottleTest {
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.FAST_DECREASE, throttle.getState());
         Assert.assertEquals(0, throttle.getWindowTotal());
         Assert.assertEquals(0, throttle.getWindowBad());
-        Assert.assertEquals( throttle.getFactor(), 0.7, 0.01);
+        Assert.assertEquals(throttle.getFactor(), 0.7, 0.01);
     }
 
     @Test
@@ -345,7 +345,7 @@ public class MetaServiceAdaptiveThrottleTest {
     // ==================== Basic Functionality Tests ====================
 
     @Test
-    public void testMixedSignalsInNORMAL() {
+    public void testMixedSignalsInNormal() {
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
         Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.55;
 
@@ -366,7 +366,7 @@ public class MetaServiceAdaptiveThrottleTest {
     }
 
     @Test
-    public void testFASTDECREASEStaysWhenOverloaded() {
+    public void testFastDecreaseStaysWhenOverloaded() {
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         triggerFastDecrease(throttle);

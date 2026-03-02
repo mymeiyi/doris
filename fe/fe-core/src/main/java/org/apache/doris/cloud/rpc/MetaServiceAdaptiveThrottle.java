@@ -18,13 +18,10 @@
 package org.apache.doris.cloud.rpc;
 
 import org.apache.doris.common.Config;
-import org.apache.doris.metric.CloudMetrics;
-import org.apache.doris.metric.MetricRepo;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
@@ -63,12 +60,6 @@ public class MetaServiceAdaptiveThrottle {
 
     private static volatile MetaServiceAdaptiveThrottle instance;
 
-    // private final AtomicReference<FactorChangeListener> listenerRef = new AtomicReference<>();
-
-    /*public interface FactorChangeListener {
-        void onFactorChanged(double newFactor);
-    }*/
-
     private MetaServiceAdaptiveThrottle() {
     }
 
@@ -83,10 +74,6 @@ public class MetaServiceAdaptiveThrottle {
         return instance;
     }
 
-    /*public void setFactorChangeListener(FactorChangeListener listener) {
-        listenerRef.set(listener);
-    }*/
-
     public void recordSignal(Signal signal) {
         if (!Config.meta_service_rpc_adaptive_throttle_enabled) {
             return;
@@ -98,13 +85,6 @@ public class MetaServiceAdaptiveThrottle {
         windowTotal.increment();
         if (signal == Signal.TIMEOUT || signal == Signal.BACKPRESSURE) {
             windowBad.increment();
-            if (MetricRepo.isInit && Config.isCloudMode()) {
-                if (signal == Signal.TIMEOUT) {
-                    CloudMetrics.META_SERVICE_RPC_ADAPTIVE_THROTTLE_TIMEOUT_SIGNALS.increase(1L);
-                } else {
-                    CloudMetrics.META_SERVICE_RPC_ADAPTIVE_THROTTLE_BACKPRESSURE_SIGNALS.increase(1L);
-                }
-            }
         }
 
         switch (state) {
@@ -208,9 +188,6 @@ public class MetaServiceAdaptiveThrottle {
 
         if (Math.abs(newFactor - oldFactor) > 0.001) {
             LOG.info("Adaptive throttle factor changed: {} -> {} (state={})", oldFactor, newFactor, state);
-            if (MetricRepo.isInit && Config.isCloudMode()) {
-                CloudMetrics.META_SERVICE_RPC_ADAPTIVE_THROTTLE_FACTOR.setValue(newFactor);
-            }
             MetaServiceRateLimiter.getInstance().setAdaptiveFactor(newFactor);
         }
     }
@@ -220,9 +197,6 @@ public class MetaServiceAdaptiveThrottle {
         this.state = newState;
         if (oldState != newState) {
             LOG.info("Adaptive throttle state transition: {} -> {} (factor={})", oldState, newState, factor);
-            if (MetricRepo.isInit && Config.isCloudMode()) {
-                CloudMetrics.META_SERVICE_RPC_ADAPTIVE_THROTTLE_STATE.setValue(newState.name());
-            }
             resetWindow(now);
         }
     }

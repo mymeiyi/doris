@@ -191,8 +191,8 @@ public class RpcRateLimiter {
                 while (currentCost + cost > limit) {
                     if (nanos <= 0) {
                         throw new RpcRateLimitException(
-                                "Meta service rpc rate limit timeout for method: " + methodName + ", requestCost: " + cost + ", currentCost: "
-                                        + currentCost + ", limit: " + limit);
+                                "Meta service rpc rate limit timeout for method: " + methodName + ", requestCost: "
+                                        + cost + ", currentCost: " + currentCost + ", limit: " + limit);
                     }
                     nanos = condition.awaitNanos(nanos);
                 }

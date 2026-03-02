@@ -21,9 +21,9 @@ import org.apache.doris.common.Config;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
-import org.junit.After;
 import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
 
@@ -554,7 +554,7 @@ public class RpcRateLimiterTest {
 
         LOG.info("Concurrent test - Success: {}, Failed: {}", successCount.get(), failCount.get());
         Assert.assertTrue(successCount.get() > 0);
-        Assert.assertEquals( iterations * threads, successCount.get());
-        Assert.assertEquals( 0, failCount.get());
+        Assert.assertEquals(iterations * threads, successCount.get());
+        Assert.assertEquals(0, failCount.get());
     }
 }

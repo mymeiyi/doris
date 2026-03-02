@@ -21,6 +21,10 @@ import org.apache.doris.cloud.rpc.RpcRateLimiter.BackpressureQpsLimiter;
 import org.apache.doris.cloud.rpc.RpcRateLimiter.CostLimiter;
 import org.apache.doris.cloud.rpc.RpcRateLimiter.QpsLimiter;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.profile.SummaryProfile;
+import org.apache.doris.metric.CloudMetrics;
+import org.apache.doris.metric.MetricRepo;
+import org.apache.doris.qe.ConnectContext;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.logging.log4j.LogManager;
@@ -35,11 +39,12 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 public class MetaServiceRateLimiter {
     private static final Logger LOG = LogManager.getLogger(MetaServiceRateLimiter.class);
 
-    private static int processorCount;
+    private final int processorCount;
     private static volatile MetaServiceRateLimiter instance;
     private volatile boolean lastEnabled = false;
     private volatile int lastMaxWaitRequestNum = 0;
@@ -299,32 +304,50 @@ public class MetaServiceRateLimiter {
             reloadConfig();
         }
 
-        // Step1: Check backpressure limiter first (if adaptive throttle is active with factor < 1.0)
-        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
-            double factor = MetaServiceAdaptiveThrottle.getInstance().getFactor();
-            if (factor < 1.0) {
-                QpsLimiter backpressureLimiter = getBackpressureQpsLimiter(methodName, factor);
-                if (backpressureLimiter != null) {
-                    backpressureLimiter.acquire();
+        long startAt = System.nanoTime();
+        try {
+            // Step1: Check backpressure limiter first (if adaptive throttle is active with factor < 1.0)
+            if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+                double factor = MetaServiceAdaptiveThrottle.getInstance().getFactor();
+                if (factor < 1.0) {
+                    QpsLimiter backpressureLimiter = getBackpressureQpsLimiter(methodName, factor);
+                    if (backpressureLimiter != null) {
+                        backpressureLimiter.acquire();
+                    }
                 }
             }
-        }
 
-        if (Config.meta_service_rpc_rate_limit_enabled) {
-            // Step2: Check qps limiter
-            QpsLimiter qpsLimiter = getQpsLimiter(methodName);
-            if (qpsLimiter != null) {
-                qpsLimiter.acquire();
-            }
+            if (Config.meta_service_rpc_rate_limit_enabled) {
+                // Step2: Check qps limiter
+                QpsLimiter qpsLimiter = getQpsLimiter(methodName);
+                if (qpsLimiter != null) {
+                    qpsLimiter.acquire();
+                }
 
-            // Step3: Check cost limiter
-            CostLimiter costLimiter = getCostLimiter(methodName);
-            if (costLimiter != null && cost > 0) {
-                costLimiter.acquire(cost);
-                return true;
+                // Step3: Check cost limiter
+                CostLimiter costLimiter = getCostLimiter(methodName);
+                if (costLimiter != null && cost > 0) {
+                    costLimiter.acquire(cost);
+                    return true;
+                }
+            }
+            return false;
+        } catch (RpcRateLimitException e) {
+            if (MetricRepo.isInit && Config.isCloudMode()) {
+                CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED.getOrAdd(methodName).increase(1L);
+            }
+            throw e;
+        } finally {
+            long durationNs = System.nanoTime() - startAt;
+            SummaryProfile summaryProfile = SummaryProfile.getSummaryProfile(ConnectContext.get());
+            if (summaryProfile != null) {
+                summaryProfile.addWaitMsRpcRateLimiterTime(durationNs);
+            }
+            if (MetricRepo.isInit && Config.isCloudMode()) {
+                CloudMetrics.META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY.getOrAdd(methodName)
+                        .update(TimeUnit.NANOSECONDS.toMillis(durationNs));
             }
         }
-        return false;
     }
 
     public void release(String methodName, int cost) {
