@@ -17,6 +17,9 @@
 
 package org.apache.doris.cloud.rpc;
 
+import org.apache.doris.cloud.rpc.MetaServiceAdaptiveThrottle.Signal;
+import org.apache.doris.cloud.rpc.MetaServiceAdaptiveThrottle.State;
+import org.apache.doris.cloud.rpc.RpcRateLimiter.BackpressureQpsLimiter;
 import org.apache.doris.cloud.rpc.RpcRateLimiter.QpsLimiter;
 import org.apache.doris.common.Config;
 
@@ -90,6 +93,16 @@ public class MetaServiceRateLimiterTest {
             Field instanceField = MetaServiceRateLimiter.class.getDeclaredField("instance");
             instanceField.setAccessible(true);
             instanceField.set(null, (MetaServiceRateLimiter) null);
+        } catch (Exception e) {
+            // Ignore
+        }
+    }
+
+    private void resetSingleton(MetaServiceRateLimiter limiter) {
+        try {
+            Field instanceField = MetaServiceRateLimiter.class.getDeclaredField("instance");
+            instanceField.setAccessible(true);
+            instanceField.set(null, limiter);
         } catch (Exception e) {
             // Ignore
         }
@@ -1190,5 +1203,79 @@ public class MetaServiceRateLimiterTest {
 
         limiter.release("recreate", 5);
         limiter.release("recreate", 1);
+    }
+
+    // =========================================================================
+    // Test: setAdaptiveFactor() method
+    // =========================================================================
+    @Test
+    public void setAdaptiveFactor() {
+        Config.meta_service_rpc_rate_limit_enabled = false;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method2:50";
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+
+        Config.meta_service_rpc_adaptive_throttle_enabled = true;
+        Config.meta_service_rpc_adaptive_throttle_methods = "method1,method2,method3";
+        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 4;
+        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 9;
+        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.5;
+        Config.meta_service_rpc_adaptive_throttle_decrease_multiplier = 0.7;
+
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
+        resetSingleton(limiter);
+        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+        for (int i = 0; i < 10; i++) {
+            String method = "method" + (i % 2);
+            Assertions.assertDoesNotThrow(() -> limiter.acquire(method, 0));
+            if (i < 5) {
+                throttle.recordSignal(Signal.SUCCESS);
+            } else {
+                throttle.recordSignal(Signal.BACKPRESSURE);
+            }
+        }
+        Assert.assertEquals(0, limiter.getBackpressureQpsLimiters().size());
+        Assert.assertEquals(State.FAST_DECREASE, throttle.getState());
+        Assert.assertEquals(0.7, throttle.getFactor(), 0.01);
+        Assert.assertEquals(0, throttle.getWindowBad());
+        Assert.assertEquals(0, throttle.getWindowTotal());
+
+        Assertions.assertDoesNotThrow(() -> limiter.acquire("method1", 0));
+        Assert.assertEquals(1, limiter.getBackpressureQpsLimiters().size());
+        BackpressureQpsLimiter method1 = limiter.getBackpressureQpsLimiters().get("method1");
+        Assert.assertNotNull(method1);
+        Assert.assertEquals(70, (int) method1.getRateLimiter().getRate());
+
+        Assertions.assertDoesNotThrow(() -> limiter.acquire("method2", 0));
+        Assert.assertEquals(2, limiter.getBackpressureQpsLimiters().size());
+        BackpressureQpsLimiter method2 = limiter.getBackpressureQpsLimiters().get("method2");
+        Assert.assertNotNull(method2);
+        Assert.assertEquals(35, (int) method2.getRateLimiter().getRate());
+
+        // cooldown
+        for (int i = 0; i < 20; i++) {
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.COOLDOWN, throttle.getState());
+
+        // SLOW_RECOVERY
+        throttle.setCooldownStartMs(System.currentTimeMillis() - 31000);
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.SLOW_RECOVERY, throttle.getState());
+
+        throttle.setLastRecoveryMs(System.currentTimeMillis() - 6000);
+        Assert.assertEquals(0.7, throttle.getFactor(), 0.01);
+
+        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        Assert.assertEquals(0.75, throttle.getFactor(), 0.01);
+        Assert.assertEquals(75, (int) method1.getRateLimiter().getRate());
+        Assert.assertEquals(37, (int) method2.getRateLimiter().getRate());
+
+        for (int i = 0; i < 10; i++) {
+            throttle.setLastRecoveryMs(System.currentTimeMillis() - 6000);
+            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        }
+        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
+        Assert.assertEquals(0, limiter.getBackpressureQpsLimiters().size());
     }
 }

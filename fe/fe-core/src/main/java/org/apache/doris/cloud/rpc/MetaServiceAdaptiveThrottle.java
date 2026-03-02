@@ -21,7 +21,6 @@ import org.apache.doris.common.Config;
 import org.apache.doris.metric.CloudMetrics;
 import org.apache.doris.metric.MetricRepo;
 
-import com.google.common.annotations.VisibleForTesting;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -64,11 +63,11 @@ public class MetaServiceAdaptiveThrottle {
 
     private static volatile MetaServiceAdaptiveThrottle instance;
 
-    private final AtomicReference<FactorChangeListener> listenerRef = new AtomicReference<>();
+    // private final AtomicReference<FactorChangeListener> listenerRef = new AtomicReference<>();
 
-    public interface FactorChangeListener {
+    /*public interface FactorChangeListener {
         void onFactorChanged(double newFactor);
-    }
+    }*/
 
     private MetaServiceAdaptiveThrottle() {
     }
@@ -84,9 +83,9 @@ public class MetaServiceAdaptiveThrottle {
         return instance;
     }
 
-    public void setFactorChangeListener(FactorChangeListener listener) {
+    /*public void setFactorChangeListener(FactorChangeListener listener) {
         listenerRef.set(listener);
-    }
+    }*/
 
     public void recordSignal(Signal signal) {
         if (!Config.meta_service_rpc_adaptive_throttle_enabled) {
@@ -212,14 +211,7 @@ public class MetaServiceAdaptiveThrottle {
             if (MetricRepo.isInit && Config.isCloudMode()) {
                 CloudMetrics.META_SERVICE_RPC_ADAPTIVE_THROTTLE_FACTOR.setValue(newFactor);
             }
-            FactorChangeListener listener = listenerRef.get();
-            if (listener != null) {
-                try {
-                    listener.onFactorChanged(newFactor);
-                } catch (Exception e) {
-                    LOG.warn("Error notifying factor change listener", e);
-                }
-            }
+            MetaServiceRateLimiter.getInstance().setAdaptiveFactor(newFactor);
         }
     }
 
@@ -256,49 +248,22 @@ public class MetaServiceAdaptiveThrottle {
         return factor;
     }
 
-    @VisibleForTesting
+    // only for testing
     public long getWindowTotal() {
         return windowTotal.sum();
     }
 
-    @VisibleForTesting
+    // only for testing
     public long getWindowBad() {
         return windowBad.sum();
     }
 
-    @VisibleForTesting
-    public void reset() {
-        state = State.NORMAL;
-        factor = 1.0;
-        windowTotal.reset();
-        windowBad.reset();
-        windowStartMs = System.currentTimeMillis();
-        cooldownStartMs = 0;
-        lastRecoveryMs = 0;
-        listenerRef.set(null);
-    }
-
-    /*@VisibleForTesting
-    public static void setInstanceForTest(MetaServiceAdaptiveThrottle testInstance) {
-        instance = testInstance;
-    }*/
-
-    @VisibleForTesting
-    public static void resetInstance() {
-        instance = null;
-    }
-
-    @VisibleForTesting
-    public void setWindowStartMs(long ms) {
-        this.windowStartMs = ms;
-    }
-
-    @VisibleForTesting
+    // only for testing
     public void setCooldownStartMs(long ms) {
         this.cooldownStartMs = ms;
     }
 
-    @VisibleForTesting
+    // only for testing
     public void setLastRecoveryMs(long ms) {
         this.lastRecoveryMs = ms;
     }

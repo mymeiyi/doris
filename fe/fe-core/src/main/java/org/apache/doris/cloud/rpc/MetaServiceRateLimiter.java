@@ -70,9 +70,7 @@ public class MetaServiceRateLimiter {
     MetaServiceRateLimiter(int processorCount) {
         this.processorCount = processorCount;
         reloadConfig();
-        /*if (Config.meta_service_rpc_adaptive_throttle_enabled) {
-            MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
-        }*/
+        // MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
     }
 
     @VisibleForTesting
@@ -111,16 +109,14 @@ public class MetaServiceRateLimiter {
         // Parse the qps and cost config
         methodQpsConfig = parseConfig(qpsConfig, "QPS");
         methodCostConfig = parseConfig(costConfig, "cost limit");
+        updateQpsLimiters(defaultQpsPerCore, maxWaitRequestNum);
 
         // If disabled, clear all limiters
         if (!enabled) {
-            methodQpsConfig.clear();
             methodCostConfig.clear();
             qpsLimiters.clear();
             costLimiters.clear();
         } else {
-            // Update limiters
-            updateQpsLimiters(defaultQpsPerCore, maxWaitRequestNum);
             updateCostLimiters();
         }
         // Update last config
@@ -340,6 +336,20 @@ public class MetaServiceRateLimiter {
                 LOG.warn("Failed to release cost limiter for method: {}, cost: {}", methodName, cost, e);
             }
         }
+    }
+
+    public void setAdaptiveFactor(double factor) {
+        if (Double.compare(factor, 1.0) >= 0) {
+            LOG.info("Adaptive factor is {}, clearing {} backpressure qps limiters", factor,
+                    backpressureQpsLimiters.size());
+            backpressureQpsLimiters.clear();
+            return;
+        }
+        for (Entry<String, BackpressureQpsLimiter> entry : backpressureQpsLimiters.entrySet()) {
+            BackpressureQpsLimiter limiter = entry.getValue();
+            limiter.applyFactor(factor);
+        }
+        LOG.info("Applied adaptive factor {} to {} backpressure qps limiters", factor, backpressureQpsLimiters.size());
     }
 
     // only used for testing

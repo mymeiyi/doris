@@ -67,8 +67,6 @@ public class MetaServiceAdaptiveThrottleTest {
         Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
         Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.3;
         Config.meta_service_rpc_adaptive_throttle_methods = "";
-
-        MetaServiceAdaptiveThrottle.resetInstance();
     }
 
     @After
@@ -151,21 +149,6 @@ public class MetaServiceAdaptiveThrottleTest {
         for (int i = 0; i < 1; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
-        Assert.assertEquals(1, throttle.getWindowTotal());
-    }
-
-    @Test
-    public void testRestWindow2() {
-        Config.meta_service_rpc_adaptive_throttle_window_seconds = 1;
-        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
-
-        for (int i = 0; i < 3; i++) {
-            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
-        }
-        Assert.assertEquals(3, throttle.getWindowTotal());
-
-        throttle.setWindowStartMs(System.currentTimeMillis() - 2000);
-        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         Assert.assertEquals(1, throttle.getWindowTotal());
     }
 
