@@ -355,32 +355,6 @@ public class MetaServiceRateLimiter {
         }
     }
 
-    /*public static int getRequestCost(String methodName, Object request) {
-        if (methodName.equals("getVersion")) {
-            if (request == null || !(request instanceof Cloud.GetVersionRequest)) {
-                LOG.warn("Failed to get request cost for method: {}, invalid request: {}", methodName, request);
-                return 1;
-            }
-            Cloud.GetVersionRequest getVersionRequest = (Cloud.GetVersionRequest) request;
-            if (getVersionRequest.hasBatchMode() && getVersionRequest.getBatchMode()) {
-                int cost = getVersionRequest.getDbIdsCount();
-                if (Config.meta_service_rpc_cost_clamped_to_limit_enabled) {
-                    int limit = getInstance().getMethodTotalCostLimit(methodName);
-                    if (limit > 0 && cost > limit) {
-                        cost = limit;
-                        LOG.info("Clamped cost: {} for method: {} to limit: {}", getVersionRequest.getDbIdsCount(),
-                                methodName, limit);
-                    }
-                }
-                return cost;
-            } else {
-                return 1;
-            }
-        }
-        // TODO the cost of other methods is not supported now
-        return 1;
-    }*/
-
     /*public void setAdaptiveFactor(double factor) {
         // Parse phase1 methods from config and add to tracked methods
         String phase1Config = Config.meta_service_rpc_adaptive_throttle_methods;
