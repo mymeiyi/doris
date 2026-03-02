@@ -657,7 +657,7 @@ public class MetaServiceRateLimiterTest4 {
         // Acquire cost 4 - should fail (2+4 > 5)
         RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
                 () -> limiter.acquire("costMethod", 4));
-        Assert.assertTrue(exception.getMessage().contains("exceeds the limit"));
+        Assert.assertTrue(exception.getMessage(), exception.getMessage().contains("exceeds the limit"));
         Assert.assertEquals(2, costLimiter.getCurrentCost());
 
         // Release cost 2
@@ -790,7 +790,7 @@ public class MetaServiceRateLimiterTest4 {
         // Acquire cost 2 again - total cost would be 4, limit is 3, should fail
         RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
                 () -> limiter.acquire("costFirst", 2));
-        Assert.assertTrue(exception.getMessage().contains("exceeds the limit"));
+        Assert.assertTrue(exception.getMessage(), exception.getMessage().contains("exceeds the limit"));
 
         // Verify QPS rate limiter was never touched (cost blocked first)
         QpsLimiter methodLimiter = limiter.getQpsLimiters().get("costFirst");
@@ -1112,7 +1112,7 @@ public class MetaServiceRateLimiterTest4 {
         // Acquire cost 1 again - should fail (5+1 > 5)
         RpcRateLimitException exception = Assertions.assertThrows(RpcRateLimitException.class,
                 () -> limiter.acquire("boundary", 1));
-        Assert.assertTrue(exception.getMessage().contains("exceeds the limit"));
+        Assert.assertTrue(exception.getMessage(), exception.getMessage().contains("exceeds the limit"));
         Assert.assertEquals(5, costLimiter.getCurrentCost());
 
         // Release and verify
