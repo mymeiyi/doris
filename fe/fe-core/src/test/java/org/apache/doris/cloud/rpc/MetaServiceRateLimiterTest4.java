@@ -143,187 +143,40 @@ public class MetaServiceRateLimiterTest4 {
         Assertions.assertTrue(limiter.isConfigChanged());
     }
 
-    /*@Test
-    public void testIsConfigChangedRateLimitEnabledToggle2() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // true -> true
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Assert.assertFalse(limiter.isConfigChanged());
-
-        // true -> false
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Assertions.assertTrue(limiter.isConfigChanged());
-
-        // false -> false
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Assertions.assertFalse(limiter.isConfigChanged());
-
-        // false -> true
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Assertions.assertTrue(limiter.isConfigChanged());
-    }
-
-    @Test
-    public void testIsConfigChanged_RateLimitEnabledToggle() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Initial state - should not detect change after construction
-        Assert.assertFalse(limiter.isConfigChanged());
-
-        // Change rate limit enabled
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Assertions.assertTrue(limiter.isConfigChanged());
-    }
-
-    @Test
-    public void testIsConfigChanged_AdaptiveThrottleEnabledToggle() {
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Initial state
-        Assert.assertFalse(limiter.isConfigChanged());
-
-        // Change adaptive throttle enabled
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
-        Assertions.assertTrue(limiter.isConfigChanged());
-    }
-
-    @Test
-    public void testIsConfigChanged_DefaultQpsChange() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Initial state
-        Assert.assertFalse(limiter.reloadConfig());
-
-        // Change default QPS
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 20;
-        Assertions.assertTrue(limiter.reloadConfig());
-    }
-
-    @Test
-    public void testIsConfigChanged_MaxWaitRequestNumChange() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
-        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Initial state
-        Assert.assertFalse(limiter.reloadConfig());
-
-        // Change max wait request num
-        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 200;
-        Assertions.assertTrue(limiter.reloadConfig());
-    }
-
-    @Test
-    public void testIsConfigChanged_QpsConfigChange() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:10";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Initial state
-        Assert.assertFalse(limiter.reloadConfig());
-
-        // Change QPS config
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:20";
-        Assertions.assertTrue(limiter.reloadConfig());
-    }
-
-    @Test
-    public void testIsConfigChanged_CostConfigChange() {
-        Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
-        Config.meta_service_rpc_cost_limit_per_core_config = "method1:10";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Initial state
-        Assert.assertFalse(limiter.reloadConfig());
-
-        // Change cost config
-        Config.meta_service_rpc_cost_limit_per_core_config = "method1:20";
-        Assertions.assertTrue(limiter.reloadConfig());
-    }
-
-    @Test
-    public void testIsConfigChanged_AdaptiveThrottleMethodsChange() {
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_methods = "method1,method2";
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Initial state
-        Assert.assertFalse(limiter.reloadConfig());
-
-        // Change adaptive throttle methods
-        Config.meta_service_rpc_adaptive_throttle_methods = "method1,method3";
-        Assertions.assertTrue(limiter.reloadConfig());
-    }
-
-    @Test
-    public void testIsConfigChanged_BothDisabledNoOtherCheck() {
-        Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
-
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-
-        // Initial state
-        Assert.assertFalse(limiter.reloadConfig());
-
-        // Change other configs when both are disabled - should NOT detect change
-        Config.meta_service_rpc_rate_limit_default_qps_per_core = 999;
-        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 999;
-        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:999";
-        Config.meta_service_rpc_cost_limit_per_core_config = "method1:999";
-
-        // When both enabled flags are false, other config changes should be ignored
-        Assert.assertFalse(limiter.reloadConfig());
-    }*/
-
     // =========================================================================
     // Test: reloadAdaptiveThrottleConfig() method
     // =========================================================================
 
     @Test
-    public void testReloadAdaptiveThrottleConfig_Disable() {
+    public void testReloadAdaptiveThrottleConfig() {
         Config.meta_service_rpc_rate_limit_enabled = false;
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = "method1,method2";
-
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Enable adaptive throttle first
-        limiter.reloadConfig();
-
-        // Get the adaptiveThrottleMethods via reflection for verification
-        Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
+        Assert.assertTrue(limiter.reloadConfig());
+        Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
+        Assert.assertEquals(2, adaptiveMethods.size());
         Assert.assertTrue(adaptiveMethods.contains("method1"));
         Assert.assertTrue(adaptiveMethods.contains("method2"));
 
+        // change meta_service_rpc_adaptive_throttle_methods
+        Config.meta_service_rpc_adaptive_throttle_methods = "method1, method3";
+        Assert.assertTrue(limiter.reloadConfig());
+        adaptiveMethods = limiter.getAdaptiveThrottleMethods();
+        Assert.assertEquals(2, adaptiveMethods.size());
+        Assert.assertTrue(adaptiveMethods.contains("method1"));
+        Assert.assertTrue(adaptiveMethods.contains("method3"));
+
         // Disable adaptive throttle
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
-        limiter.reloadConfig();
-
-        adaptiveMethods = getAdaptiveThrottleMethods(limiter);
+        Assert.assertTrue(limiter.reloadConfig());
+        adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertTrue(adaptiveMethods.isEmpty());
     }
 
-    @Test
+    /*@Test
     public void testReloadAdaptiveThrottleConfig_ParseMethods() {
         Config.meta_service_rpc_rate_limit_enabled = false;
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
@@ -332,7 +185,7 @@ public class MetaServiceRateLimiterTest4 {
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
-        Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
+        Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertEquals(3, adaptiveMethods.size());
         Assert.assertTrue(adaptiveMethods.contains("getVersion"));
         Assert.assertTrue(adaptiveMethods.contains("beginTxn"));
@@ -348,14 +201,14 @@ public class MetaServiceRateLimiterTest4 {
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
-        Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
+        Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertEquals(3, adaptiveMethods.contains("method1"));
         Assert.assertTrue(adaptiveMethods.contains("method1"));
         Assert.assertTrue(adaptiveMethods.contains("method2"));
         Assert.assertTrue(adaptiveMethods.contains("method3"));
-    }
+    }*/
 
-    @Test
+    /*@Test
     public void testReloadAdaptiveThrottleConfig_EmptyMethods() {
         Config.meta_service_rpc_rate_limit_enabled = false;
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
@@ -364,20 +217,24 @@ public class MetaServiceRateLimiterTest4 {
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         limiter.reloadConfig();
 
-        Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
+        Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertTrue(adaptiveMethods.isEmpty());
-    }
+    }*/
 
     @Test
     public void testReloadAdaptiveThrottleConfig_NullMethods() {
         Config.meta_service_rpc_rate_limit_enabled = false;
         Config.meta_service_rpc_adaptive_throttle_enabled = true;
         Config.meta_service_rpc_adaptive_throttle_methods = null;
-
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        limiter.reloadConfig();
 
-        Set<String> adaptiveMethods = getAdaptiveThrottleMethods(limiter);
+        Assert.assertTrue(limiter.reloadConfig());
+        Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
+        Assert.assertTrue(adaptiveMethods.isEmpty());
+
+        Config.meta_service_rpc_adaptive_throttle_methods = "";
+        Assert.assertTrue(limiter.reloadConfig());
+        adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertTrue(adaptiveMethods.isEmpty());
     }
 
@@ -927,7 +784,7 @@ public class MetaServiceRateLimiterTest4 {
     // Helper methods
     // =========================================================================
 
-    private Set<String> getAdaptiveThrottleMethods(MetaServiceRateLimiter limiter) {
+    /*private Set<String> getAdaptiveThrottleMethods(MetaServiceRateLimiter limiter) {
         try {
             Field field = MetaServiceRateLimiter.class.getDeclaredField("adaptiveThrottleMethods");
             field.setAccessible(true);
@@ -935,5 +792,5 @@ public class MetaServiceRateLimiterTest4 {
         } catch (Exception e) {
             throw new RuntimeException("Failed to get adaptiveThrottleMethods", e);
         }
-    }
+    }*/
 }

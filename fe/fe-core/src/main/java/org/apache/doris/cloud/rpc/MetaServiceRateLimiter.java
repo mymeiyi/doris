@@ -359,6 +359,11 @@ public class MetaServiceRateLimiter {
     }
 
     // only used for testing
+    Set<String> getAdaptiveThrottleMethods() {
+        return adaptiveThrottleMethods;
+    }
+
+    // only used for testing
     Map<String, Integer> getMethodQpsConfig() {
         return methodQpsConfig;
     }
