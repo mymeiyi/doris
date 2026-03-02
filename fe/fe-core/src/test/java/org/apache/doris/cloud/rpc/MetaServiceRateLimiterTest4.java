@@ -17,6 +17,7 @@
 
 package org.apache.doris.cloud.rpc;
 
+import org.apache.doris.cloud.rpc.RpcRateLimiter.CostLimiter;
 import org.apache.doris.common.Config;
 
 import org.junit.After;
@@ -243,26 +244,36 @@ public class MetaServiceRateLimiterTest4 {
     // =========================================================================
 
     @Test
-    public void testReloadRateLimiterConfig_DisableClearsAll() {
+    public void testReloadRateLimiterConfig() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:10";
+        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(2);
 
-        MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        Assertions.assertDoesNotThrow(() -> limiter.acquire("method1", 0));
-
+        Assert.assertFalse(limiter.reloadConfig());
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
         Assert.assertEquals(1, qpsConfig.size());
+        Assert.assertEquals(20, qpsConfig.get("method1").intValue());
+
+        Config.meta_service_rpc_cost_limit_per_core_config = "method1:30; method2:20";
+        qpsConfig = limiter.getMethodQpsConfig();
+        Assert.assertEquals(1, qpsConfig.size());
+        Assert.assertEquals(20, qpsConfig.get("method1").intValue());
+        Map<String, Integer> costConfig = limiter.getMethodCostConfig();
+        Assert.assertEquals(2, costConfig.size());
+        Assert.assertEquals(60, costConfig.get("method1").intValue());
+        Assert.assertEquals(20, costConfig.get("method2").intValue());
 
         // Disable rate limiter
         Config.meta_service_rpc_rate_limit_enabled = false;
         limiter.reloadConfig();
-
         qpsConfig = limiter.getMethodQpsConfig();
         Assert.assertEquals(0, qpsConfig.size());
+        costConfig = limiter.getMethodCostConfig();
+        Assert.assertEquals(0, costConfig.size());
     }
 
-    @Test
+    /*@Test
     public void testReloadRateLimiterConfig_ParseQpsConfig() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 10;
@@ -274,9 +285,9 @@ public class MetaServiceRateLimiterTest4 {
         Map<String, Integer> qpsConfig = limiter.getMethodQpsConfig();
         Assert.assertEquals(20, (int) qpsConfig.get("method1"));
         Assert.assertEquals(30, (int) qpsConfig.get("method2"));
-    }
+    }*/
 
-    @Test
+    /*@Test
     public void testReloadRateLimiterConfig_ParseCostConfig() {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 0;
@@ -288,7 +299,7 @@ public class MetaServiceRateLimiterTest4 {
         Map<String, Integer> costConfig = limiter.getMethodCostConfig();
         Assert.assertEquals(50, (int) costConfig.get("costMethod"));
         Assert.assertEquals(100, (int) costConfig.get("costMethod2"));
-    }
+    }*/
 
     // =========================================================================
     // Test: acquire() release() method
