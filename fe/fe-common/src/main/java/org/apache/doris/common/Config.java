@@ -3772,12 +3772,12 @@ public class Config extends ConfigBase {
     @ConfField(mutable = true, description = {
             "自适应限流触发所需的最小窗口请求数",
             "Adaptive throttle minimum requests in window before overload can trigger"})
-    public static int meta_service_rpc_adaptive_throttle_min_window_requests = 20;
+    public static int meta_service_rpc_adaptive_throttle_min_window_requests = 100;
 
     @ConfField(mutable = true, description = {
             "自适应限流触发所需的最小错误数（超时+背压）",
             "Adaptive throttle minimum bad events (timeout + backpressure) in window to trigger overload"})
-    public static int meta_service_rpc_adaptive_throttle_bad_trigger_count = 3;
+    public static int meta_service_rpc_adaptive_throttle_bad_trigger_count = 10;
 
     @ConfField(mutable = true, description = {
             "自适应限流触发所需的最小错误率",
@@ -3796,12 +3796,12 @@ public class Config extends ConfigBase {
             "Adaptive throttle phase 2 - whether to apply to all RPCs"})
     public static boolean meta_service_rpc_adaptive_throttle_phase2_enabled = false;*/
 
-    @ConfField(mutable = true, description = {
+    /*@ConfField(mutable = true, description = {
             "自适应限流当 configuredQps=0 时的基础QPS（用于过载时临时限流）",
             "Adaptive throttle base QPS when configuredQps=0 (for temporary limiting during overload)",
             "仅在自适应限流启用时生效，配置为0表示不限制"
             })
-    public static int meta_service_rpc_adaptive_throttle_base_qps_when_zero = 100;
+    public static int meta_service_rpc_adaptive_throttle_base_qps_when_zero = 100;*/
 
     @ConfField(mutable = true, description = {"存算分离模式下自动启停功能，对于该配置中的数据库名不进行唤醒操作，"
             + "用于内部作业的数据库，例如统计信息用到的数据库，"

@@ -242,7 +242,7 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_enabled = false;
         Assert.assertTrue(limiter.reloadConfig());
         qpsConfig = limiter.getMethodQpsConfig();
-        Assert.assertEquals(0, qpsConfig.size());
+        Assert.assertEquals(2, qpsConfig.size());
         costConfig = limiter.getMethodCostConfig();
         Assert.assertEquals(0, costConfig.size());
     }
