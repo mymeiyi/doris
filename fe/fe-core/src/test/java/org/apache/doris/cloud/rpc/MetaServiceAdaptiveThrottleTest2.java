@@ -51,11 +51,10 @@ public class MetaServiceAdaptiveThrottleTest2 {
     private int originalMinWindowRequests;
     private int originalBadTriggerCount;
     private double originalBadRateTrigger;
-    private String originalPhase1Methods;
-    private boolean originalPhase2Enabled;
+    private String originalThrottleMethods;
     private int originalBaseQpsWhenZero;
 
-    /*@Before
+    @Before
     public void setUp() {
         // Save original values
         originalEnabled = Config.meta_service_rpc_adaptive_throttle_enabled;
@@ -68,8 +67,7 @@ public class MetaServiceAdaptiveThrottleTest2 {
         originalMinWindowRequests = Config.meta_service_rpc_adaptive_throttle_min_window_requests;
         originalBadTriggerCount = Config.meta_service_rpc_adaptive_throttle_bad_trigger_count;
         originalBadRateTrigger = Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger;
-        originalPhase1Methods = Config.meta_service_rpc_adaptive_throttle_phase1_methods;
-        originalPhase2Enabled = Config.meta_service_rpc_adaptive_throttle_phase2_enabled;
+        originalThrottleMethods = Config.meta_service_rpc_adaptive_throttle_methods;
         originalBaseQpsWhenZero = Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero;
 
         // Set test values
@@ -83,8 +81,7 @@ public class MetaServiceAdaptiveThrottleTest2 {
         Config.meta_service_rpc_adaptive_throttle_min_window_requests = 5;
         Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
         Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.05;
-        Config.meta_service_rpc_adaptive_throttle_phase1_methods = "";
-        Config.meta_service_rpc_adaptive_throttle_phase2_enabled = false;
+        Config.meta_service_rpc_adaptive_throttle_methods = "";
         Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = 100;
 
         // Reset singleton
@@ -104,8 +101,7 @@ public class MetaServiceAdaptiveThrottleTest2 {
         Config.meta_service_rpc_adaptive_throttle_min_window_requests = originalMinWindowRequests;
         Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = originalBadTriggerCount;
         Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = originalBadRateTrigger;
-        Config.meta_service_rpc_adaptive_throttle_phase1_methods = originalPhase1Methods;
-        Config.meta_service_rpc_adaptive_throttle_phase2_enabled = originalPhase2Enabled;
+        Config.meta_service_rpc_adaptive_throttle_methods = originalThrottleMethods;
         Config.meta_service_rpc_adaptive_throttle_base_qps_when_zero = originalBaseQpsWhenZero;
 
         // Reset singleton
@@ -712,5 +708,5 @@ public class MetaServiceAdaptiveThrottleTest2 {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.COOLDOWN, throttle.getState());
-    }*/
+    }
 }

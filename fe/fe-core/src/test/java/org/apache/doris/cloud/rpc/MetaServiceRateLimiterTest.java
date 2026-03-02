@@ -1191,24 +1191,4 @@ public class MetaServiceRateLimiterTest {
         limiter.release("recreate", 5);
         limiter.release("recreate", 1);
     }
-
-    /*@Test
-    public void testCostLimitPassButRateLimitFail() {
-        class MockMethodRateLimiter extends MetaServiceRateLimiter.QpsLimiter {
-            MockMethodRateLimiter(String methodName, int maxWaitRequestNum, int qps, int costLimit) {
-                super(methodName, maxWaitRequestNum, qps, costLimit);
-            }
-
-            @Override
-            void acquireQpsRateLimit(Semaphore waitingSemaphore, RateLimiter rateLimiter) throws RpcRateLimitException {
-                throw new RpcRateLimitException("QPS limit exceeded");
-            }
-        }
-
-        QpsLimiter methodRateLimiter = new MockMethodRateLimiter("testMethod", 8, 1, 7);
-        AtomicBoolean acquired = new AtomicBoolean(false);
-        Assertions.assertThrows(RpcRateLimitException.class, () -> acquired.set(methodRateLimiter.acquire(3)));
-        Assert.assertFalse(acquired.get());
-        Assert.assertEquals(0, methodRateLimiter.getCostLimiter().getCurrentCost());
-    }*/
 }
