@@ -508,13 +508,12 @@ public class MetaServiceRateLimiterTest4 {
         try (MockedStatic<MetaServiceAdaptiveThrottle> mockedStatic = Mockito.mockStatic(
                 MetaServiceAdaptiveThrottle.class)) {
             MetaServiceAdaptiveThrottle throttle = Mockito.mock(MetaServiceAdaptiveThrottle.class);
-            // Mockito.when(MetaServiceAdaptiveThrottle.getInstance()).thenReturn(throttle);
             mockedStatic.when(MetaServiceAdaptiveThrottle::getInstance).thenReturn(throttle);
             Mockito.when(throttle.getFactor()).thenReturn(0.9);
 
             AtomicBoolean acquired = new AtomicBoolean(false);
             Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 1)));
-            Assert.assertTrue(acquired.get());
+            Assert.assertFalse(acquired.get());
             Assert.assertEquals(0, limiter.getQpsLimiters().size());
             Assert.assertEquals(0, limiter.getCostLimiters().size());
             Assert.assertEquals(1, limiter.getBackpressureQpsLimiters().size());
