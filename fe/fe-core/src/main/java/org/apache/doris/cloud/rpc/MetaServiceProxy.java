@@ -742,7 +742,7 @@ public class MetaServiceProxy {
     }
 
     private static void handleResponseStatus(Cloud.MetaServiceResponseStatus status) {
-        if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+        if (Config.meta_service_rpc_backpressure_throttle_enabled) {
             MetaServiceAdaptiveThrottle.Signal signal = isMetaServiceBusy(status)
                     ? MetaServiceAdaptiveThrottle.Signal.BACKPRESSURE
                     : MetaServiceAdaptiveThrottle.Signal.SUCCESS;

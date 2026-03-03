@@ -78,7 +78,7 @@ public class MetaServiceAdaptiveThrottle {
     }
 
     public void recordSignal(Signal signal) {
-        if (!Config.meta_service_rpc_adaptive_throttle_enabled) {
+        if (!Config.meta_service_rpc_backpressure_throttle_enabled) {
             return;
         }
 
@@ -119,7 +119,7 @@ public class MetaServiceAdaptiveThrottle {
         if (isOverloaded()) {
             decreaseFactor();
             // If factor has hit the floor, stop hammering FAST_DECREASE and enter COOLDOWN
-            /*double minFactor = Config.meta_service_rpc_adaptive_throttle_min_factor;
+            /*double minFactor = Config.meta_service_rpc_backpressure_throttle_min_factor;
             if (Math.abs(factor - minFactor) < 1e-9) {
                 transitionTo(State.COOLDOWN, now);
                 cooldownStartMs = now;
@@ -139,7 +139,7 @@ public class MetaServiceAdaptiveThrottle {
             }
         }
 
-        long cooldownMs = Config.meta_service_rpc_adaptive_throttle_cooldown_ms;
+        long cooldownMs = Config.meta_service_rpc_backpressure_throttle_cooldown_ms;
         if (now - cooldownStartMs >= cooldownMs) {
             transitionTo(State.SLOW_RECOVERY, now);
             lastRecoveryMs = now;
@@ -155,10 +155,10 @@ public class MetaServiceAdaptiveThrottle {
             }
         }
 
-        long recoveryIntervalMs = Config.meta_service_rpc_adaptive_throttle_recovery_interval_ms;
+        long recoveryIntervalMs = Config.meta_service_rpc_backpressure_throttle_recovery_interval_ms;
         if (now - lastRecoveryMs >= recoveryIntervalMs) {
             lastRecoveryMs = now;
-            double step = Config.meta_service_rpc_adaptive_throttle_recovery_step;
+            double step = Config.meta_service_rpc_backpressure_throttle_recovery_step;
             double newFactor = Math.min(1.0, factor + step);
             setFactor(newFactor);
 
@@ -171,9 +171,9 @@ public class MetaServiceAdaptiveThrottle {
     private boolean isOverloaded() {
         long total = windowTotal.sum();
         long bad = windowBad.sum();
-        int minRequests = Config.meta_service_rpc_adaptive_throttle_min_window_requests;
-        int badTriggerCount = Config.meta_service_rpc_adaptive_throttle_bad_trigger_count;
-        double badRateTrigger = Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger;
+        int minRequests = Config.meta_service_rpc_backpressure_throttle_min_window_requests;
+        int badTriggerCount = Config.meta_service_rpc_backpressure_throttle_bad_trigger_count;
+        double badRateTrigger = Config.meta_service_rpc_backpressure_throttle_bad_rate_trigger;
 
         if (total < minRequests) {
             return false;
@@ -185,8 +185,8 @@ public class MetaServiceAdaptiveThrottle {
     }
 
     private void decreaseFactor() {
-        double multiplier = Config.meta_service_rpc_adaptive_throttle_decrease_multiplier;
-        double minFactor = Config.meta_service_rpc_adaptive_throttle_min_factor;
+        double multiplier = Config.meta_service_rpc_backpressure_throttle_decrease_multiplier;
+        double minFactor = Config.meta_service_rpc_backpressure_throttle_min_factor;
         double newFactor = Math.max(minFactor, factor * multiplier);
         setFactor(newFactor);
     }
@@ -214,7 +214,7 @@ public class MetaServiceAdaptiveThrottle {
     }
 
     private void maybeResetWindow(long now) {
-        long windowMs = Config.meta_service_rpc_adaptive_throttle_window_seconds * 1000L;
+        long windowMs = Config.meta_service_rpc_backpressure_throttle_window_seconds * 1000L;
         long startMs = windowStartMs.get();
         if (now - startMs >= windowMs) {
             // CAS ensures only one thread resets the window per interval

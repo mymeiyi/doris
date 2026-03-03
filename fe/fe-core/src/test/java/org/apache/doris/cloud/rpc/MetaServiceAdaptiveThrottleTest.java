@@ -42,44 +42,44 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Before
     public void setUp() {
-        originalEnabled = Config.meta_service_rpc_adaptive_throttle_enabled;
-        originalMinFactor = Config.meta_service_rpc_adaptive_throttle_min_factor;
-        originalDecreaseMultiplier = Config.meta_service_rpc_adaptive_throttle_decrease_multiplier;
-        originalCooldownMs = Config.meta_service_rpc_adaptive_throttle_cooldown_ms;
-        originalRecoveryIntervalMs = Config.meta_service_rpc_adaptive_throttle_recovery_interval_ms;
-        originalRecoveryStep = Config.meta_service_rpc_adaptive_throttle_recovery_step;
-        originalWindowSeconds = Config.meta_service_rpc_adaptive_throttle_window_seconds;
-        originalMinWindowRequests = Config.meta_service_rpc_adaptive_throttle_min_window_requests;
-        originalBadTriggerCount = Config.meta_service_rpc_adaptive_throttle_bad_trigger_count;
-        originalBadRateTrigger = Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger;
-        originalThrottleMethods = Config.meta_service_rpc_adaptive_throttle_methods;
+        originalEnabled = Config.meta_service_rpc_backpressure_throttle_enabled;
+        originalMinFactor = Config.meta_service_rpc_backpressure_throttle_min_factor;
+        originalDecreaseMultiplier = Config.meta_service_rpc_backpressure_throttle_decrease_multiplier;
+        originalCooldownMs = Config.meta_service_rpc_backpressure_throttle_cooldown_ms;
+        originalRecoveryIntervalMs = Config.meta_service_rpc_backpressure_throttle_recovery_interval_ms;
+        originalRecoveryStep = Config.meta_service_rpc_backpressure_throttle_recovery_step;
+        originalWindowSeconds = Config.meta_service_rpc_backpressure_throttle_window_seconds;
+        originalMinWindowRequests = Config.meta_service_rpc_backpressure_throttle_min_window_requests;
+        originalBadTriggerCount = Config.meta_service_rpc_backpressure_throttle_bad_trigger_count;
+        originalBadRateTrigger = Config.meta_service_rpc_backpressure_throttle_bad_rate_trigger;
+        originalThrottleMethods = Config.meta_service_rpc_backpressure_throttle_methods;
 
-        Config.meta_service_rpc_adaptive_throttle_enabled = true;
-        Config.meta_service_rpc_adaptive_throttle_min_factor = 0.1;
-        Config.meta_service_rpc_adaptive_throttle_decrease_multiplier = 0.7;
-        Config.meta_service_rpc_adaptive_throttle_cooldown_ms = 30000;
-        Config.meta_service_rpc_adaptive_throttle_recovery_interval_ms = 5000;
-        Config.meta_service_rpc_adaptive_throttle_recovery_step = 0.05;
-        Config.meta_service_rpc_adaptive_throttle_window_seconds = 10;
-        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 5;
-        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
-        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.3;
-        Config.meta_service_rpc_adaptive_throttle_methods = "";
+        Config.meta_service_rpc_backpressure_throttle_enabled = true;
+        Config.meta_service_rpc_backpressure_throttle_min_factor = 0.1;
+        Config.meta_service_rpc_backpressure_throttle_decrease_multiplier = 0.7;
+        Config.meta_service_rpc_backpressure_throttle_cooldown_ms = 30000;
+        Config.meta_service_rpc_backpressure_throttle_recovery_interval_ms = 5000;
+        Config.meta_service_rpc_backpressure_throttle_recovery_step = 0.05;
+        Config.meta_service_rpc_backpressure_throttle_window_seconds = 10;
+        Config.meta_service_rpc_backpressure_throttle_min_window_requests = 5;
+        Config.meta_service_rpc_backpressure_throttle_bad_trigger_count = 2;
+        Config.meta_service_rpc_backpressure_throttle_bad_rate_trigger = 0.3;
+        Config.meta_service_rpc_backpressure_throttle_methods = "";
     }
 
     @After
     public void tearDown() {
-        Config.meta_service_rpc_adaptive_throttle_enabled = originalEnabled;
-        Config.meta_service_rpc_adaptive_throttle_min_factor = originalMinFactor;
-        Config.meta_service_rpc_adaptive_throttle_decrease_multiplier = originalDecreaseMultiplier;
-        Config.meta_service_rpc_adaptive_throttle_cooldown_ms = originalCooldownMs;
-        Config.meta_service_rpc_adaptive_throttle_recovery_interval_ms = originalRecoveryIntervalMs;
-        Config.meta_service_rpc_adaptive_throttle_recovery_step = originalRecoveryStep;
-        Config.meta_service_rpc_adaptive_throttle_window_seconds = originalWindowSeconds;
-        Config.meta_service_rpc_adaptive_throttle_min_window_requests = originalMinWindowRequests;
-        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = originalBadTriggerCount;
-        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = originalBadRateTrigger;
-        Config.meta_service_rpc_adaptive_throttle_methods = originalThrottleMethods;
+        Config.meta_service_rpc_backpressure_throttle_enabled = originalEnabled;
+        Config.meta_service_rpc_backpressure_throttle_min_factor = originalMinFactor;
+        Config.meta_service_rpc_backpressure_throttle_decrease_multiplier = originalDecreaseMultiplier;
+        Config.meta_service_rpc_backpressure_throttle_cooldown_ms = originalCooldownMs;
+        Config.meta_service_rpc_backpressure_throttle_recovery_interval_ms = originalRecoveryIntervalMs;
+        Config.meta_service_rpc_backpressure_throttle_recovery_step = originalRecoveryStep;
+        Config.meta_service_rpc_backpressure_throttle_window_seconds = originalWindowSeconds;
+        Config.meta_service_rpc_backpressure_throttle_min_window_requests = originalMinWindowRequests;
+        Config.meta_service_rpc_backpressure_throttle_bad_trigger_count = originalBadTriggerCount;
+        Config.meta_service_rpc_backpressure_throttle_bad_rate_trigger = originalBadRateTrigger;
+        Config.meta_service_rpc_backpressure_throttle_methods = originalThrottleMethods;
 
         resetSingleton();
     }
@@ -105,7 +105,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testDisabledDoesNothing() {
-        Config.meta_service_rpc_adaptive_throttle_enabled = false;
+        Config.meta_service_rpc_backpressure_throttle_enabled = false;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         for (int i = 0; i < 100; i++) {
@@ -131,7 +131,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testRestWindow() {
-        Config.meta_service_rpc_adaptive_throttle_window_seconds = 2;
+        Config.meta_service_rpc_backpressure_throttle_window_seconds = 2;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         for (int i = 0; i < 50; i++) {
@@ -203,7 +203,7 @@ public class MetaServiceAdaptiveThrottleTest {
             }
         }
         Assert.assertEquals(MetaServiceAdaptiveThrottle.State.COOLDOWN, throttle.getState());
-        Assert.assertEquals(Config.meta_service_rpc_adaptive_throttle_min_factor, throttle.getFactor(), 0.01);
+        Assert.assertEquals(Config.meta_service_rpc_backpressure_throttle_min_factor, throttle.getFactor(), 0.01);
     }
 
     @Test
@@ -261,7 +261,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testSlowRecoveryBackToNormal() {
-        Config.meta_service_rpc_adaptive_throttle_recovery_step = 0.5;
+        Config.meta_service_rpc_backpressure_throttle_recovery_step = 0.5;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         triggerFastDecrease(throttle);
@@ -321,11 +321,11 @@ public class MetaServiceAdaptiveThrottleTest {
     }
 
     private void triggerFastDecrease(MetaServiceAdaptiveThrottle throttle) {
-        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 2;
-        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 5;
-        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.3;
-        Config.meta_service_rpc_adaptive_throttle_decrease_multiplier = 0.7;
-        Config.meta_service_rpc_adaptive_throttle_min_factor = 0.1;
+        Config.meta_service_rpc_backpressure_throttle_bad_trigger_count = 2;
+        Config.meta_service_rpc_backpressure_throttle_min_window_requests = 5;
+        Config.meta_service_rpc_backpressure_throttle_bad_rate_trigger = 0.3;
+        Config.meta_service_rpc_backpressure_throttle_decrease_multiplier = 0.7;
+        Config.meta_service_rpc_backpressure_throttle_min_factor = 0.1;
         for (int i = 0; i < 5; i++) {
             throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
         }
@@ -347,7 +347,7 @@ public class MetaServiceAdaptiveThrottleTest {
     @Test
     public void testMixedSignalsInNormal() {
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
-        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.55;
+        Config.meta_service_rpc_backpressure_throttle_bad_rate_trigger = 0.55;
 
         // Mix of success and bad signals - should trigger decrease
         for (int i = 0; i < 3; i++) {
@@ -384,7 +384,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testIsOverloaded_falseWhenBelowMinRequests() {
-        Config.meta_service_rpc_adaptive_throttle_min_window_requests = 100;
+        Config.meta_service_rpc_backpressure_throttle_min_window_requests = 100;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         // Record some bad signals but below min threshold
@@ -397,7 +397,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testIsOverloaded_falseWhenBelowBadCount() {
-        Config.meta_service_rpc_adaptive_throttle_bad_trigger_count = 10;
+        Config.meta_service_rpc_backpressure_throttle_bad_trigger_count = 10;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         // Record bad signals but below threshold
@@ -413,7 +413,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testIsOverloaded_falseWhenBelowBadRate() {
-        Config.meta_service_rpc_adaptive_throttle_bad_rate_trigger = 0.5;
+        Config.meta_service_rpc_backpressure_throttle_bad_rate_trigger = 0.5;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         // Many successes, few timeouts - rate below threshold
@@ -448,7 +448,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testZeroRecoveryStep() {
-        Config.meta_service_rpc_adaptive_throttle_recovery_step = 0.0;
+        Config.meta_service_rpc_backpressure_throttle_recovery_step = 0.0;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         // Decrease first
@@ -470,7 +470,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testZeroCooldownPeriod() {
-        Config.meta_service_rpc_adaptive_throttle_cooldown_ms = 0;
+        Config.meta_service_rpc_backpressure_throttle_cooldown_ms = 0;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         // Transition to FAST_DECREASE
@@ -487,7 +487,7 @@ public class MetaServiceAdaptiveThrottleTest {
 
     @Test
     public void testVerySmallWindow() {
-        Config.meta_service_rpc_adaptive_throttle_window_seconds = 0;
+        Config.meta_service_rpc_backpressure_throttle_window_seconds = 0;
         MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
 
         // Window should reset frequently with 0 second window

@@ -88,8 +88,8 @@ public class MetaServiceRateLimiter {
                 || Config.meta_service_rpc_rate_limit_max_waiting_request_num != lastMaxWaitRequestNum
                 || !Objects.equals(Config.meta_service_rpc_rate_limit_qps_per_core_config, lastQpsConfig)
                 || !Objects.equals(Config.meta_service_rpc_cost_limit_per_core_config, lastCostConfig)
-                || Config.meta_service_rpc_adaptive_throttle_enabled != lastAdaptiveThrottleEnabled
-                || !Objects.equals(Config.meta_service_rpc_adaptive_throttle_methods,
+                || Config.meta_service_rpc_backpressure_throttle_enabled != lastAdaptiveThrottleEnabled
+                || !Objects.equals(Config.meta_service_rpc_backpressure_throttle_methods,
                 lastAdaptiveThrottleMethods);
     }
 
@@ -139,8 +139,8 @@ public class MetaServiceRateLimiter {
     }
 
     private void reloadAdaptiveThrottleConfig() {
-        boolean adaptiveThrottleEnabled = Config.meta_service_rpc_adaptive_throttle_enabled;
-        String adaptiveThrottleMethods = Config.meta_service_rpc_adaptive_throttle_methods;
+        boolean adaptiveThrottleEnabled = Config.meta_service_rpc_backpressure_throttle_enabled;
+        String adaptiveThrottleMethods = Config.meta_service_rpc_backpressure_throttle_methods;
         if (!adaptiveThrottleEnabled) {
             this.adaptiveThrottleMethods.clear();
             this.backpressureQpsLimiters.clear();
@@ -327,7 +327,7 @@ public class MetaServiceRateLimiter {
         long startAt = System.nanoTime();
         try {
             // Step1: Check backpressure limiter first (if adaptive throttle is active with factor < 1.0)
-            if (Config.meta_service_rpc_adaptive_throttle_enabled) {
+            if (Config.meta_service_rpc_backpressure_throttle_enabled) {
                 double factor = MetaServiceAdaptiveThrottle.getInstance().getFactor();
                 if (factor < 1.0) {
                     QpsLimiter backpressureLimiter = getBackpressureQpsLimiter(methodName, factor);
