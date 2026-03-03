@@ -3791,18 +3791,6 @@ public class Config extends ConfigBase {
             })
     public static String meta_service_rpc_adaptive_throttle_methods = "";
 
-    /*@ConfField(mutable = true, description = {
-            "自适应限流是否进入第二阶段（对所有RPC生效）",
-            "Adaptive throttle phase 2 - whether to apply to all RPCs"})
-    public static boolean meta_service_rpc_adaptive_throttle_phase2_enabled = false;*/
-
-    /*@ConfField(mutable = true, description = {
-            "自适应限流当 configuredQps=0 时的基础QPS（用于过载时临时限流）",
-            "Adaptive throttle base QPS when configuredQps=0 (for temporary limiting during overload)",
-            "仅在自适应限流启用时生效，配置为0表示不限制"
-            })
-    public static int meta_service_rpc_adaptive_throttle_base_qps_when_zero = 100;*/
-
     @ConfField(mutable = true, description = {"存算分离模式下自动启停功能，对于该配置中的数据库名不进行唤醒操作，"
             + "用于内部作业的数据库，例如统计信息用到的数据库，"
             + "举例：auto_start_ignore_db_names=__internal_schema, information_schema",

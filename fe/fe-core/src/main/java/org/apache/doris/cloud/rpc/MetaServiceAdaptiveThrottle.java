@@ -22,7 +22,9 @@ import org.apache.doris.common.Config;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Consumer;
 
 /**
  * Adaptive throttle controller for meta-service RPCs.
@@ -53,12 +55,13 @@ public class MetaServiceAdaptiveThrottle {
 
     private final LongAdder windowTotal = new LongAdder();
     private final LongAdder windowBad = new LongAdder();
-    private volatile long windowStartMs = System.currentTimeMillis();
+    private final AtomicLong windowStartMs = new AtomicLong(System.currentTimeMillis());
 
     private volatile long cooldownStartMs = 0;
     private volatile long lastRecoveryMs = 0;
 
     private static volatile MetaServiceAdaptiveThrottle instance;
+    private volatile Consumer<Double> factorChangeListener = null;
 
     private MetaServiceAdaptiveThrottle() {
     }
@@ -115,6 +118,12 @@ public class MetaServiceAdaptiveThrottle {
     private void handleFastDecrease(long now) {
         if (isOverloaded()) {
             decreaseFactor();
+            // If factor has hit the floor, stop hammering FAST_DECREASE and enter COOLDOWN
+            /*double minFactor = Config.meta_service_rpc_adaptive_throttle_min_factor;
+            if (Math.abs(factor - minFactor) < 1e-9) {
+                transitionTo(State.COOLDOWN, now);
+                cooldownStartMs = now;
+            }*/
         } else {
             transitionTo(State.COOLDOWN, now);
             cooldownStartMs = now;
@@ -188,7 +197,10 @@ public class MetaServiceAdaptiveThrottle {
 
         if (Math.abs(newFactor - oldFactor) > 0.001) {
             LOG.info("Adaptive throttle factor changed: {} -> {} (state={})", oldFactor, newFactor, state);
-            MetaServiceRateLimiter.getInstance().setAdaptiveFactor(newFactor);
+            Consumer<Double> listener = this.factorChangeListener;
+            if (listener != null) {
+                listener.accept(newFactor);
+            }
         }
     }
 
@@ -203,15 +215,20 @@ public class MetaServiceAdaptiveThrottle {
 
     private void maybeResetWindow(long now) {
         long windowMs = Config.meta_service_rpc_adaptive_throttle_window_seconds * 1000L;
-        if (now - windowStartMs >= windowMs) {
-            resetWindow(now);
+        long startMs = windowStartMs.get();
+        if (now - startMs >= windowMs) {
+            // CAS ensures only one thread resets the window per interval
+            if (windowStartMs.compareAndSet(startMs, now)) {
+                windowTotal.reset();
+                windowBad.reset();
+            }
         }
     }
 
     private void resetWindow(long now) {
+        windowStartMs.set(now);
         windowTotal.reset();
         windowBad.reset();
-        windowStartMs = now;
     }
 
     public State getState() {
@@ -230,6 +247,10 @@ public class MetaServiceAdaptiveThrottle {
     // only for testing
     public long getWindowBad() {
         return windowBad.sum();
+    }
+
+    public void setFactorChangeListener(Consumer<Double> listener) {
+        this.factorChangeListener = listener;
     }
 
     // only for testing

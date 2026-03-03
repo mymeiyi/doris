@@ -172,6 +172,9 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(2, adaptiveMethods.size());
         Assert.assertTrue(adaptiveMethods.contains("method1"));
         Assert.assertTrue(adaptiveMethods.contains("method2"));
+        limiter.getBackpressureQpsLimiters().put("method1", new BackpressureQpsLimiter("method1", 100, 100, 0.9));
+        limiter.getBackpressureQpsLimiters().put("method2", new BackpressureQpsLimiter("method2", 100, 100, 0.9));
+        Assert.assertEquals(2, limiter.getBackpressureQpsLimiters().size());
 
         // change meta_service_rpc_adaptive_throttle_methods
         Config.meta_service_rpc_adaptive_throttle_methods = "method1, method3";
@@ -180,12 +183,15 @@ public class MetaServiceRateLimiterTest {
         Assert.assertEquals(2, adaptiveMethods.size());
         Assert.assertTrue(adaptiveMethods.contains("method1"));
         Assert.assertTrue(adaptiveMethods.contains("method3"));
+        Assert.assertEquals(1, limiter.getBackpressureQpsLimiters().size());
+        Assert.assertTrue(limiter.getBackpressureQpsLimiters().containsKey("method1"));
 
         // Disable adaptive throttle
         Config.meta_service_rpc_adaptive_throttle_enabled = false;
         Assert.assertTrue(limiter.reloadConfig());
         adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertTrue(adaptiveMethods.isEmpty());
+        Assert.assertEquals(0, limiter.getBackpressureQpsLimiters().size());
     }
 
     @Test

@@ -75,7 +75,7 @@ public class MetaServiceRateLimiter {
     MetaServiceRateLimiter(int processorCount) {
         this.processorCount = processorCount;
         reloadConfig();
-        // MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
+        MetaServiceAdaptiveThrottle.getInstance().setFactorChangeListener(this::setAdaptiveFactor);
     }
 
     @VisibleForTesting
@@ -151,8 +151,15 @@ public class MetaServiceRateLimiter {
                     }
                 }
             }
-            this.adaptiveThrottleMethods.clear();
+            Set<String> toRemove = new HashSet<>();
+            for (String method : this.adaptiveThrottleMethods) {
+                if (!newAdaptiveThrottleMethods.contains(method)) {
+                    toRemove.add(method);
+                }
+            }
+            this.adaptiveThrottleMethods.removeAll(toRemove);
             this.adaptiveThrottleMethods.addAll(newAdaptiveThrottleMethods);
+            this.backpressureQpsLimiters.keySet().removeIf(method -> !this.adaptiveThrottleMethods.contains(method));
         }
         lastAdaptiveThrottleEnabled = adaptiveThrottleEnabled;
         lastAdaptiveThrottleMethods = adaptiveThrottleMethods;
