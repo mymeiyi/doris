@@ -462,12 +462,12 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
-        Config.meta_service_rpc_cost_limit_per_core_config = "getVersion:10";
+        Config.meta_service_rpc_cost_limit_per_core_config = "getTableVersion:10";
         Config.meta_service_rpc_cost_clamped_to_limit_enabled = true;
 
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(2);
-        Assert.assertEquals(10, limiter.getClampedCost("getVersion", 10));
-        Assert.assertEquals(20, limiter.getClampedCost("getVersion", 30));
+        Assert.assertEquals(10, limiter.getClampedCost("getTableVersion", 10));
+        Assert.assertEquals(20, limiter.getClampedCost("getTableVersion", 30));
         Assert.assertEquals(40, limiter.getClampedCost("other", 40));
     }
 

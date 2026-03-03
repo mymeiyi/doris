@@ -44,8 +44,8 @@ import java.util.concurrent.TimeUnit;
 public class MetaServiceRateLimiter {
     private static final Logger LOG = LogManager.getLogger(MetaServiceRateLimiter.class);
     private static final String GET_VERSION_METHOD = "getVersion";
-    private static final String GET_TABLE_VERSION_METHOD = "getTableVersion";
-    private static final String GET_PARTITION_VERSION_METHOD = "getPartitionVersion";
+    public static final String GET_TABLE_VERSION_METHOD = "getTableVersion";
+    public static final String GET_PARTITION_VERSION_METHOD = "getPartitionVersion";
 
     private final int processorCount;
     private static volatile MetaServiceRateLimiter instance;
@@ -152,7 +152,7 @@ public class MetaServiceRateLimiter {
                     if (!trimmed.isEmpty()) {
                         if (trimmed.equalsIgnoreCase(GET_VERSION_METHOD)) {
                             newAdaptiveThrottleMethods.add(GET_TABLE_VERSION_METHOD);
-                            newAdaptiveThrottleMethods.add("GET_PARTITION_VERSION_METHOD");
+                            newAdaptiveThrottleMethods.add(GET_PARTITION_VERSION_METHOD);
                         } else {
                             newAdaptiveThrottleMethods.add(trimmed);
                         }

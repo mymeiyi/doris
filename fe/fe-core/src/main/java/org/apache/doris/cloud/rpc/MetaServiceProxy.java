@@ -304,8 +304,9 @@ public class MetaServiceProxy {
 
     public Cloud.GetVersionResponse getVisibleVersion(Cloud.GetVersionRequest request, int timeoutMs) {
         long startTime = System.currentTimeMillis();
-        String methodName = request.hasIsTableVersion() && request.getIsTableVersion() ? "getTableVersion"
-                : "getPartitionVersion";
+        String methodName = request.hasIsTableVersion() && request.getIsTableVersion()
+                ? MetaServiceRateLimiter.GET_TABLE_VERSION_METHOD :
+                MetaServiceRateLimiter.GET_PARTITION_VERSION_METHOD;
         int cost = 1;
         if (request.hasBatchMode() && request.getBatchMode()) {
             cost = MetaServiceRateLimiter.getInstance().getClampedCost(methodName, request.getDbIdsCount());
@@ -384,8 +385,8 @@ public class MetaServiceProxy {
     }
 
     public Cloud.GetVersionResponse getVersion(Cloud.GetVersionRequest request) throws RpcException {
-        String methodName = request.hasIsTableVersion() && request.getIsTableVersion() ? "getTableVersion"
-                : "getPartitionVersion";
+        String methodName = request.hasIsTableVersion() && request.getIsTableVersion()
+                ? MetaServiceRateLimiter.GET_TABLE_VERSION_METHOD : MetaServiceRateLimiter.GET_PARTITION_VERSION_METHOD;
         return executeWithMetrics(methodName, (client) -> client.getVersion(request), 1,
                 Cloud.GetVersionResponse::getStatus);
     }
