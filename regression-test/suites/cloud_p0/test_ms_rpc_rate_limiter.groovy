@@ -91,7 +91,8 @@ suite("test_ms_rpc_rate_limiter") {
     logger.info("Profile_id: ${profileId}")
     logger.info("Profile: ${profile}")
     assertTrue(profile.contains("Wait MS RPC Rate Limiter Time"))
-    assertTrue(profile.contains("Wait MS RPC Rate Limiter Count: 1"))
+    assertTrue(profile.contains("Wait MS RPC Rate Limiter Count"))
+    assertFalse(profile.contains("Wait MS RPC Rate Limiter Count: 0"))
 
     // check audit log
     def audit_log

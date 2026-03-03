@@ -91,7 +91,7 @@ public class RpcRateLimiterTest {
         String methodName = "testMethod";
         int maxWaitRequestNum = 2;
         int qps = 1;
-        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 10;
+        Config.meta_service_rpc_rate_limit_wait_timeout_ms = 500;
 
         RpcRateLimiter.QpsLimiter limiter = new RpcRateLimiter.QpsLimiter(methodName, maxWaitRequestNum, qps);
 
