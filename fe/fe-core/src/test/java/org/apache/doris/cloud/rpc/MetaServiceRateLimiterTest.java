@@ -17,8 +17,8 @@
 
 package org.apache.doris.cloud.rpc;
 
-import org.apache.doris.cloud.rpc.MetaServiceAdaptiveThrottle.Signal;
-import org.apache.doris.cloud.rpc.MetaServiceAdaptiveThrottle.State;
+import org.apache.doris.cloud.rpc.MetaServiceOverloadThrottle.Signal;
+import org.apache.doris.cloud.rpc.MetaServiceOverloadThrottle.State;
 import org.apache.doris.cloud.rpc.RpcRateLimiter.BackpressureQpsLimiter;
 import org.apache.doris.cloud.rpc.RpcRateLimiter.QpsLimiter;
 import org.apache.doris.common.Config;
@@ -63,8 +63,8 @@ public class MetaServiceRateLimiterTest {
         originalWaitTimeoutMs = Config.meta_service_rpc_rate_limit_wait_timeout_ms;
         originalQpsConfig = Config.meta_service_rpc_rate_limit_qps_per_core_config;
         originalCostConfig = Config.meta_service_rpc_cost_limit_per_core_config;
-        originalAdaptiveThrottleEnabled = Config.meta_service_rpc_backpressure_throttle_enabled;
-        originalAdaptiveThrottleMethods = Config.meta_service_rpc_backpressure_throttle_methods;
+        originalAdaptiveThrottleEnabled = Config.meta_service_rpc_overload_throttle_enabled;
+        originalAdaptiveThrottleMethods = Config.meta_service_rpc_overload_throttle_method_allowlist;
         originalCostClampedEnabled = Config.meta_service_rpc_cost_clamped_to_limit_enabled;
 
         // Reset singleton for testing
@@ -80,8 +80,8 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_wait_timeout_ms = originalWaitTimeoutMs;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = originalQpsConfig;
         Config.meta_service_rpc_cost_limit_per_core_config = originalCostConfig;
-        Config.meta_service_rpc_backpressure_throttle_enabled = originalAdaptiveThrottleEnabled;
-        Config.meta_service_rpc_backpressure_throttle_methods = originalAdaptiveThrottleMethods;
+        Config.meta_service_rpc_overload_throttle_enabled = originalAdaptiveThrottleEnabled;
+        Config.meta_service_rpc_overload_throttle_method_allowlist = originalAdaptiveThrottleMethods;
         Config.meta_service_rpc_cost_clamped_to_limit_enabled = originalCostClampedEnabled;
 
         // Reset singleton for testing
@@ -119,8 +119,8 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 20;
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
         Config.meta_service_rpc_cost_limit_per_core_config = "";
-        Config.meta_service_rpc_backpressure_throttle_enabled = false;
-        Config.meta_service_rpc_backpressure_throttle_methods = "";
+        Config.meta_service_rpc_overload_throttle_enabled = false;
+        Config.meta_service_rpc_overload_throttle_method_allowlist = "";
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // change nothing
@@ -146,12 +146,12 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_cost_limit_per_core_config = "test1:10";
         Assertions.assertTrue(limiter.isConfigChanged());
 
-        // change meta_service_rpc_backpressure_throttle_enabled
-        Config.meta_service_rpc_backpressure_throttle_enabled = true;
+        // change meta_service_rpc_overload_throttle_enabled
+        Config.meta_service_rpc_overload_throttle_enabled = true;
         Assertions.assertTrue(limiter.isConfigChanged());
 
-        // change meta_service_rpc_backpressure_throttle_methods
-        Config.meta_service_rpc_backpressure_throttle_methods = "method1,method2";
+        // change meta_service_rpc_overload_throttle_method_allowlist
+        Config.meta_service_rpc_overload_throttle_method_allowlist = "method1,method2";
         Assertions.assertTrue(limiter.isConfigChanged());
     }
 
@@ -162,8 +162,8 @@ public class MetaServiceRateLimiterTest {
     @Test
     public void testReloadAdaptiveThrottleConfig() {
         Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_backpressure_throttle_enabled = true;
-        Config.meta_service_rpc_backpressure_throttle_methods = "method1,method2";
+        Config.meta_service_rpc_overload_throttle_enabled = true;
+        Config.meta_service_rpc_overload_throttle_method_allowlist = "method1,method2";
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         // Enable adaptive throttle first
@@ -176,8 +176,8 @@ public class MetaServiceRateLimiterTest {
         limiter.getBackpressureQpsLimiters().put("method2", new BackpressureQpsLimiter("method2", 100, 100, 0.9));
         Assert.assertEquals(2, limiter.getBackpressureQpsLimiters().size());
 
-        // change meta_service_rpc_backpressure_throttle_methods
-        Config.meta_service_rpc_backpressure_throttle_methods = "method1, method3";
+        // change meta_service_rpc_overload_throttle_method_allowlist
+        Config.meta_service_rpc_overload_throttle_method_allowlist = "method1, method3";
         Assert.assertTrue(limiter.reloadConfig());
         adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertEquals(2, adaptiveMethods.size());
@@ -187,7 +187,7 @@ public class MetaServiceRateLimiterTest {
         Assert.assertTrue(limiter.getBackpressureQpsLimiters().containsKey("method1"));
 
         // Disable adaptive throttle
-        Config.meta_service_rpc_backpressure_throttle_enabled = false;
+        Config.meta_service_rpc_overload_throttle_enabled = false;
         Assert.assertTrue(limiter.reloadConfig());
         adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertTrue(adaptiveMethods.isEmpty());
@@ -197,15 +197,15 @@ public class MetaServiceRateLimiterTest {
     @Test
     public void testReloadAdaptiveThrottleConfig_NullMethods() {
         Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_backpressure_throttle_enabled = true;
-        Config.meta_service_rpc_backpressure_throttle_methods = null;
+        Config.meta_service_rpc_overload_throttle_enabled = true;
+        Config.meta_service_rpc_overload_throttle_method_allowlist = null;
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
 
         Assert.assertFalse(limiter.reloadConfig());
         Set<String> adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertTrue(adaptiveMethods.isEmpty());
 
-        Config.meta_service_rpc_backpressure_throttle_methods = "";
+        Config.meta_service_rpc_overload_throttle_method_allowlist = "";
         Assert.assertTrue(limiter.reloadConfig());
         adaptiveMethods = limiter.getAdaptiveThrottleMethods();
         Assert.assertTrue(adaptiveMethods.isEmpty());
@@ -260,7 +260,7 @@ public class MetaServiceRateLimiterTest {
     @Test
     public void testAcquire_BothDisabled() {
         Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_backpressure_throttle_enabled = false;
+        Config.meta_service_rpc_overload_throttle_enabled = false;
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         AtomicBoolean acquired = new AtomicBoolean(false);
         Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("anyMethod", 1)));
@@ -273,7 +273,7 @@ public class MetaServiceRateLimiterTest {
     @Test
     public void testAcquire_QpsLimitEnabled() {
         Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_backpressure_throttle_enabled = false;
+        Config.meta_service_rpc_overload_throttle_enabled = false;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
@@ -323,15 +323,15 @@ public class MetaServiceRateLimiterTest {
     @Test
     public void testAcquire_AdaptiveThrottleEnabled() {
         Config.meta_service_rpc_rate_limit_enabled = false;
-        Config.meta_service_rpc_backpressure_throttle_enabled = true;
+        Config.meta_service_rpc_overload_throttle_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
-        Config.meta_service_rpc_backpressure_throttle_methods = "method1";
+        Config.meta_service_rpc_overload_throttle_method_allowlist = "method1";
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        try (MockedStatic<MetaServiceAdaptiveThrottle> mockedStatic = Mockito.mockStatic(
-                MetaServiceAdaptiveThrottle.class)) {
-            MetaServiceAdaptiveThrottle throttle = Mockito.mock(MetaServiceAdaptiveThrottle.class);
-            mockedStatic.when(MetaServiceAdaptiveThrottle::getInstance).thenReturn(throttle);
+        try (MockedStatic<MetaServiceOverloadThrottle> mockedStatic = Mockito.mockStatic(
+                MetaServiceOverloadThrottle.class)) {
+            MetaServiceOverloadThrottle throttle = Mockito.mock(MetaServiceOverloadThrottle.class);
+            mockedStatic.when(MetaServiceOverloadThrottle::getInstance).thenReturn(throttle);
             Mockito.when(throttle.getFactor()).thenReturn(0.9);
 
             AtomicBoolean acquired = new AtomicBoolean(false);
@@ -349,15 +349,15 @@ public class MetaServiceRateLimiterTest {
     @Test
     public void testAcquire_BothEnabled() {
         Config.meta_service_rpc_rate_limit_enabled = true;
-        Config.meta_service_rpc_backpressure_throttle_enabled = true;
+        Config.meta_service_rpc_overload_throttle_enabled = true;
         Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
-        Config.meta_service_rpc_backpressure_throttle_methods = "method1";
+        Config.meta_service_rpc_overload_throttle_method_allowlist = "method1";
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
-        try (MockedStatic<MetaServiceAdaptiveThrottle> mockedStatic = Mockito.mockStatic(
-                MetaServiceAdaptiveThrottle.class)) {
-            MetaServiceAdaptiveThrottle throttle = Mockito.mock(MetaServiceAdaptiveThrottle.class);
-            mockedStatic.when(MetaServiceAdaptiveThrottle::getInstance).thenReturn(throttle);
+        try (MockedStatic<MetaServiceOverloadThrottle> mockedStatic = Mockito.mockStatic(
+                MetaServiceOverloadThrottle.class)) {
+            MetaServiceOverloadThrottle throttle = Mockito.mock(MetaServiceOverloadThrottle.class);
+            mockedStatic.when(MetaServiceOverloadThrottle::getInstance).thenReturn(throttle);
             Mockito.when(throttle.getFactor()).thenReturn(0.9);
 
             // qps enabled, cost disabled
@@ -1221,16 +1221,16 @@ public class MetaServiceRateLimiterTest {
         Config.meta_service_rpc_rate_limit_qps_per_core_config = "method2:50";
         Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
 
-        Config.meta_service_rpc_backpressure_throttle_enabled = true;
-        Config.meta_service_rpc_backpressure_throttle_methods = "method1,method2,method3";
-        Config.meta_service_rpc_backpressure_throttle_bad_trigger_count = 4;
-        Config.meta_service_rpc_backpressure_throttle_min_window_requests = 9;
-        Config.meta_service_rpc_backpressure_throttle_bad_rate_trigger = 0.5;
-        Config.meta_service_rpc_backpressure_throttle_decrease_multiplier = 0.7;
+        Config.meta_service_rpc_overload_throttle_enabled = true;
+        Config.meta_service_rpc_overload_throttle_method_allowlist = "method1,method2,method3";
+        Config.meta_service_rpc_overload_event_count_trigger = 4;
+        Config.meta_service_rpc_overload_throttle_min_window_requests = 9;
+        Config.meta_service_rpc_overload_event_rate_trigger = 0.5;
+        Config.meta_service_rpc_overload_throttle_decrease_multiplier = 0.7;
 
         MetaServiceRateLimiter limiter = new MetaServiceRateLimiter(1);
         resetSingleton(limiter);
-        MetaServiceAdaptiveThrottle throttle = MetaServiceAdaptiveThrottle.getInstance();
+        MetaServiceOverloadThrottle throttle = MetaServiceOverloadThrottle.getInstance();
         for (int i = 0; i < 10; i++) {
             String method = "method" + (i % 2);
             Assertions.assertDoesNotThrow(() -> limiter.acquire(method, 0));
@@ -1260,28 +1260,28 @@ public class MetaServiceRateLimiterTest {
 
         // cooldown
         for (int i = 0; i < 20; i++) {
-            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+            throttle.recordSignal(MetaServiceOverloadThrottle.Signal.SUCCESS);
         }
-        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.COOLDOWN, throttle.getState());
+        Assert.assertEquals(MetaServiceOverloadThrottle.State.COOLDOWN, throttle.getState());
 
         // SLOW_RECOVERY
         throttle.setCooldownStartMs(System.currentTimeMillis() - 31000);
-        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
-        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.SLOW_RECOVERY, throttle.getState());
+        throttle.recordSignal(MetaServiceOverloadThrottle.Signal.SUCCESS);
+        Assert.assertEquals(MetaServiceOverloadThrottle.State.SLOW_RECOVERY, throttle.getState());
 
         throttle.setLastRecoveryMs(System.currentTimeMillis() - 6000);
         Assert.assertEquals(0.7, throttle.getFactor(), 0.01);
 
-        throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+        throttle.recordSignal(MetaServiceOverloadThrottle.Signal.SUCCESS);
         Assert.assertEquals(0.75, throttle.getFactor(), 0.01);
         Assert.assertEquals(75, (int) method1.getRateLimiter().getRate());
         Assert.assertEquals(37, (int) method2.getRateLimiter().getRate());
 
         for (int i = 0; i < 10; i++) {
             throttle.setLastRecoveryMs(System.currentTimeMillis() - 6000);
-            throttle.recordSignal(MetaServiceAdaptiveThrottle.Signal.SUCCESS);
+            throttle.recordSignal(MetaServiceOverloadThrottle.Signal.SUCCESS);
         }
-        Assert.assertEquals(MetaServiceAdaptiveThrottle.State.NORMAL, throttle.getState());
+        Assert.assertEquals(MetaServiceOverloadThrottle.State.NORMAL, throttle.getState());
         Assert.assertEquals(0, limiter.getBackpressureQpsLimiters().size());
     }
 }

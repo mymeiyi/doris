@@ -742,11 +742,11 @@ public class MetaServiceProxy {
     }
 
     private static void handleResponseStatus(Cloud.MetaServiceResponseStatus status) {
-        if (Config.meta_service_rpc_backpressure_throttle_enabled) {
-            MetaServiceAdaptiveThrottle.Signal signal = isMetaServiceBusy(status)
-                    ? MetaServiceAdaptiveThrottle.Signal.BACKPRESSURE
-                    : MetaServiceAdaptiveThrottle.Signal.SUCCESS;
-            MetaServiceAdaptiveThrottle.getInstance().recordSignal(signal);
+        if (Config.meta_service_rpc_overload_throttle_enabled) {
+            MetaServiceOverloadThrottle.Signal signal = isMetaServiceBusy(status)
+                    ? MetaServiceOverloadThrottle.Signal.BACKPRESSURE
+                    : MetaServiceOverloadThrottle.Signal.SUCCESS;
+            MetaServiceOverloadThrottle.getInstance().recordSignal(signal);
         }
     }
 
