@@ -48,7 +48,7 @@ public class RpcRateLimiter {
             this.qps = qps;
             this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
             this.rateLimiter = RateLimiter.create(qps);
-            LOG.info("Create rate limiter for method: {}, maxWaitRequestNum: {}, qps: {}", methodName,
+            LOG.info("Create qps limiter for method: {}, maxWaitRequestNum: {}, qps: {}", methodName,
                     maxWaitRequestNum, qps);
         }
 
@@ -58,7 +58,6 @@ public class RpcRateLimiter {
 
         private void acquireQpsRateLimit(Semaphore waitingSemaphore, RateLimiter rateLimiter)
                 throws RpcRateLimitException {
-            // TODO
             if (waitingSemaphore == null) {
                 return;
             }
@@ -88,7 +87,7 @@ public class RpcRateLimiter {
         private void updateMaxWaitRequestNum(int maxWaitRequestNum) {
             Preconditions.checkArgument(maxWaitRequestNum > 0, "maxWaitRequestNum must be > 0");
             if (maxWaitRequestNum != this.maxWaitRequestNum) {
-                LOG.info("Update rpc limiter for method: {}, maxWaitRequestNum: from {} to {}", methodName,
+                LOG.info("Update qps limiter for method: {}, maxWaitRequestNum: from {} to {}", methodName,
                         this.maxWaitRequestNum, maxWaitRequestNum);
                 this.maxWaitRequestNum = maxWaitRequestNum;
                 this.waitingSemaphore = new Semaphore(maxWaitRequestNum);
@@ -98,7 +97,7 @@ public class RpcRateLimiter {
         private void updateQps(int qps) {
             Preconditions.checkArgument(qps > 0, "qps must be > 0");
             if (qps != this.qps) {
-                LOG.info("Update rpc limiter for method: {}, qps: from {} to {}", methodName, this.qps, qps);
+                LOG.info("Update qps limiter for method: {}, qps: from {} to {}", methodName, this.qps, qps);
                 this.qps = qps;
                 this.rateLimiter.setRate(qps);
             }
@@ -134,8 +133,8 @@ public class RpcRateLimiter {
             int effectiveQps = Math.max(1, (int) (baseQps * factor));
             if (effectiveQps != this.qps) {
                 update(maxWaitRequestNum, effectiveQps);
-                LOG.info("Applied factor {} to backpressure limiter for method {}, effective QPS: {}",
-                        factor, methodName, effectiveQps);
+                LOG.info("Applied factor {} to backpressure limiter for method {}, base qps: {}, effective qps: {}",
+                        factor, methodName, baseQps, effectiveQps);
             }
         }
 
@@ -183,7 +182,7 @@ public class RpcRateLimiter {
                 lock.lockInterruptibly();
             } catch (InterruptedException e) {
                 throw new RpcRateLimitException(
-                        "Meta service rpc rate limit interrupted while acquiring lock for method: " + methodName
+                        "Meta service cost limit interrupted while acquiring lock for method: " + methodName
                                 + ", requestCost: " + cost + ", currentCost: " + currentCost + ", limit: " + limit, e);
             }
             try {
@@ -191,7 +190,7 @@ public class RpcRateLimiter {
                 while (currentCost + cost > limit) {
                     if (nanos <= 0) {
                         throw new RpcRateLimitException(
-                                "Meta service rpc rate limit timeout for method: " + methodName + ", requestCost: "
+                                "Meta service cost limit timeout for method: " + methodName + ", requestCost: "
                                         + cost + ", currentCost: " + currentCost + ", limit: " + limit);
                     }
                     nanos = condition.awaitNanos(nanos);
@@ -199,7 +198,7 @@ public class RpcRateLimiter {
                 currentCost += cost;
             } catch (InterruptedException e) {
                 throw new RpcRateLimitException(
-                        "Meta service rpc rate limit interrupted while acquiring lock for method: " + methodName
+                        "Meta service cost limit interrupted while acquiring lock for method: " + methodName
                                 + ", requestCost: " + cost + ", currentCost: " + currentCost + ", limit: " + limit, e);
             } finally {
                 lock.unlock();
