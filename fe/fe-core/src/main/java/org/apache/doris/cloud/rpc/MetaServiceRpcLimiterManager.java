@@ -222,6 +222,7 @@ public class MetaServiceRpcLimiterManager {
 
     private void parseConfig(String config, String configName, Map<String, Integer> map) {
         if (config == null || config.isEmpty()) {
+            map.clear();
             return;
         }
 

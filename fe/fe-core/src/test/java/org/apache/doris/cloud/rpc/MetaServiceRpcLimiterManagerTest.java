@@ -253,6 +253,24 @@ public class MetaServiceRpcLimiterManagerTest {
         Assert.assertEquals(0, costConfig.size());
     }
 
+    @Test
+    public void testReloadRateLimiterConfigClearByEmptyConfig() {
+        Config.meta_service_rpc_rate_limit_enabled = true;
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:10;method2:20";
+        Config.meta_service_rpc_cost_limit_per_core_config = "method1:30;method2:40";
+
+        MetaServiceRpcLimiterManager limiter = new MetaServiceRpcLimiterManager(1);
+        Assert.assertEquals(2, limiter.getMethodQpsConfig().size());
+        Assert.assertEquals(2, limiter.getMethodCostConfig().size());
+
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "";
+        Config.meta_service_rpc_cost_limit_per_core_config = "";
+        Assert.assertTrue(limiter.reloadConfig());
+        Assert.assertTrue(limiter.getMethodQpsConfig().isEmpty());
+        Assert.assertTrue(limiter.getMethodCostConfig().isEmpty());
+    }
+
     // =========================================================================
     // Test: acquire() release() method
     // =========================================================================
@@ -342,6 +360,41 @@ public class MetaServiceRpcLimiterManagerTest {
             Assert.assertEquals(1, limiter.getOverloadQpsLimiters().size());
             Assert.assertEquals(100, limiter.getOverloadQpsLimiters().get("method1").getBaseQps());
             Assert.assertEquals(90, limiter.getOverloadQpsLimiters().get("method1").getRateLimiter().getRate(), 0.01);
+        }
+    }
+
+    @Test
+    public void testOverloadQpsLimiterUpdatedAfterQpsConfigReload() {
+        Config.meta_service_rpc_rate_limit_enabled = false;
+        Config.meta_service_rpc_overload_throttle_enabled = true;
+        Config.meta_service_rpc_overload_throttle_methods = "method1";
+        Config.meta_service_rpc_rate_limit_default_qps_per_core = 100;
+        Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:50";
+        Config.meta_service_rpc_rate_limit_max_waiting_request_num = 100;
+
+        MetaServiceRpcLimiterManager limiter = new MetaServiceRpcLimiterManager(1);
+        try (MockedStatic<MetaServiceOverloadThrottle> mockedStatic = Mockito.mockStatic(
+                MetaServiceOverloadThrottle.class)) {
+            MetaServiceOverloadThrottle throttle = Mockito.mock(MetaServiceOverloadThrottle.class);
+            mockedStatic.when(MetaServiceOverloadThrottle::getInstance).thenReturn(throttle);
+            Mockito.when(throttle.getFactor()).thenReturn(0.5);
+
+            AtomicBoolean acquired = new AtomicBoolean(false);
+            Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
+            Assert.assertFalse(acquired.get());
+            Assert.assertEquals(1, limiter.getOverloadQpsLimiters().size());
+            Assert.assertEquals(50, limiter.getOverloadQpsLimiters().get("method1").getBaseQps());
+            Assert.assertEquals(25, limiter.getOverloadQpsLimiters().get("method1").getRateLimiter().getRate(), 0.01);
+
+            Config.meta_service_rpc_rate_limit_qps_per_core_config = "method1:20";
+            Assert.assertTrue(limiter.reloadConfig());
+
+            Assertions.assertDoesNotThrow(() -> acquired.set(limiter.acquire("method1", 0)));
+            Assert.assertFalse(acquired.get());
+            Assert.assertEquals(1, limiter.getOverloadQpsLimiters().size());
+            // overload does not update base QPS immediately after config reload
+            Assert.assertEquals(50, limiter.getOverloadQpsLimiters().get("method1").getBaseQps());
+            Assert.assertEquals(25, limiter.getOverloadQpsLimiters().get("method1").getRateLimiter().getRate(), 0.01);
         }
     }
 
