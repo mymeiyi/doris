@@ -462,7 +462,8 @@ Status SegmentIterator::_lazy_init(vectorized::Block* block) {
 
     // z-order can not use prefix index
     if (_segment->_tablet_schema->sort_type() != SortType::ZORDER &&
-        _segment->_tablet_schema->cluster_key_uids().empty()) {
+        (_segment->_tablet_schema->cluster_key_uids().empty() ||
+         !_opts.cluster_key_ranges.empty())) {
         RETURN_IF_ERROR(_get_row_ranges_by_keys());
     }
     RETURN_IF_ERROR(_get_row_ranges_by_column_conditions());
@@ -641,39 +642,59 @@ Status SegmentIterator::_get_row_ranges_by_keys() {
     DorisMetrics::instance()->segment_row_total->increment(num_rows());
 
     // fast path for empty segment or empty key ranges
-    if (_row_bitmap.isEmpty() || _opts.key_ranges.empty()) {
+    if (_row_bitmap.isEmpty() || (_opts.key_ranges.empty() && _opts.cluster_key_ranges.empty())) {
         return Status::OK();
     }
 
     // Read & seek key columns is a waste of time when no key column in _schema
-    if (std::none_of(_schema->columns().begin(), _schema->columns().end(), [&](const Field* col) {
+    bool has_normal_key_ranges = !_opts.key_ranges.empty() &&
+                                 _segment->_tablet_schema->cluster_key_uids().empty();
+    bool has_cluster_key_ranges = !_opts.cluster_key_ranges.empty();
+    if (has_cluster_key_ranges == false &&
+        std::none_of(_schema->columns().begin(), _schema->columns().end(), [&](const Field* col) {
             return col && _opts.tablet_schema->column_by_uid(col->unique_id()).is_key();
         })) {
         return Status::OK();
     }
 
-    RowRanges result_ranges;
-    for (auto& key_range : _opts.key_ranges) {
-        rowid_t lower_rowid = 0;
-        rowid_t upper_rowid = num_rows();
-        RETURN_IF_ERROR(_prepare_seek(key_range));
-        if (key_range.upper_key != nullptr) {
-            // If client want to read upper_bound, the include_upper is true. So we
-            // should get the first ordinal at which key is larger than upper_bound.
-            // So we call _lookup_ordinal with include_upper's negate
-            RETURN_IF_ERROR(_lookup_ordinal(*key_range.upper_key, !key_range.include_upper,
-                                            num_rows(), &upper_rowid));
+    auto apply_key_ranges = [&](const std::vector<StorageReadOptions::KeyRange>& key_ranges,
+                                bool force_short_key) -> Status {
+        if (_row_bitmap.isEmpty() || key_ranges.empty()) {
+            return Status::OK();
         }
-        if (upper_rowid > 0 && key_range.lower_key != nullptr) {
-            RETURN_IF_ERROR(_lookup_ordinal(*key_range.lower_key, key_range.include_lower,
-                                            upper_rowid, &lower_rowid));
+
+        RowRanges result_ranges;
+        for (const auto& key_range : key_ranges) {
+            rowid_t lower_rowid = 0;
+            rowid_t upper_rowid = num_rows();
+            RETURN_IF_ERROR(_prepare_seek(key_range));
+            if (key_range.upper_key != nullptr) {
+                // If client want to read upper_bound, the include_upper is true. So we
+                // should get the first ordinal at which key is larger than upper_bound.
+                // So we call _lookup_ordinal with include_upper's negate
+                RETURN_IF_ERROR(_lookup_ordinal(*key_range.upper_key, !key_range.include_upper,
+                                                num_rows(), force_short_key, &upper_rowid));
+            }
+            if (upper_rowid > 0 && key_range.lower_key != nullptr) {
+                RETURN_IF_ERROR(_lookup_ordinal(*key_range.lower_key, key_range.include_lower,
+                                                upper_rowid, force_short_key, &lower_rowid));
+            }
+            auto row_range = RowRanges::create_single(lower_rowid, upper_rowid);
+            RowRanges::ranges_union(result_ranges, row_range, &result_ranges);
         }
-        auto row_range = RowRanges::create_single(lower_rowid, upper_rowid);
-        RowRanges::ranges_union(result_ranges, row_range, &result_ranges);
+
+        size_t pre_size = _row_bitmap.cardinality();
+        _row_bitmap &= RowRanges::ranges_to_roaring(result_ranges);
+        _opts.stats->rows_key_range_filtered += (pre_size - _row_bitmap.cardinality());
+        return Status::OK();
+    };
+
+    if (has_normal_key_ranges) {
+        RETURN_IF_ERROR(apply_key_ranges(_opts.key_ranges, false));
     }
-    size_t pre_size = _row_bitmap.cardinality();
-    _row_bitmap &= RowRanges::ranges_to_roaring(result_ranges);
-    _opts.stats->rows_key_range_filtered += (pre_size - _row_bitmap.cardinality());
+    if (has_cluster_key_ranges) {
+        RETURN_IF_ERROR(apply_key_ranges(_opts.cluster_key_ranges, true));
+    }
 
     return Status::OK();
 }
@@ -696,18 +717,15 @@ Status SegmentIterator::_prepare_seek(const StorageReadOptions::KeyRange& key_ra
             }
         }
     }
-    if (!_seek_schema) {
-        _seek_schema = std::make_unique<Schema>(key_fields, key_fields.size());
-    }
+    _seek_schema = std::make_unique<Schema>(key_fields, key_fields.size());
     // todo(wb) need refactor here, when using pk to search, _seek_block is useless
-    if (_seek_block.size() == 0) {
-        _seek_block.resize(_seek_schema->num_column_ids());
-        int i = 0;
-        for (auto cid : _seek_schema->column_ids()) {
-            auto column_desc = _seek_schema->column(cid);
-            _seek_block[i] = Schema::get_column_by_field(*column_desc);
-            i++;
-        }
+    _seek_block.clear();
+    _seek_block.resize(_seek_schema->num_column_ids());
+    int i = 0;
+    for (auto cid : _seek_schema->column_ids()) {
+        auto column_desc = _seek_schema->column(cid);
+        _seek_block[i] = Schema::get_column_by_field(*column_desc);
+        i++;
     }
 
     // create used column iterator
@@ -1542,8 +1560,8 @@ Status SegmentIterator::_init_index_iterators() {
 }
 
 Status SegmentIterator::_lookup_ordinal(const RowCursor& key, bool is_include, rowid_t upper_bound,
-                                        rowid_t* rowid) {
-    if (_segment->_tablet_schema->keys_type() == UNIQUE_KEYS &&
+                                        bool force_short_key, rowid_t* rowid) {
+    if (!force_short_key && _segment->_tablet_schema->keys_type() == UNIQUE_KEYS &&
         _segment->get_primary_key_index() != nullptr) {
         return _lookup_ordinal_from_pk_index(key, is_include, rowid);
     }

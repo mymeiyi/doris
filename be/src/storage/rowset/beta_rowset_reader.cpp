@@ -64,6 +64,7 @@ void BetaRowsetReader::reset_read_options() {
     _read_options.col_id_to_predicates.clear();
     _read_options.del_predicates_for_zone_map.clear();
     _read_options.key_ranges.clear();
+    _read_options.cluster_key_ranges.clear();
 }
 
 RowsetReaderSharedPtr BetaRowsetReader::clone() {
@@ -122,6 +123,15 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
                                                   _read_context->is_lower_keys_included->at(i),
                                                   &_read_context->upper_bound_keys->at(i),
                                                   _read_context->is_upper_keys_included->at(i));
+        }
+    }
+    if (_read_context->cluster_lower_bound_keys != nullptr) {
+        for (int i = 0; i < _read_context->cluster_lower_bound_keys->size(); ++i) {
+            _read_options.cluster_key_ranges.emplace_back(
+                    &_read_context->cluster_lower_bound_keys->at(i),
+                    _read_context->is_cluster_lower_keys_included->at(i),
+                    &_read_context->cluster_upper_bound_keys->at(i),
+                    _read_context->is_cluster_upper_keys_included->at(i));
         }
     }
 
@@ -232,6 +242,10 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
 
     if (_read_context->condition_cache_digest) {
         for (const auto& key_range : _read_options.key_ranges) {
+            _read_context->condition_cache_digest =
+                    key_range.get_digest(_read_context->condition_cache_digest);
+        }
+        for (const auto& key_range : _read_options.cluster_key_ranges) {
             _read_context->condition_cache_digest =
                     key_range.get_digest(_read_context->condition_cache_digest);
         }
