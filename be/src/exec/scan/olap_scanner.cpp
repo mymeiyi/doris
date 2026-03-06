@@ -401,6 +401,20 @@ Status OlapScanner::_init_tablet_reader_params(
         tablet_schema->merge_dropped_columns(*del_pred->tablet_schema());
     }
 
+    _tablet_reader_params.cluster_start_key.clear();
+    _tablet_reader_params.cluster_end_key.clear();
+    _tablet_reader_params.use_cluster_key_for_short_key_ranges = false;
+
+    const bool could_use_cluster_short_key_ranges =
+            tablet_schema->keys_type() == UNIQUE_KEYS &&
+            _tablet_reader_params.tablet->enable_unique_key_merge_on_write() &&
+            !tablet_schema->cluster_key_uids().empty();
+    bool use_cluster_short_key_ranges = could_use_cluster_short_key_ranges;
+    std::vector<OlapTuple> cluster_start_keys;
+    std::vector<OlapTuple> cluster_end_keys;
+    const auto& key_column_names =
+            static_cast<pipeline::OlapScanLocalState*>(_local_state)->olap_scan_node().key_column_name;
+
     // Range
     for (auto* key_range : key_ranges) {
         if (key_range->begin_scan_range.size() == 1 &&
@@ -413,6 +427,39 @@ Status OlapScanner::_init_tablet_reader_params(
 
         _tablet_reader_params.start_key.push_back(key_range->begin_scan_range);
         _tablet_reader_params.end_key.push_back(key_range->end_scan_range);
+
+        if (use_cluster_short_key_ranges) {
+            if (key_range->begin_scan_range.size() != key_range->end_scan_range.size()) {
+                use_cluster_short_key_ranges = false;
+                continue;
+            }
+            size_t scan_key_size = key_range->begin_scan_range.size();
+            if (scan_key_size == 0 || scan_key_size > key_column_names.size() ||
+                scan_key_size > tablet_schema->cluster_key_uids().size()) {
+                use_cluster_short_key_ranges = false;
+                continue;
+            }
+            for (size_t i = 0; i < scan_key_size; ++i) {
+                auto cluster_key_col_idx = tablet_schema->field_index(tablet_schema->cluster_key_uids()[i]);
+                if (cluster_key_col_idx < 0 ||
+                    tablet_schema->column(cluster_key_col_idx).name() != key_column_names[i]) {
+                    use_cluster_short_key_ranges = false;
+                    break;
+                }
+            }
+            if (use_cluster_short_key_ranges) {
+                cluster_start_keys.push_back(key_range->begin_scan_range);
+                cluster_end_keys.push_back(key_range->end_scan_range);
+            }
+        }
+    }
+
+    if (use_cluster_short_key_ranges && !cluster_start_keys.empty()) {
+        _tablet_reader_params.use_cluster_key_for_short_key_ranges = true;
+        _tablet_reader_params.cluster_start_key_include = _tablet_reader_params.start_key_include;
+        _tablet_reader_params.cluster_end_key_include = _tablet_reader_params.end_key_include;
+        _tablet_reader_params.cluster_start_key = std::move(cluster_start_keys);
+        _tablet_reader_params.cluster_end_key = std::move(cluster_end_keys);
     }
 
     _tablet_reader_params.profile = _local_state->custom_profile();
