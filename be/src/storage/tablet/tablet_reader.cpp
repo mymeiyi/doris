@@ -219,6 +219,7 @@ Status TabletReader::_capture_rs_readers(const ReaderParams& read_params) {
             _keys_param.cluster_end_keys.empty() ? nullptr : &_keys_param.cluster_end_keys;
     _reader_context.is_cluster_upper_keys_included =
             _keys_param.cluster_end_keys.empty() ? nullptr : &_is_cluster_upper_keys_included;
+    _reader_context.cluster_key_cids = _cluster_key_cids.empty() ? nullptr : &_cluster_key_cids;
     _reader_context.delete_handler = &_delete_handler;
     _reader_context.stats = &_stats;
     _reader_context.use_page_cache = read_params.use_page_cache;
@@ -378,6 +379,7 @@ Status TabletReader::_init_keys_param(const ReaderParams& read_params) {
     _keys_param.end_keys.clear();
     _keys_param.cluster_start_keys.clear();
     _keys_param.cluster_end_keys.clear();
+    _cluster_key_cids.clear();
 
     auto init_keys = [&](const std::vector<OlapTuple>& input_start_keys,
                          const std::vector<OlapTuple>& input_end_keys, bool start_key_include,
@@ -478,6 +480,8 @@ Status TabletReader::_init_keys_param(const ReaderParams& read_params) {
                         cluster_scan_key_size, _tablet_schema->cluster_key_uids().size());
             }
             auto cluster_tablet_schema = std::make_shared<TabletSchema>();
+            std::vector<ColumnId> full_cluster_key_cids;
+            full_cluster_key_cids.reserve(_tablet_schema->cluster_key_uids().size());
             for (size_t i = 0; i < _tablet_schema->cluster_key_uids().size(); ++i) {
                 auto field_idx = _tablet_schema->field_index(_tablet_schema->cluster_key_uids()[i]);
                 if (field_idx < 0) {
@@ -485,8 +489,11 @@ Status TabletReader::_init_keys_param(const ReaderParams& read_params) {
                             "failed to find cluster key column, unique_id={}, tablet_id={}",
                             _tablet_schema->cluster_key_uids()[i], _tablet->tablet_id());
                 }
+                full_cluster_key_cids.push_back(field_idx);
                 cluster_tablet_schema->append_column(_tablet_schema->column(field_idx));
             }
+            _cluster_key_cids.assign(full_cluster_key_cids.begin(),
+                                     full_cluster_key_cids.begin() + cluster_scan_key_size);
             RETURN_IF_ERROR(init_keys(read_params.cluster_start_key, read_params.cluster_end_key,
                                       read_params.cluster_start_key_include,
                                       read_params.cluster_end_key_include, cluster_tablet_schema,

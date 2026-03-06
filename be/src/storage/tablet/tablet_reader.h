@@ -308,6 +308,7 @@ protected:
     std::vector<bool> _is_upper_keys_included;
     std::vector<bool> _is_cluster_lower_keys_included;
     std::vector<bool> _is_cluster_upper_keys_included;
+    std::vector<ColumnId> _cluster_key_cids;
     std::vector<std::shared_ptr<ColumnPredicate>> _col_predicates;
     std::vector<std::shared_ptr<ColumnPredicate>> _value_col_predicates;
     DeleteHandler _delete_handler;

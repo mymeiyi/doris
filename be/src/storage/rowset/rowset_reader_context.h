@@ -69,6 +69,7 @@ struct RowsetReaderContext {
     const std::vector<bool>* is_cluster_lower_keys_included = nullptr;
     const std::vector<RowCursor>* cluster_upper_bound_keys = nullptr;
     const std::vector<bool>* is_cluster_upper_keys_included = nullptr;
+    const std::vector<ColumnId>* cluster_key_cids = nullptr;
     const DeleteHandler* delete_handler = nullptr;
     OlapReaderStatistics* stats = nullptr;
     RuntimeState* runtime_state = nullptr;

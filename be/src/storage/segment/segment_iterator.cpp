@@ -667,7 +667,7 @@ Status SegmentIterator::_get_row_ranges_by_keys() {
         for (const auto& key_range : key_ranges) {
             rowid_t lower_rowid = 0;
             rowid_t upper_rowid = num_rows();
-            RETURN_IF_ERROR(_prepare_seek(key_range));
+            RETURN_IF_ERROR(_prepare_seek(key_range, force_short_key));
             if (key_range.upper_key != nullptr) {
                 // If client want to read upper_bound, the include_upper is true. So we
                 // should get the first ordinal at which key is larger than upper_bound.
@@ -700,7 +700,8 @@ Status SegmentIterator::_get_row_ranges_by_keys() {
 }
 
 // Set up environment for the following seek.
-Status SegmentIterator::_prepare_seek(const StorageReadOptions::KeyRange& key_range) {
+Status SegmentIterator::_prepare_seek(const StorageReadOptions::KeyRange& key_range,
+                                      bool force_short_key) {
     std::vector<const Field*> key_fields;
     std::set<uint32_t> column_set;
     if (key_range.lower_key != nullptr) {
@@ -721,6 +722,18 @@ Status SegmentIterator::_prepare_seek(const StorageReadOptions::KeyRange& key_ra
     // todo(wb) need refactor here, when using pk to search, _seek_block is useless
     _seek_block.clear();
     _seek_block.resize(_seek_schema->num_column_ids());
+    _seek_column_ids.clear();
+    if (force_short_key && !_opts.cluster_key_cids.empty()) {
+        if (_opts.cluster_key_cids.size() < _seek_schema->num_column_ids()) {
+            return Status::Error<ErrorCode::INTERNAL_ERROR>(
+                    "cluster key cid size {} is less than seek key size {}",
+                    _opts.cluster_key_cids.size(), _seek_schema->num_column_ids());
+        }
+        _seek_column_ids.assign(_opts.cluster_key_cids.begin(),
+                                _opts.cluster_key_cids.begin() + _seek_schema->num_column_ids());
+    } else {
+        _seek_column_ids = _seek_schema->column_ids();
+    }
     int i = 0;
     for (auto cid : _seek_schema->column_ids()) {
         auto column_desc = _seek_schema->column(cid);
@@ -729,16 +742,16 @@ Status SegmentIterator::_prepare_seek(const StorageReadOptions::KeyRange& key_ra
     }
 
     // create used column iterator
-    for (auto cid : _seek_schema->column_ids()) {
-        if (_column_iterators[cid] == nullptr) {
+    for (auto seek_cid : _seek_column_ids) {
+        if (_column_iterators[seek_cid] == nullptr) {
             // TODO: Do we need this?
-            if (_virtual_column_exprs.contains(cid)) {
-                _column_iterators[cid] = std::make_unique<VirtualColumnIterator>();
+            if (_virtual_column_exprs.contains(seek_cid)) {
+                _column_iterators[seek_cid] = std::make_unique<VirtualColumnIterator>();
                 continue;
             }
 
-            RETURN_IF_ERROR(_segment->new_column_iterator(_opts.tablet_schema->column(cid),
-                                                          &_column_iterators[cid], &_opts,
+            RETURN_IF_ERROR(_segment->new_column_iterator(_opts.tablet_schema->column(seek_cid),
+                                                          &_column_iterators[seek_cid], &_opts,
                                                           &_variant_sparse_column_cache));
             ColumnIteratorOptions iter_opts {
                     .use_page_cache = _opts.use_page_cache,
@@ -746,7 +759,7 @@ Status SegmentIterator::_prepare_seek(const StorageReadOptions::KeyRange& key_ra
                     .stats = _opts.stats,
                     .io_ctx = _opts.io_ctx,
             };
-            RETURN_IF_ERROR(_column_iterators[cid]->init(iter_opts));
+            RETURN_IF_ERROR(_column_iterators[seek_cid]->init(iter_opts));
         }
     }
 
@@ -1711,16 +1724,23 @@ Status SegmentIterator::_seek_and_peek(rowid_t rowid) {
     {
         _opts.stats->block_init_seek_num += 1;
         SCOPED_RAW_TIMER(&_opts.stats->block_init_seek_ns);
-        RETURN_IF_ERROR(_seek_columns(_seek_schema->column_ids(), rowid));
+        RETURN_IF_ERROR(_seek_columns(_seek_column_ids, rowid));
     }
-    size_t num_rows = 1;
 
     //note(wb) reset _seek_block for memory reuse
     // it is easier to use row based memory layout for clear memory
-    for (int i = 0; i < _seek_block.size(); i++) {
+    for (size_t i = 0; i < _seek_block.size(); i++) {
         _seek_block[i]->clear();
     }
-    RETURN_IF_ERROR(_read_columns(_seek_schema->column_ids(), _seek_block, num_rows));
+    for (size_t i = 0; i < _seek_column_ids.size(); ++i) {
+        size_t rows_read = 1;
+        RETURN_IF_ERROR(
+                _column_iterators[_seek_column_ids[i]]->next_batch(&rows_read, _seek_block[i]));
+        if (rows_read != 1) {
+            return Status::Error<ErrorCode::INTERNAL_ERROR>(
+                    "seek and peek expects one row, rows_read={}", rows_read);
+        }
+    }
     return Status::OK();
 }
 
