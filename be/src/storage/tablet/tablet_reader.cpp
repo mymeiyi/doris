@@ -501,6 +501,11 @@ Status TabletReader::_init_keys_param(const ReaderParams& read_params) {
                                       &_keys_param.cluster_end_keys,
                                       &_keys_param.cluster_start_key_include,
                                       &_keys_param.cluster_end_key_include));
+            LOG_IF(INFO, config::enable_mow_verbose_log && _reader_context.runtime_state != nullptr)
+                    << "cluster short key ranges prepared, tablet_id=" << _tablet->tablet_id()
+                    << ", query_id=" << print_id(_reader_context.runtime_state->query_id())
+                    << ", ranges=" << _keys_param.cluster_start_keys.size()
+                    << ", prefix_size=" << _cluster_key_cids.size();
         }
     }
 

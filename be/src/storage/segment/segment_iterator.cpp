@@ -693,7 +693,20 @@ Status SegmentIterator::_get_row_ranges_by_keys() {
         RETURN_IF_ERROR(apply_key_ranges(_opts.key_ranges, false));
     }
     if (has_cluster_key_ranges) {
+        LOG_IF(INFO, config::enable_mow_verbose_log && _opts.runtime_state != nullptr)
+                << "cluster short key pruning starts, query_id="
+                << print_id(_opts.runtime_state->query_id()) << ", tablet_id=" << _opts.tablet_id
+                << ", rowset_id=" << _opts.rowset_id.to_string() << ", segment_id=" << segment_id()
+                << ", ranges=" << _opts.cluster_key_ranges.size()
+                << ", row_bitmap_before=" << _row_bitmap.cardinality();
+        auto pre_size = _row_bitmap.cardinality();
         RETURN_IF_ERROR(apply_key_ranges(_opts.cluster_key_ranges, true));
+        LOG_IF(INFO, config::enable_mow_verbose_log && _opts.runtime_state != nullptr)
+                << "cluster short key pruning finished, query_id="
+                << print_id(_opts.runtime_state->query_id()) << ", tablet_id=" << _opts.tablet_id
+                << ", rowset_id=" << _opts.rowset_id.to_string() << ", segment_id=" << segment_id()
+                << ", row_bitmap_after=" << _row_bitmap.cardinality()
+                << ", filtered_rows=" << (pre_size - _row_bitmap.cardinality());
     }
 
     return Status::OK();
