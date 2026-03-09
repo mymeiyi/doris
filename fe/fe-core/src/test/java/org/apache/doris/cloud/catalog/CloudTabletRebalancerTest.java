@@ -20,6 +20,7 @@ package org.apache.doris.cloud.catalog;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.common.Config;
 
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -158,20 +159,20 @@ public class CloudTabletRebalancerTest {
         tableToDb.put(10L, 1L);
         tableToDb.put(11L, 1L);
         tableToDb.put(20L, 2L);
-        setField(r, "tableIdToDbId", new ConcurrentHashMap<>(tableToDb));
+        setField(r, "tableIdToDbId", new Long2LongOpenHashMap(tableToDb));
 
         // db active
         Map<Long, Long> dbActive = new HashMap<>();
         dbActive.put(1L, 5L);
         dbActive.put(2L, 1L);
-        setField(r, "dbIdToActiveCount", new ConcurrentHashMap<>(dbActive));
+        setField(r, "dbIdToActiveCount", new Long2LongOpenHashMap(dbActive));
 
         // table active
         Map<Long, Long> tableActive = new HashMap<>();
         tableActive.put(10L, 2L);
         tableActive.put(11L, 2L);
         tableActive.put(20L, 100L); // should still lose because dbActive(2)=1 < dbActive(1)=5
-        setField(r, "tableIdToActiveCount", new ConcurrentHashMap<>(tableActive));
+        setField(r, "tableIdToActiveCount", new Long2LongOpenHashMap(tableActive));
 
         Comparator<Map.Entry<Long, ConcurrentHashMap<Long, Set<Tablet>>>> cmp =
                 invokePrivate(r, "tableEntryComparator", new Class<?>[] {}, new Object[] {});
@@ -197,9 +198,9 @@ public class CloudTabletRebalancerTest {
         Map<Long, Long> tableToDb = new HashMap<>();
         tableToDb.put(10L, 1L);
         tableToDb.put(20L, 2L);
-        setField(r, "tableIdToDbId", new ConcurrentHashMap<>(tableToDb));
-        setField(r, "dbIdToActiveCount", new ConcurrentHashMap<>());
-        setField(r, "tableIdToActiveCount", new ConcurrentHashMap<>());
+        setField(r, "tableIdToDbId", new Long2LongOpenHashMap(tableToDb));
+        setField(r, "dbIdToActiveCount", new Long2LongOpenHashMap());
+        setField(r, "tableIdToActiveCount", new Long2LongOpenHashMap());
 
         Comparator<Map.Entry<Long, ConcurrentHashMap<Long, Set<Tablet>>>> cmp =
                 invokePrivate(r, "tableEntryComparator", new Class<?>[] {}, new Object[] {});
@@ -222,17 +223,17 @@ public class CloudTabletRebalancerTest {
         partToDb.put(100L, 1L); // internal
         partToDb.put(200L, 2L); // normal
         partToDb.put(201L, 2L); // normal
-        setField(r, "partitionIdToDbId", new ConcurrentHashMap<>(partToDb));
+        setField(r, "partitionIdToDbId", new Long2LongOpenHashMap(partToDb));
 
         Map<Long, Long> dbActive = new HashMap<>();
         dbActive.put(1L, 100L);
         dbActive.put(2L, 100L);
-        setField(r, "dbIdToActiveCount", new ConcurrentHashMap<>(dbActive));
+        setField(r, "dbIdToActiveCount", new Long2LongOpenHashMap(dbActive));
 
         Map<Long, Long> partActive = new HashMap<>();
         partActive.put(200L, 1L);
         partActive.put(201L, 1L);
-        setField(r, "partitionIdToActiveCount", new ConcurrentHashMap<>(partActive));
+        setField(r, "partitionIdToActiveCount", new Long2LongOpenHashMap(partActive));
 
         @SuppressWarnings("unchecked")
         Comparator<Map.Entry<Long, ConcurrentHashMap<Long, ConcurrentHashMap<Long, Set<Tablet>>>>> cmp =
@@ -308,4 +309,3 @@ public class CloudTabletRebalancerTest {
         Assertions.assertFalse(migrated);
     }
 }
-

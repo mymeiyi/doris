@@ -54,6 +54,8 @@ import org.apache.doris.thrift.TWarmUpCacheAsyncResponse;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.Sets;
+import it.unimi.dsi.fastutil.longs.Long2LongMap;
+import it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap;
 import lombok.Getter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -152,11 +154,11 @@ public class CloudTabletRebalancer extends MasterDaemon {
 
     // cache for scheduling order in one daemon run (rebuilt in statRouteInfo)
     // table/partition active count is computed from activeTabletIds
-    private volatile Map<Long, Long> tableIdToActiveCount = Collections.emptyMap();
-    private volatile Map<Long, Long> partitionIdToActiveCount = Collections.emptyMap();
-    private volatile Map<Long, Long> dbIdToActiveCount = Collections.emptyMap();
-    private volatile Map<Long, Long> tableIdToDbId = Collections.emptyMap();
-    private volatile Map<Long, Long> partitionIdToDbId = Collections.emptyMap();
+    private volatile Long2LongMap tableIdToActiveCount = new Long2LongOpenHashMap();
+    private volatile Long2LongMap partitionIdToActiveCount = new Long2LongOpenHashMap();
+    private volatile Long2LongMap dbIdToActiveCount = new Long2LongOpenHashMap();
+    private volatile Long2LongMap tableIdToDbId = new Long2LongOpenHashMap();
+    private volatile Long2LongMap partitionIdToDbId = new Long2LongOpenHashMap();
     // run-level cache: dbId -> isInternalDb (rebuilt in statRouteInfo)
     private volatile Map<Long, Boolean> dbIdToInternal = new ConcurrentHashMap<>();
     private static final Set<String> INTERNAL_DB_NAMES = Sets.newHashSet("__internal_schema", "information_schema");
@@ -1166,11 +1168,11 @@ public class CloudTabletRebalancer extends MasterDaemon {
         futureBeToTabletsInTable = new ConcurrentHashMap<Long, ConcurrentHashMap<Long, Set<Tablet>>>();
 
         // rebuild scheduling caches for this run
-        Map<Long, Long> tmpTableActive = new HashMap<>();
-        Map<Long, Long> tmpPartitionActive = new HashMap<>();
-        Map<Long, Long> tmpDbActive = new HashMap<>();
-        Map<Long, Long> tmpTableToDb = new HashMap<>();
-        Map<Long, Long> tmpPartitionToDb = new HashMap<>();
+        Long2LongOpenHashMap tmpTableActive = new Long2LongOpenHashMap();
+        Long2LongOpenHashMap tmpPartitionActive = new Long2LongOpenHashMap();
+        Long2LongOpenHashMap tmpDbActive = new Long2LongOpenHashMap();
+        Long2LongOpenHashMap tmpTableToDb = new Long2LongOpenHashMap();
+        Long2LongOpenHashMap tmpPartitionToDb = new Long2LongOpenHashMap();
         Map<Long, Boolean> tmpDbInternal = new HashMap<>();
 
         loopCloudReplica((Database db, Table table, Partition partition, MaterializedIndex index, String cluster) -> {
@@ -1184,9 +1186,9 @@ public class CloudTabletRebalancer extends MasterDaemon {
             for (Tablet tablet : index.getTablets()) {
                 // active tablet scoring (used for scheduling order)
                 if (activeTabletIds != null && !activeTabletIds.isEmpty() && activeTabletIds.contains(tablet.getId())) {
-                    tmpTableActive.merge(table.getId(), 1L, Long::sum);
-                    tmpPartitionActive.merge(partition.getId(), 1L, Long::sum);
-                    tmpDbActive.merge(db.getId(), 1L, Long::sum);
+                    tmpTableActive.addTo(table.getId(), 1L);
+                    tmpPartitionActive.addTo(partition.getId(), 1L);
+                    tmpDbActive.addTo(db.getId(), 1L);
                 }
                 for (Replica r : tablet.getReplicas()) {
                     CloudReplica replica = (CloudReplica) r;
