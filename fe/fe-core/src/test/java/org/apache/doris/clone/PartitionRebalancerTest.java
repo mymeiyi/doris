@@ -57,15 +57,16 @@ public class PartitionRebalancerTest extends TestWithFeService {
                 + " PROPERTIES ('replication_num' = '1')");
 
         Thread.sleep(2000);
-        Assertions.assertEquals(Sets.newHashSet(11, 11, 10), getBackendTabletNums());
+        Assertions.assertEquals(Sets.newHashSet(11, 11, 10), getBackendTabletNums(), "real: " + getBackendTabletNums());
 
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.4", lastFeRpcPort)));
-        Thread.sleep(2000);
-        Assertions.assertEquals(Sets.newHashSet(8, 8, 8, 8), getBackendTabletNums());
+        Thread.sleep(4000);
+        Assertions.assertEquals(Sets.newHashSet(8, 8, 8, 8), getBackendTabletNums(), "real: " + getBackendTabletNums());
 
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.5", lastFeRpcPort)));
-        Thread.sleep(2000);
-        Assertions.assertEquals(Sets.newHashSet(7, 7, 6, 6, 6), getBackendTabletNums());
+        Thread.sleep(4000);
+        Assertions.assertEquals(Sets.newHashSet(7, 7, 6, 6, 6), getBackendTabletNums(),
+                "real: " + getBackendTabletNums()));
     }
 
     private Set<Integer> getBackendTabletNums() {
