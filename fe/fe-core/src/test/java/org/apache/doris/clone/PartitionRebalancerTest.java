@@ -66,7 +66,7 @@ public class PartitionRebalancerTest extends TestWithFeService {
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.5", lastFeRpcPort)));
         Thread.sleep(4000);
         Assertions.assertEquals(Sets.newHashSet(7, 7, 6, 6, 6), getBackendTabletNums(),
-                "real: " + getBackendTabletNums()));
+                "real: " + getBackendTabletNums());
     }
 
     private Set<Integer> getBackendTabletNums() {
