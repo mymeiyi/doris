@@ -26,6 +26,7 @@ import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -57,16 +58,18 @@ public class PartitionRebalancerTest extends TestWithFeService {
                 + " PROPERTIES ('replication_num' = '1')");
 
         Thread.sleep(2000);
-        Assertions.assertEquals(Sets.newHashSet(11, 11, 10), getBackendTabletNums(), "real: " + getBackendTabletNums());
+        Assertions.assertEquals(Sets.newHashSet(11, 11, 10), getBackendTabletNums(),
+                "real: " + getBackendTabletNumLists());
 
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.4", lastFeRpcPort)));
         Thread.sleep(4000);
-        Assertions.assertEquals(Sets.newHashSet(8, 8, 8, 8), getBackendTabletNums(), "real: " + getBackendTabletNums());
+        Assertions.assertEquals(Sets.newHashSet(8, 8, 8, 8), getBackendTabletNums(),
+                "real: " + getBackendTabletNumLists());
 
         checkBEHeartbeat(Lists.newArrayList(createBackend("127.0.0.5", lastFeRpcPort)));
         Thread.sleep(4000);
         Assertions.assertEquals(Sets.newHashSet(7, 7, 6, 6, 6), getBackendTabletNums(),
-                "real: " + getBackendTabletNums());
+                "real: " + getBackendTabletNumLists());
     }
 
     private Set<Integer> getBackendTabletNums() {
@@ -75,5 +78,10 @@ public class PartitionRebalancerTest extends TestWithFeService {
                 .collect(Collectors.toSet());
     }
 
+    private List<Integer> getBackendTabletNumLists() {
+        return Env.getCurrentSystemInfo().getAllBackendIds().stream()
+                .map(beId -> Env.getCurrentInvertedIndex().getTabletIdsByBackendId(beId).size())
+                .collect(Collectors.toList());
+    }
 }
 
