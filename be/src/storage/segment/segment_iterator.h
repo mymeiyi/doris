@@ -172,9 +172,10 @@ private:
 
     // calculate row ranges that fall into requested key ranges using short key index
     [[nodiscard]] Status _get_row_ranges_by_keys();
-    [[nodiscard]] Status _prepare_seek(const StorageReadOptions::KeyRange& key_range);
+    [[nodiscard]] Status _prepare_seek(const StorageReadOptions::KeyRange& key_range,
+                                       bool force_short_key);
     [[nodiscard]] Status _lookup_ordinal(const RowCursor& key, bool is_include, rowid_t upper_bound,
-                                         rowid_t* rowid);
+                                         bool force_short_key, rowid_t* rowid);
     // lookup the ordinal of given key from short key index
     // the returned rowid is rowid in primary index, not the rowid encoded in primary key
     [[nodiscard]] Status _lookup_ordinal_from_sk_index(const RowCursor& key, bool is_include,
@@ -304,7 +305,7 @@ private:
     // todo(wb) remove this method after RowCursor is removed
     void NO_SANITIZE_UNDEFINED _convert_rowcursor_to_short_key(const RowCursor& key,
                                                                size_t num_keys) {
-        if (_short_key.size() == 0) {
+        if (_short_key.size() != num_keys) {
             _short_key.resize(num_keys);
             for (auto cid = 0; cid < num_keys; cid++) {
                 auto* field = key.schema()->column(cid);
@@ -455,6 +456,8 @@ private:
     // used to binary search the rowid for a given key
     // only used in `_get_row_ranges_by_keys`
     MutableColumns _seek_block;
+
+    std::vector<ColumnId> _seek_column_ids;
 
     //todo(wb) remove this field after Rowcursor is removed
     MutableColumns _short_key;

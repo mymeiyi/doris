@@ -105,39 +105,61 @@ Status TabletReader::_capture_rs_readers(const ReaderParams& read_params) {
                                      _tablet->tablet_id());
     }
 
-    bool eof = false;
-    bool is_lower_key_included = _keys_param.start_key_include;
-    bool is_upper_key_included = _keys_param.end_key_include;
+    _is_lower_keys_included.clear();
+    _is_upper_keys_included.clear();
+    _is_cluster_lower_keys_included.clear();
+    _is_cluster_upper_keys_included.clear();
 
-    for (int i = 0; i < _keys_param.start_keys.size(); ++i) {
-        // lower bound
-        RowCursor& start_key = _keys_param.start_keys[i];
-        RowCursor& end_key = _keys_param.end_keys[i];
+    auto capture_key_ranges =
+            [&](const std::vector<RowCursor>& start_keys, const std::vector<RowCursor>& end_keys,
+                bool is_lower_key_included, bool is_upper_key_included,
+                std::vector<bool>* is_lower_keys_included,
+                std::vector<bool>* is_upper_keys_included) -> Status {
+        for (size_t i = 0; i < start_keys.size(); ++i) {
+            const RowCursor& start_key = start_keys[i];
+            const RowCursor& end_key = end_keys[i];
 
-        if (!is_lower_key_included) {
-            if (compare_row_key(start_key, end_key) >= 0) {
-                VLOG_NOTICE << "return EOF when lower key not include"
-                            << ", start_key=" << start_key.to_string()
-                            << ", end_key=" << end_key.to_string();
-                eof = true;
-                break;
+            if (!is_lower_key_included) {
+                if (compare_row_key(start_key, end_key) >= 0) {
+                    VLOG_NOTICE << "return EOF when lower key not include"
+                                << ", start_key=" << start_key.to_string()
+                                << ", end_key=" << end_key.to_string();
+                    return Status::EndOfFile("reach end of scan range. tablet={}",
+                                             _tablet->tablet_id());
+                }
+            } else {
+                if (compare_row_key(start_key, end_key) > 0) {
+                    VLOG_NOTICE << "return EOF when lower key include="
+                                << ", start_key=" << start_key.to_string()
+                                << ", end_key=" << end_key.to_string();
+                    return Status::EndOfFile("reach end of scan range. tablet={}",
+                                             _tablet->tablet_id());
+                }
             }
-        } else {
-            if (compare_row_key(start_key, end_key) > 0) {
-                VLOG_NOTICE << "return EOF when lower key include="
-                            << ", start_key=" << start_key.to_string()
-                            << ", end_key=" << end_key.to_string();
-                eof = true;
-                break;
-            }
+
+            is_lower_keys_included->push_back(is_lower_key_included);
+            is_upper_keys_included->push_back(is_upper_key_included);
         }
+        return Status::OK();
+    };
 
-        _is_lower_keys_included.push_back(is_lower_key_included);
-        _is_upper_keys_included.push_back(is_upper_key_included);
+    if (!_keys_param.start_keys.empty()) {
+        Status st = capture_key_ranges(_keys_param.start_keys, _keys_param.end_keys,
+                                       _keys_param.start_key_include, _keys_param.end_key_include,
+                                       &_is_lower_keys_included, &_is_upper_keys_included);
+        if (!st.ok()) {
+            return st;
+        }
     }
-
-    if (eof) {
-        return Status::EndOfFile("reach end of scan range. tablet={}", _tablet->tablet_id());
+    if (!_keys_param.cluster_start_keys.empty()) {
+        Status st = capture_key_ranges(_keys_param.cluster_start_keys, _keys_param.cluster_end_keys,
+                                       _keys_param.cluster_start_key_include,
+                                       _keys_param.cluster_end_key_include,
+                                       &_is_cluster_lower_keys_included,
+                                       &_is_cluster_upper_keys_included);
+        if (!st.ok()) {
+            return st;
+        }
     }
 
     bool need_ordered_result = true;
@@ -182,10 +204,22 @@ Status TabletReader::_capture_rs_readers(const ReaderParams& read_params) {
             !_orderby_key_columns.empty() ? &_orderby_key_columns : nullptr;
     _reader_context.predicates = &_col_predicates;
     _reader_context.value_predicates = &_value_col_predicates;
-    _reader_context.lower_bound_keys = &_keys_param.start_keys;
-    _reader_context.is_lower_keys_included = &_is_lower_keys_included;
-    _reader_context.upper_bound_keys = &_keys_param.end_keys;
-    _reader_context.is_upper_keys_included = &_is_upper_keys_included;
+    _reader_context.lower_bound_keys = _keys_param.start_keys.empty() ? nullptr
+                                                                       : &_keys_param.start_keys;
+    _reader_context.is_lower_keys_included =
+            _keys_param.start_keys.empty() ? nullptr : &_is_lower_keys_included;
+    _reader_context.upper_bound_keys = _keys_param.end_keys.empty() ? nullptr : &_keys_param.end_keys;
+    _reader_context.is_upper_keys_included =
+            _keys_param.end_keys.empty() ? nullptr : &_is_upper_keys_included;
+    _reader_context.cluster_lower_bound_keys =
+            _keys_param.cluster_start_keys.empty() ? nullptr : &_keys_param.cluster_start_keys;
+    _reader_context.is_cluster_lower_keys_included =
+            _keys_param.cluster_start_keys.empty() ? nullptr : &_is_cluster_lower_keys_included;
+    _reader_context.cluster_upper_bound_keys =
+            _keys_param.cluster_end_keys.empty() ? nullptr : &_keys_param.cluster_end_keys;
+    _reader_context.is_cluster_upper_keys_included =
+            _keys_param.cluster_end_keys.empty() ? nullptr : &_is_cluster_upper_keys_included;
+    _reader_context.cluster_key_cids = _cluster_key_cids.empty() ? nullptr : &_cluster_key_cids;
     _reader_context.delete_handler = &_delete_handler;
     _reader_context.stats = &_stats;
     _reader_context.use_page_cache = read_params.use_page_cache;
@@ -340,75 +374,139 @@ Status TabletReader::_init_return_columns(const ReaderParams& read_params) {
 
 Status TabletReader::_init_keys_param(const ReaderParams& read_params) {
     SCOPED_RAW_TIMER(&_stats.tablet_reader_init_keys_param_timer_ns);
-    if (read_params.start_key.empty()) {
+    _keys_param.start_keys.clear();
+    _keys_param.end_keys.clear();
+    _keys_param.cluster_start_keys.clear();
+    _keys_param.cluster_end_keys.clear();
+    _cluster_key_cids.clear();
+
+    auto init_keys = [&](const std::vector<OlapTuple>& input_start_keys,
+                         const std::vector<OlapTuple>& input_end_keys, bool start_key_include,
+                         bool end_key_include, const TabletSchemaSPtr& scan_schema,
+                         std::vector<RowCursor>* output_start_keys,
+                         std::vector<RowCursor>* output_end_keys, bool* output_start_key_include,
+                         bool* output_end_key_include) -> Status {
+        if (input_start_keys.size() != input_end_keys.size()) {
+            return Status::Error<INVALID_ARGUMENT>(
+                    "start key size does not match end key size, start_key_size={}, end_key_size={}",
+                    input_start_keys.size(), input_end_keys.size());
+        }
+        if (input_start_keys.empty()) {
+            return Status::OK();
+        }
+
+        *output_start_key_include = start_key_include;
+        *output_end_key_include = end_key_include;
+
+        size_t key_range_size = input_start_keys.size();
+        std::vector<RowCursor>(key_range_size).swap(*output_start_keys);
+        std::vector<RowCursor>(key_range_size).swap(*output_end_keys);
+
+        size_t scan_key_size = input_start_keys.front().size();
+        if (scan_key_size > scan_schema->num_columns()) {
+            return Status::Error<INVALID_ARGUMENT>(
+                    "Input param are invalid. Column count is bigger than num_columns of schema. "
+                    "column_count={}, schema.num_columns={}",
+                    scan_key_size, scan_schema->num_columns());
+        }
+
+        std::vector<uint32_t> columns(scan_key_size);
+        std::iota(columns.begin(), columns.end(), 0);
+        auto schema = std::make_shared<Schema>(scan_schema->columns(), columns);
+
+        for (size_t i = 0; i < key_range_size; ++i) {
+            if (input_start_keys[i].size() != scan_key_size) {
+                return Status::Error<INVALID_ARGUMENT>(
+                        "The start_key.at({}).size={}, not equals the scan_key_size={}", i,
+                        input_start_keys[i].size(), scan_key_size);
+            }
+            if (input_end_keys[i].size() != scan_key_size) {
+                return Status::Error<INVALID_ARGUMENT>(
+                        "The end_key.at({}).size={}, not equals the scan_key_size={}", i,
+                        input_end_keys[i].size(), scan_key_size);
+            }
+
+            Status res =
+                    output_start_keys->at(i).init_scan_key(scan_schema, input_start_keys[i].values(),
+                                                           schema);
+            if (!res.ok()) {
+                LOG(WARNING) << "fail to init start row cursor. res = " << res;
+                return res;
+            }
+            res = output_start_keys->at(i).from_tuple(input_start_keys[i]);
+            if (!res.ok()) {
+                LOG(WARNING) << "fail to init start row cursor from keys. res=" << res
+                             << ", key_index=" << i;
+                return res;
+            }
+
+            res = output_end_keys->at(i).init_scan_key(scan_schema, input_end_keys[i].values(),
+                                                       schema);
+            if (!res.ok()) {
+                LOG(WARNING) << "fail to init end row cursor. res = " << res;
+                return res;
+            }
+            res = output_end_keys->at(i).from_tuple(input_end_keys[i]);
+            if (!res.ok()) {
+                LOG(WARNING) << "fail to init end row cursor from keys. res=" << res
+                             << ", key_index=" << i;
+                return res;
+            }
+        }
         return Status::OK();
-    }
+    };
 
-    _keys_param.start_key_include = read_params.start_key_include;
-    _keys_param.end_key_include = read_params.end_key_include;
+    RETURN_IF_ERROR(init_keys(read_params.start_key, read_params.end_key, read_params.start_key_include,
+                              read_params.end_key_include, _tablet_schema, &_keys_param.start_keys,
+                              &_keys_param.end_keys, &_keys_param.start_key_include,
+                              &_keys_param.end_key_include));
 
-    size_t start_key_size = read_params.start_key.size();
-    //_keys_param.start_keys.resize(start_key_size);
-    std::vector<RowCursor>(start_key_size).swap(_keys_param.start_keys);
-
-    size_t scan_key_size = read_params.start_key.front().size();
-    if (scan_key_size > _tablet_schema->num_columns()) {
-        return Status::Error<INVALID_ARGUMENT>(
-                "Input param are invalid. Column count is bigger than num_columns of schema. "
-                "column_count={}, schema.num_columns={}",
-                scan_key_size, _tablet_schema->num_columns());
-    }
-
-    std::vector<uint32_t> columns(scan_key_size);
-    std::iota(columns.begin(), columns.end(), 0);
-
-    std::shared_ptr<Schema> schema = std::make_shared<Schema>(_tablet_schema->columns(), columns);
-
-    for (size_t i = 0; i < start_key_size; ++i) {
-        if (read_params.start_key[i].size() != scan_key_size) {
+    if (read_params.use_cluster_key_for_short_key_ranges) {
+        if (!(_tablet_schema->keys_type() == UNIQUE_KEYS &&
+              _tablet->enable_unique_key_merge_on_write() &&
+              !_tablet_schema->cluster_key_uids().empty())) {
             return Status::Error<INVALID_ARGUMENT>(
-                    "The start_key.at({}).size={}, not equals the scan_key_size={}", i,
-                    read_params.start_key[i].size(), scan_key_size);
+                    "cluster short key ranges are only supported for UNIQUE_KEYS merge-on-write "
+                    "table with cluster keys, tablet_id={}",
+                    _tablet->tablet_id());
         }
-
-        Status res = _keys_param.start_keys[i].init_scan_key(
-                _tablet_schema, read_params.start_key[i].values(), schema);
-        if (!res.ok()) {
-            LOG(WARNING) << "fail to init row cursor. res = " << res;
-            return res;
-        }
-        res = _keys_param.start_keys[i].from_tuple(read_params.start_key[i]);
-        if (!res.ok()) {
-            LOG(WARNING) << "fail to init row cursor from Keys. res=" << res << "key_index=" << i;
-            return res;
+        if (!read_params.cluster_start_key.empty()) {
+            size_t cluster_scan_key_size = read_params.cluster_start_key.front().size();
+            if (cluster_scan_key_size > _tablet_schema->cluster_key_uids().size()) {
+                return Status::Error<INVALID_ARGUMENT>(
+                        "cluster start key size exceeds cluster key size, scan_key_size={}, "
+                        "cluster_key_size={}",
+                        cluster_scan_key_size, _tablet_schema->cluster_key_uids().size());
+            }
+            auto cluster_tablet_schema = std::make_shared<TabletSchema>();
+            std::vector<ColumnId> full_cluster_key_cids;
+            full_cluster_key_cids.reserve(_tablet_schema->cluster_key_uids().size());
+            for (size_t i = 0; i < _tablet_schema->cluster_key_uids().size(); ++i) {
+                auto field_idx = _tablet_schema->field_index(_tablet_schema->cluster_key_uids()[i]);
+                if (field_idx < 0) {
+                    return Status::Error<INVALID_ARGUMENT>(
+                            "failed to find cluster key column, unique_id={}, tablet_id={}",
+                            _tablet_schema->cluster_key_uids()[i], _tablet->tablet_id());
+                }
+                full_cluster_key_cids.push_back(field_idx);
+                cluster_tablet_schema->append_column(_tablet_schema->column(field_idx));
+            }
+            _cluster_key_cids.assign(full_cluster_key_cids.begin(),
+                                     full_cluster_key_cids.begin() + cluster_scan_key_size);
+            RETURN_IF_ERROR(init_keys(read_params.cluster_start_key, read_params.cluster_end_key,
+                                      read_params.cluster_start_key_include,
+                                      read_params.cluster_end_key_include, cluster_tablet_schema,
+                                      &_keys_param.cluster_start_keys,
+                                      &_keys_param.cluster_end_keys,
+                                      &_keys_param.cluster_start_key_include,
+                                      &_keys_param.cluster_end_key_include));
+            LOG_IF(INFO, config::enable_mow_verbose_log && _reader_context.runtime_state != nullptr)
+                    << "cluster short key ranges prepared, tablet_id=" << _tablet->tablet_id()
+                    << ", query_id=" << print_id(_reader_context.runtime_state->query_id())
+                    << ", ranges=" << _keys_param.cluster_start_keys.size()
+                    << ", prefix_size=" << _cluster_key_cids.size();
         }
     }
-
-    size_t end_key_size = read_params.end_key.size();
-    //_keys_param.end_keys.resize(end_key_size);
-    std::vector<RowCursor>(end_key_size).swap(_keys_param.end_keys);
-    for (size_t i = 0; i < end_key_size; ++i) {
-        if (read_params.end_key[i].size() != scan_key_size) {
-            return Status::Error<INVALID_ARGUMENT>(
-                    "The end_key.at({}).size={}, not equals the scan_key_size={}", i,
-                    read_params.end_key[i].size(), scan_key_size);
-        }
-
-        Status res = _keys_param.end_keys[i].init_scan_key(_tablet_schema,
-                                                           read_params.end_key[i].values(), schema);
-        if (!res.ok()) {
-            LOG(WARNING) << "fail to init row cursor. res = " << res;
-            return res;
-        }
-
-        res = _keys_param.end_keys[i].from_tuple(read_params.end_key[i]);
-        if (!res.ok()) {
-            LOG(WARNING) << "fail to init row cursor from Keys. res=" << res << " key_index=" << i;
-            return res;
-        }
-    }
-
-    //TODO:check the valid of start_key and end_key.(eg. start_key <= end_key)
 
     return Status::OK();
 }

@@ -86,6 +86,11 @@ class TabletReader {
         std::vector<RowCursor> end_keys;
         bool start_key_include = false;
         bool end_key_include = false;
+
+        std::vector<RowCursor> cluster_start_keys;
+        std::vector<RowCursor> cluster_end_keys;
+        bool cluster_start_key_include = false;
+        bool cluster_end_key_include = false;
     };
 
 public:
@@ -133,6 +138,11 @@ public:
         std::vector<OlapTuple> end_key;
         bool start_key_include = false;
         bool end_key_include = false;
+        std::vector<OlapTuple> cluster_start_key;
+        std::vector<OlapTuple> cluster_end_key;
+        bool cluster_start_key_include = false;
+        bool cluster_end_key_include = false;
+        bool use_cluster_key_for_short_key_ranges = false;
 
         std::vector<std::shared_ptr<ColumnPredicate>> predicates;
         std::vector<FunctionFilter> function_filters;
@@ -294,6 +304,9 @@ protected:
     KeysParam _keys_param;
     std::vector<bool> _is_lower_keys_included;
     std::vector<bool> _is_upper_keys_included;
+    std::vector<bool> _is_cluster_lower_keys_included;
+    std::vector<bool> _is_cluster_upper_keys_included;
+    std::vector<ColumnId> _cluster_key_cids;
     std::vector<std::shared_ptr<ColumnPredicate>> _col_predicates;
     std::vector<std::shared_ptr<ColumnPredicate>> _value_col_predicates;
     DeleteHandler _delete_handler;

@@ -1142,6 +1142,14 @@ public class OlapScanNode extends ScanNode {
         if (olapTable.getBaseSchema().stream().anyMatch(Column::isClusterKey)) {
             keyColumnNames.clear();
             keyColumnTypes.clear();
+            List<Column> clusterKeyColumns = olapTable.getBaseSchema().stream()
+                    .filter(Column::isClusterKey)
+                    .sorted(Comparator.comparingInt(Column::getClusterKeyId))
+                    .collect(Collectors.toList());
+            for (Column clusterKeyColumn : clusterKeyColumns) {
+                keyColumnNames.add(clusterKeyColumn.getName());
+                keyColumnTypes.add(clusterKeyColumn.getDataType().toThrift());
+            }
         }
         msg.olap_scan_node = new TOlapScanNode(desc.getId().asInt(), keyColumnNames, keyColumnTypes, isPreAggregation);
         msg.olap_scan_node.setColumnsDesc(columnsDesc);

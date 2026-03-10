@@ -89,6 +89,11 @@ public:
     // reader's key ranges, empty if not existed.
     // used by short key index to filter row blocks
     std::vector<KeyRange> key_ranges;
+    // reader's cluster key ranges, empty if not existed.
+    // used by short key index (cluster-key layout) to filter row blocks
+    std::vector<KeyRange> cluster_key_ranges;
+    // mapping from cluster-key range logical order to tablet schema column ids.
+    std::vector<ColumnId> cluster_key_cids;
 
     // For unique-key merge-on-write, the effect is similar to delete_conditions
     // that filters out rows that are deleted in realtime.
