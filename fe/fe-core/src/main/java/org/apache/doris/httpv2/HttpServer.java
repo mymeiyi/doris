@@ -164,6 +164,7 @@ public class HttpServer extends SpringBootServletInitializer {
         properties.put("server.jetty.threadPool.minThreads", this.minThreads);
         properties.put("server.max-http-header-size", this.maxHttpHeaderSize);
         properties.put("server.jetty.max-http-header-size", this.maxHttpHeaderSize);
+        properties.put("server.max-http-request-header-size", this.maxHttpHeaderSize);
         // Worker thread pool is not set by default, set according to your needs
         if (this.workers > 0) {
             properties.put("server.jetty.workers", this.workers);
