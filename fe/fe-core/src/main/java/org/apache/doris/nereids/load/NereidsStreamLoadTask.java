@@ -357,7 +357,10 @@ public class NereidsStreamLoadTask implements NereidsLoadTaskInfo {
                 request.getFileType(), request.getFormatType(),
                 request.getCompressType());
         streamLoadTask.setOptionalFromTSLPutRequest(request);
-        streamLoadTask.setGroupCommit(request.getGroupCommitMode());
+        if (request.isSetGroupCommit() && !Strings.isNullOrEmpty(request.getGroupCommitMode())
+                && !"off_mode".equalsIgnoreCase(request.getGroupCommitMode())) {
+            streamLoadTask.setGroupCommit(request.getGroupCommitMode());
+        }
         if (request.isSetFileSize()) {
             streamLoadTask.fileSize = request.getFileSize();
         }
