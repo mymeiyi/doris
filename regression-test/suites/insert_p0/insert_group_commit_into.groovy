@@ -543,12 +543,14 @@ suite("insert_group_commit_into") {
         logger.info("SHOW CREATE TABLE result after alter: " + createStmt2)
         assertTrue(createStmt2.toString().contains('sync_mode'), "SHOW CREATE TABLE should contain sync_mode after alter")
         
-        // Test ALTER TABLE to change back to off_mode
+        // Test ALTER TABLE to change back to off_mode - should NOT show in SHOW CREATE TABLE
         sql """ ALTER TABLE ${table}_mode SET ("group_commit_mode" = "off_mode"); """
         
         def createStmt3 = sql """ SHOW CREATE TABLE ${table}_mode """
         logger.info("SHOW CREATE TABLE result after alter to off_mode: " + createStmt3)
-        assertTrue(createStmt3.toString().contains('off_mode'), "SHOW CREATE TABLE should contain off_mode after alter")
+        // off_mode should NOT be shown in SHOW CREATE TABLE
+        assertTrue(!createStmt3.toString().contains('group_commit_mode'), 
+            "off_mode should NOT be shown in SHOW CREATE TABLE")
         
         // Test invalid group_commit_mode value
         test {
@@ -556,7 +558,7 @@ suite("insert_group_commit_into") {
             exception """Invalid group_commit_mode"""
         }
         
-        // Test default value (off_mode)
+        // Test default value (off_mode) - should NOT show group_commit_mode in SHOW CREATE TABLE
         sql """ drop table if exists ${table}_mode_default; """
         sql """
             CREATE TABLE IF NOT EXISTS ${table}_mode_default (
@@ -570,7 +572,9 @@ suite("insert_group_commit_into") {
         """
         def createStmt4 = sql """ SHOW CREATE TABLE ${table}_mode_default """
         logger.info("SHOW CREATE TABLE result for default: " + createStmt4)
-        assertTrue(createStmt4.toString().contains('off_mode'), "Default group_commit_mode should be off_mode")
+        // When default is off_mode, it should NOT be shown in SHOW CREATE TABLE
+        assertTrue(!createStmt4.toString().contains('group_commit_mode'), 
+            "Default off_mode should NOT be shown in SHOW CREATE TABLE")
         
     } finally {
     }

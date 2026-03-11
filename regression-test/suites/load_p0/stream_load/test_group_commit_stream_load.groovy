@@ -520,10 +520,11 @@ suite("test_group_commit_stream_load") {
         );
         """
         
-        // Verify SHOW CREATE TABLE shows default off_mode
+        // Verify SHOW CREATE TABLE does NOT show group_commit_mode when default is off_mode
         def createStmtDefault = sql """ SHOW CREATE TABLE ${tableNameDefault} """
         logger.info("SHOW CREATE TABLE for default: " + createStmtDefault)
-        assertTrue(createStmtDefault.toString().contains('off_mode'), "Default group_commit_mode should be off_mode")
+        assertTrue(!createStmtDefault.toString().contains('group_commit_mode'), 
+            "Default off_mode should NOT be shown in SHOW CREATE TABLE")
         
         // Stream load WITHOUT setting group_commit header - should use table default (off_mode)
         streamLoad {
