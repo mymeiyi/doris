@@ -1927,6 +1927,7 @@ public class PropertyAnalyzer {
         }
         return groupCommitMode;
     }
+
     /**
      * Check the type property of the catalog props.
      */
