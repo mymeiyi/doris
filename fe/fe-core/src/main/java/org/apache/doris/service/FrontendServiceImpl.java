@@ -1297,6 +1297,16 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         }
 
         OlapTable table = (OlapTable) db.getTableOrMetaException(request.tbl, TableType.OLAP);
+        // check if use table group_commit_mode property
+        if (request.getUseTableGroupCommitMode()) {
+            String tableGroupCommitMode = table.getGroupCommitMode();
+            if (tableGroupCommitMode != null && !tableGroupCommitMode.equalsIgnoreCase("off_mode")) {
+                LOG.info("table: {}, use group commit mode: {}", table.getName(), tableGroupCommitMode);
+                TLoadTxnBeginResult result = new TLoadTxnBeginResult();
+                result.setTableGroupCommitMode(tableGroupCommitMode).setDbId(db.getId());
+                return result;
+            }
+        }
         // begin
         long timeoutSecond = request.isSetTimeout() ? request.getTimeout() : Config.stream_load_default_timeout_second;
         Backend backend = Env.getCurrentSystemInfo().getBackend(request.getBackendId());
