@@ -72,7 +72,7 @@ public class StreamLoadHandler {
     private List<OlapTable> tables = Lists.newArrayList();
     private long timeoutMs;
     private List fragmentParams = Lists.newArrayList();
-    private String tableGroupCommitMode = null;
+    // private String tableGroupCommitMode = null;
 
     public StreamLoadHandler(TStreamLoadPutRequest request, AtomicInteger indexId,
             TStreamLoadPutResult result, String clientAddr) {
@@ -180,14 +180,14 @@ public class StreamLoadHandler {
 
         for (String tableName : tableNames) {
             Table table = db.getTableOrMetaException(tableName, TableType.OLAP);
-            if (request.getGroupCommitMode() == null) {
+            /*if (request.getGroupCommitMode() == null) {
                 String tableGroupCommitMode = ((OlapTable) table).getGroupCommitMode();
                 if (tableGroupCommitMode != null && !tableGroupCommitMode.equals("off_mode")) {
                     LOG.info("table: {}, use group commit mode: {}", table.getName(), tableGroupCommitMode);
                     this.tableGroupCommitMode = tableGroupCommitMode;
                     request.setGroupCommitMode(tableGroupCommitMode);
                 }
-            }
+            }*/
             if (request.getGroupCommitMode() != null
                     && !request.getGroupCommitMode().equals("off_mode")) {
                 if (!((OlapTable) table).getTableProperty().getUseSchemaLightChange()) {
@@ -215,9 +215,9 @@ public class StreamLoadHandler {
             result.setDbId(db.getId());
             result.setTableId(olapTable.getId());
             result.setBaseSchemaVersion(olapTable.getBaseSchemaVersion());
-            if (tableGroupCommitMode != null && !tableGroupCommitMode.equals("off_mode")) {
+            /*if (tableGroupCommitMode != null && !tableGroupCommitMode.equals("off_mode")) {
                 result.setTableGroupCommitMode(tableGroupCommitMode);
-            }
+            }*/
         }
     }
 

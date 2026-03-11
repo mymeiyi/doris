@@ -1298,7 +1298,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
 
         OlapTable table = (OlapTable) db.getTableOrMetaException(request.tbl, TableType.OLAP);
         // check if use table group_commit_mode property
-        if (request.getUseTableGroupCommitMode()) {
+        if (request.isUseTableGroupCommitMode()) {
             String tableGroupCommitMode = table.getGroupCommitMode();
             if (tableGroupCommitMode != null && !tableGroupCommitMode.equalsIgnoreCase("off_mode")) {
                 LOG.info("table: {}, use group commit mode: {}", table.getName(), tableGroupCommitMode);
