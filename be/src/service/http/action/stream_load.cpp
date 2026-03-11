@@ -766,10 +766,10 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req,
                 safe_stoi(http_req->header(HTTP_LOAD_STREAM_PER_NODE), HTTP_LOAD_STREAM_PER_NODE));
         request.__set_stream_per_node(stream_per_node);
     }
-    if (ctx->group_commit) {
-        if (!http_req->header(HTTP_GROUP_COMMIT).empty()) {
-            request.__set_group_commit_mode(http_req->header(HTTP_GROUP_COMMIT));
-        } else {
+    if (!http_req->header(HTTP_GROUP_COMMIT).empty()) {
+        request.__set_group_commit_mode(http_req->header(HTTP_GROUP_COMMIT));
+    } else {
+        if (ctx->group_commit) {
             // used for wait_internal_group_commit_finish
             request.__set_group_commit_mode("sync_mode");
         }
