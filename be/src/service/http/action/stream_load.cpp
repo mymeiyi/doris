@@ -811,6 +811,10 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req,
     if (config::is_cloud_mode() && ctx->two_phase_commit && ctx->is_mow_table()) {
         return Status::NotSupported("stream load 2pc is unsupported for mow table");
     }
+    if (ctx->put_result.__isset.table_group_commit_mode) {
+        auto table_group_commit_mode = ctx->put_result.table_group_commit_mode;
+        ctx->group_commit = table_group_commit_mode != "off_mode";
+    }
     if (http_req->header(HTTP_GROUP_COMMIT) == "async_mode") {
         // FIXME find a way to avoid chunked stream load write large WALs
         size_t content_length = 0;
