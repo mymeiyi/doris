@@ -463,6 +463,9 @@ public class CloudSchemaChangeHandler extends SchemaChangeHandler {
                     case GROUP_COMMIT_DATA_BYTES:
                         infoBuilder.setGroupCommitDataBytes(param.groupCommitDataBytes);
                         break;
+                    case GROUP_COMMIT_MODE:
+                        infoBuilder.setGroupCommitMode(param.groupCommitMode);
+                        break;
                     case COMPACTION_POLICY:
                         infoBuilder.setCompactionPolicy(param.compactionPolicy);
                         break;
