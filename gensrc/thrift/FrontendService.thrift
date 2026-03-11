@@ -596,6 +596,7 @@ struct TStreamLoadPutResult {
     7: optional bool wait_internal_group_commit_finish = false
     8: optional i64 group_commit_interval_ms
     9: optional i64 group_commit_data_bytes
+    10: optional string table_group_commit_mode
 }
 
 struct TStreamLoadMultiTablePutResult {
