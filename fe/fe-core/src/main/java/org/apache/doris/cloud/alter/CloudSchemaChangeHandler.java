@@ -152,6 +152,21 @@ public class CloudSchemaChangeHandler extends SchemaChangeHandler {
             }
             param.ttlSeconds = ttlSeconds;
             param.type = UpdatePartitionMetaParam.TabletMetaType.TTL_SECONDS;
+        } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_GROUP_COMMIT_MODE)) {
+            String groupCommitMode = PropertyAnalyzer.analyzeGroupCommitMode(properties, false);
+            olapTable.readLock();
+            try {
+                if (groupCommitMode.equalsIgnoreCase(olapTable.getGroupCommitMode())) {
+                    LOG.info("groupCommitMode:{} is equal with olapTable.groupCommitMode():{}",
+                            groupCommitMode, olapTable.getGroupCommitMode());
+                    return;
+                }
+                partitions.addAll(olapTable.getPartitions());
+            } finally {
+                olapTable.readUnlock();
+            }
+            param.groupCommitMode = groupCommitMode;
+            param.type = UpdatePartitionMetaParam.TabletMetaType.GROUP_COMMIT_MODE;
         } else if (properties.containsKey(PropertyAnalyzer.PROPERTIES_GROUP_COMMIT_INTERVAL_MS)) {
             int groupCommitIntervalMs = PropertyAnalyzer.analyzeGroupCommitIntervalMs(properties, false);
             olapTable.readLock();
@@ -372,6 +387,7 @@ public class CloudSchemaChangeHandler extends SchemaChangeHandler {
             INMEMORY,
             PERSISTENT,
             TTL_SECONDS,
+            GROUP_COMMIT_MODE,
             GROUP_COMMIT_INTERVAL_MS,
             GROUP_COMMIT_DATA_BYTES,
             COMPACTION_POLICY,
@@ -388,6 +404,7 @@ public class CloudSchemaChangeHandler extends SchemaChangeHandler {
         boolean isPersistent = false;
         boolean isInMemory = false;
         long ttlSeconds = 0;
+        String groupCommitMode;
         long groupCommitIntervalMs = 0;
         long groupCommitDataBytes = 0;
         String compactionPolicy;
