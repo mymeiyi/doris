@@ -466,6 +466,8 @@ struct TLoadTxnBeginRequest {
     14: optional i64 table_id
     15: optional i64 backend_id
     16: optional TCertBasedAuth cert_based_auth
+    // if use group_commit_mode from table
+    17: optional bool use_table_group_commit_mode
 }
 
 struct TLoadTxnBeginResult {
@@ -473,6 +475,7 @@ struct TLoadTxnBeginResult {
     2: optional i64 txnId
     3: optional string job_status // if label already used, set status of existing job
     4: optional i64 db_id
+    5: optional string table_group_commit_mode
 }
 
 struct TBeginTxnRequest {
@@ -596,7 +599,6 @@ struct TStreamLoadPutResult {
     7: optional bool wait_internal_group_commit_finish = false
     8: optional i64 group_commit_interval_ms
     9: optional i64 group_commit_data_bytes
-    10: optional string table_group_commit_mode
 }
 
 struct TStreamLoadMultiTablePutResult {

@@ -254,6 +254,7 @@ int StreamLoadAction::on_header(HttpRequest* req) {
 
     LOG(INFO) << "new income streaming load request." << ctx->brief() << ", db=" << ctx->db
               << ", tbl=" << ctx->table << ", group_commit=" << ctx->group_commit
+              << ", group_commit_mode=" << ctx->group_commit_mode
               << ", HTTP headers=" << req->get_all_headers();
     ctx->begin_receive_and_read_data_cost_nanos = MonotonicNanos();
 
@@ -767,6 +768,7 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req,
         request.__set_stream_per_node(stream_per_node);
     }
 
+    // TODO
     if (ctx->group_commit) {
         if (!http_req->header(HTTP_GROUP_COMMIT).empty()) {
             request.__set_group_commit_mode(http_req->header(HTTP_GROUP_COMMIT));
@@ -816,6 +818,7 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req,
     if (config::is_cloud_mode() && ctx->two_phase_commit && ctx->is_mow_table()) {
         return Status::NotSupported("stream load 2pc is unsupported for mow table");
     }
+    // TODO
     if (ctx->put_result.__isset.table_group_commit_mode) {
         auto table_group_commit_mode = ctx->put_result.table_group_commit_mode;
         ctx->group_commit = table_group_commit_mode != "off_mode";
@@ -895,17 +898,9 @@ void StreamLoadAction::_save_stream_load_record(std::shared_ptr<StreamLoadContex
     }
 }
 
-Status StreamLoadAction::_handle_group_commit(HttpRequest* req,
-                                              std::shared_ptr<StreamLoadContext> ctx) {
-    std::string group_commit_mode = req->header(HTTP_GROUP_COMMIT);
-    if (!group_commit_mode.empty() && !iequal(group_commit_mode, "sync_mode") &&
-        !iequal(group_commit_mode, "async_mode") && !iequal(group_commit_mode, "off_mode")) {
-        return Status::InvalidArgument(
-                "group_commit can only be [async_mode, sync_mode, off_mode]");
-    }
-    if (config::wait_internal_group_commit_finish) {
-        group_commit_mode = "sync_mode";
-    }
+Status StreamLoadAction::_can_group_commit(HttpRequest* req, std::shared_ptr<StreamLoadContext> ctx,
+                                           std::string& group_commit_header,
+                                           bool& can_group_commit) {
     int64_t content_length = req->header(HttpHeaders::CONTENT_LENGTH).empty()
                                      ? 0
                                      : std::stoll(req->header(HttpHeaders::CONTENT_LENGTH));
@@ -916,13 +911,12 @@ Status StreamLoadAction::_handle_group_commit(HttpRequest* req,
         LOG(WARNING) << ss.str();
         return Status::InvalidArgument(ss.str());
     }
-    // allow chunked stream load in flink
     auto is_chunk = !req->header(HttpHeaders::TRANSFER_ENCODING).empty() &&
                     req->header(HttpHeaders::TRANSFER_ENCODING).find(CHUNK) != std::string::npos;
-    if (group_commit_mode.empty() || iequal(group_commit_mode, "off_mode") ||
-        (content_length == 0 && !is_chunk)) {
+    if (content_length == 0 && !is_chunk) {
         // off_mode and empty
-        ctx->group_commit = false;
+        // ctx->group_commit = false;
+        can_group_commit = false;
         return Status::OK();
     }
     if (is_chunk) {
@@ -942,8 +936,8 @@ Status StreamLoadAction::_handle_group_commit(HttpRequest* req,
         if (!config::wait_internal_group_commit_finish && !ctx->label.empty()) {
             return Status::InvalidArgument("label and group_commit can't be set at the same time");
         }
-        ctx->group_commit = true;
-        if (iequal(group_commit_mode, "async_mode")) {
+        // ctx->group_commit = true;
+        if (iequal(group_commit_header, "async_mode")) {
             if (!load_size_smaller_than_wal_limit(content_length)) {
                 std::stringstream ss;
                 ss << "There is no space for group commit stream load async WAL. This stream load "
@@ -953,6 +947,43 @@ Status StreamLoadAction::_handle_group_commit(HttpRequest* req,
                 LOG(WARNING) << ss.str();
                 return Status::Error<EXCEEDED_LIMIT>(ss.str());
             }
+        }
+        can_group_commit = true;
+    }
+    return Status::OK();
+}
+
+Status StreamLoadAction::_handle_group_commit(HttpRequest* req,
+                                              std::shared_ptr<StreamLoadContext> ctx) {
+    std::string group_commit_header = req->header(HTTP_GROUP_COMMIT);
+    if (!group_commit_header.empty() && !iequal(group_commit_header, "sync_mode") &&
+        !iequal(group_commit_header, "async_mode") && !iequal(group_commit_header, "off_mode")) {
+        return Status::InvalidArgument(
+                "group_commit can only be [async_mode, sync_mode, off_mode]");
+    }
+    if (config::wait_internal_group_commit_finish) {
+        group_commit_header = "sync_mode";
+    }
+
+    // if group_commit_header is off_mode, we will not use group commit
+    if (iequal(group_commit_header, "off_mode")) {
+        ctx->group_commit_mode = "off_mode";
+        ctx->group_commit = false;
+        return Status::OK();
+    }
+    bool can_group_commit = false;
+    RETURN_IF_ERROR(_can_group_commit(req, ctx, group_commit_header, can_group_commit));
+    if (!can_group_commit) {
+        ctx->group_commit_mode = "off_mode";
+        ctx->group_commit = false;
+    } else {
+        if (!group_commit_header.empty()) {
+            ctx->group_commit_mode = group_commit_header;
+            ctx->group_commit = true;
+        } else {
+            // use table property to decide group commit or not
+            ctx->group_commit_mode = "";
+            ctx->group_commit = false;
         }
     }
     return Status::OK();

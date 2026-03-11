@@ -67,7 +67,7 @@ Status k_stream_load_plan_status;
 bvar::LatencyRecorder g_stream_load_begin_txn_latency("stream_load", "begin_txn");
 bvar::LatencyRecorder g_stream_load_precommit_txn_latency("stream_load", "precommit_txn");
 bvar::LatencyRecorder g_stream_load_commit_txn_latency("stream_load", "commit_txn");
-
+g
 Status StreamLoadExecutor::execute_plan_fragment(std::shared_ptr<StreamLoadContext> ctx,
                                                  const TPipelineFragmentParamsList& parent) {
     return execute_plan_fragment(ctx, parent, [](std::shared_ptr<StreamLoadContext> ctx) {});
@@ -189,6 +189,9 @@ Status StreamLoadExecutor::begin_txn(StreamLoadContext* ctx) {
     }
     request.__set_request_id(ctx->id.to_thrift());
     request.__set_backend_id(_exec_env->cluster_info()->backend_id);
+    if (ctx->group_commit_mode == "") {
+        request.__set_use_table_group_commit_mode(true);
+    }
 
     TLoadTxnBeginResult result;
     Status status;
@@ -216,6 +219,14 @@ Status StreamLoadExecutor::begin_txn(StreamLoadContext* ctx) {
             ctx->existing_job_status = result.job_status;
         }
         return status;
+    }
+    if (ctx->group_commit_mode == "") {
+        auto table_group_commit_mode = result.table_group_commit_mode;
+        if (!table_group_commit_mode.empty() && table_group_commit_mode != "off_mode") {
+            ctx->group_commit = true;
+            ctx->group_commit_mode = table_group_commit_mode;
+            return Status::OK();
+        }
     }
     ctx->txn_id = result.txnId;
     if (result.__isset.db_id) {
