@@ -100,6 +100,7 @@ public class CloudSchemaChangeHandler extends SchemaChangeHandler {
             throws UserException {
         final Set<String> allowedProps = new HashSet<String>() {
             {
+                add(PropertyAnalyzer.PROPERTIES_GROUP_COMMIT_MODE);
                 add(PropertyAnalyzer.PROPERTIES_GROUP_COMMIT_INTERVAL_MS);
                 add(PropertyAnalyzer.PROPERTIES_GROUP_COMMIT_DATA_BYTES);
                 add(PropertyAnalyzer.PROPERTIES_FILE_CACHE_TTL_SECONDS);
