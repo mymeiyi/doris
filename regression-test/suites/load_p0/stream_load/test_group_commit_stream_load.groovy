@@ -342,8 +342,6 @@ suite("test_group_commit_stream_load") {
     }
     qt_read_json_by_line "select k,v1,v2,v3,v4,v5,BITMAP_TO_STRING(__DORIS_SKIP_BITMAP_COL__) from ${tableName} order by k;"
 
-
-
     // Test: stream load using table property group_commit_mode (async_mode)
     // When HTTP header 'group_commit' is not set, should use table's group_commit_mode property
     def tableNameAsync = "test_group_commit_stream_load_table_property_async"
@@ -364,7 +362,7 @@ suite("test_group_commit_stream_load") {
             "group_commit_mode" = "async_mode"
         );
         """
-        
+
         // Verify SHOW CREATE TABLE contains group_commit_mode
         def createStmt1 = sql """ SHOW CREATE TABLE ${tableNameAsync} """
         logger.info("SHOW CREATE TABLE for async: " + createStmt1)
@@ -375,19 +373,21 @@ suite("test_group_commit_stream_load") {
             table "${tableNameAsync}"
             set 'column_separator', ','
             // NOT setting 'group_commit' header - should use table property
+            set 'columns', 'id, name'
             file "test_stream_load1.csv"
             unset 'label'
             time 10000
             
             check { result, exception, startTime, endTime ->
-                if (exception != null) {
+                checkStreamLoadResult(exception, result, 2, 2, 0, 0)
+                /*if (exception != null) {
                     throw exception
                 }
                 log.info("Stream load result (table property async): ${result}".toString())
                 def json = parseJson(result)
                 assertEquals("success", json.Status.toLowerCase())
                 assertTrue(json.GroupCommit, "Group commit should be enabled when using table property")
-                assertTrue(json.Label.startsWith("group_commit_"), "Label should be generated for group commit")
+                assertTrue(json.Label.startsWith("group_commit_"), "Label should be generated for group commit")*/
             }
         }
         
@@ -430,23 +430,25 @@ suite("test_group_commit_stream_load") {
             table "${tableNameSync}"
             set 'column_separator', ','
             // NOT setting 'group_commit' header - should use table property
+            set 'columns', 'id, name'
             file "test_stream_load1.csv"
             unset 'label'
             time 10000
             
             check { result, exception, startTime, endTime ->
-                if (exception != null) {
+                checkStreamLoadResult(exception, result, 2, 2, 0, 0)
+                /*if (exception != null) {
                     throw exception
                 }
                 log.info("Stream load result (table property sync): ${result}".toString())
                 def json = parseJson(result)
                 assertEquals("success", json.Status.toLowerCase())
-                assertTrue(json.GroupCommit, "Group commit should be enabled for sync_mode")
+                assertTrue(json.GroupCommit, "Group commit should be enabled for sync_mode")*/
             }
         }
         
         // Wait for data to be loaded
-        sleep(3000)
+        // sleep(3000)
         def rowCount2 = sql "select count(*) from ${tableNameSync}"
         logger.info("Row count for sync table: " + rowCount2)
         assertTrue(rowCount2[0][0] > 0, "Data should be loaded")
@@ -479,6 +481,7 @@ suite("test_group_commit_stream_load") {
         streamLoad {
             table "${tableNameOverride}"
             set 'column_separator', ','
+            set 'columns', 'id, name'
             set 'group_commit', 'off_mode'  // Override table property
             file "test_stream_load1.csv"
             set 'label', 'test_override_' + System.currentTimeMillis()
@@ -529,6 +532,7 @@ suite("test_group_commit_stream_load") {
         // Stream load WITHOUT setting group_commit header - should use table default (off_mode)
         streamLoad {
             table "${tableNameDefault}"
+            set 'columns', 'id, name'
             set 'column_separator', ','
             // NOT setting 'group_commit' header - should use table default (off_mode)
             file "test_stream_load1.csv"

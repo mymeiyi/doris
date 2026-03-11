@@ -179,6 +179,13 @@ public class StreamLoadHandler {
 
         for (String tableName : tableNames) {
             Table table = db.getTableOrMetaException(tableName, TableType.OLAP);
+            if (request.getGroupCommitMode() == null) {
+                String tableGroupCommitMode = ((OlapTable) table).getGroupCommitMode();
+                if (tableGroupCommitMode != null && !tableGroupCommitMode.equals("off_mode")) {
+                    LOG.info("table: {}, use group commit mode: {}", table.getName(), tableGroupCommitMode);
+                    request.setGroupCommitMode(tableGroupCommitMode);
+                }
+            }
             if (request.getGroupCommitMode() != null
                     && !request.getGroupCommitMode().equals("off_mode")) {
                 if (!((OlapTable) table).getTableProperty().getUseSchemaLightChange()) {
