@@ -84,6 +84,9 @@ bvar::LatencyRecorder g_stream_load_commit_and_publish_latency_ms("stream_load",
 
 static constexpr size_t MIN_CHUNK_SIZE = 64 * 1024;
 static const std::string CHUNK = "chunked";
+static const std::string OFF_MODE = "off_mode";
+static const std::string SYNC_MODE = "sync_mode";
+static const std::string ASYNC_MODE = "async_mode";
 
 #ifdef BE_TEST
 TStreamLoadPutResult k_stream_load_put_result;
@@ -807,7 +810,7 @@ Status StreamLoadAction::_process_put(HttpRequest* http_req,
     if (config::is_cloud_mode() && ctx->two_phase_commit && ctx->is_mow_table()) {
         return Status::NotSupported("stream load 2pc is unsupported for mow table");
     }
-    if (http_req->header(HTTP_GROUP_COMMIT) == "async_mode") {
+    if (http_req->header(HTTP_GROUP_COMMIT) == ASYNC_MODE) {
         // FIXME find a way to avoid chunked stream load write large WALs
         size_t content_length = 0;
         if (!http_req->header(HttpHeaders::CONTENT_LENGTH).empty()) {
@@ -919,7 +922,7 @@ Status StreamLoadAction::_can_group_commit(HttpRequest* req, std::shared_ptr<Str
         if (!config::wait_internal_group_commit_finish && !ctx->label.empty()) {
             return Status::InvalidArgument("label and group_commit can't be set at the same time");
         }
-        if (iequal(group_commit_header, "async_mode")) {
+        if (iequal(group_commit_header, ASYNC_MODE)) {
             if (!load_size_smaller_than_wal_limit(content_length)) {
                 std::stringstream ss;
                 ss << "There is no space for group commit stream load async WAL. This stream load "
@@ -938,25 +941,25 @@ Status StreamLoadAction::_can_group_commit(HttpRequest* req, std::shared_ptr<Str
 Status StreamLoadAction::_handle_group_commit(HttpRequest* req,
                                               std::shared_ptr<StreamLoadContext> ctx) {
     std::string group_commit_header = req->header(HTTP_GROUP_COMMIT);
-    if (!group_commit_header.empty() && !iequal(group_commit_header, "sync_mode") &&
-        !iequal(group_commit_header, "async_mode") && !iequal(group_commit_header, "off_mode")) {
+    if (!group_commit_header.empty() && !iequal(group_commit_header, SYNC_MODE) &&
+        !iequal(group_commit_header, ASYNC_MODE) && !iequal(group_commit_header, OFF_MODE)) {
         return Status::InvalidArgument(
                 "group_commit can only be [async_mode, sync_mode, off_mode]");
     }
     if (config::wait_internal_group_commit_finish) {
-        group_commit_header = "sync_mode";
+        group_commit_header = SYNC_MODE;
     }
 
     // if group_commit_header is off_mode, we will not use group commit
-    if (iequal(group_commit_header, "off_mode")) {
-        ctx->group_commit_mode = "off_mode";
+    if (iequal(group_commit_header, OFF_MODE)) {
+        ctx->group_commit_mode = OFF_MODE;
         ctx->group_commit = false;
         return Status::OK();
     }
     bool can_group_commit = false;
     RETURN_IF_ERROR(_can_group_commit(req, ctx, group_commit_header, can_group_commit));
     if (!can_group_commit) {
-        ctx->group_commit_mode = "off_mode";
+        ctx->group_commit_mode = OFF_MODE;
         ctx->group_commit = false;
     } else {
         if (!group_commit_header.empty()) {
