@@ -106,6 +106,7 @@ public class LoadAction extends RestBaseController {
         boolean groupCommit = false;
         String groupCommitStr = request.getHeader("group_commit");
         if (groupCommitStr != null) {
+            // Use header value if set
             if (!groupCommitStr.equalsIgnoreCase("async_mode") && !groupCommitStr.equalsIgnoreCase("sync_mode")
                     && !groupCommitStr.equalsIgnoreCase("off_mode")) {
                 return new RestBaseResult("Header `group_commit` can only be `sync_mode`, `async_mode` or `off_mode`.");
@@ -123,6 +124,23 @@ public class LoadAction extends RestBaseController {
                         return new RestBaseResult(e.getMessage());
                     }
                 }
+            }
+        } else {
+            // Use table property if header not set
+            try {
+                String tableGroupCommitMode = getTableGroupCommitMode(db, table);
+                if (tableGroupCommitMode != null && !tableGroupCommitMode.equalsIgnoreCase("off_mode")) {
+                    groupCommit = true;
+                    if (tableGroupCommitMode.equalsIgnoreCase("async_mode")) {
+                        if (isGroupCommitBlock(db, table)) {
+                            String msg = "insert table " + table + GroupCommitPlanner.SCHEMA_CHANGE;
+                            return new RestBaseResult(msg);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                LOG.info("exception:" + e);
+                // Ignore table property errors, use default false
             }
         }
 
@@ -177,6 +195,30 @@ public class LoadAction extends RestBaseController {
                     return new RestBaseResult(e.getMessage());
                 }
             }
+        } else {
+            // Use table property if header not set
+            try {
+                String[] pair = parseDbAndTb(sql);
+                Database db = Env.getCurrentInternalCatalog()
+                        .getDbOrException(pair[0], s -> new TException("database is invalid for dbName: " + s));
+                Table tbl = db.getTableOrException(pair[1], s -> new TException("table is invalid: " + s));
+                if (tbl instanceof OlapTable) {
+                    String tableGroupCommitMode = ((OlapTable) tbl).getGroupCommitMode();
+                    if (tableGroupCommitMode != null && !tableGroupCommitMode.equalsIgnoreCase("off_mode")) {
+                        groupCommit = true;
+                        tableId = tbl.getId();
+                        if (tableGroupCommitMode.equalsIgnoreCase("async_mode")) {
+                            if (isGroupCommitBlock(pair[0], pair[1])) {
+                                String msg = "insert table " + pair[1] + GroupCommitPlanner.SCHEMA_CHANGE;
+                                return new RestBaseResult(msg);
+                            }
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                LOG.info("exception:" + e);
+                // Ignore table property errors, use default false
+            }
         }
         executeCheckPassword(request, response);
         try {
@@ -204,6 +246,17 @@ public class LoadAction extends RestBaseController {
                 .getDbOrException(fullDbName, s -> new TException("database is invalid for dbName: " + s));
         Table tblObj = dbObj.getTableOrException(table, s -> new TException("table is invalid: " + s));
         return Env.getCurrentEnv().getGroupCommitManager().isBlock(tblObj.getId());
+    }
+
+    private String getTableGroupCommitMode(String db, String table) throws TException {
+        String fullDbName = getFullDbName(db);
+        Database dbObj = Env.getCurrentInternalCatalog()
+                .getDbOrException(fullDbName, s -> new TException("database is invalid for dbName: " + s));
+        Table tblObj = dbObj.getTableOrException(table, s -> new TException("table is invalid: " + s));
+        if (tblObj instanceof OlapTable) {
+            return ((OlapTable) tblObj).getGroupCommitMode();
+        }
+        return null;
     }
 
     private String[] parseDbAndTb(String sql) throws Exception {
