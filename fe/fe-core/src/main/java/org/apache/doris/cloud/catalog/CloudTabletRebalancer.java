@@ -312,10 +312,10 @@ public class CloudTabletRebalancer extends MasterDaemon {
 
     @Getter
     private class InfightTablet {
-        private final Long tabletId;
+        private final long tabletId;
         private final String clusterId;
 
-        public InfightTablet(Long tabletId, String clusterId) {
+        public InfightTablet(long tabletId, String clusterId) {
             this.tabletId = tabletId;
             this.clusterId = clusterId;
         }
@@ -329,7 +329,7 @@ public class CloudTabletRebalancer extends MasterDaemon {
                 return false;
             }
             InfightTablet that = (InfightTablet) o;
-            return tabletId.equals(that.tabletId) && clusterId.equals(that.clusterId);
+            return tabletId == that.tabletId && clusterId.equals(that.clusterId);
         }
 
         @Override

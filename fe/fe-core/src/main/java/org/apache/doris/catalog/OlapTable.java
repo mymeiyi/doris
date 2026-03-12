@@ -105,6 +105,8 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Range;
 import com.google.common.collect.Sets;
 import com.google.gson.annotations.SerializedName;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.collections4.CollectionUtils;
@@ -177,10 +179,10 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
     // index id -> index meta
     @SerializedName(value = "itm", alternate = {"indexIdToMeta"})
-    private Map<Long, MaterializedIndexMeta> indexIdToMeta = Maps.newHashMap();
+    private Map<Long, MaterializedIndexMeta> indexIdToMeta = new Long2ObjectOpenHashMap();
     // index name -> index id
     @SerializedName(value = "inti", alternate = {"indexNameToId"})
-    private Map<String, Long> indexNameToId = Maps.newHashMap();
+    private Map<String, Long> indexNameToId = new Object2LongOpenHashMap();
 
     @SerializedName(value = "kt", alternate = {"keysType"})
     private KeysType keysType;
@@ -841,7 +843,7 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
         // reset all 'indexIdToXXX' map
         Map<Long, MaterializedIndexMeta> origIdxIdToMeta = indexIdToMeta;
-        indexIdToMeta = Maps.newHashMap();
+        indexIdToMeta = new Long2ObjectOpenHashMap();
         for (Map.Entry<Long, String> entry : origIdxIdToName.entrySet()) {
             long newIdxId = env.getNextId();
             if (entry.getValue().equals(name)) {
