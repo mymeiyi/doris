@@ -852,7 +852,7 @@ public class RollupJobV2 extends AlterJobV2 implements GsonPostProcessable {
         info.add(rollupIndexName);
         info.add(rollupIndexId);
         info.add(watershedTxnId);
-        info.add(showJobState.name());
+        info.add(showJobState == null ? "" : showJobState.name());
         info.add(errMsg);
         // progress
         if (jobState == JobState.RUNNING && rollupBatchTask.getTaskNum() > 0) {
