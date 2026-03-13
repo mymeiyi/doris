@@ -351,6 +351,7 @@ public class TabletScheduler extends MasterDaemon {
      */
     @Override
     public void runAfterCatalogReady() {
+        LOG.info("sout: start run tablet scheduler");
         long start = System.currentTimeMillis();
         if (!updateWorkingSlots()) {
             return;

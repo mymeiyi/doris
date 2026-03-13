@@ -97,6 +97,7 @@ public abstract class Rebalancer {
                 }
             }
         }
+        LOG.info("sout: selected alternative tablet: {}", alternativeTablets);
         return alternativeTablets;
     }
 

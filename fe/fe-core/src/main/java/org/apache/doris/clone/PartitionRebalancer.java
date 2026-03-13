@@ -17,6 +17,7 @@
 
 package org.apache.doris.clone;
 
+import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.TabletInvertedIndex;
 import org.apache.doris.catalog.TabletMeta;
@@ -145,6 +146,7 @@ public class PartitionRebalancer extends Rebalancer {
                         && !invalidIds.contains(tabletId)
                         && !inProgressIds.contains(tabletId);
             };
+            LOG.info("sout: candidate be: {}, tabletIds: {}", move.fromBe, tabletIds);
 
             // Random pick one candidate to create tabletSchedCtx
             int startIdx = rand.nextInt(tabletIds.size());
@@ -190,6 +192,7 @@ public class PartitionRebalancer extends Rebalancer {
             // Pair<Move, ToDeleteReplicaId>, ToDeleteReplicaId should be -1L before scheduled successfully
             movesInProgress.get().put(pickedTabletId,
                     Pair.of(new TabletMove(pickedTabletId, move.fromBe, move.toBe), -1L));
+            LOG.info("sout: add one move. tabletId {}, fromBe {}, toBe {}", pickedTabletId, move.fromBe, move.toBe);
             counterBalanceMoveCreated.incrementAndGet();
             // Synchronize with movesInProgress
             inProgressIds.add(pickedTabletId);
@@ -201,9 +204,15 @@ public class PartitionRebalancer extends Rebalancer {
                 LOG.debug("Medium {}: cluster is balanced.", medium);
             }
         } else {
-            LOG.info("Medium {}: get {} moves, actually select {} alternative tablets to move. Tablets detail: {}",
+            LOG.info("Medium {}: get {} moves, actually select {} alternative tablets to move. Tablets detail: {}"
+                            + ", dest bes: {}",
                     medium, moves.size(), alternativeTablets.size(),
-                    alternativeTablets.stream().mapToLong(TabletSchedCtx::getTabletId).toArray());
+                    alternativeTablets.stream().mapToLong(TabletSchedCtx::getTabletId).toArray(),
+                    alternativeTablets.stream().mapToLong(TabletSchedCtx::getDestBackendId).toArray());
+            for (Long beId : Env.getCurrentSystemInfo().getAllBackendIds()) {
+                List<Long> tabletIds = Env.getCurrentInvertedIndex().getTabletIdsByBackendId(beId);
+                LOG.info("sout: before be: {}, tablets: {}", beId, tabletIds);
+            }
         }
         return alternativeTablets;
     }

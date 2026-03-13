@@ -132,7 +132,7 @@ public abstract class TestWithFeService {
     protected String dorisHome;
     protected String runningDir = "fe/mocked/" + getClass().getSimpleName() + "/" + UUID.randomUUID() + "/";
     protected ConnectContext connectContext;
-    protected boolean needCleanDir = true;
+    protected boolean needCleanDir = false;
     protected int lastFeRpcPort = 0;
     // make it default to enable_advance_next_id
     protected boolean enableAdvanceNextId = Config.enable_advance_next_id;
