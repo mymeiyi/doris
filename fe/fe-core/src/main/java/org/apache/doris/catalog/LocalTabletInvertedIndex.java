@@ -36,6 +36,7 @@ import org.apache.doris.transaction.TableCommitInfo;
 import org.apache.doris.transaction.TransactionState;
 import org.apache.doris.transaction.TransactionStatus;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.HashBasedTable;
 import com.google.common.collect.ImmutableMap;
@@ -48,6 +49,8 @@ import com.google.common.collect.SetMultimap;
 import com.google.common.collect.Sets;
 import com.google.common.collect.Table;
 import com.google.common.collect.TreeMultimap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap.Entry;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -69,7 +72,8 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     private static final Logger LOG = LogManager.getLogger(LocalTabletInvertedIndex.class);
 
     // tablet id -> (backend id -> replica)
-    private Table<Long, Long, Replica> replicaMetaTable = HashBasedTable.create();
+    private Long2ObjectLinkedOpenHashMap<Long2ObjectLinkedOpenHashMap<Replica>> replicaMetaTable
+            = new Long2ObjectLinkedOpenHashMap<>();
 
     // backing replica table, for visiting backend replicas faster.
     // backend id -> (tablet id -> replica)
@@ -645,8 +649,8 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         }
 
         // check cooldown replica is alive
-        Map<Long, Replica> replicaMap = replicaMetaTable.row(beTabletInfo.getTabletId());
-        if (replicaMap.isEmpty()) {
+        Map<Long, Replica> replicaMap = replicaMetaTable.get(beTabletInfo.getTabletId());
+        if (replicaMap == null || replicaMap.isEmpty()) {
             return;
         }
         boolean replicaAlive = false;
@@ -676,8 +680,11 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     public List<Replica> getReplicas(Long tabletId) {
         long stamp = readLock();
         try {
-            Map<Long, Replica> replicaMap = replicaMetaTable.row(tabletId);
-            return replicaMap.values().stream().collect(Collectors.toList());
+            Map<Long, Replica> replicaMap = replicaMetaTable.get(tabletId);
+            if (replicaMap != null) {
+                return replicaMap.values().stream().collect(Collectors.toList());
+            }
+            return Collections.emptyList();
         } finally {
             readUnlock(stamp);
         }
@@ -728,7 +735,7 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     public void deleteTablet(long tabletId) {
         long stamp = writeLock();
         try {
-            Map<Long, Replica> replicas = replicaMetaTable.rowMap().remove(tabletId);
+            Map<Long, Replica> replicas = replicaMetaTable.remove(tabletId);
             if (replicas != null) {
                 for (long backendId : replicas.keySet()) {
                     Map<Long, Replica> backendMap = backingReplicaMetaTable.get(backendId);
@@ -757,7 +764,8 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
             Preconditions.checkState(tabletMetaMap.containsKey(tabletId),
                     "tablet " + tabletId + " not exists, replica " + replica.getId()
                             + ", backend " + backendId);
-            replicaMetaTable.put(tabletId, backendId, replica);
+            replicaMetaTable.computeIfAbsent(tabletId, k -> new Long2ObjectLinkedOpenHashMap<>())
+                    .put(backendId, replica);
             backingReplicaMetaTable.computeIfAbsent(backendId, k -> new Long2ObjectOpenHashMap<>())
                     .put(tabletId, replica);
             if (LOG.isDebugEnabled()) {
@@ -775,12 +783,15 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         try {
             Preconditions.checkState(tabletMetaMap.containsKey(tabletId),
                     "tablet " + tabletId + " not exists, backend " + backendId);
-            if (replicaMetaTable.containsRow(tabletId)) {
-                Replica replica = replicaMetaTable.remove(tabletId, backendId);
-
+            Map<Long, Replica> tabletMap = replicaMetaTable.get(tabletId);
+            if (tabletMap != null) {
+                Replica replica = tabletMap.remove(backendId);
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("delete replica {} of tablet {} in backend {}",
                             replica == null ? null : replica.getId(), tabletId, backendId);
+                }
+                if (tabletMap.isEmpty()) {
+                    replicaMetaTable.remove(tabletId);
                 }
 
                 Map<Long, Replica> backendMap = backingReplicaMetaTable.get(backendId);
@@ -806,7 +817,8 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         try {
             Preconditions.checkState(tabletMetaMap.containsKey(tabletId),
                     "tablet " + tabletId + " not exists, backend " + backendId);
-            return replicaMetaTable.get(tabletId, backendId);
+            Map<Long, Replica> tabletMap = replicaMetaTable.get(tabletId);
+            return tabletMap != null ? tabletMap.get(backendId) : null;
         } finally {
             readUnlock(stamp);
         }
@@ -816,8 +828,9 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     public List<Replica> getReplicasByTabletId(long tabletId) {
         long stamp = readLock();
         try {
-            if (replicaMetaTable.containsRow(tabletId)) {
-                return Lists.newArrayList(replicaMetaTable.row(tabletId).values());
+            Map<Long, Replica> tabletMap = replicaMetaTable.get(tabletId);
+            if (tabletMap != null) {
+                return Lists.newArrayList(tabletMap.values());
             }
             return Collections.emptyList();
         } finally {
@@ -945,59 +958,63 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
         try {
             // Changes to the returned set will update the underlying table
             // tablet id -> (backend id -> replica)
-            Set<Table.Cell<Long, Long, Replica>> cells = replicaMetaTable.cellSet();
-            for (Table.Cell<Long, Long, Replica> cell : cells) {
-                Long tabletId = cell.getRowKey();
-                Long beId = cell.getColumnKey();
-                Pair<TabletMove, Long> movePair = movesInProgress.get(tabletId);
-                TabletMove move = movePair != null ? movePair.first : null;
-                // there exists move from fromBe to toBe
-                if (move != null && beId == move.fromBe
-                        && availableBeIds.contains(move.toBe)) {
+            for (Map.Entry<Long, Long2ObjectLinkedOpenHashMap<Replica>> tabletEntry : replicaMetaTable.entrySet()) {
+                long tabletId = tabletEntry.getKey();
+                for (Map.Entry<Long, Replica> replicaEntry : tabletEntry.getValue().entrySet()) {
+                    long beId = replicaEntry.getKey();
 
-                    // if movePair.second == -1, it means toBe hadn't added this tablet but it will add later;
-                    // otherwise it means toBe had added this tablet
-                    boolean toBeHadReplica = movePair.second != -1L;
-                    if (toBeHadReplica) {
-                        // toBe had add this tablet, fromBe just ignore this tablet
-                        continue;
+                    Pair<TabletMove, Long> movePair = movesInProgress.get(tabletId);
+                    TabletMove move = movePair != null ? movePair.first : null;
+                    // there exists move from fromBe to toBe
+                    if (move != null && beId == move.fromBe
+                            && availableBeIds.contains(move.toBe)) {
+
+                        // if movePair.second == -1, it means toBe hadn't added this tablet but it will add later;
+                        // otherwise it means toBe had added this tablet
+                        boolean toBeHadReplica = movePair.second != -1L;
+                        if (toBeHadReplica) {
+                            // toBe had add this tablet, fromBe just ignore this tablet
+                            continue;
+                        }
+
+                        // later fromBe will delete this replica
+                        // and toBe will add a replica
+                        // so this replica should belong to toBe
+                        beId = move.toBe;
                     }
 
-                    // later fromBe will delete this replica
-                    // and toBe will add a replica
-                    // so this replica should belong to toBe
-                    beId = move.toBe;
-                }
+                    try {
+                        Preconditions.checkState(availableBeIds.contains(beId), "dead be " + beId);
+                        TabletMeta tabletMeta = tabletMetaMap.get(tabletId);
+                        // Ensure tabletMeta is not null before any access
+                        Preconditions.checkNotNull(tabletMeta, "invalid tablet " + tabletId);
+                        if (dbIds.contains(tabletMeta.getDbId()) || tableIds.contains(tabletMeta.getTableId())
+                                || partitionIds.contains(tabletMeta.getPartitionId())) {
+                            continue;
+                        }
+                        Preconditions.checkState(
+                                !Env.getCurrentColocateIndex().isColocateTable(tabletMeta.getTableId()),
+                                "table " + tabletMeta.getTableId() + " should not be the colocate table");
 
-                try {
-                    Preconditions.checkState(availableBeIds.contains(beId), "dead be " + beId);
-                    TabletMeta tabletMeta = tabletMetaMap.get(tabletId);
-                    if (dbIds.contains(tabletMeta.getDbId()) || tableIds.contains(tabletMeta.getTableId())
-                            || partitionIds.contains(tabletMeta.getPartitionId())) {
-                        continue;
-                    }
-                    Preconditions.checkNotNull(tabletMeta, "invalid tablet " + tabletId);
-                    Preconditions.checkState(
-                            !Env.getCurrentColocateIndex().isColocateTable(tabletMeta.getTableId()),
-                            "table " + tabletMeta.getTableId() + " should not be the colocate table");
+                        TStorageMedium medium = tabletMeta.getStorageMedium();
+                        Table<Long, Long, Map<Long, Long>> partitionReplicasInfo = partitionReplicasInfoMaps.get(
+                                medium);
+                        Map<Long, Long> countMap = partitionReplicasInfo.get(
+                                tabletMeta.getPartitionId(), tabletMeta.getIndexId());
+                        if (countMap == null) {
+                            // If one be doesn't have any replica of one partition, it should be counted too.
+                            countMap = availableBeIds.stream().collect(Collectors.toMap(i -> i, i -> 0L));
+                        }
 
-                    TStorageMedium medium = tabletMeta.getStorageMedium();
-                    Table<Long, Long, Map<Long, Long>> partitionReplicasInfo = partitionReplicasInfoMaps.get(medium);
-                    Map<Long, Long> countMap = partitionReplicasInfo.get(
-                            tabletMeta.getPartitionId(), tabletMeta.getIndexId());
-                    if (countMap == null) {
-                        // If one be doesn't have any replica of one partition, it should be counted too.
-                        countMap = availableBeIds.stream().collect(Collectors.toMap(i -> i, i -> 0L));
-                    }
-
-                    Long count = countMap.get(beId);
-                    countMap.put(beId, count + 1L);
-                    partitionReplicasInfo.put(tabletMeta.getPartitionId(), tabletMeta.getIndexId(), countMap);
-                    partitionReplicasInfoMaps.put(medium, partitionReplicasInfo);
-                } catch (IllegalStateException | NullPointerException e) {
-                    // If the tablet or be has some problem, don't count in
-                    if (LOG.isDebugEnabled()) {
-                        LOG.debug(e.getMessage());
+                        Long count = countMap.get(beId);
+                        countMap.put(beId, count + 1L);
+                        partitionReplicasInfo.put(tabletMeta.getPartitionId(), tabletMeta.getIndexId(), countMap);
+                        partitionReplicasInfoMaps.put(medium, partitionReplicasInfo);
+                    } catch (IllegalStateException | NullPointerException e) {
+                        // If the tablet or be has some problem, don't count in
+                        if (LOG.isDebugEnabled()) {
+                            LOG.debug(e.getMessage());
+                        }
                     }
                 }
             }
@@ -1035,17 +1052,25 @@ public class LocalTabletInvertedIndex extends TabletInvertedIndex {
     }
 
     // just for ut
+    @VisibleForTesting
     @Override
     public Table<Long, Long, Replica> getReplicaMetaTable() {
         long stamp = readLock();
         try {
-            return HashBasedTable.create(replicaMetaTable);
+            Table<Long, Long, Replica> table = HashBasedTable.create();
+            replicaMetaTable.entrySet().forEach(tabletEntry -> {
+                tabletEntry.getValue().entrySet().forEach(replicaEntry -> {
+                    table.put(tabletEntry.getKey(), replicaEntry.getKey(), replicaEntry.getValue());
+                });
+            });
+            return table;
         } finally {
             readUnlock(stamp);
         }
     }
 
     // just for ut
+    @VisibleForTesting
     @Override
     public Table<Long, Long, Replica> getBackingReplicaMetaTable() {
         long stamp = readLock();
