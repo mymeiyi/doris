@@ -17,6 +17,7 @@
 
 package org.apache.doris.cloud.transaction;
 
+import org.apache.doris.catalog.CloudTabletStatMgr;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
@@ -147,6 +148,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -501,6 +503,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
      * @param commitTxnResponse commit txn call response from meta-service
      * @param tabletCommitInfos tablet commit infos containing backend and tablet mapping
      */
+<<<<<<< HEAD
     public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse, List<TabletCommitInfo> tabletCommitInfos) {
         // ========================================
         // notify BEs to make temporary rowsets visible
@@ -509,6 +512,9 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             notifyBesMakeTmpRsVisible(commitTxnResponse, tabletCommitInfos);
         }
 
+=======
+    public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse, List<Long> tabletIds) {
+>>>>>>> 3ba9a70d846 ([improve](cloud) cloud reduce get_tablet_stats rpc to meta_service)
         // ========================================
         // update some table stats
         // ========================================
@@ -542,6 +548,12 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         if (sb.length() > 0) {
             LOG.info("notify partition first load. {}", sb);
         }
+        // 4. notify update tablet stats
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("force sync tablet stats for txnId: {}, tabletNum: {}, tabletIds: {}", txnId,
+                    tabletIds.size(), tabletIds);
+        }
+        CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
 
         // ========================================
         // produce event
@@ -733,12 +745,22 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         }
 
         final CommitTxnRequest commitTxnRequest = builder.build();
+<<<<<<< HEAD
         executeCommitTxnRequest(commitTxnRequest, transactionId, is2PC, txnCommitAttachment, tabletCommitInfos);
     }
 
     private void executeCommitTxnRequest(CommitTxnRequest commitTxnRequest, long transactionId, boolean is2PC,
             TxnCommitAttachment txnCommitAttachment, List<TabletCommitInfo> tabletCommitInfos)
                 throws UserException {
+=======
+        executeCommitTxnRequest(commitTxnRequest, transactionId, is2PC, txnCommitAttachment,
+                tabletCommitInfos == null ? Collections.emptyList()
+                        : tabletCommitInfos.stream().map(t -> t.getTabletId()).collect(Collectors.toList()));
+    }
+
+    private void executeCommitTxnRequest(CommitTxnRequest commitTxnRequest, long transactionId, boolean is2PC,
+            TxnCommitAttachment txnCommitAttachment, List<Long> tabletIds) throws UserException {
+>>>>>>> 3ba9a70d846 ([improve](cloud) cloud reduce get_tablet_stats rpc to meta_service)
         if (DebugPointUtil.isEnable("FE.mow.commit.exception")) {
             LOG.info("debug point FE.mow.commit.exception, throw e");
             throw new UserException(InternalErrorCode.INTERNAL_ERR, "debug point FE.mow.commit.exception");
@@ -761,7 +783,11 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
         StopWatch stopWatch = new StopWatch();
         stopWatch.start();
         try {
+<<<<<<< HEAD
             txnState = commitTxn(commitTxnRequest, transactionId, is2PC, tabletCommitInfos);
+=======
+            txnState = commitTxn(commitTxnRequest, transactionId, is2PC, tabletIds);
+>>>>>>> 3ba9a70d846 ([improve](cloud) cloud reduce get_tablet_stats rpc to meta_service)
             txnOperated = true;
             if (DebugPointUtil.isEnable("CloudGlobalTransactionMgr.commitTransaction.timeout")) {
                 throw new UserException(InternalErrorCode.DELETE_BITMAP_LOCK_ERR,
@@ -801,7 +827,11 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
     }
 
     private TransactionState commitTxn(CommitTxnRequest commitTxnRequest, long transactionId, boolean is2PC,
+<<<<<<< HEAD
             List<TabletCommitInfo> tabletCommitInfos) throws UserException {
+=======
+            List<Long> tabletIds) throws UserException {
+>>>>>>> 3ba9a70d846 ([improve](cloud) cloud reduce get_tablet_stats rpc to meta_service)
         checkCommitInfo(commitTxnRequest);
 
         CommitTxnResponse commitTxnResponse = null;
@@ -861,7 +891,11 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             MetricRepo.COUNTER_TXN_SUCCESS.increase(1L);
             MetricRepo.HISTO_TXN_EXEC_LATENCY.update(txnState.getCommitTime() - txnState.getPrepareTime());
         }
+<<<<<<< HEAD
         afterCommitTxnResp(commitTxnResponse, tabletCommitInfos);
+=======
+        afterCommitTxnResp(commitTxnResponse, tabletIds);
+>>>>>>> 3ba9a70d846 ([improve](cloud) cloud reduce get_tablet_stats rpc to meta_service)
         return txnState;
     }
 
@@ -1638,6 +1672,7 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             builder.addMowTableIds(olapTable.getId());
         }
         // add sub txn infos
+        Set<Long> tabletIds = new HashSet<>();
         for (SubTransactionState subTransactionState : subTransactionStates) {
             builder.addSubTxnInfos(SubTxnInfo.newBuilder().setSubTxnId(subTransactionState.getSubTransactionId())
                     .setTableId(subTransactionState.getTable().getId())
@@ -1647,10 +1682,17 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
                                             .map(c -> new TabletCommitInfo(c.getTabletId(), c.getBackendId()))
                                             .collect(Collectors.toList())))
                     .build());
+            for (TTabletCommitInfo tabletCommitInfo : subTransactionState.getTabletCommitInfos()) {
+                tabletIds.add(tabletCommitInfo.getTabletId());
+            }
         }
 
         final CommitTxnRequest commitTxnRequest = builder.build();
+<<<<<<< HEAD
         executeCommitTxnRequest(commitTxnRequest, transactionId, false, null, null);
+=======
+        executeCommitTxnRequest(commitTxnRequest, transactionId, false, null, new ArrayList<>(tabletIds));
+>>>>>>> 3ba9a70d846 ([improve](cloud) cloud reduce get_tablet_stats rpc to meta_service)
     }
 
     private List<Table> getTablesNeedCommitLock(List<Table> tableList) {
