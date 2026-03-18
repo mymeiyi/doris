@@ -503,8 +503,8 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
      * @param commitTxnResponse commit txn call response from meta-service
      * @param tabletCommitInfos tablet commit infos containing backend and tablet mapping
      */
-<<<<<<< HEAD
-    public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse, List<TabletCommitInfo> tabletCommitInfos) {
+    public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse, List<TabletCommitInfo> tabletCommitInfos,
+            List<Long> tabletIds) {
         // ========================================
         // notify BEs to make temporary rowsets visible
         // ========================================
@@ -512,9 +512,6 @@ public class CloudGlobalTransactionMgr implements GlobalTransactionMgrIface {
             notifyBesMakeTmpRsVisible(commitTxnResponse, tabletCommitInfos);
         }
 
-=======
-    public void afterCommitTxnResp(CommitTxnResponse commitTxnResponse, List<Long> tabletIds) {
->>>>>>> 3ba9a70d846 ([improve](cloud) cloud reduce get_tablet_stats rpc to meta_service)
         // ========================================
         // update some table stats
         // ========================================
