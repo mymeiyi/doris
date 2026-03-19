@@ -80,11 +80,14 @@ public class CloudReplica extends Replica implements GsonPostProcessable {
      * if the stats is unchanged, will update this index to next value to get stats less frequently;
      * if the stats is changed, will update this index to 0 to get stats more frequently.
      */
+    @SerializedName(value = "sii")
     @Getter
     @Setter
     int statsIntervalIndex = 0;
 
+    @SerializedName(value = "sc")
     private long segmentCount = 0L;
+    @SerializedName(value = "rsc")
     private long rowsetCount = 1L; // [0-1] rowset
 
     private static final Random rand = new Random();
