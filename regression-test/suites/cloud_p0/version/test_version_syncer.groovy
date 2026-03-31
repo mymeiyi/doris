@@ -19,6 +19,10 @@ suite("test_version_syncer", "nonConcurrent") {
     if (!isCloudMode()) {
         return
     }
+    if (!getFeConfig("enable_debug_points").equals("true")) {
+        logger.info("Config.enable_debug_points=true is required")
+        return
+    }
 
     def tbl = 'test_version_syncer_tbl'
     sql """ DROP TABLE IF EXISTS ${tbl} """

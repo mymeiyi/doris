@@ -48,6 +48,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -561,8 +562,8 @@ public class CloudTabletStatMgr extends MasterDaemon {
         if (Config.cloud_get_tablet_stats_version == 1 || tabletIds == null || tabletIds.isEmpty()) {
             return;
         }
-        String ignoreTablets = DebugPointUtil.getDebugParamOrDefault(
-                "FE.CloudTabletStatMgr.addActiveTablets.ignore.tablets", "");
+        List<String> ignoreTablets = Arrays.asList(DebugPointUtil.getDebugParamOrDefault(
+                "FE.CloudTabletStatMgr.addActiveTablets.ignore.tablets", "").split(","));
         if (!ignoreTablets.isEmpty() && tabletIds.stream().anyMatch(id -> ignoreTablets.contains(String.valueOf(id)))) {
             LOG.info("ignore adding active tablets: {}, debug param: {}", tabletIds, ignoreTablets);
             return;
