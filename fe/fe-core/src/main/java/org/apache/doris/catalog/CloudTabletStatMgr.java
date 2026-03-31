@@ -29,6 +29,7 @@ import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.common.ClientPool;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.Pair;
+import org.apache.doris.common.util.DebugPointUtil;
 import org.apache.doris.common.util.MasterDaemon;
 import org.apache.doris.metric.MetricRepo;
 import org.apache.doris.rpc.RpcException;
@@ -558,6 +559,12 @@ public class CloudTabletStatMgr extends MasterDaemon {
 
     public void addActiveTablets(List<Long> tabletIds) {
         if (Config.cloud_get_tablet_stats_version == 1 || tabletIds == null || tabletIds.isEmpty()) {
+            return;
+        }
+        String ignoreTablets = DebugPointUtil.getDebugParamOrDefault(
+                "FE.CloudTabletStatMgr.addActiveTablets.ignore.tablets", "");
+        if (!ignoreTablets.isEmpty() && tabletIds.stream().anyMatch(id -> ignoreTablets.contains(String.valueOf(id)))) {
+            LOG.info("ignore adding active tablets: {}, debug param: {}", tabletIds, ignoreTablets);
             return;
         }
         activeTablets.addAll(tabletIds);
