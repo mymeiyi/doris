@@ -23,10 +23,11 @@ suite("test_tablet_stat_syncer", "docker") {
     }
 
     def options = new ClusterOptions()
-    options.setFeNum(1)
+    options.setFeNum(2)
     options.setBeNum(1)
     options.cloudMode = true
     options.enableDebugPoints()
+    options.connectToFollower = true
 
     docker(options) {
         def tbl = 'test_tablet_stat_syncer_tbl'
