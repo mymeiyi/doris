@@ -283,7 +283,7 @@ suite("test_mow_compaction_and_rowset_not_exist", "nonConcurrent") {
             sleep(2000)
         }
         assertEquals(3, tablet_status["rowsets"].size())
-        local_dm = getLocalDeleteBitmapStatus(tablet)
+        local_dm = getMsDeleteBitmapStatus(tablet)
         logger.info("local_dm 2: " + local_dm)
         assertEquals(5, local_dm["delete_bitmap_count"])
         assertEquals(5, local_dm["cardinality"])
