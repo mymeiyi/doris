@@ -410,6 +410,8 @@ public class PartitionsProcDir implements ProcDirInterface {
 
     private List<Long> getPartitionVersions(OlapTable olapTable, List<Long> partitionIds)
             throws AnalysisException {
+        LOG.info("sout: cond1: {}, cond2: {}", ConnectContext.get() != null,
+                ConnectContext.get() != null && ConnectContext.get().getSessionVariable().cloudForceSyncVersion);
         List<Long> partitionVersions;
         if (Config.isNotCloudMode()) {
             partitionVersions = partitionIds.stream().map(id -> olapTable.getPartition(id).getVisibleVersion())
