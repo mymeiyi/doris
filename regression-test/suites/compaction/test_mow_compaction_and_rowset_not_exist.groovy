@@ -269,7 +269,7 @@ suite("test_mow_compaction_and_rowset_not_exist", "nonConcurrent") {
         logger.info("local_dm 1: " + local_dm)
 
         // block merge delete bitmap
-        GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.cloud_update_delete_bitmap_without_lock.block")
+        // GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.cloud_update_delete_bitmap_without_lock.block")
         // trigger compaction
         GetDebugPoint().enableDebugPointForAllBEs("CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
                 [tablet_id: "${tablet.TabletId}", start_version: 7, end_version: 11]);

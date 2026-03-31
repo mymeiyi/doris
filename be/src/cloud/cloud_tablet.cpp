@@ -1362,7 +1362,7 @@ void CloudTablet::agg_delete_bitmap_for_compaction(
             if (d->isEmpty()) {
                 continue;
             }
-            VLOG_DEBUG << "agg delete bitmap for tablet_id=" << tablet_id()
+            LOG(INFO) << "agg delete bitmap for tablet_id=" << tablet_id()
                        << ", rowset_id=" << rowset->rowset_id() << ", seg_id=" << seg_id
                        << ", rowset_version=" << rowset->version().to_string()
                        << ". compaction start_version=" << start_version
