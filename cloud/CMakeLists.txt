@@ -398,7 +398,7 @@ endif()
 add_definitions(-DGLOG_CUSTOM_PREFIX_SUPPORT)
 
 set(FDB_VERSIONS "7.1.57" "7.3.69")
-set(FDB_DEFAULT_VERSION "7.1.57")
+set(FDB_DEFAULT_VERSION "7.3.69")
 include(install_fdb)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lfdb_c -L${THIRDPARTY_DIR}/lib")
 
