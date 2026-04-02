@@ -527,7 +527,7 @@ class UpCommand(Command):
         parser.add_argument(
             "--fdb-version",
             type=str,
-            default="7.1.26",
+            default="7.3.69",
             help="fdb image version. Only use in cloud cluster.")
 
         parser.add_argument(
