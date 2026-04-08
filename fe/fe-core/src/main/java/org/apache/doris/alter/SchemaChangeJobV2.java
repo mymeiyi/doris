@@ -485,6 +485,10 @@ public class SchemaChangeJobV2 extends AlterJobV2 implements GsonPostProcessable
         } catch (UserException e) {
             throw new AlterCancelException(e.getMessage());
         }
+        if (DebugPointUtil.isEnable("FE.SchemaChangeJobV2.runWaitingTxnJob.block")) {
+            LOG.info("FE.SchemaChangeJobV2.runWaitingTxnJob.block for job: {}", jobId);
+            return;
+        }
 
         LOG.info("previous transactions are all finished, begin to send schema change tasks. job: {}", jobId);
         Database db = Env.getCurrentInternalCatalog()
