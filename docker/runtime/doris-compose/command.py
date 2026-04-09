@@ -218,10 +218,14 @@ class SimpleCommand(Command):
         for_all, related_nodes, related_node_num = get_ids_related_nodes(
             cluster, args.fe_id, args.be_id, args.ms_id, args.recycle_id,
             args.fdb_id)
-        utils.exec_docker_compose_command(cluster.get_compose_file(),
-                                          self.command,
-                                          options=self.options,
-                                          nodes=related_nodes)
+
+        if getattr(cluster, 'all_in_one', False):
+            self._run_all_in_one(cluster, for_all, related_nodes)
+        else:
+            utils.exec_docker_compose_command(cluster.get_compose_file(),
+                                              self.command,
+                                              options=self.options,
+                                              nodes=related_nodes)
         show_cmd = self.command[0].upper() + self.command[1:]
 
         if for_all:
@@ -232,6 +236,66 @@ class SimpleCommand(Command):
                 show_cmd, related_node_num)))
 
         return cluster, related_nodes
+
+    def _run_all_in_one(self, cluster, for_all, related_nodes):
+        import docker as docker_lib
+        client = docker_lib.from_env()
+        service_name = cluster.get_all_in_one_service_name()
+        try:
+            container = client.containers.get(service_name)
+        except docker_lib.errors.NotFound:
+            raise Exception("All-in-one container '{}' not found".format(service_name))
+
+        if self.command == "stop":
+            if for_all:
+                utils.exec_docker_compose_command(cluster.get_compose_file(),
+                                                  "stop",
+                                                  options=self.options)
+                return
+            nodes = related_nodes if related_nodes else cluster.get_all_nodes()
+            for node in nodes:
+                comp = self._node_to_component(node)
+                if comp:
+                    cmd = "bash {} stop {}".format(
+                        CLUSTER.DOCKER_RESOURCE_PATH + "/manage_component.sh", comp)
+                    container.exec_run(cmd)
+        elif self.command == "start":
+            if for_all:
+                utils.exec_docker_compose_command(cluster.get_compose_file(),
+                                                  "start",
+                                                  options=self.options)
+                return
+            nodes = related_nodes if related_nodes else cluster.get_all_nodes()
+            for node in nodes:
+                comp = self._node_to_component(node)
+                if comp:
+                    cmd = "bash {} start {}".format(
+                        CLUSTER.DOCKER_RESOURCE_PATH + "/manage_component.sh", comp)
+                    container.exec_run(cmd)
+        elif self.command == "restart":
+            if for_all:
+                utils.exec_docker_compose_command(cluster.get_compose_file(),
+                                                  "restart",
+                                                  options=self.options)
+                return
+            nodes = related_nodes if related_nodes else cluster.get_all_nodes()
+            for node in nodes:
+                comp = self._node_to_component(node)
+                if comp:
+                    cmd = "bash {} restart {}".format(
+                        CLUSTER.DOCKER_RESOURCE_PATH + "/manage_component.sh", comp)
+                    container.exec_run(cmd)
+
+    @staticmethod
+    def _node_to_component(node):
+        type_map = {
+            CLUSTER.Node.TYPE_FE: "fe",
+            CLUSTER.Node.TYPE_BE: "be",
+            CLUSTER.Node.TYPE_MS: "ms",
+            CLUSTER.Node.TYPE_RECYCLE: "recycler",
+            CLUSTER.Node.TYPE_FDB: "fdb",
+        }
+        return type_map.get(node.node_type(), None)
 
 
 class StartBaseCommand(SimpleCommand):
@@ -531,6 +595,13 @@ class UpCommand(Command):
             help="fdb image version. Only use in cloud cluster.")
 
         parser.add_argument(
+            "--all-in-one",
+            default=False,
+            action=self._get_parser_bool_action(True),
+            help="Deploy all components (FDB, MS, Recycler, FE, BE) in a single Docker container. "
+                 "Only supported in cloud mode. Only use when creating new cluster.")
+
+        parser.add_argument(
             "--tde-ak",
             type=str,
             default="",
@@ -660,6 +731,23 @@ class UpCommand(Command):
 
             instance_id = getattr(args, 'instance_id', None)
             cluster_snapshot = getattr(args, 'cluster_snapshot', '')
+            all_in_one = getattr(args, 'all_in_one', False)
+
+            if all_in_one:
+                if not args.cloud:
+                    raise Exception("All-in-one mode requires --cloud")
+                args.cloud = True
+                if args.add_fe_num is None or args.add_fe_num == 0:
+                    args.add_fe_num = 1
+                if args.add_be_num is None or args.add_be_num == 0:
+                    args.add_be_num = 1
+                # Phase 1: enforce single FE and single BE
+                if args.add_fe_num > 1:
+                    raise Exception("All-in-one mode supports at most 1 FE (got {})".format(
+                        args.add_fe_num))
+                if args.add_be_num > 1:
+                    raise Exception("All-in-one mode supports at most 1 BE (got {})".format(
+                        args.add_be_num))
 
             cluster = CLUSTER.Cluster.new(
                 args.NAME, args.IMAGE, args.cloud, args.root, args.fe_config,
@@ -668,7 +756,7 @@ class UpCommand(Command):
                 args.be_disks if args.be_disks is not None else ["HDD=1"], args.be_cluster, args.reg_be, args.extra_hosts, args.env,
                 args.coverage_dir, cloud_store_config, args.sql_mode_node_mgr,
                 args.be_metaservice_endpoint, args.be_cluster_id, args.tde_ak, args.tde_sk,
-                external_ms_cluster, instance_id, cluster_snapshot)
+                external_ms_cluster, instance_id, cluster_snapshot, all_in_one)
             LOG.info("Create new cluster {} succ, cluster path is {}".format(
                 args.NAME, cluster.get_path()))
 
@@ -727,10 +815,21 @@ class UpCommand(Command):
                 cluster.set_image(args.IMAGE)
 
         for node in cluster.get_all_nodes(CLUSTER.Node.TYPE_FDB):
-            node.set_image("foundationdb/foundationdb:{}".format(
-                args.fdb_version))
+            if not getattr(cluster, 'all_in_one', False):
+                node.set_image("foundationdb/foundationdb:{}".format(
+                    args.fdb_version))
 
         cluster.save()
+
+        # For all-in-one mode, extract FDB binaries from the FDB image
+        if getattr(cluster, 'all_in_one', False):
+            fdb_bin_dir = os.path.join(cluster.get_path(), "fdb-bin")
+            if not os.path.exists(fdb_bin_dir) or not os.listdir(fdb_bin_dir):
+                fdb_image = "foundationdb/foundationdb:{}".format(args.fdb_version)
+                LOG.info("Extracting FDB binaries from {} to {}".format(
+                    fdb_image, fdb_bin_dir))
+                os.makedirs(fdb_bin_dir, exist_ok=True)
+                utils.extract_fdb_binaries(fdb_image, fdb_bin_dir)
 
         options = []
         if not args.start:
@@ -1074,6 +1173,17 @@ class DownCommand(Command):
             db_mgr = database.get_db_mgr(cluster.name,
                                          cluster.get_all_node_net_infos())
 
+            is_all_in_one = cluster and getattr(cluster, 'all_in_one', False)
+            aio_container = None
+            if is_all_in_one:
+                import docker as docker_lib
+                try:
+                    client = docker_lib.from_env()
+                    aio_container = client.containers.get(
+                        cluster.get_all_in_one_service_name())
+                except:
+                    pass
+
             for node in related_nodes:
                 if node.is_fe():
                     fe_endpoint = "{}:{}".format(
@@ -1091,12 +1201,24 @@ class DownCommand(Command):
                     raise Exception("Unknown node type: {}".format(
                         node.node_type()))
 
-                #utils.exec_docker_compose_command(cluster.get_compose_file(),
-                #                                  "stop",
-                #                                  nodes=[node])
-                utils.exec_docker_compose_command(cluster.get_compose_file(),
-                                                  "rm", ["-s", "-v", "-f"],
-                                                  nodes=[node])
+                if is_all_in_one and aio_container:
+                    # Stop individual component via manage_component.sh
+                    type_map = {
+                        CLUSTER.Node.TYPE_FE: "fe",
+                        CLUSTER.Node.TYPE_BE: "be",
+                        CLUSTER.Node.TYPE_MS: "ms",
+                        CLUSTER.Node.TYPE_RECYCLE: "recycler",
+                        CLUSTER.Node.TYPE_FDB: "fdb",
+                    }
+                    comp = type_map.get(node.node_type())
+                    if comp:
+                        cmd = "bash {} stop {}".format(
+                            CLUSTER.DOCKER_RESOURCE_PATH + "/manage_component.sh", comp)
+                        aio_container.exec_run(cmd)
+                else:
+                    utils.exec_docker_compose_command(cluster.get_compose_file(),
+                                                      "rm", ["-s", "-v", "-f"],
+                                                      nodes=[node])
                 if args.clean:
                     utils.enable_dir_with_rw_perm(node.get_path())
                     shutil.rmtree(node.get_path())
@@ -1496,44 +1618,97 @@ class ListCommand(Command):
                 cluster_name,
                 cluster.get_all_node_net_infos() if cluster else [], False)
             nodes = []
-            for service_name, container in services.items():
-                _, node_type, id = utils.parse_service_name(container.name)
-                node = ListNode()
-                node.cluster_name = cluster_name
-                node.node_type = node_type
-                node.id = id
-                node.update_db_info(cluster, db_mgr)
-                nodes.append(node)
 
-                if node_type == CLUSTER.Node.TYPE_FE:
-                    fe_ids[id] = True
-                elif node_type == CLUSTER.Node.TYPE_BE:
-                    be_ids[id] = True
-
-                if type(container) == TYPE_COMPOSESERVICE:
-                    node.ip = container.ip
-                    node.image = container.image
-                    node.status = SERVICE_DEAD
+            # Handle all-in-one mode: synthesize virtual nodes from metadata
+            if cluster and getattr(cluster, 'all_in_one', False):
+                aio_service_name = cluster.get_all_in_one_service_name()
+                aio_container = None
+                # Try to find the all-in-one container from services or docker
+                if aio_service_name in services:
+                    aio_container = services[aio_service_name]
                 else:
-                    node.created = dateutil.parser.parse(
-                        container.attrs.get("Created")).astimezone().strftime(
-                            "%Y-%m-%d %H:%M:%S")
-                    if cluster and cluster.is_host_network():
-                        node.ip = cluster.local_network_ip
+                    import docker as docker_lib
+                    try:
+                        client = docker_lib.from_env()
+                        aio_container = client.containers.get(aio_service_name)
+                    except:
+                        pass
+
+                shared_ip = cluster.get_all_in_one_ip()
+                for virtual_node in cluster.get_all_nodes():
+                    node = ListNode()
+                    node.cluster_name = cluster_name
+                    node.node_type = virtual_node.node_type()
+                    node.id = virtual_node.id
+                    node.ip = shared_ip
+                    node.update_db_info(cluster, db_mgr)
+
+                    if node.node_type == CLUSTER.Node.TYPE_FE:
+                        fe_ids[node.id] = True
+                    elif node.node_type == CLUSTER.Node.TYPE_BE:
+                        be_ids[node.id] = True
+
+                    if aio_container is None:
+                        node.status = SERVICE_DEAD
+                        node.image = cluster.image
+                    elif type(aio_container) == TYPE_COMPOSESERVICE:
+                        node.image = aio_container.image
+                        node.status = SERVICE_DEAD
                     else:
-                        network_name = utils.get_network_name(cluster.name)
-                        node.ip = container.attrs["NetworkSettings"]["Networks"][network_name] \
-                                ["IPAMConfig"]["IPv4Address"]
-                    node.image = container.attrs["Config"]["Image"]
-                    if not node.image:
-                        node.image = ",".join(container.image.tags)
-                    node.container_id = container.short_id
-                    node.status = container.status
-                    if node.container_id and \
-                        node_type in (CLUSTER.Node.TYPE_FDB,
-                                     CLUSTER.Node.TYPE_MS,
-                                     CLUSTER.Node.TYPE_RECYCLE):
-                        node.alive = "true"
+                        node.created = dateutil.parser.parse(
+                            aio_container.attrs.get("Created")).astimezone().strftime(
+                                "%Y-%m-%d %H:%M:%S")
+                        node.image = aio_container.attrs["Config"]["Image"]
+                        if not node.image:
+                            node.image = ",".join(aio_container.image.tags)
+                        node.container_id = aio_container.short_id
+                        node.status = aio_container.status
+                        if node.container_id and \
+                            node.node_type in (CLUSTER.Node.TYPE_FDB,
+                                               CLUSTER.Node.TYPE_MS,
+                                               CLUSTER.Node.TYPE_RECYCLE):
+                            node.alive = "true"
+
+                    nodes.append(node)
+            else:
+                for service_name, container in services.items():
+                    _, node_type, id = utils.parse_service_name(container.name)
+                    node = ListNode()
+                    node.cluster_name = cluster_name
+                    node.node_type = node_type
+                    node.id = id
+                    node.update_db_info(cluster, db_mgr)
+                    nodes.append(node)
+
+                    if node_type == CLUSTER.Node.TYPE_FE:
+                        fe_ids[id] = True
+                    elif node_type == CLUSTER.Node.TYPE_BE:
+                        be_ids[id] = True
+
+                    if type(container) == TYPE_COMPOSESERVICE:
+                        node.ip = container.ip
+                        node.image = container.image
+                        node.status = SERVICE_DEAD
+                    else:
+                        node.created = dateutil.parser.parse(
+                            container.attrs.get("Created")).astimezone().strftime(
+                                "%Y-%m-%d %H:%M:%S")
+                        if cluster and cluster.is_host_network():
+                            node.ip = cluster.local_network_ip
+                        else:
+                            network_name = utils.get_network_name(cluster.name)
+                            node.ip = container.attrs["NetworkSettings"]["Networks"][network_name] \
+                                    ["IPAMConfig"]["IPv4Address"]
+                        node.image = container.attrs["Config"]["Image"]
+                        if not node.image:
+                            node.image = ",".join(container.image.tags)
+                        node.container_id = container.short_id
+                        node.status = container.status
+                        if node.container_id and \
+                            node_type in (CLUSTER.Node.TYPE_FDB,
+                                         CLUSTER.Node.TYPE_MS,
+                                         CLUSTER.Node.TYPE_RECYCLE):
+                            node.alive = "true"
 
             for id, fe in db_mgr.fe_states.items():
                 if fe_ids.get(id, False):

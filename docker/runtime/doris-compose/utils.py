@@ -160,7 +160,11 @@ def get_doris_containers(cluster_names):
     for container in containers:
         cluster_name, _, _ = parse_service_name(container.name)
         if not cluster_name:
-            continue
+            # Try all-in-one pattern: doris-{cluster}-all-in-one
+            if container.name.startswith(DORIS_PREFIX) and container.name.endswith("-all-in-one"):
+                cluster_name = container.name[len(DORIS_PREFIX):-len("-all-in-one")]
+            else:
+                continue
         if cluster_names and cluster_name not in cluster_names:
             continue
         if cluster_name not in clusters:
@@ -287,6 +291,19 @@ def copy_image_directory(image, image_dir, local_dir):
         remove=True,
         volumes=volumes,
         entrypoint="cp -r  {}  /opt/mount/".format(image_dir))
+
+
+def extract_fdb_binaries(fdb_image, local_dir):
+    client = docker.from_env()
+    volumes = ["{}:/opt/mount".format(local_dir)]
+    client.containers.run(
+        fdb_image,
+        remove=True,
+        volumes=volumes,
+        entrypoint="sh -c 'cp /usr/bin/fdbcli /usr/bin/fdbmonitor /usr/bin/fdbserver /opt/mount/ && "
+                   "cp /usr/bin/backup_agent /opt/mount/ 2>/dev/null; "
+                   "cp /usr/lib/libfdb_c.so /opt/mount/ 2>/dev/null; "
+                   "chmod +x /opt/mount/fdbcli /opt/mount/fdbmonitor /opt/mount/fdbserver /opt/mount/backup_agent 2>/dev/null; true'")
 
 
 def get_avail_port():
