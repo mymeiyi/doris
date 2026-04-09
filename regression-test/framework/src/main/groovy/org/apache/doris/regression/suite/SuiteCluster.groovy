@@ -81,6 +81,10 @@ class ClusterOptions {
     // 3. cloudMode = null, create both cloud and none-cloud cluster, depend on the running pipeline mode.
     Boolean cloudMode = false
 
+    // Deploy all components (FDB, MS, Recycler, FE, BE) in a single Docker container.
+    // Only supported in cloud mode.
+    boolean allInOne = false
+
     // in cloud mode, deployment methods are divided into
     // 1. master - multi observers
     // 2. mutli followers - multi observers
@@ -424,6 +428,10 @@ class SuiteCluster {
             cmd += ['--cluster-snapshot', compactJson]
         }
 
+        if (options.allInOne) {
+            cmd += ['--all-in-one']
+        }
+
         cmd += ['--wait-timeout', String.valueOf(options.waitTimeout)]
 
         sqlModeNodeMgr = options.sqlModeNodeMgr
@@ -667,6 +675,11 @@ class SuiteCluster {
     // if not specific be indices, then start all backends
     void startBackends(int... indices) {
         runBackendsCmd(START_WAIT_TIMEOUT + 5, "start  --wait-timeout ${START_WAIT_TIMEOUT}".toString(), indices)
+        waitForContainerReady(indices)
+    }
+
+    private void waitForContainerReady(int... indices) {
+        Thread.sleep(3000)
     }
 
     // indices start from 1, not 0

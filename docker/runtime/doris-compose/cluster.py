@@ -345,6 +345,12 @@ class Node(object):
                 return self.cluster.remote_master_fe.split(":")[0]
             else:
                 return self.cluster.local_network_ip
+        elif getattr(self.cluster, 'all_in_one', False):
+            # All nodes share the same IP in all-in-one mode
+            seq = get_node_seq(Node.TYPE_FE, 1)
+            return "{}.{}.{}".format(self.cluster.subnet,
+                                     int(seq / IP_PART4_SIZE),
+                                     seq % IP_PART4_SIZE)
         else:
             seq = get_node_seq(self.node_type(), self.id)
             return "{}.{}.{}".format(self.cluster.subnet,
@@ -909,7 +915,8 @@ class Cluster(object):
                  local_network_ip, fe_follower, be_disks, be_cluster, reg_be,
                  extra_hosts, env, coverage_dir, cloud_store_config,
                  sql_mode_node_mgr, be_metaservice_endpoint, be_cluster_id, tde_ak, tde_sk,
-                 external_ms_cluster, instance_id, cluster_snapshot=""):
+                 external_ms_cluster, instance_id, cluster_snapshot="",
+                 all_in_one=False):
         self.name = name
         self.subnet = subnet
         self.image = image
@@ -935,6 +942,7 @@ class Cluster(object):
             self.instance_id = f"instance_{name}" if self.external_ms_cluster else "default_instance_id"
         # cluster_snapshot is not persisted to meta, only used during cluster creation
         self.cluster_snapshot = cluster_snapshot
+        self.all_in_one = all_in_one
         self.is_rollback = False
         self.groups = {
             node_type: Group(node_type)
@@ -955,7 +963,8 @@ class Cluster(object):
             fe_follower, be_disks, be_cluster, reg_be, extra_hosts, env,
             coverage_dir, cloud_store_config, sql_mode_node_mgr,
             be_metaservice_endpoint, be_cluster_id, tde_ak, tde_sk,
-            external_ms_cluster, instance_id, cluster_snapshot=""):
+            external_ms_cluster, instance_id, cluster_snapshot="",
+            all_in_one=False):
         if not os.path.exists(LOCAL_DORIS_PATH):
             os.makedirs(LOCAL_DORIS_PATH, exist_ok=True)
             os.chmod(LOCAL_DORIS_PATH, 0o777)
@@ -971,7 +980,7 @@ class Cluster(object):
                               coverage_dir, cloud_store_config,
                               sql_mode_node_mgr, be_metaservice_endpoint,
                               be_cluster_id, tde_ak, tde_sk, external_ms_cluster,
-                              instance_id, cluster_snapshot)
+                              instance_id, cluster_snapshot, all_in_one)
             os.makedirs(cluster.get_path(), exist_ok=True)
             os.makedirs(get_status_path(name), exist_ok=True)
             cluster._save_meta()
@@ -1136,6 +1145,9 @@ class Cluster(object):
             f.write(jsonpickle.dumps(self, indent=2))
 
     def _save_compose(self):
+        if getattr(self, 'all_in_one', False):
+            return self._save_compose_all_in_one()
+
         services = {}
         for node_type in self.groups.keys():
             for node in self.get_all_nodes(node_type):
@@ -1165,6 +1177,254 @@ class Cluster(object):
                 LOG.debug(f"Added external network: {external_network_name}")
 
             compose["networks"] = networks
+
+        utils.write_compose_file(self.get_compose_file(), compose)
+
+    def get_all_in_one_service_name(self):
+        return utils.with_doris_prefix("{}-all-in-one".format(self.name))
+
+    def get_all_in_one_ip(self):
+        seq = get_node_seq(Node.TYPE_FE, 1)
+        return "{}.{}.{}".format(self.subnet,
+                                 int(seq / IP_PART4_SIZE),
+                                 seq % IP_PART4_SIZE)
+
+    def _save_compose_all_in_one(self):
+        all_in_one_ip = self.get_all_in_one_ip()
+        service_name = self.get_all_in_one_service_name()
+
+        # Get system core pattern to determine core dump directory
+        core_pattern = "/opt/apache-doris/core_dump"
+        try:
+            with open("/proc/sys/kernel/core_pattern", "r") as f:
+                pattern = f.read().strip()
+                if pattern.startswith("/"):
+                    core_pattern = os.path.dirname(pattern)
+        except:
+            pass
+
+        cluster_path = self.get_path()
+        status_path = get_status_path(self.name)
+
+        # Build volumes from all node types
+        volumes = []
+
+        # Core dump directory
+        volumes.append("{}:{}".format(
+            os.path.join(cluster_path, "core_dump"), core_pattern))
+
+        # FE volumes
+        for fe in self.get_all_nodes(Node.TYPE_FE):
+            fe_path = fe.get_path()
+            volumes.append("{}:/opt/apache-doris/fe/conf".format(
+                os.path.join(fe_path, "conf")))
+            volumes.append("{}:/opt/apache-doris/fe/log".format(
+                os.path.join(fe_path, "log")))
+            volumes.append("{}:/opt/apache-doris/fe/doris-meta".format(
+                os.path.join(fe_path, "doris-meta")))
+
+        # BE volumes
+        for be in self.get_all_nodes(Node.TYPE_BE):
+            be_path = be.get_path()
+            volumes.append("{}:/opt/apache-doris/be/conf".format(
+                os.path.join(be_path, "conf")))
+            volumes.append("{}:/opt/apache-doris/be/log".format(
+                os.path.join(be_path, "log")))
+            volumes.append("{}:/opt/apache-doris/be/storage".format(
+                os.path.join(be_path, "storage")))
+
+        # MS volumes
+        for ms in self.get_all_nodes(Node.TYPE_MS):
+            ms_path = ms.get_path()
+            volumes.append("{}:/opt/apache-doris/ms/conf".format(
+                os.path.join(ms_path, "conf")))
+            volumes.append("{}:/opt/apache-doris/ms/log".format(
+                os.path.join(ms_path, "log")))
+
+        # Recycler volumes (separate paths to avoid conflict with MS)
+        for recycle in self.get_all_nodes(Node.TYPE_RECYCLE):
+            recycle_path = recycle.get_path()
+            volumes.append("{}:/opt/apache-doris/recycler/conf".format(
+                os.path.join(recycle_path, "conf")))
+            volumes.append("{}:/opt/apache-doris/recycler/log".format(
+                os.path.join(recycle_path, "log")))
+
+        # FDB volumes
+        for fdb in self.get_all_nodes(Node.TYPE_FDB):
+            fdb_path = fdb.get_path()
+            volumes.append("{}:/opt/apache-doris/fdb/conf".format(
+                os.path.join(fdb_path, "conf")))
+            volumes.append("{}:/opt/apache-doris/fdb/log".format(
+                os.path.join(fdb_path, "log")))
+            volumes.append("{}:/opt/apache-doris/fdb/data".format(
+                os.path.join(fdb_path, "data")))
+
+        # Shared status directory
+        volumes.append("{}:/opt/apache-doris/status".format(status_path))
+
+        # Resource directory (read-only)
+        volumes.append("{}:{}:ro".format(LOCAL_RESOURCE_PATH, DOCKER_RESOURCE_PATH))
+
+        # Timezone files
+        for path in ("/etc/localtime", "/etc/timezone", "/usr/share/zoneinfo"):
+            if os.path.exists(path):
+                volumes.append("{0}:{0}:ro".format(path))
+
+        # FDB binaries directory
+        fdb_bin_dir = os.path.join(cluster_path, "fdb-bin")
+        os.makedirs(fdb_bin_dir, exist_ok=True)
+        volumes.append("{}:/opt/apache-doris/fdb/bin".format(fdb_bin_dir))
+
+        # Coverage directory
+        if self.coverage_dir:
+            volumes.append("{}:{}/coverage".format(
+                self.coverage_dir, DOCKER_DORIS_PATH))
+
+        # Build environment variables
+        fe_nodes = self.get_all_nodes(Node.TYPE_FE)
+        be_nodes = self.get_all_nodes(Node.TYPE_BE)
+
+        envs = {
+            "ALL_IN_ONE": 1,
+            "MY_IP": all_in_one_ip,
+            "MY_TYPE": "all_in_one",
+            "MY_ID": 1,
+            "DORIS_HOME": "/opt/apache-doris/fe",
+            "IS_CLOUD": 1 if self.is_cloud else 0,
+            "FE_NUM": len(fe_nodes),
+            "BE_NUM": len(be_nodes),
+            "INSTANCE_ID": self.instance_id,
+            "META_SERVICE_ENDPOINT": "{}:{}".format(all_in_one_ip, MS_PORT),
+            "FDB_HOME": "/opt/apache-doris/fdb",
+            "MS_HOME": "/opt/apache-doris/ms",
+            "FE_HOME": "/opt/apache-doris/fe",
+            "BE_HOME": "/opt/apache-doris/be",
+            "STATUS_DIR": "/opt/apache-doris/status",
+            "FDB_PORT": FDB_PORT,
+            "MS_PORT": MS_PORT,
+            "MY_QUERY_PORT": FE_QUERY_PORT,
+            "MY_EDITLOG_PORT": FE_EDITLOG_PORT,
+            "MY_HEARTBEAT_PORT": BE_HEARTBEAT_PORT,
+            "SQL_MODE_NODE_MGR": 1 if self.sql_mode_node_mgr else 0,
+            "STOP_GRACE": 1 if self.coverage_dir else 0,
+            "DORIS_CLOUD_PREFIX": "doris_docker_env_{}".format(self.name),
+            "RECYCLER_CONF_DIR": "/opt/apache-doris/recycler/conf",
+            "RECYCLER_LOG_DIR": "/opt/apache-doris/recycler/log",
+        }
+
+        # Cloud store config
+        for key, value in self.cloud_store_config.items():
+            envs[key] = value
+
+        # Per-component cloud_unique_ids
+        for fe in fe_nodes:
+            envs["CLOUD_UNIQUE_ID_FE_{}".format(fe.id)] = fe.cloud_unique_id()
+        for be in be_nodes:
+            envs["CLOUD_UNIQUE_ID_BE_{}".format(be.id)] = be.cloud_unique_id()
+            envs["CLUSTER_NAME_BE_{}".format(be.id)] = be.meta.get(
+                "cluster_name", "compute_cluster")
+
+        # TDE keys
+        envs["TDE_AK"] = self.tde_ak
+        envs["TDE_SK"] = self.tde_sk
+
+        # Host user
+        if not self.is_root_user:
+            envs["HOST_USER"] = getpass.getuser()
+            envs["HOST_UID"] = os.getuid()
+            envs["HOST_GID"] = os.getgid()
+
+        # Coverage
+        if self.coverage_dir:
+            outfile_prefix = "{}/coverage".format(DOCKER_DORIS_PATH)
+            envs["JACOCO_COVERAGE_OPT"] = (
+                "-javaagent:/jacoco/lib/jacocoagent.jar"
+                "=excludes=org.apache.doris.thrift:org.apache.doris.proto"
+                ":org.apache.parquet.format"
+                ":com.aliyun*:com.amazonaws*"
+                ":org.apache.hadoop.hive.metastore"
+                ":org.apache.parquet.format,"
+                "output=file,append=true,destfile="
+                + "{}/fe-coverage-{}-1".format(outfile_prefix, self.name))
+            envs["LLVM_PROFILE_FILE_PREFIX"] = "{}/be-coverage-{}-1".format(
+                outfile_prefix, self.name)
+
+        # User envs
+        if self.env:
+            for env in self.env:
+                pos = env.find('=')
+                if pos != -1:
+                    envs[env[:pos]] = env[pos + 1:]
+
+        # Collect all exposed ports
+        ports = []
+        for port_class in (FE, BE, MS, RECYCLE, FDB):
+            dummy_meta = {"image": self.image, "ports": {}}
+            dummy = port_class(self, 1, dummy_meta)
+            ports.extend(dummy.docker_ports())
+        # Deduplicate while preserving order
+        seen = set()
+        unique_ports = []
+        for p in ports:
+            if p not in seen:
+                seen.add(p)
+                unique_ports.append(p)
+
+        content = {
+            "cap_add": ["SYS_ADMIN"],
+            "privileged": "true",
+            "container_name": service_name,
+            "environment": envs,
+            "image": self.image,
+            "ulimits": {
+                "core": -1,
+                "nofile": {
+                    "soft": 655350,
+                    "hard": 655350,
+                }
+            },
+            "security_opt": ["seccomp:unconfined"],
+            "volumes": volumes,
+            "hostname": "all-in-one",
+            "networks": {
+                utils.with_doris_prefix(self.name): {
+                    "ipv4_address": all_in_one_ip,
+                }
+            },
+            "ports": unique_ports,
+            "entrypoint": [
+                "bash",
+                os.path.join(DOCKER_RESOURCE_PATH, "entrypoint.sh"),
+                "init_all_in_one.sh",
+            ],
+        }
+
+        extra_hosts = []
+        # Map all node hostnames to the shared IP
+        for node in self.get_all_nodes():
+            extra_hosts.append("{}:{}".format(node.get_name(), all_in_one_ip))
+        user_hosts = getattr(self, "extra_hosts", [])
+        if user_hosts:
+            extra_hosts.extend(user_hosts)
+        if extra_hosts:
+            content["extra_hosts"] = extra_hosts
+
+        services = {service_name: content}
+
+        compose = {
+            "version": "3",
+            "services": services,
+            "networks": {
+                utils.with_doris_prefix(self.name): {
+                    "driver": "bridge",
+                    "ipam": {
+                        "config": [{
+                            "subnet": self.get_cidr(),
+                        }]
+                    },
+                },
+            },
+        }
 
         utils.write_compose_file(self.get_compose_file(), compose)
 
