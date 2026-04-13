@@ -133,9 +133,10 @@ wait_pid() {
     while true; do
         ps -p $pid >/dev/null
         if [ $? -ne 0 ]; then
-            break
+            # break
+            health_log "process $pid is not running"
         fi
-        sleep 1s
+        sleep 30s
     done
 
     health_log "show dmesg -T: "
