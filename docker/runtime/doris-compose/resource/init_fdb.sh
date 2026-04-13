@@ -49,12 +49,27 @@ stop_fdb() {
     exit 0
 }
 
+wait_process() {
+    pid=""
+    for ((i = 0; i < 5; i++)); do
+        sleep 1s
+        pid=$(ps -elf | grep java | grep fdbserver | grep -v grep | awk '{print $4}')
+        if [ -n "$pid" ]; then
+            break
+        fi
+    done
+
+    wait_pid $pid
+}
+
 main() {
     trap stop_fdb SIGTERM
 
     init_db &
 
     fdbmonitor --conffile ${DORIS_HOME}/conf/fdb.conf --lockfile ${DORIS_HOME}/fdbmonitor.pid
+
+    wait_process
 }
 
 main
