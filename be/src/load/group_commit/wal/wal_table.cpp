@@ -264,6 +264,11 @@ Status WalTable::_handle_stream_load(int64_t wal_id, const std::string& wal,
             // deprecated and should be removed in 3.1, use token instead.
             ctx->auth.auth_code = wal_id;
             st = _exec_env->stream_load_executor()->commit_txn(ctx.get());
+            LOG(INFO) << "sout: label=" << ctx->label << ", txn_id=" << ctx->txn_id
+                      << ", total_rows=" << ctx->number_total_rows
+                      << ", loaded_rows=" << ctx->number_loaded_rows
+                      << ", filtered_rows=" << ctx->number_filtered_rows
+                      << ", unselected_rows=" << ctx->number_unselected_rows;
         } else {
             st = ctx->status;
         }
