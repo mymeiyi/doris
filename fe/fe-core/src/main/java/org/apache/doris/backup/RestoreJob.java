@@ -24,6 +24,7 @@ import org.apache.doris.backup.BackupJobInfo.BackupTabletInfo;
 import org.apache.doris.backup.RestoreFileMapping.IdChain;
 import org.apache.doris.backup.Status.ErrCode;
 import org.apache.doris.catalog.BinlogConfig;
+import org.apache.doris.catalog.CloudTabletStatMgr;
 import org.apache.doris.catalog.DataProperty;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
@@ -109,6 +110,7 @@ import org.apache.logging.log4j.Logger;
 
 import java.io.DataInput;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -2123,6 +2125,7 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
         // set all restored partition version and version hash
         // set all tables' state to NORMAL
         setTableStateToNormalAndUpdateProperties(db, true, isReplay);
+        List<Long> tabletIds = Config.isCloudMode() ? new ArrayList<>() : null;
         for (long tblId : restoredVersionInfo.rowKeySet()) {
             Table tbl = db.getTableNullable(tblId);
             if (tbl == null) {
@@ -2140,6 +2143,7 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
                     if (part == null) {
                         continue;
                     }
+                    LOG.info("sout: table: {}, part: {}, version: {}", tblId, partId, entry.getValue());
 
                     // update partition visible version
                     part.updateVersionForRestore(entry.getValue());
@@ -2148,6 +2152,9 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
                     // we also need to update the replica version of these overwritten restored partitions
                     for (MaterializedIndex idx : part.getMaterializedIndices(IndexExtState.VISIBLE)) {
                         for (Tablet tablet : idx.getTablets()) {
+                            if (tabletIds != null) {
+                                tabletIds.add(tablet.getId());
+                            }
                             for (Replica replica : tablet.getReplicas()) {
                                 replica.updateVersionForRestore(visibleVersion);
                             }
@@ -2192,6 +2199,12 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
 
             // Only send release snapshot tasks after the job is finished.
             releaseSnapshots(savedSnapshotInfos, true);
+
+            // notify update tablet stats
+            if (tabletIds != null) {
+                LOG.info("sout: add active tablets for restore: {}", tabletIds);
+                CloudTabletStatMgr.getInstance().addActiveTablets(tabletIds);
+            }
         }
         showState = RestoreJobState.FINISHED;
 
@@ -2200,7 +2213,9 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
     }
 
     private void updateOlapTablesVersion(Database db) {
+        LOG.info("sout: start updateOlapTablesVersion");
         if (Env.getCurrentEnv().invalidCacheForCloud()) {
+            LOG.info("sout: skip updateOlapTablesVersion for cloud");
             return;
         }
 
