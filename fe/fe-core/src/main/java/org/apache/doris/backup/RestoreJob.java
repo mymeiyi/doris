@@ -1150,6 +1150,9 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
                             remotePartitionInfo.getIsInMemory(remotePartId),
                             remotePartitionInfo.getIsMutable(remotePartId));
                 }
+                LOG.info("sout: add a restor partition, tableId={}, partId={}, version={}, time={}, tableVersion={}",
+                        localTbl.getId(), restoredPart.getId(), restoredPart.getCachedVisibleVersion(),
+                        restoredPart.getVisibleVersionTime(), localTbl.getCachedTableVersion());
                 localTbl.addPartition(restoredPart);
             } finally {
                 localTbl.writeUnlock();
