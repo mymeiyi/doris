@@ -1125,6 +1125,7 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
         // add restored partitions.
         // table should be in State RESTORE, so no other partitions can be
         // added to or removed from this table during the restore process.
+        LOG.info("sout: restoredPartitions num: {}, {}", restoredPartitions.size(), restoredPartitions);
         for (Pair<String, Partition> entry : restoredPartitions) {
             OlapTable localTbl = (OlapTable) db.getTableNullable(entry.first);
             localTbl.writeLock();
@@ -2129,6 +2130,7 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
         // set all tables' state to NORMAL
         setTableStateToNormalAndUpdateProperties(db, true, isReplay);
         List<Long> tabletIds = Config.isCloudMode() ? new ArrayList<>() : null;
+        LOG.info("sout: restoredVersionInfo size: {}, val: {}", restoredVersionInfo.size(), restoredVersionInfo);
         for (long tblId : restoredVersionInfo.rowKeySet()) {
             Table tbl = db.getTableNullable(tblId);
             if (tbl == null) {
