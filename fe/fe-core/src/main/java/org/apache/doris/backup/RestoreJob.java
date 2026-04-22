@@ -2217,12 +2217,12 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
         return Status.OK;
     }
 
-    private void updateOlapTablesVersion(Database db) {
+    protected void updateOlapTablesVersion(Database db) {
         LOG.info("sout: start updateOlapTablesVersion");
         if (Env.getCurrentEnv().invalidCacheForCloud()) {
             LOG.info("sout: skip updateOlapTablesVersion for cloud, size={}", jobInfo.backupOlapTableObjects.size());
             // update table cache version for cloud mode
-            // return;
+            return;
         }
 
         for (String tableName : jobInfo.backupOlapTableObjects.keySet()) {

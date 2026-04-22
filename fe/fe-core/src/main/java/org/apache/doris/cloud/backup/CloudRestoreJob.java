@@ -36,6 +36,7 @@ import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.ReplicaAllocation;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.TableIf;
+import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Tablet;
 import org.apache.doris.catalog.TabletMeta;
 import org.apache.doris.cloud.catalog.CloudEnv;
@@ -156,19 +157,32 @@ public class CloudRestoreJob extends RestoreJob {
         } catch (UserException e) {
             LOG.error("failed to run cloud restore job", e);
         }
-        handleVersionAndStats();
+        // handleVersionAndStats();
     }
 
-    private void handleVersionAndStats() {
-        if (state != RestoreJobState.FINISHED) {
+    // private void handleVersionAndStats() {
+    @Override
+    protected void updateOlapTablesVersion(Database db) {
+        super.updateOlapTablesVersion(db);
+        /*if (state != RestoreJobState.FINISHED) {
             return;
-        }
-        LOG.info("sout: handleVersionAndStats: {}", restoredTbls.size());
-        for (Table table : restoredTbls) {
-            if (table.getType() != TableIf.TableType.OLAP) {
+        }*/
+        LOG.info("sout: handleVersionAndStats: {}", jobInfo.backupOlapTableObjects.size());
+        for (String tableName : jobInfo.backupOlapTableObjects.keySet()) {
+            Table tbl = db.getTableNullable(jobInfo.getAliasByOriginNameIfSet(tableName));
+            if (tbl == null) {
                 continue;
             }
-            OlapTable olapTable = (OlapTable) table;
+
+            if (tbl.getType() != TableType.OLAP) {
+                continue;
+            }
+
+            OlapTable olapTable = (OlapTable) tbl;
+            /*if (table.getType() != TableIf.TableType.OLAP) {
+                continue;
+            }
+            OlapTable olapTable = (OlapTable) table;*/
             List<Pair<OlapTable, Long>> tableVersionMap = Lists.newArrayList(
                     Pair.of(olapTable, olapTable.getCachedTableVersion()));
             Map<CloudPartition, Pair<Long, Long>> partitionVersionMap = new HashMap<>(olapTable.getPartitions().size());
