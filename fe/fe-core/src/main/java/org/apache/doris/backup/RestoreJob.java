@@ -2220,8 +2220,9 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
     private void updateOlapTablesVersion(Database db) {
         LOG.info("sout: start updateOlapTablesVersion");
         if (Env.getCurrentEnv().invalidCacheForCloud()) {
-            LOG.info("sout: skip updateOlapTablesVersion for cloud");
-            return;
+            LOG.info("sout: skip updateOlapTablesVersion for cloud, size={}", jobInfo.backupOlapTableObjects.size());
+            // update table cache version for cloud mode
+            // return;
         }
 
         for (String tableName : jobInfo.backupOlapTableObjects.keySet()) {
@@ -2239,8 +2240,16 @@ public class RestoreJob extends AbstractJob implements GsonPostProcessable {
                 continue;
             }
             try {
-                long nextVersion = olapTbl.getNextVersion();
-                olapTbl.updateVisibleVersionAndTime(nextVersion, System.currentTimeMillis());
+                if (Config.isNotCloudMode()) {
+                    long nextVersion = olapTbl.getNextVersion();
+                    olapTbl.updateVisibleVersionAndTime(nextVersion, System.currentTimeMillis());
+                } else {
+                    LOG.info("sout: table={}, cache version={}", olapTbl.getId(),
+                            olapTbl.getCachedTableVersion());
+                    /*olapTbl.setCachedTableVersion(nextVersion);
+                    ((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()
+                            .pushVersionAsync(dbId, olapTbl, nextVersion);*/
+                }
             } finally {
                 olapTbl.writeUnlock();
             }
