@@ -176,7 +176,17 @@ start_cloud_fe() {
         fi
         health_log "Found recovery script with JOURNAL_ID=$JOURNAL_ID, executing..."
         bash "$RECOVERY_SCRIPT"
+        RECOVERY_RES=$?
+        if [ $RECOVERY_RES -ne 0 ]; then
+            health_log "ERROR: Recovery script failed with exit code $RECOVERY_RES"
+            exit $RECOVERY_RES
+        fi
         mv "$RECOVERY_SCRIPT" "${RECOVERY_SCRIPT}.bak"
+        MV_RES=$?
+        if [ $MV_RES -ne 0 ]; then
+            health_log "ERROR: Failed to rename recovery script to ${RECOVERY_SCRIPT}.bak"
+            exit $MV_RES
+        fi
         health_log "Recovery script executed and renamed to ${RECOVERY_SCRIPT}.bak"
         RECOVERY_ARGS="--metadata_failure_recovery --recovery_journal_id $JOURNAL_ID"
     fi
