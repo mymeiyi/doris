@@ -670,6 +670,18 @@ class SuiteCluster {
     }
 
     // indices start from 1, not 0
+    // if not specific fe indices, then start all meta services
+    void startMetaServices(int... indices) {
+        runMsCmd(START_WAIT_TIMEOUT + 5, "start  --wait-timeout ${START_WAIT_TIMEOUT}".toString(), indices)
+    }
+
+    // indices start from 1, not 0
+    // if not specific fe indices, then start all recyclers
+    void startRecyclers(int... indices) {
+        runRecyclerCmd(START_WAIT_TIMEOUT + 5, "start  --wait-timeout ${START_WAIT_TIMEOUT}".toString(), indices)
+    }
+
+    // indices start from 1, not 0
     // if not specific fe indices, then stop all frontends
     void stopFrontends(int... indices) {
         runFrontendsCmd(STOP_WAIT_TIMEOUT + 5, "stop --wait-timeout ${STOP_WAIT_TIMEOUT}".toString(), indices)
@@ -680,6 +692,20 @@ class SuiteCluster {
     // if not specific be indices, then stop all backends
     void stopBackends(int... indices) {
         runBackendsCmd(STOP_WAIT_TIMEOUT + 5, "stop --wait-timeout ${STOP_WAIT_TIMEOUT}".toString(), indices)
+        waitHbChanged()
+    }
+
+    // indices start from 1, not 0
+    // if not specific be indices, then stop all meta services
+    void stopMetaServices(int... indices) {
+        runMsCmd(STOP_WAIT_TIMEOUT + 5, "stop --wait-timeout ${STOP_WAIT_TIMEOUT}".toString(), indices)
+        waitHbChanged()
+    }
+
+    // indices start from 1, not 0
+    // if not specific be indices, then stop all recyclers
+    void stopRecyclers(int... indices) {
+        runRecyclerCmd(STOP_WAIT_TIMEOUT + 5, "stop --wait-timeout ${STOP_WAIT_TIMEOUT}".toString(), indices)
         waitHbChanged()
     }
 
