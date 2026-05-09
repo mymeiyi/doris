@@ -669,7 +669,7 @@ public class Config extends ConfigBase {
                     + "even if there are no new journals. This helps keep table version, partition version, "
                     + "and tablet stats in the image up-to-date. If the value is less than or equal to 0, "
                     + "this feature is disabled."})
-    public static long cloud_checkpoint_image_stale_threshold_seconds = 3600;
+    public static long cloud_checkpoint_image_stale_threshold_seconds = 0;
 
     @ConfField(mutable = false, masterOnly = true, description = {"攒批的默认提交时间，单位是毫秒",
             "Default commit interval in ms for group commit"})
@@ -3607,7 +3607,7 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true, description = {"存算分离模式下是否启用同步 table 和 partition version 的功能",
             "Whether to enable the function of syncing table and partition version in cloud mode"})
-    public static boolean cloud_enable_version_syncer = true;
+    public static boolean cloud_enable_version_syncer = false;
 
     @ConfField(description = {"Get version task 的并发数", "Concurrent num of get version task."})
     public static int cloud_get_version_task_threads_num = 4;

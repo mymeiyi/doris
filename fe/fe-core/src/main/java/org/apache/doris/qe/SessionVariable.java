@@ -2931,9 +2931,9 @@ public class SessionVariable implements Serializable, Writable {
     @VariableMgr.VarAttr(name = CLOUD_FORCE_SYNC_TABLET_STATS, needForward = true)
     public boolean cloudForceSyncTabletStats = false;
     @VariableMgr.VarAttr(name = CLOUD_PARTITION_VERSION_CACHE_TTL_MS)
-    public long cloudPartitionVersionCacheTtlMs = Long.MAX_VALUE;
+    public long cloudPartitionVersionCacheTtlMs = 0;
     @VariableMgr.VarAttr(name = CLOUD_TABLE_VERSION_CACHE_TTL_MS)
-    public long cloudTableVersionCacheTtlMs = Long.MAX_VALUE;
+    public long cloudTableVersionCacheTtlMs = 0;
     @VariableMgr.VarAttr(name = CLOUD_FORCE_SYNC_VERSION, needForward = true)
     public boolean cloudForceSyncVersion = false;
     // CLOUD_VARIABLES_END
