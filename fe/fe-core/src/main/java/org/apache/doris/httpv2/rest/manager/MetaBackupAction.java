@@ -40,6 +40,8 @@ import com.sleepycat.je.util.DbBackup;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.apache.commons.io.FileUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -55,6 +57,7 @@ import java.util.Map;
 @RestController
 @RequestMapping("/rest/v2/manager/backup")
 public class MetaBackupAction extends RestBaseController {
+    private static final Logger LOG = LogManager.getLogger(MetaBackupAction.class);
     private static final String ALLOW_REDIRECT = "allow_redirect";
 
     @PostMapping("/sync_cloud_meta")
@@ -116,6 +119,7 @@ public class MetaBackupAction extends RestBaseController {
                 Env.getCurrentEnv().getCheckpointer().getLock().readLock().lock();
             }
             try {
+                LOG.info("begin export meta to {}", targetDir.getAbsolutePath());
                 CopiedImage copiedImage = copyLatestImageIfExists(targetDir);
                 copyImageMetaFiles(targetDir);
                 BdbExportResult bdbResult = exportBdbJe(targetDir, copiedImage.version, copiedImage.exists);
@@ -128,6 +132,7 @@ public class MetaBackupAction extends RestBaseController {
                 data.put("image_version", copiedImage.version);
                 data.put("image_exported", copiedImage.exists);
                 data.put("journal_upper_bound", bdbResult.journalUpperBound);
+                LOG.info("finish export meta to {}, exists: {}", targetDir, targetDir.exists());
                 return ResponseEntityBuilder.ok(data);
             } finally {
                 if (Env.getCurrentEnv().getCheckpointer() != null) {
