@@ -426,13 +426,45 @@ resolve_password_from_secret()
     fi
 }
 
+# handle restore_snapshot.sh: execute it, extract JOURNAL_ID, rename to .bak,
+# and return recovery args for start_fe.sh
+function handle_restore_snapshot()
+{
+    local restore_script="$DORIS_HOME/conf/restore_snapshot.sh"
+    if [[ ! -f "$restore_script" ]]; then
+        echo ""
+        return 0
+    fi
+
+    log_stderr "Found restore_snapshot.sh, executing..."
+    source "$restore_script"
+
+    local journal_id="${JOURNAL_ID:-}"
+    if [[ -z "$journal_id" ]]; then
+        log_stderr "JOURNAL_ID not set or empty in restore_snapshot.sh, abort!"
+        exit 1
+    fi
+    log_stderr "restore_snapshot.sh executed, JOURNAL_ID=$journal_id"
+
+    mv "$restore_script" "${restore_script}.bak"
+    log_stderr "Renamed restore_snapshot.sh to restore_snapshot.sh.bak"
+
+    echo "--metadata_failure_recovery --recovery_journal_id $journal_id"
+}
+
 start_fe_with_meta()
 {
+    local extra_opts="${1:-}"
+
     # the server will start in the current terminal session, and the log output and console interaction will be printed to that terminal
     local opts="--console"
     local recovery=`grep "\<selectdb.com.doris/recovery\>" $ANNOTATION_PATH | grep -v '^\s*#' | sed 's|^\s*'$confkey'\s*=\s*\(.*\)\s*$|\1|g'`
     if [[ "x$recovery" != "x" ]]; then
-        opts=${opts}" --metadata_failure_recovery"
+        opts="${opts} --metadata_failure_recovery"
+    fi
+
+    if [[ -n "$extra_opts" ]]; then
+        opts="${opts} ${extra_opts}"
     fi
 
     log_stderr "start with meta run start_fe.sh with additional options: '$opts'"
@@ -520,7 +552,9 @@ doris_meta_dir=$(eval "echo \"$DORIS_META_DIR\"")
 if [[ -f "$doris_meta_dir/image/ROLE" ]]; then
     log_stderr "start fe with exist meta."
     ./doris-debug --component fe
-    start_fe_with_meta
+
+    restore_opts=$(handle_restore_snapshot)
+    start_fe_with_meta "$restore_opts"
 else
     log_stderr "first start fe with meta not exist."
     probe_master $fe_addrs
