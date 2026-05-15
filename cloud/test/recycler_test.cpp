@@ -8693,4 +8693,57 @@ TEST(RecyclerTest, recycle_tablet_with_delete_file_failure) {
         EXPECT_EQ(it->size(), 0) << "All recycle rowset keys should be deleted";
     }
 }
+TEST(RecyclerTest, enable_recycler_default_true) {
+    EXPECT_TRUE(config::enable_recycler);
+}
+
+TEST(RecyclerTest, enable_recycler_skip_instance_scanner) {
+    auto txn_kv = std::make_shared<MemTxnKv>();
+    ASSERT_EQ(txn_kv->init(), 0);
+
+    bool old_val = config::enable_recycler;
+    config::enable_recycler = false;
+    DORIS_CLOUD_DEFER { config::enable_recycler = old_val; };
+
+    Recycler recycler(txn_kv);
+    // recycler_sleep_before_scheduling_seconds is 0 (set in main()),
+    // otherwise this call would hang for that many seconds.
+    recycler.instance_scanner_callback();
+
+    EXPECT_TRUE(recycler.pending_instance_queue_.empty());
+}
+
+TEST(RecyclerTest, enable_recycler_skip_recycle_callback) {
+    auto txn_kv = std::make_shared<MemTxnKv>();
+    ASSERT_EQ(txn_kv->init(), 0);
+
+    bool old_val = config::enable_recycler;
+    config::enable_recycler = false;
+    DORIS_CLOUD_DEFER { config::enable_recycler = old_val; };
+
+    Recycler recycler(txn_kv);
+
+    InstanceInfoPB instance;
+    instance.set_instance_id("test_instance");
+    recycler.pending_instance_queue_.push_back(instance);
+    recycler.pending_instance_set_.insert("test_instance");
+
+    std::thread t([&]() { recycler.recycle_callback(); });
+
+    // Wait until the callback has popped the instance from the queue
+    {
+        std::unique_lock lock(recycler.mtx_);
+        recycler.pending_instance_cond_.wait(lock, [&]() {
+            return recycler.pending_instance_queue_.empty();
+        });
+    }
+
+    recycler.stopped_ = true;
+    recycler.pending_instance_cond_.notify_all();
+    t.join();
+
+    EXPECT_TRUE(recycler.pending_instance_queue_.empty());
+    EXPECT_TRUE(recycler.pending_instance_set_.empty());
+    EXPECT_TRUE(recycler.recycling_instance_map_.empty());
+}
 } // namespace doris::cloud
