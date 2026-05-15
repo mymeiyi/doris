@@ -8744,12 +8744,17 @@ TEST(RecyclerTest, enable_recycler_skip_recycle_callback) {
 
     std::thread t([&]() { recycler.recycle_callback(); });
 
-    // Wait until the callback has popped the instance from the queue
-    {
-        std::unique_lock lock(recycler.mtx_);
-        recycler.pending_instance_cond_.wait(lock, [&]() {
-            return recycler.pending_instance_queue_.empty();
-        });
+    // Wait until the callback has popped the instance from the queue.
+    // Can not wait on pending_instance_cond_ here because the callback does
+    // not notify after popping, which may cause a deadlock: both the main
+    // thread and the callback end up waiting on the same CV with different
+    // predicates and no one will wake them up.
+    while (true) {
+        {
+            std::lock_guard lock(recycler.mtx_);
+            if (recycler.pending_instance_queue_.empty()) break;
+        }
+        std::this_thread::yield();
     }
 
     recycler.stopped_ = true;
