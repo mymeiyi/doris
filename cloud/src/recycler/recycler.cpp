@@ -251,7 +251,7 @@ void Recycler::instance_scanner_callback() {
     while (!stopped()) {
         if (!config::enable_recycler) {
             LOG(WARNING) << "Skip recycler since enable_recycler is false";
-            return;
+            continue;
         }
         std::vector<InstanceInfoPB> instances;
         get_all_instances(txn_kv_.get(), instances);
