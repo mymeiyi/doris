@@ -249,6 +249,10 @@ void Recycler::instance_scanner_callback() {
     std::this_thread::sleep_for(
             std::chrono::seconds(config::recycler_sleep_before_scheduling_seconds));
     while (!stopped()) {
+        if (!config::enable_recycler) {
+            LOG(WARNING) << "Skip recycler since enable_recycler is false";
+            return;
+        }
         std::vector<InstanceInfoPB> instances;
         get_all_instances(txn_kv_.get(), instances);
         // TODO(plat1ko): delete job recycle kv of non-existent instances
@@ -297,6 +301,11 @@ void Recycler::recycle_callback() {
             std::lock_guard lock(mtx_);
             // skip instance in recycling
             if (recycling_instance_map_.count(instance_id)) continue;
+        }
+        if (!config::enable_recycler) {
+            LOG(WARNING) << "Skip recycle instance_id=" << instance_id
+                         << " since enable_recycler is false";
+            continue;
         }
         auto instance_recycler = std::make_shared<InstanceRecycler>(
                 txn_kv_, instance, _thread_pool_group, txn_lazy_committer_);
