@@ -249,30 +249,30 @@ void Recycler::instance_scanner_callback() {
     std::this_thread::sleep_for(
             std::chrono::seconds(config::recycler_sleep_before_scheduling_seconds));
     while (!stopped()) {
-        if (!config::enable_recycler) {
-            LOG(WARNING) << "Skip recycler since enable_recycler is false";
-            continue;
-        }
-        std::vector<InstanceInfoPB> instances;
-        get_all_instances(txn_kv_.get(), instances);
-        // TODO(plat1ko): delete job recycle kv of non-existent instances
-        LOG(INFO) << "Recycler get instances: " << [&instances] {
-            std::stringstream ss;
-            for (auto& i : instances) ss << ' ' << i.instance_id();
-            return ss.str();
-        }();
-        if (!instances.empty()) {
-            // enqueue instances
-            std::lock_guard lock(mtx_);
-            for (auto& instance : instances) {
-                if (instance_filter_.filter_out(instance.instance_id())) continue;
-                auto [_, success] = pending_instance_set_.insert(instance.instance_id());
-                // skip instance already in pending queue
-                if (success) {
-                    pending_instance_queue_.push_back(std::move(instance));
+        if (config::enable_recycler) {
+            std::vector<InstanceInfoPB> instances;
+            get_all_instances(txn_kv_.get(), instances);
+            // TODO(plat1ko): delete job recycle kv of non-existent instances
+            LOG(INFO) << "Recycler get instances: " << [&instances] {
+                std::stringstream ss;
+                for (auto& i : instances) ss << ' ' << i.instance_id();
+                return ss.str();
+            }();
+            if (!instances.empty()) {
+                // enqueue instances
+                std::lock_guard lock(mtx_);
+                for (auto& instance : instances) {
+                    if (instance_filter_.filter_out(instance.instance_id())) continue;
+                    auto [_, success] = pending_instance_set_.insert(instance.instance_id());
+                    // skip instance already in pending queue
+                    if (success) {
+                        pending_instance_queue_.push_back(std::move(instance));
+                    }
                 }
+                pending_instance_cond_.notify_all();
             }
-            pending_instance_cond_.notify_all();
+        } else {
+            LOG(WARNING) << "Skip recycler since enable_recycler is false";
         }
         {
             std::unique_lock lock(mtx_);
