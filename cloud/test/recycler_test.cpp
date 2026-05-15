@@ -8705,10 +8705,20 @@ TEST(RecyclerTest, enable_recycler_skip_instance_scanner) {
     config::enable_recycler = false;
     DORIS_CLOUD_DEFER { config::enable_recycler = old_val; };
 
+    bool old_recycle_interval = config::recycle_interval_seconds;
+    config::recycle_interval_seconds = 0;
+    DORIS_CLOUD_DEFER { config::recycle_interval_seconds = old_recycle_interval; };
+
     Recycler recycler(txn_kv);
-    // recycler_sleep_before_scheduling_seconds is 0 (set in main()),
-    // otherwise this call would hang for that many seconds.
-    recycler.instance_scanner_callback();
+    std::thread t([&]() { recycler.instance_scanner_callback(); });
+
+    // Let the callback complete one iteration:
+    //   sleep(0) -> check enable_recycler (false, skip) -> wait_for(0, timeout)
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    recycler.stopped_ = true;
+    recycler.notifier_.notify_all();
+    t.join();
 
     EXPECT_TRUE(recycler.pending_instance_queue_.empty());
 }
