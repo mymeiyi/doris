@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include "common/config.h"
 #include "common/logging.h"
 #include "common/util.h"
 #include "cpp/sync_point.h"
@@ -700,10 +701,11 @@ HttpResponse process_http_set_value(TxnKv* txn_kv, brpc::Controller* cntl) {
     // and the number of final keys may be less than the initial number of keys
     if (kv_found) value.remove(txn.get());
 
-    // TODO(gavin): use cloud::blob_put() to deal with split-multi-kv and special keys
-    // StatsTabletKey is special, it has a series of keys, we only handle the base stat key
-    // MetaSchemaPBDictionaryKey, MetaSchemaKey, MetaDeleteBitmapKey are splited in to multiple KV
-    txn->put(key, serialized_value_to_save);
+    if (key_type == "MetaPendingDeleteBitmap") {
+        cloud::blob_put(txn.get(), key, serialized_value_to_save, 0);
+    } else {
+        txn->put(key, serialized_value_to_save);
+    }
     err = txn->commit();
     if (err != TxnErrorCode::TXN_OK) {
         std::stringstream ss;
