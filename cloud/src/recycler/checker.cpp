@@ -1355,13 +1355,6 @@ int InstanceChecker::get_pending_delete_bitmap_keys(
             LOG(WARNING) << "failed to parse PendingDeleteBitmapPB, tablet=" << tablet_id;
             return -1;
         }
-    } else if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
-        std::string pending_val;
-        err = txn->get(pending_key, &pending_val);
-        if (err == TxnErrorCode::TXN_OK && !pending_info.ParseFromString(pending_val)) [[unlikely]] {
-            LOG(WARNING) << "failed to parse PendingDeleteBitmapPB, tablet=" << tablet_id;
-            return -1;
-        }
     }
     if (err != TxnErrorCode::TXN_OK && err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
         LOG(WARNING) << "failed to get pending delete bitmap kv, err=" << err;

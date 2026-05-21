@@ -3567,14 +3567,6 @@ static bool remove_pending_delete_bitmap(MetaServiceCode& code, std::string& msg
             msg = "failed to parse PendingDeleteBitmapPB";
             return false;
         }
-    } else if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
-        std::string pending_val;
-        err = txn->get(pending_key, &pending_val);
-        if (err == TxnErrorCode::TXN_OK && !pending_info.ParseFromString(pending_val)) [[unlikely]] {
-            code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-            msg = "failed to parse PendingDeleteBitmapPB";
-            return false;
-        }
     }
     if (err != TxnErrorCode::TXN_OK && err != TxnErrorCode::TXN_KEY_NOT_FOUND) {
         ss << "failed to get delete bitmap pending info, instance_id=" << instance_id
@@ -4058,15 +4050,6 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         auto err = cloud::blob_get(txn.get(), pending_key, &previous_pending_val_buf);
         if (err == TxnErrorCode::TXN_OK) {
             if (!previous_pending_val_buf.to_pb(&previous_pending_info)) [[unlikely]] {
-                code = MetaServiceCode::PROTOBUF_PARSE_ERR;
-                msg = "failed to parse PendingDeleteBitmapPB";
-                return;
-            }
-        } else if (err == TxnErrorCode::TXN_KEY_NOT_FOUND) {
-            std::string previous_pending_val;
-            err = txn->get(pending_key, &previous_pending_val);
-            if (err == TxnErrorCode::TXN_OK &&
-                !previous_pending_info.ParseFromString(previous_pending_val)) [[unlikely]] {
                 code = MetaServiceCode::PROTOBUF_PARSE_ERR;
                 msg = "failed to parse PendingDeleteBitmapPB";
                 return;
