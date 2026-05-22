@@ -55,9 +55,11 @@ import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.AuthenticationException;
 import org.apache.doris.common.CaseSensibility;
+import org.apache.doris.common.ClientPool;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.DuplicatedRequestException;
+import org.apache.doris.ha.FrontendNodeType;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.InternalErrorCode;
 import org.apache.doris.common.LabelAlreadyUsedException;
@@ -135,6 +137,7 @@ import org.apache.doris.statistics.query.QueryStats;
 import org.apache.doris.system.Backend;
 import org.apache.doris.system.Frontend;
 import org.apache.doris.system.SystemInfoService;
+import org.apache.doris.system.SystemInfoService.HostInfo;
 import org.apache.doris.tablefunction.MetadataGenerator;
 import org.apache.doris.thrift.FrontendService;
 import org.apache.doris.thrift.TAbortRemoteTxnRequest;
@@ -346,6 +349,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -2784,6 +2788,35 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         String clientAddr = getClientAddrAsString();
         if (LOG.isDebugEnabled()) {
             LOG.debug("receive stream load put request: {}, backend: {}", request, clientAddr);
+        }
+
+        String groupCommitMode = request.getGroupCommitMode();
+        if (groupCommitMode != null && !groupCommitMode.equals("off_mode") && Env.getCurrentEnv().isMaster()
+                && Config.enable_forward_group_commit_stream_load) {
+            HostInfo selfNode = Env.getCurrentEnv().getSelfNode();
+            List<Frontend> followers = Env.getCurrentEnv().getFrontends(FrontendNodeType.FOLLOWER).stream()
+                    .filter(fe -> fe.isAlive() && !(fe.getHost().equals(selfNode.getHost())
+                            && fe.getEditLogPort() == selfNode.getPort())).collect(
+                            Collectors.toList());
+            if (followers != null && !followers.isEmpty()) {
+                int idx = ThreadLocalRandom.current().nextInt(followers.size());
+                Frontend follower = followers.get(idx);
+                TNetworkAddress address = new TNetworkAddress(follower.getHost(), follower.getRpcPort());
+                LOG.info("forward group commit stream load put to follower {}, db={}, tbl={}, groupCommitMode={}",
+                        address, request.getDb(), request.getTbl(), groupCommitMode);
+                FrontendService.Client client = null;
+                try {
+                    client = ClientPool.frontendPool.borrowObject(address);
+                    return client.streamLoadPut(request);
+                } catch (Exception e) {
+                    LOG.warn("failed to forward stream load put to follower: {}, fallback to local", address, e);
+                } finally {
+                    if (client != null) {
+                        ClientPool.frontendPool.returnObject(address, client);
+                    }
+                }
+
+            }
         }
 
         TStreamLoadPutResult result = new TStreamLoadPutResult();
