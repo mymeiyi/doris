@@ -2821,7 +2821,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
                     return errorResult;
                 }
                 List<Frontend> followers = Env.getCurrentEnv().getFrontends(FrontendNodeType.FOLLOWER);
-                if (followers != null && !followers.isEmpty()) {
+                if (Env.getCurrentEnv().isMaster() && followers != null && !followers.isEmpty()) {
                     int idx = ThreadLocalRandom.current().nextInt(followers.size());
                     Frontend follower = followers.get(idx);
                     TNetworkAddress address = new TNetworkAddress(follower.getHost(), follower.getRpcPort());
