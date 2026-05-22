@@ -55,9 +55,11 @@ import org.apache.doris.cloud.system.CloudSystemInfoService;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.AuthenticationException;
 import org.apache.doris.common.CaseSensibility;
+import org.apache.doris.common.ClientPool;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.DuplicatedRequestException;
+import org.apache.doris.ha.FrontendNodeType;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.InternalErrorCode;
 import org.apache.doris.common.LabelAlreadyUsedException;
@@ -346,6 +348,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -2784,6 +2787,59 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         String clientAddr = getClientAddrAsString();
         if (LOG.isDebugEnabled()) {
             LOG.debug("receive stream load put request: {}, backend: {}", request, clientAddr);
+        }
+
+        if (Config.enable_forward_group_commit_stream_load) {
+            String groupCommitMode = request.getGroupCommitMode();
+            if (groupCommitMode != null && !groupCommitMode.equals("off_mode")) {
+                Database db;
+                try {
+                    db = Env.getCurrentInternalCatalog().getDbOrDdlException(request.getDb());
+                } catch (DdlException e) {
+                    TStreamLoadPutResult errorResult = new TStreamLoadPutResult();
+                    TStatus errorStatus = new TStatus(TStatusCode.ANALYSIS_ERROR);
+                    errorStatus.addToErrorMsgs(e.getMessage());
+                    errorResult.setStatus(errorStatus);
+                    return errorResult;
+                }
+                OlapTable table;
+                try {
+                    table = (OlapTable) db.getTableOrDdlException(request.getTbl());
+                } catch (DdlException e) {
+                    TStreamLoadPutResult errorResult = new TStreamLoadPutResult();
+                    TStatus errorStatus = new TStatus(TStatusCode.ANALYSIS_ERROR);
+                    errorStatus.addToErrorMsgs(e.getMessage());
+                    errorResult.setStatus(errorStatus);
+                    return errorResult;
+                }
+                if (!table.getTableProperty().getUseSchemaLightChange()) {
+                    TStreamLoadPutResult errorResult = new TStreamLoadPutResult();
+                    TStatus errorStatus = new TStatus(TStatusCode.ANALYSIS_ERROR);
+                    errorStatus.addToErrorMsgs(
+                            "table light_schema_change is false, can't do stream load with group commit mode");
+                    errorResult.setStatus(errorStatus);
+                    return errorResult;
+                }
+                List<Frontend> followers = Env.getCurrentEnv().getFrontends(FrontendNodeType.FOLLOWER);
+                if (followers != null && !followers.isEmpty()) {
+                    int idx = ThreadLocalRandom.current().nextInt(followers.size());
+                    Frontend follower = followers.get(idx);
+                    TNetworkAddress address = new TNetworkAddress(follower.getHost(), follower.getRpcPort());
+                    LOG.info("forward group commit stream load put to follower {}, db={}, tbl={}, groupCommitMode={}",
+                            address, request.getDb(), request.getTbl(), groupCommitMode);
+                    FrontendService.Client client = null;
+                    try {
+                        client = ClientPool.frontendPool.borrowObject(address);
+                        return client.streamLoadPut(request);
+                    } catch (Exception e) {
+                        LOG.warn("failed to forward stream load put to follower: {}, fallback to local", address, e);
+                    } finally {
+                        if (client != null) {
+                            ClientPool.frontendPool.returnObject(address, client);
+                        }
+                    }
+                }
+            }
         }
 
         TStreamLoadPutResult result = new TStreamLoadPutResult();
