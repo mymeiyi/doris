@@ -6103,6 +6103,10 @@ TEST(MetaServiceTest, UpdateDeleteBitmapSplitPendingKey) {
     auto meta_service = get_meta_service();
     brpc::Controller cntl;
 
+    int16_t old_version = config::meta_pending_delete_bitmap_value_version;
+    DORIS_CLOUD_DEFER { config::meta_pending_delete_bitmap_value_version = old_version; };
+    config::meta_pending_delete_bitmap_value_version = 2;
+
     extern std::string get_instance_id(const std::shared_ptr<ResourceManager>& rc_mgr,
                                        const std::string& cloud_unique_id);
     auto instance_id = get_instance_id(meta_service->resource_mgr(), "test_cloud_unique_id");
@@ -6242,6 +6246,69 @@ TEST(MetaServiceTest, UpdateDeleteBitmapReadsLegacyPlainPendingKey) {
         ASSERT_EQ(std::get<std::int64_t>(std::get<0>(out[5])), version);
         ASSERT_EQ(std::get<std::int64_t>(std::get<0>(out[6])), 0);
     }
+}
+
+TEST(MetaServiceTest, UpdateDeleteBitmapPendingKeyValueVersion) {
+    auto meta_service = get_meta_service();
+    brpc::Controller cntl;
+
+    int16_t old_version = config::meta_pending_delete_bitmap_value_version;
+    DORIS_CLOUD_DEFER { config::meta_pending_delete_bitmap_value_version = old_version; };
+
+    extern std::string get_instance_id(const std::shared_ptr<ResourceManager>& rc_mgr,
+                                       const std::string& cloud_unique_id);
+    auto instance_id = get_instance_id(meta_service->resource_mgr(), "test_cloud_unique_id");
+
+    auto check_case = [&](int16_t value_version, int64_t db_id, int64_t table_id, int64_t index_id,
+                          int64_t partition_id, int64_t tablet_id, const std::string& label) {
+        int64_t txn_id = 0;
+        ASSERT_NO_FATAL_FAILURE(create_tablet_with_db_id(meta_service.get(), db_id, table_id,
+                                                         index_id, partition_id, tablet_id));
+        begin_txn_and_commit_rowset(meta_service.get(), label, db_id, table_id, partition_id,
+                                    tablet_id, &txn_id);
+
+        constexpr int64_t lock_id = -2;
+        constexpr int64_t initiator = 1012;
+        constexpr int64_t version = 103;
+        get_delete_bitmap_update_lock(meta_service.get(), table_id, partition_id, lock_id,
+                                      initiator);
+
+        config::meta_pending_delete_bitmap_value_version = value_version;
+
+        UpdateDeleteBitmapRequest req;
+        UpdateDeleteBitmapResponse res;
+        update_delete_bitmap(meta_service.get(), req, res, table_id, partition_id, lock_id,
+                             initiator, tablet_id, txn_id, version, "pending_value_version");
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+
+        std::string pending_key = meta_pending_delete_bitmap_key({instance_id, tablet_id});
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+
+        std::string raw_pending_val;
+        ValueBuf pending_val;
+        ASSERT_EQ(cloud::blob_get(txn.get(), pending_key, &pending_val), TxnErrorCode::TXN_OK);
+
+        PendingDeleteBitmapPB pending_info;
+        ASSERT_TRUE(pending_val.to_pb(&pending_info));
+        ASSERT_EQ(pending_info.delete_bitmap_keys_size(), 1);
+
+        if (value_version == 1) {
+            ASSERT_EQ(txn->get(pending_key, &raw_pending_val), TxnErrorCode::TXN_OK);
+            PendingDeleteBitmapPB raw_pending_info;
+            ASSERT_TRUE(raw_pending_info.ParseFromString(raw_pending_val));
+            ASSERT_EQ(raw_pending_info.delete_bitmap_keys_size(), 1);
+            ASSERT_EQ(pending_val.keys().size(), 1);
+            ASSERT_EQ(pending_val.keys().front(), pending_key);
+        } else {
+            ASSERT_EQ(txn->get(pending_key, &raw_pending_val), TxnErrorCode::TXN_KEY_NOT_FOUND);
+            ASSERT_EQ(pending_val.keys().size(), 1);
+            ASSERT_NE(pending_val.keys().front(), pending_key);
+        }
+    };
+
+    check_case(1, 99996, 1804, 4804, 2004, 3004, "label14");
+    check_case(2, 99995, 1805, 4805, 2005, 3005, "label15");
 }
 
 void testUpdateDeleteBitmap(int lock_version) {

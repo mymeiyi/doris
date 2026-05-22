@@ -4099,7 +4099,16 @@ void MetaServiceImpl::update_delete_bitmap(google::protobuf::RpcController* cont
         std::string pending_key = meta_pending_delete_bitmap_key({instance_id, tablet_id});
         // splitting large values (>90*1000) into multiple KVs
         cloud::blob_remove(txn.get(), pending_key);
-        cloud::blob_put(txn.get(), pending_key, pending_val, 0);
+        if (config::meta_pending_delete_bitmap_value_version == 1) {
+            txn->put(pending_key, pending_val);
+        } else if (config::meta_pending_delete_bitmap_value_version == 2) {
+            cloud::blob_put(txn.get(), pending_key, pending_val, 0);
+        } else {
+            code = MetaServiceCode::INVALID_ARGUMENT;
+            msg = fmt::format("invalid meta_pending_delete_bitmap_value_version={}",
+                              config::meta_pending_delete_bitmap_value_version);
+            return;
+        }
         fdb_txn_size = fdb_txn_size + pending_key.size() + pending_val.size();
         LOG(INFO) << "xxx update delete bitmap put pending_key=" << hex(pending_key)
                   << " lock_id=" << request->lock_id() << " initiator=" << request->initiator()
