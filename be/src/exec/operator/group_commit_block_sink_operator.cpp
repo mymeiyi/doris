@@ -184,9 +184,6 @@ void GroupCommitBlockSinkLocalState::_remove_estimated_wal_bytes() {
 
 Status GroupCommitBlockSinkLocalState::_add_blocks(RuntimeState* state,
                                                    bool is_blocks_contain_all_load_data) {
-    if (!_load_block_queue) {
-        RETURN_IF_ERROR(_initialize_load_queue());
-    }
     DCHECK(_is_block_appended == false);
     auto& p = _parent->cast<GroupCommitBlockSinkOperatorX>();
     if (_state->exec_env()->wal_mgr()->is_running()) {
@@ -288,13 +285,9 @@ Status GroupCommitBlockSinkOperatorX::sink(RuntimeState* state, Block* input_blo
     SCOPED_TIMER(local_state.exec_time_counter());
     COUNTER_UPDATE(local_state.rows_input_counter(), (int64_t)input_block->rows());
     if (!local_state._load_block_queue) {
-        auto st = local_state._initialize_load_queue();
-        if (!st.ok()) {
-            LOG(WARNING) << "Failed to initialize load queue, reason: " << st.to_string();
-        } else {
-            DCHECK(local_state._load_block_queue);
-        }
+        RETURN_IF_ERROR(local_state._initialize_load_queue());
     }
+    DCHECK(local_state._load_block_queue);
     Status status = Status::OK();
 
     auto wind_up = [&]() -> Status {
