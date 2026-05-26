@@ -167,6 +167,9 @@ public:
     void remove_load_id(const UniqueId& load_id);
 
 private:
+    // must hold lock
+    Status _submit_create_group_commit_load(int be_exe_version,
+                                            std::shared_ptr<MemTrackerLimiter> mem_tracker);
     Status _create_group_commit_load(int be_exe_version,
                                      std::shared_ptr<MemTrackerLimiter> mem_tracker,
                                      std::shared_ptr<LoadBlockQueue>& created_load_block_queue);
