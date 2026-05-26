@@ -340,6 +340,7 @@ Status GroupCommitTable::_submit_create_group_commit_load(
     auto submit_st = _thread_pool->submit_func([&, be_exe_version, mem_tracker] {
         std::shared_ptr<LoadBlockQueue> created_load_block_queue;
         Defer defer {[&]() {
+            std::vector<UniqueId> success_load_ids;
             std::unique_lock l(_lock);
             if (created_load_block_queue && !created_load_block_queue->need_commit()) {
                 for (const auto& [id, load_info] : _create_plan_deps) {
@@ -353,11 +354,20 @@ Status GroupCommitTable::_submit_create_group_commit_load(
                                             "group commit queue, load_id="
                                          << id << ", label=" << created_load_block_queue->label
                                          << ", status=" << st.to_string();
+                        } else {
+                            create_dep->set_ready();
+                            success_load_ids.emplace_back(id);
                         }
+                    } else if (created_load_block_queue->schema_version > std::get<2>(load_info) ||
+                               (created_load_block_queue->schema_version == std::get<2>(load_info) &&
+                                created_load_block_queue->index_size != std::get<3>(load_info))) {
+                        create_dep->set_ready();
+                        success_load_ids.emplace_back(id);
                     }
-                    create_dep->set_ready();
                 }
-                _create_plan_deps.clear();
+                for (const auto& id : success_load_ids) {
+                   _create_plan_deps.erase(id);
+                }
                 _is_creating_plan_fragment = false;
             } else {
                 _is_creating_plan_fragment = false;
