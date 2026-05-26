@@ -282,16 +282,41 @@ Status GroupCommitTable::get_first_block_load_queue(
     if (!_is_creating_plan_fragment) {
         _is_creating_plan_fragment = true;
         RETURN_IF_ERROR(
-                _thread_pool->submit_func([&, be_exe_version, mem_tracker, dep = create_plan_dep] {
-                    Defer defer {[&, dep = dep]() {
+                _thread_pool->submit_func([&, be_exe_version, mem_tracker] {
+                    std::shared_ptr<LoadBlockQueue> created_load_block_queue;
+                    Defer defer {[&]() {
                         std::unique_lock l(_lock);
-                        for (auto it : _create_plan_deps) {
-                            std::get<0>(it.second)->set_ready();
+                        if (created_load_block_queue && !created_load_block_queue->need_commit()) {
+                            for (const auto& [id, load_info] : _create_plan_deps) {
+                                auto create_dep = std::get<0>(load_info);
+                                auto put_dep = std::get<1>(load_info);
+                                if (created_load_block_queue->schema_version ==
+                                            std::get<2>(load_info) &&
+                                    created_load_block_queue->index_size ==
+                                            std::get<3>(load_info)) {
+                                    auto st = created_load_block_queue->add_load_id(id, put_dep);
+                                    if (!st.ok()) {
+                                        LOG(WARNING)
+                                                << "failed to add pending load_id into created "
+                                                   "group commit queue, load_id="
+                                                << id << ", label=" << created_load_block_queue->label
+                                                << ", status=" << st.to_string();
+                                    }
+                                }
+                                create_dep->set_ready();
+                            }
+                            _create_plan_deps.clear();
+                        } else {
+                            // trigger create plan
+                            for (const auto& [_, load_info] : _create_plan_deps) {
+                                std::get<0>(load_info)->set_ready();
+                            }
+                            _create_plan_deps.clear();
                         }
-                        _create_plan_deps.clear();
                         _is_creating_plan_fragment = false;
                     }};
-                    auto st = _create_group_commit_load(be_exe_version, mem_tracker);
+                    auto st = _create_group_commit_load(be_exe_version, mem_tracker,
+                                                        created_load_block_queue);
                     if (!st.ok()) {
                         LOG(WARNING) << "create group commit load error: " << st.to_string();
                         _create_plan_failed_reason = ". create group commit load error: " +
@@ -317,8 +342,9 @@ void GroupCommitTable::remove_load_id(const UniqueId& load_id) {
     }
 }
 
-Status GroupCommitTable::_create_group_commit_load(int be_exe_version,
-                                                   std::shared_ptr<MemTrackerLimiter> mem_tracker) {
+Status GroupCommitTable::_create_group_commit_load(
+        int be_exe_version, std::shared_ptr<MemTrackerLimiter> mem_tracker,
+        std::shared_ptr<LoadBlockQueue>& created_load_block_queue) {
     Status st = Status::OK();
     TStreamLoadPutResult result;
     std::string label;
@@ -386,6 +412,7 @@ Status GroupCommitTable::_create_group_commit_load(int be_exe_version,
                     instance_id, label, txn_id, schema_version, index_size, _all_block_queues_bytes,
                     result.wait_internal_group_commit_finish, result.group_commit_interval_ms,
                     result.group_commit_data_bytes);
+            created_load_block_queue = load_block_queue;
             RETURN_IF_ERROR(load_block_queue->create_wal(
                     _db_id, _table_id, txn_id, label, _exec_env->wal_mgr(),
                     pipeline_params.fragment.output_sink.olap_table_sink.schema.slot_descs,
@@ -403,6 +430,11 @@ Status GroupCommitTable::_create_group_commit_load(int be_exe_version,
                         create_dep->set_ready();
                         success_load_ids.emplace_back(id);
                     }
+                } else if (load_block_queue->schema_version > std::get<2>(load_info) ||
+                    (load_block_queue->schema_version == std::get<2>(load_info) &&
+                            load_block_queue->index_size != std::get<3>(load_info))) {
+                    create_dep->set_ready();
+                    success_load_ids.emplace_back(id);
                 }
             }
             for (const auto& id : success_load_ids) {
