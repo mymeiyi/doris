@@ -22,6 +22,7 @@ import org.apache.doris.catalog.InternalSchemaInitializer;
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.FeConstants;
+import org.apache.doris.common.UserException;
 import org.apache.doris.mysql.MysqlChannel;
 import org.apache.doris.mysql.MysqlSerializer;
 import org.apache.doris.planner.PlanFragment;
@@ -349,5 +350,70 @@ public class StmtExecutorTest extends TestWithFeService {
         clearMethod.invoke(executor);
 
         Mockito.verify(resultFileSink).setDeleteExistingFiles(false);
+    }
+
+    @Test
+    public void testShouldDisableCloudVersionCacheOnRetryForE230() throws UserException {
+        String originalCloudUniqueId = Config.cloud_unique_id;
+        long originalPartitionTtl = connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs;
+        long originalTableTtl = connectContext.getSessionVariable().cloudTableVersionCacheTtlMs;
+        try {
+            Config.cloud_unique_id = "test-cloud-id";
+            StmtExecutor executor = new StmtExecutor(connectContext, "select 1");
+
+            connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = 1000L;
+            connectContext.getSessionVariable().cloudTableVersionCacheTtlMs = 1000L;
+            Assertions.assertTrue(executor.shouldDisableCloudVersionCacheOnRetry(
+                    "errCode = 2, detailMessage = E-230 versions are already compacted"));
+            Assertions.assertFalse(executor.shouldDisableCloudVersionCacheOnRetry(
+                    "errCode = 2, detailMessage = some other error"));
+
+            connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = 0L;
+            connectContext.getSessionVariable().cloudTableVersionCacheTtlMs = 1000L;
+            Assertions.assertTrue(executor.shouldDisableCloudVersionCacheOnRetry(
+                    "errCode = 2, detailMessage = E-230 versions are already compacted"));
+
+            connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = 1000L;
+            connectContext.getSessionVariable().cloudTableVersionCacheTtlMs = 0L;
+            Assertions.assertTrue(executor.shouldDisableCloudVersionCacheOnRetry(
+                    "errCode = 2, detailMessage = E-230 versions are already compacted"));
+
+            connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = 0L;
+            connectContext.getSessionVariable().cloudTableVersionCacheTtlMs = 0L;
+            Assertions.assertFalse(executor.shouldDisableCloudVersionCacheOnRetry(
+                    "errCode = 2, detailMessage = E-230 versions are already compacted"));
+        } finally {
+            Config.cloud_unique_id = originalCloudUniqueId;
+            connectContext.getSessionVariable().cloudPartitionVersionCacheTtlMs = originalPartitionTtl;
+            connectContext.getSessionVariable().cloudTableVersionCacheTtlMs = originalTableTtl;
+        }
+    }
+
+    @Test
+    public void testSetCloudVersionCacheTtlZeroForNextAttemptAndRevert() throws Exception {
+        SessionVariable sessionVariable = connectContext.getSessionVariable();
+        long originalPartitionTtl = sessionVariable.cloudPartitionVersionCacheTtlMs;
+        long originalTableTtl = sessionVariable.cloudTableVersionCacheTtlMs;
+        try {
+            sessionVariable.cloudPartitionVersionCacheTtlMs = 1000L;
+            sessionVariable.cloudTableVersionCacheTtlMs = 2000L;
+            StmtExecutor executor = new StmtExecutor(connectContext, "select 1");
+
+            executor.setCloudVersionCacheTtlZeroForNextAttempt();
+            Assertions.assertEquals(0L, sessionVariable.cloudPartitionVersionCacheTtlMs);
+            Assertions.assertEquals(0L, sessionVariable.cloudTableVersionCacheTtlMs);
+
+            VariableMgr.revertSessionValue(sessionVariable);
+            sessionVariable.setIsSingleSetVar(false);
+            sessionVariable.clearSessionOriginValue();
+
+            Assertions.assertEquals(1000L, sessionVariable.cloudPartitionVersionCacheTtlMs);
+            Assertions.assertEquals(2000L, sessionVariable.cloudTableVersionCacheTtlMs);
+        } finally {
+            sessionVariable.cloudPartitionVersionCacheTtlMs = originalPartitionTtl;
+            sessionVariable.cloudTableVersionCacheTtlMs = originalTableTtl;
+            sessionVariable.setIsSingleSetVar(false);
+            sessionVariable.clearSessionOriginValue();
+        }
     }
 }

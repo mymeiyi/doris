@@ -583,6 +583,7 @@ public class StmtExecutor {
         TUniqueId firstQueryId = queryId;
         int retryTime = Config.max_query_retry_time;
         retryTime = retryTime <= 0 ? 1 : retryTime + 1;
+        boolean disableCloudVersionCacheOnRetry = false;
         // If the query is an `outfile` statement,
         // we execute it only once to avoid exporting redundant data.
         if (parsedStmt instanceof Queriable) {
@@ -590,6 +591,9 @@ public class StmtExecutor {
         }
         for (int i = 1; i <= retryTime; i++) {
             try {
+                if (disableCloudVersionCacheOnRetry) {
+                    setCloudVersionCacheTtlZeroForNextAttempt();
+                }
                 execute(queryId);
                 return;
             } catch (UserException e) {
@@ -602,6 +606,7 @@ public class StmtExecutor {
                 if (this.coord != null && this.coord.isQueryCancelled()) {
                     throw e;
                 }
+                disableCloudVersionCacheOnRetry = shouldDisableCloudVersionCacheOnRetry(e.getMessage());
                 TUniqueId lastQueryId = queryId;
                 queryId = UniqueIdUtils.fastUniqueId();
                 int randomMillis = 10 + (int) (Math.random() * 10);
@@ -620,6 +625,35 @@ public class StmtExecutor {
                 throw e;
             }
         }
+    }
+
+    boolean shouldDisableCloudVersionCacheOnRetry(String errorMessage) {
+        return Config.isCloudMode()
+                && errorMessage != null
+                && errorMessage.contains(SystemInfoService.ERROR_E230)
+                && (context.getSessionVariable().cloudPartitionVersionCacheTtlMs != 0
+                || context.getSessionVariable().cloudTableVersionCacheTtlMs != 0);
+    }
+
+    void setCloudVersionCacheTtlZeroForNextAttempt() {
+        SessionVariable sessionVariable = context.getSessionVariable();
+        long partitionTtl = sessionVariable.cloudPartitionVersionCacheTtlMs;
+        long tableTtl = sessionVariable.cloudTableVersionCacheTtlMs;
+
+        if (partitionTtl != 0
+                && !sessionVariable.setVarOnce(SessionVariable.CLOUD_PARTITION_VERSION_CACHE_TTL_MS, "0")) {
+            LOG.warn("failed to set {}=0 before retry. {}",
+                    SessionVariable.CLOUD_PARTITION_VERSION_CACHE_TTL_MS, context.getQueryIdentifier());
+        }
+        if (tableTtl != 0
+                && !sessionVariable.setVarOnce(SessionVariable.CLOUD_TABLE_VERSION_CACHE_TTL_MS, "0")) {
+            LOG.warn("failed to set {}=0 before retry. {}",
+                    SessionVariable.CLOUD_TABLE_VERSION_CACHE_TTL_MS, context.getQueryIdentifier());
+        }
+        LOG.info("temporarily set {} from {} to 0 and {} from {} to 0 before retry. {}",
+                SessionVariable.CLOUD_PARTITION_VERSION_CACHE_TTL_MS, partitionTtl,
+                SessionVariable.CLOUD_TABLE_VERSION_CACHE_TTL_MS, tableTtl,
+                context.getQueryIdentifier());
     }
 
     public void execute(TUniqueId queryId) throws Exception {
