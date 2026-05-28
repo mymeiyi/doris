@@ -193,9 +193,13 @@ public class CloudMetrics {
                 new LongCounterMetric("meta_service_rpc_rate_limit_throttled", MetricUnit.NOUNIT,
                         "meta service RPC rate limit throttled count"));
         META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY = new AutoMappedMetric<>(methodName -> {
-            String metricName = MetricRegistry.name("meta_service", "rpc", "rate_limit_throttled", "latency", "ms",
-                    "method=" + methodName);
-            return MetricRepo.METRIC_REGISTER.histogram(metricName);
+            List<MetricLabel> labels = Collections.singletonList(new MetricLabel("method", methodName));
+            return new HistogramMetric(
+                    MetricRegistry.name("meta_service", "rpc", "rate_limit_throttled", "latency", "ms"), labels);
         });
+        MetricRepo.DORIS_METRIC_REGISTER.addHistogramMetrics(
+                "meta_service_rpc_rate_limit_throttled_latency",
+                META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY,
+                Config::isCloudMode);
     }
 }
