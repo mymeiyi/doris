@@ -70,7 +70,7 @@ public class CloudMetrics {
 
     // Per-method meta-service RPC Rate limiting metrics
     public static AutoMappedMetric<LongCounterMetric> META_SERVICE_RPC_RATE_LIMIT_THROTTLED;
-    public static AutoMappedMetric<Histogram> META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY;
+    public static AutoMappedMetric<HistogramMetric> META_SERVICE_RPC_RATE_LIMIT_THROTTLED_LATENCY;
 
     protected static void init() {
         if (Config.isNotCloudMode()) {
