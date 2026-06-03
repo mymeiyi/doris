@@ -114,6 +114,11 @@ public:
     // counts of load in one group commit
     std::atomic_size_t group_commit_load_count = 0;
 
+    // only used by fault injection (debug point) to reproduce the lost-row race
+    // when multiple loads share the same load_id (reuse group commit plan):
+    // it lets us block the 2nd (and later) add_block on this queue.
+    std::atomic<int> _debug_add_block_seq = 0;
+
     // the execute status of this internal group commit
     std::mutex mutex;
     std::atomic<bool> process_finish = false;

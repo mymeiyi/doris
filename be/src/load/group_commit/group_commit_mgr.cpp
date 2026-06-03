@@ -54,6 +54,39 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state, std::shared_ptr<Bl
                                  bool write_wal, UniqueId& load_id) {
     DBUG_EXECUTE_IF("LoadBlockQueue.add_block.failed",
                     { return Status::InternalError("LoadBlockQueue.add_block.failed"); });
+    // Fault injection to reproduce the lost-row race when several loads share the same
+    // load_id (reuse group commit plan). Block the 2nd (and later) add_block on this
+    // queue *without holding the queue mutex*, so the first load can finish (add_block +
+    // remove_load_id) and the internal consumer can commit the txn before this block is
+    // appended. After the debug point is disabled, this late block is appended to an
+    // already-committed queue and is silently lost.
+    DBUG_EXECUTE_IF("LoadBlockQueue.add_block.block_second_load", {
+        int seq = _debug_add_block_seq.fetch_add(1);
+        if (seq == 0) {
+            // The 1st add_block waits until a 2nd load has joined this same queue, so both
+            // loads share the (reused) load_id in _load_ids_to_write_dep before the 1st one
+            // removes it. This makes the "shared-key clobber" deterministic.
+            LOG(INFO) << "debug 1st add_block waits for a 2nd load to join, label=" << label;
+            while (group_commit_load_count.load() < 2 &&
+                   DebugPoints::instance()->is_enable("LoadBlockQueue.add_block.block_second_load")) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            LOG(INFO) << "debug 1st add_block proceeds, label=" << label
+                      << ", load_count=" << group_commit_load_count.load();
+        } else {
+            // The 2nd (and later) add_block blocks here (no queue mutex held) so the 1st load
+            // can finish and the internal consumer can commit the txn first. After the debug
+            // point is disabled, this late block is appended to an already-committed queue and
+            // is silently lost.
+            LOG(INFO) << "debug block 2nd+ add_block, label=" << label
+                      << ", load_id=" << load_id.to_string();
+            while (DebugPoints::instance()->is_enable("LoadBlockQueue.add_block.block_second_load")) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            LOG(INFO) << "debug unblock 2nd+ add_block, label=" << label
+                      << ", load_id=" << load_id.to_string();
+        }
+    });
     std::unique_lock l(mutex);
     RETURN_IF_ERROR(status);
     if (UNLIKELY(runtime_state->is_cancelled())) {
