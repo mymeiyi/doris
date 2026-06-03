@@ -266,6 +266,14 @@ Status GroupCommitBlockSinkOperatorX::init(const TDataSink& t_sink) {
     // the reuse-group-commit-plan path does. Lets the lost-row race be reproduced with
     // two concurrent connections instead of relying on prepared-statement plan reuse.
     DBUG_EXECUTE_IF("GroupCommitBlockSink.force_shared_load_id", { _load_id = UniqueId(1, 1); });
+    // FIX (validation): regenerate a unique load_id so that concurrent group-commit
+    // loads never share one key in LoadBlockQueue::_load_ids_to_write_dep. Loads that
+    // reuse one group commit plan otherwise share a load_id, which triggers the
+    // lost-row race. Placed after the force-injection so it also defeats the test hook.
+    UniqueId origin_load_id = _load_id;
+    _load_id = UniqueId::gen_uid();
+    LOG(INFO) << "group commit sink regenerate load_id, origin=" << origin_load_id.to_string()
+              << ", new=" << _load_id.to_string();
     _max_filter_ratio = table_sink.max_filter_ratio;
     // From the thrift expressions create the real exprs.
     RETURN_IF_ERROR(VExpr::create_expr_trees(_t_output_expr, _output_vexpr_ctxs));
