@@ -262,6 +262,11 @@ Status GroupCommitBlockSinkOperatorX::init(const TDataSink& t_sink) {
     _partition = table_sink.partition;
     _group_commit_mode = table_sink.group_commit_mode;
     _load_id = table_sink.load_id;
+    // Fault injection only: force a shared block-queue load_id so that several
+    // independent loads collide in LoadBlockQueue::_load_ids_to_write_dep, exactly as
+    // the reuse-group-commit-plan path does. Lets the lost-row race be reproduced with
+    // two concurrent connections instead of relying on prepared-statement plan reuse.
+    DBUG_EXECUTE_IF("GroupCommitBlockSink.force_shared_load_id", { _load_id = UniqueId(1, 1); });
     _max_filter_ratio = table_sink.max_filter_ratio;
     // From the thrift expressions create the real exprs.
     RETURN_IF_ERROR(VExpr::create_expr_trees(_t_output_expr, _output_vexpr_ctxs));

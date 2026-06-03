@@ -67,12 +67,12 @@ Status LoadBlockQueue::add_block(RuntimeState* runtime_state, std::shared_ptr<Bl
             // loads share the (reused) load_id in _load_ids_to_write_dep before the 1st one
             // removes it. This makes the "shared-key clobber" deterministic.
             LOG(INFO) << "debug 1st add_block waits for a 2nd load to join, label=" << label;
-            while (group_commit_load_count.load() < 2 &&
+            while (_debug_add_block_seq.load() < 2 &&
                    DebugPoints::instance()->is_enable("LoadBlockQueue.add_block.block_second_load")) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             LOG(INFO) << "debug 1st add_block proceeds, label=" << label
-                      << ", load_count=" << group_commit_load_count.load();
+                      << ", add_block_arrivals=" << _debug_add_block_seq.load();
         } else {
             // The 2nd (and later) add_block blocks here (no queue mutex held) so the 1st load
             // can finish and the internal consumer can commit the txn first. After the debug
