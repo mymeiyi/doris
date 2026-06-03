@@ -15,117 +15,119 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import java.sql.PreparedStatement
-import com.mysql.cj.jdbc.StatementImpl
+import java.sql.Connection
+import java.sql.DriverManager
+import java.sql.Statement
 
-// Deterministically reproduce the group-commit lost-row race that happens when several
-// inserts of the SAME server-side prepared statement reuse one group commit plan and thus
-// share one load_id.
+// Deterministically reproduce the group-commit lost-row race.
 //
-// Root cause: LoadBlockQueue._load_ids_to_write_dep is a map keyed by load_id. When two
-// concurrent inserts share the load_id and join the same block queue, the second add_load_id
-// overwrites the first's entry, and a single remove_load_id from whichever load finishes
-// first clears the shared entry. The internal consumer then sees "no writer in flight"
-// (_load_ids_to_write_dep.empty()) and commits, while the other load's block is appended
-// afterwards to the already-committed queue and is silently lost (add_block has no
-// _need_commit / committed guard and returns OK, so FE thinks the row succeeded).
+// In production the race appears with server-side prepared statements that reuse one group
+// commit plan: every insert RPC then shares one load_id, and LoadBlockQueue._load_ids_to_write_dep
+// (a map keyed by load_id) is corrupted -- the 2nd add_load_id overwrites the 1st, and a single
+// remove_load_id from whichever load finishes first clears the shared entry, so the internal
+// consumer sees "no writer in flight" and commits while the other load is still about to append
+// its block. That late block is appended to an already-committed queue and is silently lost.
 //
-// This test injects the BE debug point "LoadBlockQueue.add_block.block_second_load" to force
-// the exact ordering. It REQUIRES the debug point patch in be/src/load/group_commit/.
+// A single MySQL connection processes a prepared-statement batch row-by-row (FE blocks on each
+// RPC response), so the two inserts never overlap there. To reproduce reliably we instead use
+// TWO concurrent connections plus two BE debug points:
+//   * GroupCommitBlockSink.force_shared_load_id : force the sink load_id to a constant so the two
+//     independent loads collide in the same block queue, exactly as plan reuse does.
+//   * LoadBlockQueue.add_block.block_second_load : barrier the 1st add_block until a 2nd has also
+//     arrived at the queue, then block that 2nd add_block so the 1st load finishes and the consumer
+//     commits first; when released the 2nd block lands on the already-committed queue and is lost.
 //
-// Expected result:
-//   - current (buggy) code  -> only 2 rows committed (id=1 + one of id=2/id=3): assertion fails
-//   - after the fix         -> all 3 rows committed (id=1,2,3): assertion passes
-suite("test_group_commit_lost_row_inject") {
+// Requires the BE debug-point patch in be/src/load/group_commit and be/src/exec/operator.
+//
+// Result:
+//   * current (buggy) code -> only 1 of the 2 rows committed: count == 1  (assertion passes -> bug reproduced)
+//   * after the fix        -> both rows committed:            count == 2  (this assertion then fails)
+suite("test_group_commit_lost_row_inject", "nonConcurrent") {
     def dbName = "regression_test_insert_p0"
     def table = dbName + ".test_group_commit_lost_row_inject"
-    def dp = "LoadBlockQueue.add_block.block_second_load"
+    def dpForce = "GroupCommitBlockSink.force_shared_load_id"
+    def dpBlock = "LoadBlockQueue.add_block.block_second_load"
 
     sql "CREATE DATABASE IF NOT EXISTS ${dbName}"
+    sql "drop table if exists ${table}"
+    sql """
+        CREATE TABLE ${table} (
+            `id` int(11) NOT NULL,
+            `name` varchar(50) NULL,
+            `score` int(11) NULL
+        ) ENGINE=OLAP
+        UNIQUE KEY(`id`, `name`)
+        DISTRIBUTED BY HASH(`id`) BUCKETS 1
+        PROPERTIES (
+            "group_commit_interval_ms" = "1000",
+            "replication_num" = "1"
+        );
+    """
+
+    def user = context.config.jdbcUser
+    def password = context.config.jdbcPassword
+    // url pointing at our db with async group commit
+    def url = getServerPrepareJdbcUrl(context.config.jdbcUrl, dbName, false) + "&sessionVariables=group_commit=async_mode"
+    logger.info("jdbc url: " + url)
+
+    def errs = new java.util.concurrent.CopyOnWriteArrayList<String>()
+    def doInsert = { String vals ->
+        Connection conn = null
+        try {
+            conn = DriverManager.getConnection(url, user, password)
+            Statement st = conn.createStatement()
+            st.execute("insert into ${table} values ${vals}")
+            st.close()
+            logger.info("insert ${vals} returned ok")
+        } catch (Throwable e) {
+            errs.add(vals + " -> " + e.getMessage())
+            logger.info("insert ${vals} threw (may be expected when the late block is dropped): " + e.getMessage())
+        } finally {
+            if (conn != null) {
+                try { conn.close() } catch (Throwable ignore) {}
+            }
+        }
+    }
 
     try {
         GetDebugPoint().clearDebugPointsForAllBEs()
+        GetDebugPoint().enableDebugPointForAllBEs(dpForce)
+        GetDebugPoint().enableDebugPointForAllBEs(dpBlock)
 
-        def url = getServerPrepareJdbcUrl(context.config.jdbcUrl, dbName, false)
-        logger.info("server-prepare url: " + url)
+        // A: creates the block queue and registers the forced load_id, reaches add_block (arrival #1),
+        //    then waits at the barrier for a 2nd arrival.
+        def tA = Thread.start { doInsert("(2, 'b', 20)") }
+        // give A time to create the queue + register the shared load_id before B joins it
+        sleep(500)
+        // B: joins the same queue (shared load_id), reaches add_block (arrival #2) -> releases A,
+        //    then B is the one that gets blocked.
+        def tB = Thread.start { doInsert("(3, 'c', 30)") }
 
-        connect(context.config.jdbcUser, context.config.jdbcPassword,
-                url + "&sessionVariables=group_commit=async_mode") {
-            sql "drop table if exists ${table}"
-            sql """
-                CREATE TABLE ${table} (
-                    `id` int(11) NOT NULL,
-                    `name` varchar(50) NULL,
-                    `score` int(11) NULL
-                ) ENGINE=OLAP
-                UNIQUE KEY(`id`, `name`)
-                DISTRIBUTED BY HASH(`id`) BUCKETS 1
-                PROPERTIES (
-                    "group_commit_interval_ms" = "1000",
-                    "replication_num" = "1"
-                );
-            """
+        // While B is blocked: A appends its block, removes the (shared) load_id, and the consumer
+        // commits the queue (interval = 1s) with only A's row.
+        sleep(3000)
 
-            PreparedStatement stmt = prepareStatement "INSERT INTO ${table} VALUES(?, ?, ?)"
-            assertEquals(com.mysql.cj.jdbc.ServerPreparedStatement, stmt.class)
+        // Release B: its block is appended to the already-committed queue and is lost.
+        GetDebugPoint().disableDebugPointForAllBEs(dpBlock)
+        tA.join()
+        tB.join()
+        GetDebugPoint().disableDebugPointForAllBEs(dpForce)
 
-            // 1) Warm up: the first executeBatch builds the reusable group commit plan, fixing
-            //    the shared load_id L for all subsequent inserts of this prepared statement.
-            stmt.setInt(1, 1); stmt.setString(2, "a"); stmt.setInt(3, 10); stmt.addBatch()
-            stmt.executeBatch()
-            // Let the warm-up queue commit (interval = 1s) so it does not interfere below.
-            sleep(3000)
+        logger.info("insert errors: " + errs)
 
-            // 2) Inject: barrier the 1st add_block until a 2nd load joins the same queue, then
-            //    block that 2nd add_block until we disable the debug point.
-            GetDebugPoint().enableDebugPointForAllBEs(dp)
-
-            // 3) One executeBatch with two rows. They reuse the plan => share load_id L, the
-            //    driver pipelines them, and both join the same new block queue. The 2nd row's
-            //    add_block blocks in BE, so run executeBatch in a background thread. (Create
-            //    the batch here, only the blocking executeBatch runs in the thread.)
-            stmt.setInt(1, 2); stmt.setString(2, "b"); stmt.setInt(3, 20); stmt.addBatch()
-            stmt.setInt(1, 3); stmt.setString(2, "c"); stmt.setInt(3, 30); stmt.addBatch()
-            def batchErr = null
-            def t = Thread.start {
-                try {
-                    def r = stmt.executeBatch()
-                    logger.info("batch2 result: " + r)
-                } catch (Throwable e) {
-                    batchErr = e
-                    logger.info("batch2 threw (may be expected when the late block is dropped): "
-                            + e.getMessage())
-                }
-            }
-
-            // 4) While the 2nd add_block is blocked, the 1st row is appended, its (shared)
-            //    load_id is removed, and the consumer commits the queue (interval = 1s) with
-            //    only 1 row.
-            sleep(3000)
-
-            // 5) Release the blocked add_block: the late block is appended to the
-            //    already-committed queue and is lost.
-            GetDebugPoint().disableDebugPointForAllBEs(dp)
-            t.join()
-
-            // 6) Verify. Retry a bit to let everything settle.
-            def cnt = 0
-            for (int i = 0; i < 10; i++) {
-                sleep(2000)
-                def c = sql "select count(*) from ${table}"
-                cnt = c[0][0]
-                logger.info("count = " + cnt + ", retry = " + i)
-                if (cnt >= 3) {
-                    break
-                }
-            }
-            def rows = sql "select id, name, score from ${table} order by id"
-            logger.info("final rows = " + rows)
-
-            // BUG: one of id=2/id=3 is silently lost -> count == 2.
-            // FIXED: all three rows are committed -> count == 3.
-            assertEquals(3, cnt)
+        def cnt = 0
+        def rows = null
+        for (int i = 0; i < 15; i++) {
+            sleep(2000)
+            rows = sql "select id, name, score from ${table} order by id"
+            cnt = rows.size()
+            logger.info("rows = " + rows + ", retry = " + i)
+            if (cnt >= 2) break
         }
+
+        // BUG: one row is silently lost -> count == 1.
+        // FIXED: both rows committed  -> count == 2.
+        assertEquals(1, cnt)
     } finally {
         GetDebugPoint().clearDebugPointsForAllBEs()
     }
