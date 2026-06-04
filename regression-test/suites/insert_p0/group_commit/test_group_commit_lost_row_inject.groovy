@@ -40,8 +40,8 @@ import java.sql.Statement
 // Requires the BE debug-point patch in be/src/load/group_commit and be/src/exec/operator.
 //
 // Result:
-// With the load_id-regeneration fix this case PASSES (count == 2). If the bug regresses,
-// one row is silently lost (count == 1) and this case FAILS.
+//   * current (buggy) code -> only 1 of the 2 rows committed: count == 1  (assertion passes -> bug reproduced)
+//   * after the fix        -> both rows committed:            count == 2  (this assertion then fails)
 suite("test_group_commit_lost_row_inject", "nonConcurrent") {
     def dbName = "regression_test_insert_p0"
     def table = dbName + ".test_group_commit_lost_row_inject"
