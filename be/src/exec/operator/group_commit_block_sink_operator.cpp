@@ -122,17 +122,16 @@ Status GroupCommitBlockSinkLocalState::_add_block(RuntimeState* state,
         block->get_by_position(i).column = make_nullable(block->get_by_position(i).column);
         block->get_by_position(i).type = make_nullable(block->get_by_position(i).type);
     }
-    // add block to queue
-    auto cur_mutable_block = MutableBlock::create_unique(block->clone_empty());
-    {
-        IColumn::Selector selector;
-        for (auto i = 0; i < block->rows(); i++) {
-            selector.emplace_back(i);
-        }
-        RETURN_IF_ERROR(block->append_to_block_by_selector(cur_mutable_block.get(), selector));
-    }
+    // Add block to queue. The block has already been converted to all-nullable columns above
+    // and contains exactly the rows to enqueue (filtering is done by the caller before
+    // _add_block), so move its columns into a standalone output_block instead of deep-copying
+    // them. The previous code appended every row through an identity selector, which duplicated
+    // all column data (notably ColumnString chars) and dominated group-commit load memory.
+    // Columns are COW shared_ptrs, so swapping into a fresh Block is O(1) and memory-safe: the
+    // queued block is a distinct object (consumers swap/mutate only that object) while the
+    // underlying data stays alive via reference counting and is only read downstream.
     std::shared_ptr<Block> output_block = Block::create_shared();
-    output_block->swap(cur_mutable_block->to_block());
+    output_block->swap(*block);
     if (!_is_block_appended && state->num_rows_load_total() + state->num_rows_load_unselected() +
                                                state->num_rows_load_filtered() <=
                                        config::group_commit_memory_rows_for_max_filter_ratio) {
@@ -317,10 +316,11 @@ Status GroupCommitBlockSinkOperatorX::sink(RuntimeState* state, Block* input_blo
     };
 
     auto rows = input_block->rows();
-    auto bytes = input_block->bytes();
     if (UNLIKELY(rows == 0)) {
         return wind_up();
     }
+    // Compute bytes only after the empty-block early return, since bytes() walks every column.
+    auto bytes = input_block->bytes();
 
     // update incrementally so that FE can get the progress.
     // the real 'num_rows_load_total' will be set when sink being closed.
@@ -342,11 +342,13 @@ Status GroupCommitBlockSinkOperatorX::sink(RuntimeState* state, Block* input_blo
         local_state._partitions.assign(rows, nullptr);
         local_state._filter_bitmap.Reset(rows);
 
-        for (int index = 0; index < rows; index++) {
-            local_state._vpartition->find_partition(block.get(), index,
-                                                    local_state._partitions[index]);
-        }
+        // Find the partition for each row and handle unpartitioned rows in the same pass.
+        // find_partition only writes the out-param on a hit (leaving it as the nullptr set by
+        // the assign above on a miss), so the per-row null check below is equivalent to the
+        // previous separate post-loop, while saving one extra traversal over all rows.
         for (int row_index = 0; row_index < rows; row_index++) {
+            local_state._vpartition->find_partition(block.get(), row_index,
+                                                    local_state._partitions[row_index]);
             if (local_state._partitions[row_index] == nullptr) [[unlikely]] {
                 local_state._filter_bitmap.Set(row_index, true);
                 LOG(WARNING) << "no partition for this tuple. tuple="
@@ -371,8 +373,15 @@ Status GroupCommitBlockSinkOperatorX::sink(RuntimeState* state, Block* input_blo
         SCOPED_TIMER(local_state._append_blocks_timer);
         if (local_state._block_convertor->num_filtered_rows() > 0 ||
             local_state._has_filtered_rows) {
+            // Collect the rows that survive filtering and copy them in one batched pass via
+            // add_rows (which fans out to insert_indices_from per column) instead of inserting
+            // them one row at a time. This avoids the per-row, per-column virtual dispatch of
+            // add_row while producing an identical result; it copies the same data, so memory
+            // use is unchanged.
             auto cloneBlock = block->clone_without_columns();
             auto res_block = MutableBlock::build_mutable_block(std::move(cloneBlock));
+            std::vector<uint32_t> rows_to_keep;
+            rows_to_keep.reserve(rows);
             for (int i = 0; i < rows; ++i) {
                 if (local_state._block_convertor->filter_map()[i]) {
                     continue;
@@ -380,8 +389,10 @@ Status GroupCommitBlockSinkOperatorX::sink(RuntimeState* state, Block* input_blo
                 if (local_state._filter_bitmap.Get(i)) {
                     continue;
                 }
-                res_block.add_row(block.get(), i);
+                rows_to_keep.emplace_back(i);
             }
+            RETURN_IF_ERROR(res_block.add_rows(block.get(), rows_to_keep.data(),
+                                               rows_to_keep.data() + rows_to_keep.size()));
             block->swap(res_block.to_block());
         }
         // add block into block queue
