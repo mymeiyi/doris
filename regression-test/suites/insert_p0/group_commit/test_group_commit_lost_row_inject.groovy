@@ -125,9 +125,9 @@ suite("test_group_commit_lost_row_inject", "nonConcurrent") {
             if (cnt >= 2) break
         }
 
-        // BUG: one row is silently lost -> count == 1.
-        // FIXED: both rows committed  -> count == 2.
-        assertEquals(1, cnt)
+        // FIXED: both rows committed -> count == 2.
+        // If the lost-row race regresses, one row is dropped -> count == 1 and this fails.
+        assertEquals(2, cnt)
     } finally {
         GetDebugPoint().clearDebugPointsForAllBEs()
     }
