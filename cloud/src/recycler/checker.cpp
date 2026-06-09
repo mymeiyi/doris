@@ -1365,8 +1365,10 @@ int InstanceChecker::collect_unexpired_job_tmp_rowsets(
     std::unique_ptr<RangeGetIterator> it;
     int64_t num_scanned = 0;
     int64_t num_non_job = 0;
+    int64_t num_skipped_non_job_txns = 0;
     int64_t num_unexpired = 0;
     int64_t num_expired = 0;
+    int64_t last_txn_id = -1;
     int64_t current_time =
             duration_cast<seconds>(system_clock::now().time_since_epoch()).count();
 
@@ -1388,10 +1390,18 @@ int InstanceChecker::collect_unexpired_job_tmp_rowsets(
         while (it->has_next() && !stopped()) {
             auto [k, v] = it->next();
             ++num_scanned;
-            if (!it->has_next()) {
-                begin = k;
-                begin.push_back('\x00');
+
+            std::string_view k1 = k;
+            k1.remove_prefix(1);
+            std::vector<std::tuple<std::variant<int64_t, std::string>, int, int>> out;
+            if (decode_key(&k1, &out) != 0 || out.size() < 5) {
+                LOG(WARNING) << "malformed tmp rowset key, key=" << hex(k);
+                return -1;
             }
+            // 0x01 "meta" ${instance_id} "rowset_tmp" ${txn_id} ${tablet_id} -> RowsetMetaCloudPB
+            auto txn_id = std::get<int64_t>(std::get<0>(out[3]));
+            bool is_first_rowset_of_txn = last_txn_id != txn_id;
+            last_txn_id = txn_id;
 
             doris::RowsetMetaCloudPB rowset;
             if (!rowset.ParseFromArray(v.data(), v.size())) {
@@ -1400,6 +1410,20 @@ int InstanceChecker::collect_unexpired_job_tmp_rowsets(
             }
             if (!rowset.has_job_id() || rowset.job_id().empty()) {
                 ++num_non_job;
+                if (is_first_rowset_of_txn) {
+                    ++num_skipped_non_job_txns;
+                    if (txn_id == INT64_MAX) {
+                        begin = end;
+                    } else {
+                        begin = meta_rowset_tmp_key({instance_id_, txn_id + 1, 0});
+                    }
+                    it.reset();
+                    break;
+                }
+                if (!it->has_next()) {
+                    begin = k;
+                    begin.push_back('\x00');
+                }
                 continue;
             }
 
@@ -1417,6 +1441,7 @@ int InstanceChecker::collect_unexpired_job_tmp_rowsets(
                             << "false positives, instance_id=" << instance_id_
                             << ", num_scanned=" << num_scanned
                             << ", num_non_job=" << num_non_job
+                            << ", num_skipped_non_job_txns=" << num_skipped_non_job_txns
                             << ", num_unexpired=" << num_unexpired
                             << ", num_expired=" << num_expired
                             << ", limit=" << max_unexpired_tmp_rowsets;
@@ -1425,12 +1450,18 @@ int InstanceChecker::collect_unexpired_job_tmp_rowsets(
             } else {
                 ++num_expired;
             }
+
+            if (!it->has_next()) {
+                begin = k;
+                begin.push_back('\x00');
+            }
         }
     }
 
     LOG(INFO) << "collect unexpired tmp rowsets for delete bitmap checker finished, instance_id="
               << instance_id_ << ", num_scanned=" << num_scanned
               << ", num_non_job=" << num_non_job
+              << ", num_skipped_non_job_txns=" << num_skipped_non_job_txns
               << ", num_unexpired=" << num_unexpired << ", num_expired=" << num_expired;
     return 0;
 }
