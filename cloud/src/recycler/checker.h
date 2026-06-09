@@ -185,7 +185,7 @@ private:
     int collect_tablet_rowsets(
             int64_t tablet_id,
             const std::function<void(const doris::RowsetMetaCloudPB&)>& collect_cb);
-    int collect_unexpired_tmp_rowsets(
+    int collect_unexpired_job_tmp_rowsets(
             std::unordered_map<int64_t, std::unordered_set<std::string>>& tmp_rowsets);
     int get_pending_delete_bitmap_keys(int64_t tablet_id,
                                        std::unordered_set<std::string>& pending_delete_bitmaps);

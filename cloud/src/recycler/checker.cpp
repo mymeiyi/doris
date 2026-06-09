@@ -1228,7 +1228,7 @@ int InstanceChecker::do_delete_bitmap_inverted_check() {
     } tablet_rowsets_cache {};
 
     std::unordered_map<int64_t, std::unordered_set<std::string>> unexpired_tmp_rowsets;
-    if (int ret = collect_unexpired_tmp_rowsets(unexpired_tmp_rowsets); ret < 0) {
+    if (int ret = collect_unexpired_job_tmp_rowsets(unexpired_tmp_rowsets); ret < 0) {
         return ret;
     }
 
@@ -1357,7 +1357,7 @@ int InstanceChecker::do_delete_bitmap_inverted_check() {
     return (leaked_delete_bitmaps > 0 || abnormal_delete_bitmaps > 0) ? 1 : 0;
 }
 
-int InstanceChecker::collect_unexpired_tmp_rowsets(
+int InstanceChecker::collect_unexpired_job_tmp_rowsets(
         std::unordered_map<int64_t, std::unordered_set<std::string>>& tmp_rowsets) {
     static constexpr int64_t max_unexpired_tmp_rowsets = 1000;
     auto begin = meta_rowset_tmp_key({instance_id_, 0, 0});
