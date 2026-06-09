@@ -5258,6 +5258,209 @@ void remove_delete_bitmap_lock(MetaServiceProxy* meta_service, int64_t table_id)
     ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
 } // namespace
 
+static void create_tablet_via_ms(MetaServiceProxy* meta_service, int64_t table_id, int64_t index_id,
+                                 int64_t partition_id, int64_t tablet_id, bool enable_mow) {
+    brpc::Controller cntl;
+    CreateTabletsRequest req;
+    CreateTabletsResponse res;
+    req.set_db_id(1);
+    auto* tablet = req.add_tablet_metas();
+    tablet->set_tablet_state(doris::TabletStatePB::PB_RUNNING);
+    tablet->set_table_id(table_id);
+    tablet->set_index_id(index_id);
+    tablet->set_partition_id(partition_id);
+    tablet->set_tablet_id(tablet_id);
+    tablet->set_enable_unique_key_merge_on_write(enable_mow);
+    auto* schema = tablet->mutable_schema();
+    schema->set_schema_version(0);
+    auto* first_rowset = tablet->add_rs_metas();
+    first_rowset->set_rowset_id(0); // required
+    first_rowset->set_rowset_id_v2(next_rowset_id());
+    first_rowset->set_start_version(0);
+    first_rowset->set_end_version(1);
+    first_rowset->mutable_tablet_schema()->CopyFrom(*schema);
+    meta_service->create_tablets(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << tablet_id;
+}
+
+static void start_compaction_job_via_ms(MetaServiceProxy* meta_service, int64_t tablet_id,
+                                        const std::string& job_id, const std::string& initiator,
+                                        TabletCompactionJobPB::CompactionType type) {
+    brpc::Controller cntl;
+    StartTabletJobRequest req;
+    StartTabletJobResponse res;
+    req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+    auto* compaction = req.mutable_job()->add_compaction();
+    compaction->set_id(job_id);
+    compaction->set_initiator(initiator);
+    compaction->set_base_compaction_cnt(0);
+    compaction->set_cumulative_compaction_cnt(0);
+    compaction->set_type(type);
+    long now = ::time(nullptr);
+    compaction->set_expiration(now + 300);
+    compaction->set_lease(now + 60);
+    meta_service->start_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << tablet_id;
+}
+
+static void prepare_and_commit_rowset_via_ms(MetaServiceProxy* meta_service,
+                                             const doris::RowsetMetaCloudPB& rowset,
+                                             int64_t txn_id) {
+    {
+        brpc::Controller cntl;
+        CreateRowsetRequest req;
+        CreateRowsetResponse res;
+        req.set_txn_id(txn_id);
+        req.mutable_rowset_meta()->CopyFrom(rowset);
+        meta_service->prepare_rowset(&cntl, &req, &res, nullptr);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+    }
+    {
+        brpc::Controller cntl;
+        CreateRowsetRequest req;
+        CreateRowsetResponse res;
+        req.set_txn_id(txn_id);
+        req.mutable_rowset_meta()->CopyFrom(rowset);
+        meta_service->commit_rowset(&cntl, &req, &res, nullptr);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+    }
+}
+
+static MetaServiceCode update_compaction_delete_bitmap_via_ms(
+        MetaServiceProxy* meta_service, int64_t table_id, int64_t partition_id, int64_t tablet_id,
+        int64_t lock_id, int64_t initiator, const std::string& rowset_id, int64_t version) {
+    brpc::Controller cntl;
+    UpdateDeleteBitmapRequest req;
+    UpdateDeleteBitmapResponse res;
+    req.set_cloud_unique_id("test_cloud_unique_id");
+    req.set_table_id(table_id);
+    req.set_partition_id(partition_id);
+    req.set_lock_id(lock_id);
+    req.set_initiator(initiator);
+    req.set_tablet_id(tablet_id);
+    req.add_rowset_ids(rowset_id);
+    req.add_segment_ids(0);
+    req.add_versions(version);
+    req.add_segment_delete_bitmaps("1");
+    meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
+                                       &req, &res, nullptr);
+    return res.status().code();
+}
+
+static void abort_compaction_job_via_ms(MetaServiceProxy* meta_service, int64_t tablet_id,
+                                        const std::string& job_id, const std::string& initiator,
+                                        TabletCompactionJobPB::CompactionType type, int64_t txn_id,
+                                        const std::string& output_rowset_id,
+                                        int64_t delete_bitmap_lock_initiator) {
+    brpc::Controller cntl;
+    FinishTabletJobRequest req;
+    FinishTabletJobResponse res;
+    req.set_action(FinishTabletJobRequest::ABORT);
+    req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+    auto* compaction = req.mutable_job()->add_compaction();
+    compaction->set_id(job_id);
+    compaction->set_initiator(initiator);
+    compaction->set_type(type);
+    compaction->add_txn_id(txn_id);
+    compaction->add_output_rowset_ids(output_rowset_id);
+    compaction->set_delete_bitmap_lock_initiator(delete_bitmap_lock_initiator);
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << tablet_id;
+}
+
+// Reproduce the real leak scenario end-to-end through the meta-service:
+//   start compaction job -> commit the output (tmp) rowset -> update delete bitmap
+//   -> abort compaction job.
+// The abort removes the job and the delete bitmap lock, but leaves the output rowset's
+// tmp meta and its delete bitmap behind (see the TODO in process_compaction_job's ABORT
+// branch). The checker must treat such a delete bitmap as a leak ONLY after the tmp rowset
+// has expired (i.e. once the recycler would have cleaned it up), not while it is still alive.
+TEST(CheckerTest, delete_bitmap_inverted_check_compaction_abort) {
+    auto retention_seconds = config::retention_seconds;
+    auto force_immediate_recycle = config::force_immediate_recycle;
+    DORIS_CLOUD_DEFER {
+        config::retention_seconds = retention_seconds;
+        config::force_immediate_recycle = force_immediate_recycle;
+    };
+    config::retention_seconds = 3600;
+    config::force_immediate_recycle = false;
+
+    std::string instance_id = "test_compaction_abort_leak";
+
+    std::set<std::tuple<int64_t, std::string>> real_leaked, expected_leaked;
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        SyncPoint::get_instance()->clear_all_call_backs();
+    };
+    sp->set_call_back("get_instance_id", [&](auto&& args) {
+        auto* ret = try_any_cast_ret<std::string>(args);
+        ret->first = instance_id;
+        ret->second = true;
+    });
+    sp->set_call_back(
+            "InstanceChecker::do_delete_bitmap_inverted_check.get_leaked_delete_bitmap",
+            [&real_leaked](auto&& args) {
+                int64_t tablet_id = *try_any_cast<int64_t*>(args[0]);
+                std::string rowset_id = *try_any_cast<std::string*>(args[1]);
+                real_leaked.insert({tablet_id, rowset_id});
+            });
+    sp->enable_processing();
+
+    auto meta_service = get_meta_service();
+
+    constexpr int64_t table_id = 10000, index_id = 10001, partition_id = 10002;
+    int64_t now = ::time(nullptr);
+
+    // Drive a full "compaction -> abort" through the meta-service and return the orphaned
+    // output rowset id (whose tmp meta + delete bitmap are left behind by the abort).
+    auto run_compaction_abort = [&](int64_t tablet_id, int64_t txn_id, int64_t initiator,
+                                    int64_t txn_expiration) -> std::string {
+        create_tablet_via_ms(meta_service.get(), table_id, index_id, partition_id, tablet_id, true);
+        std::string job_id = "job_" + std::to_string(tablet_id);
+        start_compaction_job_via_ms(meta_service.get(), tablet_id, job_id,
+                                    std::to_string(initiator), TabletCompactionJobPB::CUMULATIVE);
+
+        doris::TabletSchemaCloudPB schema;
+        schema.set_schema_version(0);
+        auto output_rowset = create_rowset("1", tablet_id, index_id, 1, schema, txn_id);
+        output_rowset.set_start_version(2);
+        output_rowset.set_end_version(2);
+        output_rowset.set_creation_time(txn_expiration);
+        output_rowset.set_txn_expiration(txn_expiration);
+        output_rowset.set_job_id(job_id);
+        prepare_and_commit_rowset_via_ms(meta_service.get(), output_rowset, txn_id);
+
+        EXPECT_EQ(MetaServiceCode::OK,
+                  get_delete_bitmap_lock(meta_service.get(), table_id, -1, initiator));
+        EXPECT_EQ(MetaServiceCode::OK,
+                  update_compaction_delete_bitmap_via_ms(meta_service.get(), table_id, partition_id,
+                                                         tablet_id, -1, initiator,
+                                                         output_rowset.rowset_id_v2(), 2));
+
+        abort_compaction_job_via_ms(meta_service.get(), tablet_id, job_id,
+                                    std::to_string(initiator), TabletCompactionJobPB::CUMULATIVE,
+                                    txn_id, output_rowset.rowset_id_v2(), initiator);
+        return output_rowset.rowset_id_v2();
+    };
+
+    // tablet A: the output tmp rowset is still alive -> the orphan delete bitmap is NOT a leak.
+    run_compaction_abort(620001, 5550001, 11111, now);
+    // tablet B: the output tmp rowset has already expired -> the orphan delete bitmap IS a leak.
+    int64_t tablet_b = 620002;
+    std::string leaked_rowset_id =
+            run_compaction_abort(tablet_b, 5550002, 22222, now - config::retention_seconds - 10);
+    expected_leaked.insert({tablet_b, leaked_rowset_id});
+
+    InstanceInfoPB instance;
+    instance.set_instance_id(instance_id);
+    instance.add_obj_info()->set_id("1");
+    InstanceChecker checker(meta_service->txn_kv(), instance_id);
+    ASSERT_EQ(checker.init(instance), 0);
+
+    ASSERT_EQ(checker.do_delete_bitmap_inverted_check(), 1);
+    ASSERT_EQ(real_leaked, expected_leaked);
+}
+
 TEST(CheckerTest, check_job_key) {
     config::enable_mow_job_key_check = true;
     config::mow_job_key_check_expiration_diff_seconds = 0;
