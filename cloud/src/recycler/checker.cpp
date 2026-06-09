@@ -1359,10 +1359,12 @@ int InstanceChecker::do_delete_bitmap_inverted_check() {
 
 int InstanceChecker::collect_unexpired_tmp_rowsets(
         std::unordered_map<int64_t, std::unordered_set<std::string>>& tmp_rowsets) {
+    static constexpr int64_t max_unexpired_tmp_rowsets = 1000;
     auto begin = meta_rowset_tmp_key({instance_id_, 0, 0});
     auto end = meta_rowset_tmp_key({instance_id_, INT64_MAX, 0});
     std::unique_ptr<RangeGetIterator> it;
     int64_t num_scanned = 0;
+    int64_t num_non_job = 0;
     int64_t num_unexpired = 0;
     int64_t num_expired = 0;
     int64_t current_time =
@@ -1396,6 +1398,10 @@ int InstanceChecker::collect_unexpired_tmp_rowsets(
                 LOG(WARNING) << "malformed tmp rowset meta, key=" << hex(k);
                 return -1;
             }
+            if (!rowset.has_job_id() || rowset.job_id().empty()) {
+                ++num_non_job;
+                continue;
+            }
 
             // Must use the same threshold as the recycler so that a delete bitmap is never
             // reported as leaked while its tmp rowset is still alive from the recycler's view.
@@ -1404,6 +1410,18 @@ int InstanceChecker::collect_unexpired_tmp_rowsets(
             if (current_time < expiration) {
                 tmp_rowsets[rowset.tablet_id()].insert(rowset.rowset_id_v2());
                 ++num_unexpired;
+                if (num_unexpired >= max_unexpired_tmp_rowsets) {
+                    LOG(WARNING)
+                            << "collect unexpired tmp rowsets for delete bitmap checker reached "
+                            << "limit, remaining tmp rowsets will not be considered and may cause "
+                            << "false positives, instance_id=" << instance_id_
+                            << ", num_scanned=" << num_scanned
+                            << ", num_non_job=" << num_non_job
+                            << ", num_unexpired=" << num_unexpired
+                            << ", num_expired=" << num_expired
+                            << ", limit=" << max_unexpired_tmp_rowsets;
+                    return 0;
+                }
             } else {
                 ++num_expired;
             }
@@ -1412,6 +1430,7 @@ int InstanceChecker::collect_unexpired_tmp_rowsets(
 
     LOG(INFO) << "collect unexpired tmp rowsets for delete bitmap checker finished, instance_id="
               << instance_id_ << ", num_scanned=" << num_scanned
+              << ", num_non_job=" << num_non_job
               << ", num_unexpired=" << num_unexpired << ", num_expired=" << num_expired;
     return 0;
 }
