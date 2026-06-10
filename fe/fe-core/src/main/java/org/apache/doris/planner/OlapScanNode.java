@@ -304,10 +304,35 @@ public class OlapScanNode extends ScanNode {
         if (olapTable instanceof RowBinlogTableWrapper) {
             return false;
         }
+        // Colocate / bucket-shuffle fragments depend on bucket(tablet) locality and are assigned
+        // via the bucket path (never split). Treating their scans as eligible would also wrongly
+        // force them non-serial (see isSerialOperator), so exclude them here.
+        PlanFragment planFragment = getFragment();
+        if (planFragment != null
+                && (planFragment.hasColocatePlanNode() || planFragment.hasBucketShuffleNode())) {
+            return false;
+        }
         KeysType keysType = olapTable.getKeysType();
         // DUP, or MoW-unique read as dup: scanners never merge, so rowid split is correct.
         return keysType == KeysType.DUP_KEYS
                 || (keysType == KeysType.UNIQUE_KEYS && olapTable.getEnableUniqueKeyMergeOnWrite());
+    }
+
+    /**
+     * A tablet-split-eligible scan is parallelized across BEs by the tablet-split feature, and the
+     * BE only consumes {@code split_id/split_count} on the parallel (non-serial) scan path. If this
+     * scan were reported as a serial operator, the BE would take the serial path and ignore the
+     * split (the BE-side guard then fails the query). The split itself IS the cross-BE
+     * parallelization, so such a scan must never be treated as a serial source -- this overrides
+     * the scan-range-count heuristic in {@link ScanNode#isSerialOperator()}. When the feature is
+     * off, or the scan is not eligible, behavior is unchanged.
+     */
+    @Override
+    public boolean isSerialOperator() {
+        if (isTabletSplitEligible()) {
+            return false;
+        }
+        return super.isSerialOperator();
     }
 
     public HashSet<Long> getScanBackendIds() {
