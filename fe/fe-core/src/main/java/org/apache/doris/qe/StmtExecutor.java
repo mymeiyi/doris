@@ -592,9 +592,24 @@ public class StmtExecutor {
         for (int i = 1; i <= retryTime; i++) {
             try {
                 if (disableCloudVersionCacheOnRetry) {
-                    setCloudVersionCacheTtlZeroForNextAttempt();
+                    SessionVariable sessionVariable = context.getSessionVariable();
+                    long oldPartitionTtl = sessionVariable.cloudPartitionVersionCacheTtlMs;
+                    long oldTableTtl = sessionVariable.cloudTableVersionCacheTtlMs;
+                    try {
+                        sessionVariable.cloudPartitionVersionCacheTtlMs = 0;
+                        sessionVariable.cloudTableVersionCacheTtlMs = 0;
+                        LOG.info("temporarily set {} from {} to 0 and {} from {} to 0 before retry. {}",
+                                SessionVariable.CLOUD_PARTITION_VERSION_CACHE_TTL_MS, oldPartitionTtl,
+                                SessionVariable.CLOUD_TABLE_VERSION_CACHE_TTL_MS, oldTableTtl,
+                                context.getQueryIdentifier());
+                        execute(queryId);
+                    } finally {
+                        sessionVariable.cloudPartitionVersionCacheTtlMs = oldPartitionTtl;
+                        sessionVariable.cloudTableVersionCacheTtlMs = oldTableTtl;
+                    }
+                } else {
+                    execute(queryId);
                 }
-                execute(queryId);
                 return;
             } catch (UserException e) {
                 if (!SystemInfoService.needRetryWithReplan(e.getMessage()) || i == retryTime) {
@@ -633,27 +648,6 @@ public class StmtExecutor {
                 && errorMessage.contains(SystemInfoService.ERROR_E230)
                 && (context.getSessionVariable().cloudPartitionVersionCacheTtlMs != 0
                 || context.getSessionVariable().cloudTableVersionCacheTtlMs != 0);
-    }
-
-    void setCloudVersionCacheTtlZeroForNextAttempt() {
-        SessionVariable sessionVariable = context.getSessionVariable();
-        long partitionTtl = sessionVariable.cloudPartitionVersionCacheTtlMs;
-        long tableTtl = sessionVariable.cloudTableVersionCacheTtlMs;
-
-        if (partitionTtl != 0
-                && !sessionVariable.setVarOnce(SessionVariable.CLOUD_PARTITION_VERSION_CACHE_TTL_MS, "0")) {
-            LOG.warn("failed to set {}=0 before retry. {}",
-                    SessionVariable.CLOUD_PARTITION_VERSION_CACHE_TTL_MS, context.getQueryIdentifier());
-        }
-        if (tableTtl != 0
-                && !sessionVariable.setVarOnce(SessionVariable.CLOUD_TABLE_VERSION_CACHE_TTL_MS, "0")) {
-            LOG.warn("failed to set {}=0 before retry. {}",
-                    SessionVariable.CLOUD_TABLE_VERSION_CACHE_TTL_MS, context.getQueryIdentifier());
-        }
-        LOG.info("temporarily set {} from {} to 0 and {} from {} to 0 before retry. {}",
-                SessionVariable.CLOUD_PARTITION_VERSION_CACHE_TTL_MS, partitionTtl,
-                SessionVariable.CLOUD_TABLE_VERSION_CACHE_TTL_MS, tableTtl,
-                context.getQueryIdentifier());
     }
 
     public void execute(TUniqueId queryId) throws Exception {
