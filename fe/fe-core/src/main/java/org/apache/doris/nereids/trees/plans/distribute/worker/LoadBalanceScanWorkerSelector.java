@@ -172,6 +172,9 @@ public class LoadBalanceScanWorkerSelector implements ScanWorkerSelector {
     private void assignTabletSplits(ScanNode scanNode, TScanRangeLocations location, int splitCount,
             List<DistributedPlanWorker> splitWorkers, long tabletBytes,
             Map<DistributedPlanWorker, UninstancedScanSource> workerScanRanges) {
+        // Record that this scan was actually split, so it reports non-serial (OlapScanNode
+        // .isSerialOperator) and the BE takes the parallel path that consumes the split.
+        ((OlapScanNode) scanNode).markTabletSplitAssigned();
         int n = splitWorkers.size();
         // splitCount <= n (capped by caller), so the splits land on distinct BEs. Rotate the
         // start per tablet so different tablets do not all pile their split 0 onto the same BE.

@@ -295,6 +295,13 @@ public class OlapScanNode extends ScanNode {
         if (isPointQuery() || olapTable == null) {
             return false;
         }
+        // The BE independently forces a single serial read for small-LIMIT scans (adaptive
+        // pipeline serial read on limit, scan_operator.cpp:1275), regardless of the FE serial
+        // flag. Mirror that predicate here so we don't split and then hit the BE serial path
+        // (which the BE guard turns into a hard error).
+        if (shouldUseOneInstance(ctx)) {
+            return false;
+        }
         // Pushed-down aggregate (e.g. COUNT_ON_INDEX) is computed from metadata on the serial
         // path and does not honor rowid splits.
         if (pushDownAggNoGroupingOp != null && pushDownAggNoGroupingOp != TPushAggOp.NONE) {
@@ -302,6 +309,12 @@ public class OlapScanNode extends ScanNode {
         }
         // Row binlog must be read in order; the BE forces the serial path for it.
         if (olapTable instanceof RowBinlogTableWrapper) {
+            return false;
+        }
+        // ANN topn uses per-segment scan parallelism on the BE (olap_scan_operator.cpp), which the
+        // ParallelScannerBuilder cannot combine with a rowid split (returns NotSupported). Exclude
+        // it here; ANN already has its own per-segment parallelization.
+        if (annSortInfo != null) {
             return false;
         }
         // Colocate / bucket-shuffle fragments depend on bucket(tablet) locality and are assigned
@@ -319,17 +332,34 @@ public class OlapScanNode extends ScanNode {
     }
 
     /**
-     * A tablet-split-eligible scan is parallelized across BEs by the tablet-split feature, and the
-     * BE only consumes {@code split_id/split_count} on the parallel (non-serial) scan path. If this
-     * scan were reported as a serial operator, the BE would take the serial path and ignore the
-     * split (the BE-side guard then fails the query). The split itself IS the cross-BE
+     * Set by the scheduler ({@code assignTabletSplits}) when this scan was ACTUALLY split into
+     * {@code split_count > 1} on at least one tablet. Used to force the scan non-serial, so the BE
+     * takes the parallel path that consumes {@code split_id/split_count}. Eligibility alone is not
+     * enough: small tablets / unknown size / single BE may still resolve to split_count == 1, and
+     * those must keep normal serial-source behavior (do not change their instance allocation).
+     */
+    private boolean hasAssignedTabletSplit = false;
+
+    public void markTabletSplitAssigned() {
+        this.hasAssignedTabletSplit = true;
+    }
+
+    /**
+     * A scan whose tablets were actually split is parallelized across BEs by the tablet-split
+     * feature, and the BE only consumes {@code split_id/split_count} on the parallel (non-serial)
+     * scan path. Reporting it as a serial operator would force the BE serial path, which ignores
+     * the split (the BE-side guard then fails the query). The split IS the cross-BE
      * parallelization, so such a scan must never be treated as a serial source -- this overrides
-     * the scan-range-count heuristic in {@link ScanNode#isSerialOperator()}. When the feature is
-     * off, or the scan is not eligible, behavior is unchanged.
+     * the scan-range-count heuristic in {@link ScanNode#isSerialOperator()}. Scans that were not
+     * split (the common case) keep unchanged behavior.
+     *
+     * <p>Note: this only overrides the FE-serialized serial flag. The BE also forces serial read
+     * for small-LIMIT scans independently (scan_operator.cpp); that case is excluded earlier in
+     * {@link #isTabletSplitEligible()} via {@code shouldUseOneInstance}, so it is never split.
      */
     @Override
     public boolean isSerialOperator() {
-        if (isTabletSplitEligible()) {
+        if (hasAssignedTabletSplit) {
             return false;
         }
         return super.isSerialOperator();

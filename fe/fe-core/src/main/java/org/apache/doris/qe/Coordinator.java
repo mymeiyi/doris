@@ -2588,6 +2588,9 @@ public class Coordinator implements CoordInterface {
     // its own global rowid range from (split_id, split_count) after syncing the same version.
     private void assignTabletSplits(ScanNode scanNode, TScanRangeLocations scanRangeLocations,
             int splitCount, List<Backend> splitBackends, FragmentScanRangeAssignment assignment) {
+        // Record that this scan was actually split, so it reports non-serial
+        // (OlapScanNode.isSerialOperator) and the BE takes the parallel path that consumes it.
+        ((OlapScanNode) scanNode).markTabletSplitAssigned();
         int n = splitBackends.size();
         // splitCount <= n (capped by caller), so the splits land on distinct BEs. Rotate the
         // start per tablet so different tablets do not all pile their split 0 onto the same BE.
