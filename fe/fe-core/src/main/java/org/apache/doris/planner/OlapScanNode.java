@@ -75,6 +75,7 @@ import org.apache.doris.nereids.trees.plans.ScoreRangeInfo;
 import org.apache.doris.planner.normalize.Normalizer;
 import org.apache.doris.planner.normalize.PartitionRangePredicateNormalizer;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.resource.computegroup.ComputeGroup;
 import org.apache.doris.system.Backend;
 import org.apache.doris.thrift.TAggregationType;
@@ -93,6 +94,7 @@ import org.apache.doris.thrift.TPartitionBoundary;
 import org.apache.doris.thrift.TPlanNode;
 import org.apache.doris.thrift.TPlanNodeType;
 import org.apache.doris.thrift.TPrimitiveType;
+import org.apache.doris.thrift.TPushAggOp;
 import org.apache.doris.thrift.TScanRange;
 import org.apache.doris.thrift.TScanRangeLocation;
 import org.apache.doris.thrift.TScanRangeLocations;
@@ -261,24 +263,45 @@ public class OlapScanNode extends ScanNode {
 
     /**
      * Whether the scan of a single tablet may be split across multiple BEs (the rowid-range
-     * model, phase 1). Mirrors the BE-side gate {@code _storage_no_merge()}: only tables whose
-     * scanners do not merge are safe to split by rowid (coverage + non-overlap is enough).
+     * model, phase 1).
      *
-     * Cloud only: a split may be assigned to a BE that does not hold the tablet locally, which
-     * only works when data lives on object storage. Point queries are excluded (they locate a
-     * single row via the primary key and should not be fanned out). Colocate / bucket-shuffle
-     * gating is handled by the caller in the Coordinator (only the scheduler assignment path,
-     * which excludes those, performs the split).
+     * <p>CRITICAL: this gate must stay a subset of the BE-side parallel-scan gate
+     * ({@code olap_scan_operator.cpp}: {@code enable_parallel_scan && !_should_run_serial &&
+     * push_down_agg == NONE && (_storage_no_merge() || is_preaggregation) && !read_row_binlog}).
+     * The BE only consumes {@code split_id/split_count} on that parallel path; on any other path
+     * it scans the WHOLE tablet. If FE emits a split (fanning a tablet to N BEs) but a BE then
+     * takes the serial path, every BE whole-scans the tablet and count/sum get amplified N times.
+     * Conditions FE cannot see here (e.g. {@code _should_run_serial}) are guarded defensively on
+     * the BE side, which fails fast instead of silently whole-scanning.
+     *
+     * <p>Cloud only: a split may be assigned to a BE that does not hold the tablet locally, which
+     * only works when data lives on object storage. Point queries are excluded (single-row PK
+     * lookup, should not fan out). Colocate / bucket-shuffle gating is handled by the caller
+     * (only the non-bucket assignment path performs the split).
      */
     public boolean isTabletSplitEligible() {
         if (!Config.isCloudMode()) {
             return false;
         }
         ConnectContext ctx = ConnectContext.get();
-        if (ctx == null || !ctx.getSessionVariable().isEnableTabletSplitScan()) {
+        if (ctx == null) {
+            return false;
+        }
+        SessionVariable sv = ctx.getSessionVariable();
+        // Must match the BE parallel-scan gate: split is only honored there.
+        if (!sv.isEnableTabletSplitScan() || !sv.getEnableParallelScan()) {
             return false;
         }
         if (isPointQuery() || olapTable == null) {
+            return false;
+        }
+        // Pushed-down aggregate (e.g. COUNT_ON_INDEX) is computed from metadata on the serial
+        // path and does not honor rowid splits.
+        if (pushDownAggNoGroupingOp != null && pushDownAggNoGroupingOp != TPushAggOp.NONE) {
+            return false;
+        }
+        // Row binlog must be read in order; the BE forces the serial path for it.
+        if (olapTable instanceof RowBinlogTableWrapper) {
             return false;
         }
         KeysType keysType = olapTable.getKeysType();

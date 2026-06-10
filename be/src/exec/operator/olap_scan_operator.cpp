@@ -740,6 +740,20 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
         return Status::OK();
     }
 
+    // Defensive: split scan ranges (split_count > 1) are only consumed by the rowid-split parallel
+    // path above (ParallelScannerBuilder). Reaching the serial path with a split set means this BE
+    // would whole-scan the tablet while the other fan-out BEs scan it too -- amplifying results.
+    // Fail fast instead of silently corrupting. FE (OlapScanNode.isTabletSplitEligible) avoids the
+    // predictable cases; this guards the ones FE cannot see (e.g. _should_run_serial).
+    for (auto& scan_range : _scan_ranges) {
+        if (scan_range->__isset.split_count && scan_range->split_count > 1) {
+            return Status::InternalError(
+                    "tablet {} split (split_count={}) reached the serial scan path; FE split "
+                    "eligibility diverged from the BE parallel-scan gate",
+                    scan_range->tablet_id, scan_range->split_count);
+        }
+    }
+
     int scanners_per_tablet = std::max(1, 64 / (int)_scan_ranges.size());
     for (size_t scan_range_idx = 0; scan_range_idx < _scan_ranges.size(); scan_range_idx++) {
         const auto& palo_scan_range = *_scan_ranges[scan_range_idx];

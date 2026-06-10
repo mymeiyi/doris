@@ -37,6 +37,14 @@ namespace doris {
 Status ParallelScannerBuilder::build_scanners(std::list<ScannerSPtr>& scanners) {
     RETURN_IF_ERROR(_load());
     if (_scan_parallelism_by_per_segment) {
+        // Per-segment scanners scan whole segments and do not honor rowid splits. If a split was
+        // requested here, every fan-out BE would whole-scan the tablet -- refuse instead.
+        for (const auto& split : _tablet_splits) {
+            if (split.second > 1) {
+                return Status::NotSupported(
+                        "tablet split is not supported with per-segment scan parallelism");
+            }
+        }
         return _build_scanners_by_per_segment(scanners);
     } else if (_is_dup_mow_key) {
         // Default strategy for DUP/MOW tables: split by rowids within segments
