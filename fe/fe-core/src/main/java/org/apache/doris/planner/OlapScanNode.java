@@ -342,6 +342,11 @@ public class OlapScanNode extends ScanNode {
 
     public void markTabletSplitAssigned() {
         this.hasAssignedTabletSplit = true;
+        // Propagate to the fragment so it does not use a serial/shared scan source (which would
+        // replicate this split scan's ranges to every instance -> duplicate scanning).
+        if (getFragment() != null) {
+            getFragment().markTabletSplitAssigned();
+        }
     }
 
     /**

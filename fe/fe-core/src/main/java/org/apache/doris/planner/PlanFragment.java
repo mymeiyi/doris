@@ -156,6 +156,12 @@ public class PlanFragment extends TreeNode<PlanFragment> {
     protected boolean hasColocatePlanNode = false;
     protected final Supplier<Boolean> hasBucketShuffleNode;
 
+    // Set when the scheduler actually split a tablet (split_count > 1) for some scan node in this
+    // fragment. Such a fragment must NOT use a serial/shared scan source: in that mode the legacy
+    // Coordinator replicates (nCopies) each node's scan ranges to every instance, which for a
+    // non-serial split scan means multiple instances scan the same split range (duplication).
+    private boolean hasAssignedTabletSplit = false;
+
     private TResultSinkType resultSinkType = TResultSinkType.MYSQL_PROTOCOL;
 
     public Optional<NereidsSpecifyInstances<ScanSource>> specifyInstances = Optional.empty();
@@ -505,8 +511,18 @@ public class PlanFragment extends TreeNode<PlanFragment> {
                 && ((JoinNodeBase) plan).getJoinOp() == JoinOperator.NULL_AWARE_LEFT_ANTI_JOIN);
     }
 
+    public void markTabletSplitAssigned() {
+        this.hasAssignedTabletSplit = true;
+    }
+
+    public boolean hasAssignedTabletSplit() {
+        return hasAssignedTabletSplit;
+    }
+
     public boolean useSerialSource(ConnectContext context) {
         return context != null
+                // A fragment with an actually-split scan must not share/replicate scan sources.
+                && !hasAssignedTabletSplit
                 && context.getSessionVariable().isIgnoreStorageDataDistribution()
                 && queryCacheParam == null
                 && !hasNullAwareLeftAntiJoin()
