@@ -17,7 +17,9 @@
 
 #include "exec/scan/parallel_scanner_builder.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <utility>
 
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet_hotspot.h"
@@ -25,6 +27,7 @@
 #include "common/status.h"
 #include "exec/operator/olap_scan_operator.h"
 #include "exec/scan/olap_scanner.h"
+#include "exec/scan/rowid_split_planner.h"
 #include "storage/rowset/beta_rowset.h"
 #include "storage/segment/segment_loader.h"
 #include "storage/tablet/base_tablet.h"
@@ -47,6 +50,7 @@ Status ParallelScannerBuilder::build_scanners(std::list<ScannerSPtr>& scanners) 
 Status ParallelScannerBuilder::_build_scanners_by_rowid(std::list<ScannerSPtr>& scanners) {
     DCHECK_GE(_rows_per_scanner, _min_rows_per_scanner);
 
+    size_t tablet_idx = 0;
     for (auto&& [tablet, version] : _tablets) {
         DCHECK(_all_read_sources.contains(tablet->tablet_id()));
         auto& entire_read_source = _all_read_sources[tablet->tablet_id()];
@@ -56,109 +60,56 @@ Status ParallelScannerBuilder::_build_scanners_by_rowid(std::list<ScannerSPtr>& 
             ExecEnv::GetInstance()->storage_engine().to_cloud().tablet_hotspot().count(*tablet);
         }
 
-        // `rs_splits` in `entire read source` will be devided into several partitial read sources
-        // to build several parallel scanners, based on segment rows number. All the partitial read sources
-        // share the same delete predicates from their corresponding entire read source.
-        TabletReadSource partitial_read_source;
-        int64_t rows_collected = 0;
+        // Build the per-rowset segment row layout, aligned 1:1 with `rs_splits` (version_path
+        // order). Together with the snapshot `version` this defines the tablet-global rowid
+        // space deterministically across BEs (see rowid_split_planner.h).
+        std::vector<std::vector<int64_t>> rowsets_segment_rows;
+        rowsets_segment_rows.reserve(entire_read_source.rs_splits.size());
+        int64_t tablet_total_rows = 0;
         for (auto& rs_split : entire_read_source.rs_splits) {
-            auto reader = rs_split.rs_reader;
-            auto rowset = reader->rowset();
-            const auto rowset_id = rowset->rowset_id();
-
-            const auto& segments_rows = _all_segments_rows[rowset_id];
-
-            if (rowset->num_rows() == 0) {
-                continue;
+            const auto rowset_id = rs_split.rs_reader->rowset()->rowset_id();
+            const auto& segs = _all_segments_rows[rowset_id];
+            auto& dst = rowsets_segment_rows.emplace_back();
+            dst.reserve(segs.size());
+            for (auto rows : segs) {
+                dst.emplace_back(static_cast<int64_t>(rows));
+                tablet_total_rows += static_cast<int64_t>(rows);
             }
+        }
 
-            int64_t segment_start = 0;
-            auto split = RowSetSplits(reader->clone());
+        // Resolve this tablet's split identity into a global rowid sub-range. split_count <= 1
+        // (the default for the legacy single-BE path) means the whole tablet [0, total).
+        int32_t split_id = 0;
+        int32_t split_count = 1;
+        if (tablet_idx < _tablet_splits.size() && _tablet_splits[tablet_idx].second > 1) {
+            split_id = _tablet_splits[tablet_idx].first;
+            split_count = _tablet_splits[tablet_idx].second;
+        }
+        const auto [g_begin, g_end] = rowid_split_range(tablet_total_rows, split_id, split_count);
 
-            for (size_t i = 0; i != segments_rows.size(); ++i) {
-                const size_t rows_of_segment = segments_rows[i];
-                RowRanges row_ranges;
-                int64_t offset_in_segment = 0;
-
-                // try to split large segments into RowRanges
-                while (offset_in_segment < rows_of_segment) {
-                    const int64_t remaining_rows = rows_of_segment - offset_in_segment;
-                    auto rows_need = _rows_per_scanner - rows_collected;
-
-                    // 0.9: try to avoid splitting the segments into excessively small parts.
-                    if (rows_need >= remaining_rows * 9 / 10) {
-                        rows_need = remaining_rows;
-                    }
-                    DCHECK_LE(rows_need, remaining_rows);
-
-                    // RowRange stands for range: [From, To), From is inclusive, To is exclusive.
-                    row_ranges.add({offset_in_segment,
-                                    offset_in_segment + static_cast<int64_t>(rows_need)});
-                    rows_collected += rows_need;
-                    offset_in_segment += rows_need;
-
-                    // If collected enough rows, build a new scanner
-                    if (rows_collected >= _rows_per_scanner) {
-                        split.segment_offsets.first = segment_start,
-                        split.segment_offsets.second = i + 1;
-                        split.segment_row_ranges.emplace_back(std::move(row_ranges));
-
-                        DCHECK_EQ(split.segment_offsets.second - split.segment_offsets.first,
-                                  split.segment_row_ranges.size());
-
-                        partitial_read_source.rs_splits.emplace_back(std::move(split));
-
-                        scanners.emplace_back(_build_scanner(
-                                tablet, version, _key_ranges,
-                                {.rs_splits = std::move(partitial_read_source.rs_splits),
-                                 .delete_predicates = entire_read_source.delete_predicates,
-                                 .delete_bitmap = entire_read_source.delete_bitmap}));
-
-                        partitial_read_source = {};
-                        split = RowSetSplits(reader->clone());
-                        row_ranges = RowRanges();
-
-                        segment_start = offset_in_segment < rows_of_segment ? i : i + 1;
-                        rows_collected = 0;
-                    }
-                }
-
-                // The non-empty `row_ranges` means there are some rows left in this segment not added into `split`.
-                if (!row_ranges.is_empty()) {
-                    DCHECK_GT(rows_collected, 0);
-                    DCHECK_EQ(row_ranges.to(), rows_of_segment);
-                    split.segment_row_ranges.emplace_back(std::move(row_ranges));
-                }
-            }
-
-            DCHECK_LE(rows_collected, _rows_per_scanner);
-            if (rows_collected > 0) {
-                split.segment_offsets.first = segment_start;
-                split.segment_offsets.second = segments_rows.size();
-                DCHECK_GT(split.segment_offsets.second, split.segment_offsets.first);
-                DCHECK_EQ(split.segment_row_ranges.size(),
-                          split.segment_offsets.second - split.segment_offsets.first);
-                partitial_read_source.rs_splits.emplace_back(std::move(split));
-            }
-        } // end `for (auto& rowset : rowsets)`
-
-        DCHECK_LE(rows_collected, _rows_per_scanner);
-        if (rows_collected > 0) {
-            DCHECK_GT(partitial_read_source.rs_splits.size(), 0);
-#ifndef NDEBUG
-            for (auto& split : partitial_read_source.rs_splits) {
-                DCHECK(split.rs_reader != nullptr);
+        // Plan (pure) then materialize: attach a cloned reader per slice and the shared delete
+        // metadata. A scanner may span several rowsets, so each plan becomes one read source.
+        const auto plans = plan_rowid_scanners(rowsets_segment_rows, g_begin, g_end,
+                                               static_cast<int64_t>(_rows_per_scanner));
+        for (auto& plan : plans) {
+            TabletReadSource read_source;
+            read_source.rs_splits.reserve(plan.size());
+            for (auto& slice : plan) {
+                auto& reader = entire_read_source.rs_splits[slice.rowset_index].rs_reader;
+                RowSetSplits split(reader->clone());
+                split.segment_offsets = slice.segment_offsets;
+                split.segment_row_ranges = slice.segment_row_ranges;
                 DCHECK_LT(split.segment_offsets.first, split.segment_offsets.second);
                 DCHECK_EQ(split.segment_row_ranges.size(),
                           split.segment_offsets.second - split.segment_offsets.first);
+                read_source.rs_splits.emplace_back(std::move(split));
             }
-#endif
+            read_source.delete_predicates = entire_read_source.delete_predicates;
+            read_source.delete_bitmap = entire_read_source.delete_bitmap;
             scanners.emplace_back(
-                    _build_scanner(tablet, version, _key_ranges,
-                                   {.rs_splits = std::move(partitial_read_source.rs_splits),
-                                    .delete_predicates = entire_read_source.delete_predicates,
-                                    .delete_bitmap = entire_read_source.delete_bitmap}));
+                    _build_scanner(tablet, version, _key_ranges, std::move(read_source)));
         }
+        ++tablet_idx;
     }
 
     return Status::OK();

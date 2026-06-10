@@ -685,6 +685,20 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
                                                key_ranges, state(), p._limit, true,
                                                p._olap_scan_node.is_preaggregation);
 
+        // Forward the per-tablet split identity (split_id, split_count) carried by each scan
+        // range. `_scan_ranges` is kept aligned 1:1 with `_tablets` / `_read_sources` (including
+        // after RF partition pruning above). When unset (split_count <= 1) the builder scans the
+        // whole tablet, so this is a no-op for the legacy single-BE path.
+        std::vector<std::pair<int32_t, int32_t>> tablet_splits;
+        tablet_splits.reserve(_scan_ranges.size());
+        for (auto& scan_range : _scan_ranges) {
+            const int32_t split_count =
+                    scan_range->__isset.split_count ? scan_range->split_count : 1;
+            const int32_t split_id = scan_range->__isset.split_id ? scan_range->split_id : 0;
+            tablet_splits.emplace_back(split_id, split_count);
+        }
+        scanner_builder.set_tablet_splits(std::move(tablet_splits));
+
         int max_scanners_count = state()->parallel_scan_max_scanners_count();
 
         // If the `max_scanners_count` was not set,

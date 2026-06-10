@@ -63,6 +63,14 @@ public:
 
     void set_scan_parallelism_by_per_segment(bool v) { _scan_parallelism_by_per_segment = v; }
 
+    // Tablet-level parallel split, aligned 1:1 with the `tablets` passed to the ctor.
+    // Each entry is (split_id, split_count): this builder only emits scanners covering
+    // the tablet's global rowid sub-range [total*split_id/split_count, total*(split_id+1)/split_count).
+    // Empty, or split_count <= 1, means scan the whole tablet (legacy behavior).
+    void set_tablet_splits(std::vector<std::pair<int32_t, int32_t>> splits) {
+        _tablet_splits = std::move(splits);
+    }
+
     const OlapReaderStatistics* builder_stats() const { return &_builder_stats; }
 
 private:
@@ -107,6 +115,8 @@ private:
     // PreAgg OFF: The storage layer must complete pre-aggregation and return fully aggregated data. (Slow data reading)
     bool _is_preaggregation;
     std::vector<TabletWithVersion> _tablets;
+    // (split_id, split_count) per tablet, aligned with `_tablets`. See set_tablet_splits().
+    std::vector<std::pair<int32_t, int32_t>> _tablet_splits;
     std::vector<OlapScanRange*> _key_ranges;
     std::unordered_map<int64_t, TabletReadSource> _all_read_sources;
     std::vector<TabletReadSource>& _read_sources;

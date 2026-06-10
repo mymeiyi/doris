@@ -101,6 +101,15 @@ struct TPaloScanRange {
   10: optional i64 start_tso
   11: optional i64 end_tso
   12: optional TBinlogScanType binlog_scan_type
+  // ── tablet 内并行 split (默认不设 = 整 tablet 单 BE, 零行为变化) ──
+  // rowid range (phase 1): 仅传序号身份, BE 同步同一 version 后用确定性公式
+  //   begin = total_rows * split_id / split_count, end = total_rows * (split_id+1) / split_count
+  //   自推本片的全局 rowid 区间, 保证覆盖且不重叠。split_count <= 1 即整 tablet。
+  20: optional i32 split_count
+  21: optional i32 split_id
+  // key range (phase 2, 需归并的 AGG / MoR-unique): 暂未实现
+  22: optional TKeyRange split_key_lower
+  23: optional TKeyRange split_key_upper
 }
 
 enum TFileFormatType {
