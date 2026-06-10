@@ -259,6 +259,34 @@ public class OlapScanNode extends ScanNode {
         return isPreAggregation;
     }
 
+    /**
+     * Whether the scan of a single tablet may be split across multiple BEs (the rowid-range
+     * model, phase 1). Mirrors the BE-side gate {@code _storage_no_merge()}: only tables whose
+     * scanners do not merge are safe to split by rowid (coverage + non-overlap is enough).
+     *
+     * Cloud only: a split may be assigned to a BE that does not hold the tablet locally, which
+     * only works when data lives on object storage. Point queries are excluded (they locate a
+     * single row via the primary key and should not be fanned out). Colocate / bucket-shuffle
+     * gating is handled by the caller in the Coordinator (only the scheduler assignment path,
+     * which excludes those, performs the split).
+     */
+    public boolean isTabletSplitEligible() {
+        if (!Config.isCloudMode()) {
+            return false;
+        }
+        ConnectContext ctx = ConnectContext.get();
+        if (ctx == null || !ctx.getSessionVariable().isEnableTabletSplitScan()) {
+            return false;
+        }
+        if (isPointQuery() || olapTable == null) {
+            return false;
+        }
+        KeysType keysType = olapTable.getKeysType();
+        // DUP, or MoW-unique read as dup: scanners never merge, so rowid split is correct.
+        return keysType == KeysType.DUP_KEYS
+                || (keysType == KeysType.UNIQUE_KEYS && olapTable.getEnableUniqueKeyMergeOnWrite());
+    }
+
     public HashSet<Long> getScanBackendIds() {
         return scanBackendIds;
     }

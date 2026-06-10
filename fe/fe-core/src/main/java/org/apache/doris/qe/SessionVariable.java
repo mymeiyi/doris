@@ -352,6 +352,18 @@ public class SessionVariable implements Serializable, Writable {
     // Avoid splitting small segments, each scanner should scan `parallel_scan_min_rows_per_scanner` rows.
     public static final String PARALLEL_SCAN_MIN_ROWS_PER_SCANNER = "parallel_scan_min_rows_per_scanner";
 
+    // Split the scan of a single large tablet across multiple BEs (cloud mode only).
+    // Each split carries (split_count, split_id); the BE deterministically derives its own
+    // global rowid range. See large_tablet_parallel_query_design.md.
+    public static final String ENABLE_TABLET_SPLIT_SCAN = "enable_tablet_split_scan";
+
+    // A tablet is split so that each split covers roughly this many (single-replica) bytes.
+    public static final String TABLET_SPLIT_SCAN_TARGET_BYTES = "tablet_split_scan_target_bytes";
+
+    // Hard cap on the number of splits a single tablet is divided into (0 = cap only by the
+    // number of available BEs in the compute group).
+    public static final String TABLET_SPLIT_SCAN_MAX_COUNT = "tablet_split_scan_max_count";
+
     public static final String ENABLE_LOCAL_SHUFFLE = "enable_local_shuffle";
 
     public static final String FORCE_TO_LOCAL_SHUFFLE = "force_to_local_shuffle";
@@ -1601,6 +1613,24 @@ public class SessionVariable implements Serializable, Writable {
     @VarAttrDef.VarAttr(name = PARALLEL_SCAN_MIN_ROWS_PER_SCANNER, fuzzy = true,
             varType = VariableAnnotation.EXPERIMENTAL, needForward = true)
     private long parallelScanMinRowsPerScanner = 2097152; // 2M
+
+    @VarAttrDef.VarAttr(name = ENABLE_TABLET_SPLIT_SCAN, varType = VariableAnnotation.EXPERIMENTAL,
+            needForward = true, description = {
+                "是否把单个大 tablet 的扫描拆分到多个 BE 并行执行（仅 cloud 模式）",
+                "Whether to split the scan of a single large tablet across multiple BEs (cloud only)"})
+    private boolean enableTabletSplitScan = false;
+
+    @VarAttrDef.VarAttr(name = TABLET_SPLIT_SCAN_TARGET_BYTES, varType = VariableAnnotation.EXPERIMENTAL,
+            needForward = true, description = {
+                "拆分大 tablet 时每个 split 期望覆盖的单副本字节数",
+                "Target single-replica bytes each split covers when splitting a large tablet"})
+    private long tabletSplitScanTargetBytes = 1073741824L; // 1G
+
+    @VarAttrDef.VarAttr(name = TABLET_SPLIT_SCAN_MAX_COUNT, varType = VariableAnnotation.EXPERIMENTAL,
+            needForward = true, description = {
+                "单个 tablet 最多拆分的 split 数，0 表示仅受计算组 BE 数限制",
+                "Hard cap on splits per tablet; 0 means cap only by the number of BEs"})
+    private int tabletSplitScanMaxCount = 0;
 
     @VarAttrDef.VarAttr(name = IGNORE_STORAGE_DATA_DISTRIBUTION, fuzzy = false,
             varType = VariableAnnotation.EXPERIMENTAL, needForward = true)
@@ -5901,6 +5931,18 @@ public class SessionVariable implements Serializable, Writable {
 
     public boolean getEnableParallelScan() {
         return enableParallelScan;
+    }
+
+    public boolean isEnableTabletSplitScan() {
+        return enableTabletSplitScan;
+    }
+
+    public long getTabletSplitScanTargetBytes() {
+        return tabletSplitScanTargetBytes;
+    }
+
+    public int getTabletSplitScanMaxCount() {
+        return tabletSplitScanMaxCount;
     }
 
     public boolean getEnableAggregateFunctionNullV2() {

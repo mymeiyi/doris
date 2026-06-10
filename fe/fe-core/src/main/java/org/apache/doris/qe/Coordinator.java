@@ -2503,12 +2503,37 @@ public class Coordinator implements CoordInterface {
             Map<TNetworkAddress, Long> assignedBytesPerHost,
             Map<TNetworkAddress, Long> replicaNumPerHost,
             boolean isEnableOrderedLocations) throws Exception {
+        // Large-tablet split: only reachable here (not the colocate / bucket-shuffle paths),
+        // so splitting a tablet across BEs cannot break bucket locality. Cloud only and gated by
+        // table type via OlapScanNode.isTabletSplitEligible().
+        boolean splitEligible = (scanNode instanceof OlapScanNode)
+                && ((OlapScanNode) scanNode).isTabletSplitEligible();
+        List<Backend> splitBackends = null;
+        if (splitEligible) {
+            splitBackends = new ArrayList<>();
+            for (Backend be : idToBackend.values()) {
+                if (be.isAlive() && be.isQueryAvailable()) {
+                    splitBackends.add(be);
+                }
+            }
+            // Nothing to gain (or no fan-out target) with a single BE.
+            splitEligible = splitBackends.size() > 1;
+        }
+
         // Type of locations is List, it could have elements that have same "location"
         // and we do have this situation for some scan node.
         // The duplicate "location" will NOT be filtered by FragmentScanRangeAssignment,
         // since FragmentScanRangeAssignment use List<TScanRangeParams> as its value type,
         // duplicate "locations" will be converted to list.
         for (TScanRangeLocations scanRangeLocations : locations) {
+            int splitCount = splitEligible
+                    ? computeTabletSplitCount((OlapScanNode) scanNode, scanRangeLocations, splitBackends.size())
+                    : 1;
+            if (splitCount > 1) {
+                assignTabletSplits(scanNode, scanRangeLocations, splitCount, splitBackends, assignment);
+                continue;
+            }
+
             Reference<Long> backendIdRef = new Reference<Long>();
             TScanRangeLocation minLocation = selectBackendsByRoundRobin(scanRangeLocations,
                     assignedBytesPerHost, replicaNumPerHost, backendIdRef, isEnableOrderedLocations);
@@ -2525,6 +2550,64 @@ public class Coordinator implements CoordInterface {
             scanRangeParams.scan_range = scanRangeLocations.scan_range;
             // Volume is optional, so we need to set the value and the is-set bit
             scanRangeParams.setVolumeId(minLocation.volume_id);
+            scanRangeParamsList.add(scanRangeParams);
+            updateScanRangeNumByScanRange(scanRangeParams);
+        }
+    }
+
+    // Decide how many splits a single tablet is divided into, based on its single-replica byte
+    // size and the session target/cap. Returns 1 (no split) when the tablet is small, its size
+    // is unknown, or the feature would not help.
+    private int computeTabletSplitCount(OlapScanNode scanNode, TScanRangeLocations scanRangeLocations,
+            int backendCount) {
+        TScanRange scanRange = scanRangeLocations.scan_range;
+        if (scanRange == null || scanRange.getPaloScanRange() == null) {
+            return 1;
+        }
+        long tabletId = scanRange.getPaloScanRange().getTabletId();
+        Long bytes = scanNode.getTabletSingleReplicaSize(tabletId);
+        if (bytes == null || bytes <= 0) {
+            return 1;
+        }
+        SessionVariable sv = ConnectContext.get().getSessionVariable();
+        long target = sv.getTabletSplitScanTargetBytes();
+        if (target <= 0 || bytes <= target) {
+            return 1;
+        }
+        long desired = (bytes + target - 1) / target;
+        long cap = backendCount;
+        int maxCount = sv.getTabletSplitScanMaxCount();
+        if (maxCount > 0) {
+            cap = Math.min(cap, maxCount);
+        }
+        return (int) Math.max(1, Math.min(desired, cap));
+    }
+
+    // Expand one tablet's scan range into `splitCount` split scan ranges, each carrying
+    // (split_count, split_id), and assign them to distinct BEs. The BE deterministically derives
+    // its own global rowid range from (split_id, split_count) after syncing the same version.
+    private void assignTabletSplits(ScanNode scanNode, TScanRangeLocations scanRangeLocations,
+            int splitCount, List<Backend> splitBackends, FragmentScanRangeAssignment assignment) {
+        int n = splitBackends.size();
+        // splitCount <= n (capped by caller), so the splits land on distinct BEs. Rotate the
+        // start per tablet so different tablets do not all pile their split 0 onto the same BE.
+        long tabletId = scanRangeLocations.scan_range.getPaloScanRange().getTabletId();
+        int start = (int) Math.floorMod(tabletId, (long) n);
+        for (int splitId = 0; splitId < splitCount; splitId++) {
+            Backend backend = splitBackends.get((start + splitId) % n);
+            TNetworkAddress execHostPort = new TNetworkAddress(backend.getHost(), backend.getBePort());
+            this.addressToBackendID.put(execHostPort, backend.getId());
+
+            TScanRange scanRange = scanRangeLocations.scan_range.deepCopy();
+            scanRange.getPaloScanRange().setSplitCount(splitCount);
+            scanRange.getPaloScanRange().setSplitId(splitId);
+
+            Map<Integer, List<TScanRangeParams>> scanRanges = findOrInsert(assignment, execHostPort,
+                    new HashMap<Integer, List<TScanRangeParams>>());
+            List<TScanRangeParams> scanRangeParamsList = findOrInsert(scanRanges, scanNode.getId().asInt(),
+                    new ArrayList<TScanRangeParams>());
+            TScanRangeParams scanRangeParams = new TScanRangeParams();
+            scanRangeParams.scan_range = scanRange;
             scanRangeParamsList.add(scanRangeParams);
             updateScanRangeNumByScanRange(scanRangeParams);
         }

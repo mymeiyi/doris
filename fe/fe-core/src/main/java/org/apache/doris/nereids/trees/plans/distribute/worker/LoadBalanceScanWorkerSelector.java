@@ -30,6 +30,8 @@ import org.apache.doris.planner.OlapScanNode;
 import org.apache.doris.planner.PlanFragment;
 import org.apache.doris.planner.ScanNode;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.SessionVariable;
+import org.apache.doris.system.Backend;
 import org.apache.doris.thrift.TExplainLevel;
 import org.apache.doris.thrift.TExternalScanRange;
 import org.apache.doris.thrift.TFileRangeDesc;
@@ -46,6 +48,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -95,9 +98,34 @@ public class LoadBalanceScanWorkerSelector implements ScanWorkerSelector {
             allScanRangesLocations = sortScanRanges(allScanRangesLocations);
         }
 
+        // Large-tablet split (cloud only, gated by table type). This is the non-bucket /
+        // non-colocate path, so splitting a tablet across BEs cannot break bucket locality.
+        List<DistributedPlanWorker> splitWorkers = null;
+        if (scanNode instanceof OlapScanNode && ((OlapScanNode) scanNode).isTabletSplitEligible()) {
+            splitWorkers = new ArrayList<>();
+            for (Backend be : workerManager.getAllBackends(scanNode.getCatalogId(), true)) {
+                if (be.isQueryAvailable()) {
+                    splitWorkers.add(workerManager.getWorker(scanNode.getCatalogId(), be));
+                }
+            }
+            // Nothing to gain (or no fan-out target) with a single BE.
+            if (splitWorkers.size() <= 1) {
+                splitWorkers = null;
+            }
+        }
+
         for (TScanRangeLocations onePartitionOneScanRangeLocation : allScanRangesLocations) {
             // usually, the onePartitionOneScanRangeLocation is a tablet in one partition
             long bytes = getScanRangeSize(scanNode, onePartitionOneScanRangeLocation);
+
+            int splitCount = splitWorkers == null ? 1
+                    : computeTabletSplitCount((OlapScanNode) scanNode, onePartitionOneScanRangeLocation,
+                            splitWorkers.size(), context.getSessionVariable());
+            if (splitCount > 1) {
+                assignTabletSplits(scanNode, onePartitionOneScanRangeLocation, splitCount, splitWorkers,
+                        bytes, workerScanRanges);
+                continue;
+            }
 
             WorkerScanRanges assigned = selectScanReplicaAndMinWorkloadWorker(
                     onePartitionOneScanRangeLocation, bytes, orderedScanRangeLocations, scanNode.getCatalogId());
@@ -111,6 +139,63 @@ public class LoadBalanceScanWorkerSelector implements ScanWorkerSelector {
             scanSource.scanNodeToScanRanges.get(scanNode).addScanRanges(assigned.scanRanges);
         }
         return workerScanRanges;
+    }
+
+    // Decide how many splits a single tablet is divided into, based on its single-replica byte
+    // size and the session target/cap. Returns 1 (no split) when small or size is unknown.
+    private int computeTabletSplitCount(OlapScanNode scanNode, TScanRangeLocations location,
+            int workerCount, SessionVariable sv) {
+        TScanRange scanRange = location.scan_range;
+        if (scanRange == null || scanRange.getPaloScanRange() == null) {
+            return 1;
+        }
+        Long bytes = scanNode.getTabletSingleReplicaSize(scanRange.getPaloScanRange().getTabletId());
+        if (bytes == null || bytes <= 0) {
+            return 1;
+        }
+        long target = sv.getTabletSplitScanTargetBytes();
+        if (target <= 0 || bytes <= target) {
+            return 1;
+        }
+        long desired = (bytes + target - 1) / target;
+        long cap = workerCount;
+        int maxCount = sv.getTabletSplitScanMaxCount();
+        if (maxCount > 0) {
+            cap = Math.min(cap, maxCount);
+        }
+        return (int) Math.max(1, Math.min(desired, cap));
+    }
+
+    // Expand one tablet into `splitCount` split scan ranges -- each carrying (split_count,
+    // split_id) -- and assign them to distinct BEs. The BE deterministically derives its own
+    // global rowid range from (split_id, split_count) after syncing the same version.
+    private void assignTabletSplits(ScanNode scanNode, TScanRangeLocations location, int splitCount,
+            List<DistributedPlanWorker> splitWorkers, long tabletBytes,
+            Map<DistributedPlanWorker, UninstancedScanSource> workerScanRanges) {
+        int n = splitWorkers.size();
+        // splitCount <= n (capped by caller), so the splits land on distinct BEs. Rotate the
+        // start per tablet so different tablets do not all pile their split 0 onto the same BE.
+        long tabletId = location.scan_range.getPaloScanRange().getTabletId();
+        int start = (int) Math.floorMod(tabletId, (long) n);
+        long bytesPerSplit = tabletBytes / splitCount;
+        for (int splitId = 0; splitId < splitCount; splitId++) {
+            DistributedPlanWorker worker = splitWorkers.get((start + splitId) % n);
+            TScanRange scanRange = location.scan_range.deepCopy();
+            scanRange.getPaloScanRange().setSplitCount(splitCount);
+            scanRange.getPaloScanRange().setSplitId(splitId);
+            TScanRangeParams params = new TScanRangeParams();
+            params.scan_range = scanRange;
+
+            UninstancedScanSource src = workerScanRanges.computeIfAbsent(
+                    worker,
+                    w -> new UninstancedScanSource(
+                            new DefaultScanSource(ImmutableMap.of(scanNode, new ScanRanges()))
+                    )
+            );
+            DefaultScanSource scanSource = (DefaultScanSource) src.scanSource;
+            scanSource.scanNodeToScanRanges.get(scanNode).addScanRange(params, bytesPerSplit);
+            getWorkload(worker).recordOneScanTask(bytesPerSplit);
+        }
     }
 
     @Override
