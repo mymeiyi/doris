@@ -315,9 +315,26 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
         const int64_t hi = boundary_at(split_id + 1);
         const bool is_last = (split_id == split_count - 1);
 
+        // TabletReader stores key-range inclusivity as scalar fields, not per range. It also
+        // requires every key tuple in one scanner to have the same width. Stage ranges into
+        // compatible groups and build one scanner per group.
+        std::vector<std::vector<OlapScanRange*>> scanner_key_range_groups;
+        auto stage_key_range = [&](OlapScanRange* range) {
+            for (auto& group : scanner_key_range_groups) {
+                auto* first = group.front();
+                if (first->begin_include == range->begin_include &&
+                    first->end_include == range->end_include &&
+                    first->begin_scan_range.size() == range->begin_scan_range.size() &&
+                    first->end_scan_range.size() == range->end_scan_range.size()) {
+                    group.push_back(range);
+                    return;
+                }
+            }
+            scanner_key_range_groups.push_back({range});
+        };
+
         // Helper: own a single-column first-key range [r_lo, r_hi] (with the given inclusivities)
         // in the local state (outlives the scanners; this builder does not) and stage it.
-        std::vector<OlapScanRange*> scanner_key_ranges;
         auto own_first_key_range = [&](int64_t r_lo, bool lo_incl, int64_t r_hi,
                                        bool hi_incl) -> Status {
             auto range = std::make_unique<OlapScanRange>();
@@ -330,7 +347,7 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                 return Status::NotSupported(
                         "key-range tablet split: unsupported first key column type");
             }
-            scanner_key_ranges.push_back(_parent->own_split_key_range(std::move(range)));
+            stage_key_range(_parent->own_split_key_range(std::move(range)));
             return Status::OK();
         };
 
@@ -384,7 +401,7 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                     const int64_t v = has_begin ? r_begin : r_end;
                     const bool in_split = v >= lo && (is_last ? v <= hi : v < hi);
                     if (in_split) {
-                        scanner_key_ranges.push_back(r);
+                        stage_key_range(r);
                     }
                     continue;
                 }
@@ -424,8 +441,8 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
         // Empty intersection: every predicate range fell outside this split's interval, so this
         // split owns none of the tablet. Build no scanner (an empty key-range list would mean a
         // FULL scan, not an empty one). The other splits cover the data; correctness holds.
-        if (!scanner_key_ranges.empty()) {
-            build_full_scanner(scanner_key_ranges);
+        for (const auto& key_range_group : scanner_key_range_groups) {
+            build_full_scanner(key_range_group);
         }
         ++tablet_idx;
     }
