@@ -660,6 +660,21 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
     bool read_row_binlog =
             p._olap_scan_node.__isset.read_row_binlog && p._olap_scan_node.read_row_binlog;
 
+    // Whether FE actually assigned a tablet split (split_count > 1) to this scan. Merge-required
+    // tables (real AGG / MoR-unique) can't be split by rowid, so they normally don't satisfy the
+    // parallel-scan gate below; but when a key-range split was assigned we route them into the
+    // parallel builder (which splits by key range). Only then -- never for un-split merge scans.
+    bool has_assigned_split = false;
+    for (auto& scan_range : _scan_ranges) {
+        if (scan_range->__isset.split_count && scan_range->split_count > 1) {
+            has_assigned_split = true;
+            break;
+        }
+    }
+    // No-merge scans split by rowid; merge scans (entered only via has_assigned_split) split by
+    // key range. This flag routes ParallelScannerBuilder between the two strategies.
+    bool split_by_rowid = _storage_no_merge() || p._olap_scan_node.is_preaggregation;
+
     // The flag of preagg's meaning is whether return pre agg data(or partial agg data)
     // PreAgg ON: The storage layer returns partially aggregated data without additional processing. (Fast data reading)
     // for example, if a table is select userid,count(*) from base table.
@@ -668,7 +683,7 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
     // PreAgg OFF: The storage layer must complete pre-aggregation and return fully aggregated data. (Slow data reading)
     if (enable_parallel_scan && !p._should_run_serial &&
         p._push_down_agg_type == TPushAggOp::NONE &&
-        (_storage_no_merge() || p._olap_scan_node.is_preaggregation)
+        (split_by_rowid || has_assigned_split)
         // binlog<row> need to be read in order
         && !read_row_binlog) {
         // Filter out the "full scan" placeholder range (has_lower_bound == false)
@@ -682,7 +697,7 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
         }
 
         ParallelScannerBuilder scanner_builder(this, _tablets, _read_sources, _scanner_profile,
-                                               key_ranges, state(), p._limit, true,
+                                               key_ranges, state(), p._limit, split_by_rowid,
                                                p._olap_scan_node.is_preaggregation);
 
         // Forward the per-tablet split identity (split_id, split_count) carried by each scan

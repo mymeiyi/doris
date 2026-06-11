@@ -50,6 +50,7 @@ import org.apache.doris.catalog.PartitionInfo;
 import org.apache.doris.catalog.PartitionItem;
 import org.apache.doris.catalog.PartitionKey;
 import org.apache.doris.catalog.PartitionType;
+import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.RangePartitionItem;
 import org.apache.doris.catalog.Replica;
 import org.apache.doris.catalog.RowBinlogTableWrapper;
@@ -326,9 +327,39 @@ public class OlapScanNode extends ScanNode {
             return false;
         }
         KeysType keysType = olapTable.getKeysType();
-        // DUP, or MoW-unique read as dup: scanners never merge, so rowid split is correct.
-        return keysType == KeysType.DUP_KEYS
-                || (keysType == KeysType.UNIQUE_KEYS && olapTable.getEnableUniqueKeyMergeOnWrite());
+        // DUP, or MoW-unique read as dup: scanners never merge, so rowid split (BE default
+        // strategy) is correct regardless of column types.
+        if (keysType == KeysType.DUP_KEYS
+                || (keysType == KeysType.UNIQUE_KEYS && olapTable.getEnableUniqueKeyMergeOnWrite())) {
+            return true;
+        }
+        // AGG, or MoR-unique (UNIQUE without MoW): scanners must merge same-key rows across
+        // rowsets, so rowid split is wrong. The BE instead splits by key range (each key + all
+        // its versions stay on one BE). The MVP supports this only when the first sort-key column
+        // is a fixed-length integer, so the BE can decode boundaries from segment key bounds.
+        if (keysType == KeysType.AGG_KEYS
+                || (keysType == KeysType.UNIQUE_KEYS && !olapTable.getEnableUniqueKeyMergeOnWrite())) {
+            return isFirstKeyColumnSplittableInteger();
+        }
+        return false;
+    }
+
+    /**
+     * Whether the first sort-key column is a fixed-length integer (TINYINT/SMALLINT/INT/BIGINT).
+     * This is the MVP precondition for key-range tablet split of merge-required tables (AGG /
+     * MoR-unique): the BE derives split boundaries by decoding the first key column from the
+     * memcomparable segment key bounds, which is only implemented for these integer types. Kept
+     * in sync with the BE guard {@code is_supported_split_key_type} in parallel_scanner_builder.cpp.
+     */
+    private boolean isFirstKeyColumnSplittableInteger() {
+        long indexId = selectedIndexId != -1 ? selectedIndexId : olapTable.getBaseIndexId();
+        List<Column> keyColumns = olapTable.getKeyColumnsByIndexId(indexId);
+        if (keyColumns.isEmpty()) {
+            return false;
+        }
+        PrimitiveType type = keyColumns.get(0).getDataType();
+        return type == PrimitiveType.TINYINT || type == PrimitiveType.SMALLINT
+                || type == PrimitiveType.INT || type == PrimitiveType.BIGINT;
     }
 
     /**

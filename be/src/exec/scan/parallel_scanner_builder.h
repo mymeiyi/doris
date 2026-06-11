@@ -23,6 +23,7 @@
 #include <utility>
 
 #include "exec/scan/olap_scanner.h"
+#include "storage/olap_utils.h" // OlapScanRange (owned key-range split bounds)
 #include "storage/rowset/rowset_fwd.h"
 #include "storage/segment/row_ranges.h"
 #include "storage/segment/segment_loader.h"
@@ -77,6 +78,13 @@ private:
     Status _load();
 
     Status _build_scanners_by_rowid(std::list<ScannerSPtr>& scanners);
+
+    // Build scanners for merge-required tables (real AGG / MoR-unique) by partitioning the
+    // tablet's sort-key space into per-BE half-open key ranges. Each scanner reads ALL
+    // rowsets/segments but only the rows whose first sort-key column falls in its range, so a
+    // key (and all its versions) is owned by exactly one BE -> the cross-rowset merge stays
+    // correct. Boundaries are derived deterministically from segment key bounds (see .cpp).
+    Status _build_scanners_by_key_range(std::list<ScannerSPtr>& scanners);
 
     // Build scanners so that each segment is handled by its own scanner.
     Status _build_scanners_by_per_segment(std::list<ScannerSPtr>& scanners);

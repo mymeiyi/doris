@@ -48,6 +48,15 @@ public:
     Status prepare(RuntimeState* state) override;
     TOlapScanNode& olap_scan_node() const;
 
+    // Take ownership of a synthetic key-range bound used by key-range split scanners and return a
+    // stable raw pointer into it. Such bounds must outlive the scanners that reference them; this
+    // local state does, whereas the ParallelScannerBuilder that creates them is a transient stack
+    // object. Mirrors how predicate-derived ranges live in `_cond_ranges`.
+    doris::OlapScanRange* own_split_key_range(std::unique_ptr<doris::OlapScanRange> range) {
+        _split_key_ranges.emplace_back(std::move(range));
+        return _split_key_ranges.back().get();
+    }
+
     std::string name_suffix() const override {
         if (_parent->nereids_id() == -1) {
             return fmt::format("(id={}, table_name={})", _parent->node_id(),
@@ -133,6 +142,8 @@ private:
     std::future<Status> _cloud_tablet_future;
     std::atomic_bool _sync_tablet = false;
     std::vector<std::unique_ptr<doris::OlapScanRange>> _cond_ranges;
+    // Owns synthetic key-range bounds for key-range split scanners (see own_split_key_range).
+    std::vector<std::unique_ptr<doris::OlapScanRange>> _split_key_ranges;
     OlapScanKeys _scan_keys;
     // If column id in this set, indicate that we need to read data after index filtering
     std::set<int32_t> _output_column_ids;
