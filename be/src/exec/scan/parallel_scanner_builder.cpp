@@ -30,8 +30,10 @@
 #include "exec/operator/olap_scan_operator.h"
 #include "exec/scan/olap_scanner.h"
 #include "exec/scan/rowid_split_planner.h"
+#include "storage/index/short_key_index.h"
 #include "storage/key_coder.h"
 #include "storage/rowset/beta_rowset.h"
+#include "storage/segment/segment.h"
 #include "storage/segment/segment_loader.h"
 #include "storage/tablet/base_tablet.h"
 #include "storage/tablet/tablet_schema.h"
@@ -298,6 +300,52 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
             }
             ++tablet_idx;
             continue;
+        }
+
+        // Enrich interior boundary precision with the short key index. The bounds above give only
+        // 2 samples per (aggregated) rowset -- just the extremes -- so quantiles over them are
+        // coarse and skewed (e.g. overlapping rowsets cluster the samples). The short key index
+        // stores one entry every `num_rows_per_block` (~1024) rows, so each entry is a sample
+        // weighted by ~equal rows: a plain quantile over them balances scanned rows for free, with
+        // no within-rowset uniformity assumption. Same memcomparable encoding as the min/max bounds
+        // (RowCursor::encode_key_with_padding -> 1 marker byte + KeyCoder), so decode is identical.
+        //
+        // IMPORTANT: the index's last entry is the last BLOCK START, not the segment's true max
+        // key, so it must NOT define global coverage. We therefore KEEP the bounds-derived true
+        // global min/max (already in `samples`) as the outer anchors and only add interior points.
+        // This is best-effort: the index lives in the segment and reading it is IO (remote+cached
+        // in cloud), but a key-range scanner reads all these segments anyway and seeks via this
+        // same index, so the cost is pulled-forward, not new. Any failure just leaves the coarser
+        // bounds-only samples -- still correct, only less balanced.
+        for (auto& rs_split : entire_read_source.rs_splits) {
+            auto rowset = rs_split.rs_reader->rowset();
+            if (rowset->num_rows() == 0) {
+                continue;
+            }
+            auto beta = std::dynamic_pointer_cast<BetaRowset>(rowset);
+            if (beta == nullptr) {
+                continue;
+            }
+            std::vector<segment_v2::SegmentSharedPtr> segments;
+            if (!beta->load_segments(&segments).ok()) {
+                continue;
+            }
+            for (auto& seg : segments) {
+                if (!seg->load_index(&_builder_stats).ok()) {
+                    continue;
+                }
+                const auto* decoder = seg->get_short_key_index();
+                if (decoder == nullptr) {
+                    continue;
+                }
+                const uint32_t num_items = decoder->num_items();
+                for (uint32_t i = 0; i < num_items; ++i) {
+                    int64_t v = 0;
+                    if (decode_first_int_key(decoder->key(i).to_string(), first_key_type, &v)) {
+                        samples.emplace_back(v);
+                    }
+                }
+            }
         }
         std::sort(samples.begin(), samples.end());
 
