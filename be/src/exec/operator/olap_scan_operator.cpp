@@ -54,6 +54,16 @@
 
 namespace doris {
 
+namespace {
+
+bool cache_tablet_on_miss_for_scan_range(const TPaloScanRange& scan_range) {
+    // Tablet split scan ranges are query-scoped fan-out work in cloud mode. Do not promote a
+    // split-only miss into the process-level CloudTablet cache on every fan-out BE.
+    return !(scan_range.__isset.split_count && scan_range.split_count > 1);
+}
+
+} // namespace
+
 Status OlapScanLocalState::init(RuntimeState* state, LocalStateInfo& info) {
     const TOlapScanNode& olap_scan_node = _parent->cast<OlapScanOperatorX>()._olap_scan_node;
 
@@ -869,8 +879,11 @@ Status OlapScanLocalState::_sync_cloud_tablets(RuntimeState* state) {
                             _sync_cloud_tablets_watcher.stop();
                         }
                     });
-                    auto tablet =
-                            DORIS_TRY(ExecEnv::get_tablet(_scan_ranges[i]->tablet_id, sync_stats));
+                    const bool cache_on_miss =
+                            cache_tablet_on_miss_for_scan_range(*_scan_ranges[i]);
+                    auto tablet = DORIS_TRY(ExecEnv::get_tablet(
+                            _scan_ranges[i]->tablet_id, sync_stats,
+                            /*force_use_only_cached=*/false, cache_on_miss));
                     _tablets[i] = {std::move(tablet), version};
                     SyncOptions options;
                     options.query_version = version;
