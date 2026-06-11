@@ -350,6 +350,11 @@ public class OlapScanNode extends ScanNode {
      * MoR-unique): the BE derives split boundaries by decoding the first key column from the
      * memcomparable segment key bounds, which is only implemented for these integer types. Kept
      * in sync with the BE guard {@code is_supported_split_key_type} in parallel_scanner_builder.cpp.
+     *
+     * <p>The column must also be NOT NULL: NULL keys are encoded with a null marker that the BE
+     * boundary decoder skips, so a nullable first key would leave NULL rows outside every split
+     * range and silently drop them. Disallow nullable first keys until split0 is extended to cover
+     * the {@code [null, first_boundary)} prefix.
      */
     private boolean isFirstKeyColumnSplittableInteger() {
         long indexId = selectedIndexId != -1 ? selectedIndexId : olapTable.getBaseIndexId();
@@ -357,7 +362,11 @@ public class OlapScanNode extends ScanNode {
         if (keyColumns.isEmpty()) {
             return false;
         }
-        PrimitiveType type = keyColumns.get(0).getDataType();
+        Column firstKey = keyColumns.get(0);
+        if (firstKey.isAllowNull()) {
+            return false;
+        }
+        PrimitiveType type = firstKey.getDataType();
         return type == PrimitiveType.TINYINT || type == PrimitiveType.SMALLINT
                 || type == PrimitiveType.INT || type == PrimitiveType.BIGINT;
     }

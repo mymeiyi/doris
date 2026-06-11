@@ -121,6 +121,35 @@ bool make_first_key_tuple(FieldType ft, int64_t value, OlapTuple* tuple) {
     }
 }
 
+// Extract the first sort-key column value of an OlapScanRange bound (a predicate-derived key
+// range, see OlapScanLocalState::_cond_ranges) as int64. Returns false for an empty, null, or
+// non-integer first field -- the caller then refuses to split rather than risk mis-intersecting.
+bool first_key_field_to_int(const OlapTuple& tuple, int64_t* out) {
+    if (tuple.size() == 0) {
+        return false;
+    }
+    const Field& f = tuple.get_field(0);
+    if (f.is_null()) {
+        return false;
+    }
+    switch (f.get_type()) {
+    case TYPE_TINYINT:
+        *out = f.get<TYPE_TINYINT>();
+        return true;
+    case TYPE_SMALLINT:
+        *out = f.get<TYPE_SMALLINT>();
+        return true;
+    case TYPE_INT:
+        *out = f.get<TYPE_INT>();
+        return true;
+    case TYPE_BIGINT:
+        *out = f.get<TYPE_BIGINT>();
+        return true;
+    default:
+        return false;
+    }
+}
+
 } // namespace
 
 Status ParallelScannerBuilder::build_scanners(std::list<ScannerSPtr>& scanners) {
@@ -194,31 +223,66 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                     "has first key column type {}",
                     tablet->tablet_id(), static_cast<int>(first_key_type));
         }
+        if (tablet->tablet_schema()->column(0).is_nullable()) {
+            // NULL keys are encoded with a null marker that decode_first_int_key skips, so they
+            // would fall outside every split range and be dropped. FE
+            // (isFirstKeyColumnSplittableInteger) already excludes nullable first keys; fail
+            // loudly if the two diverged rather than silently lose NULL rows.
+            return Status::NotSupported(
+                    "key-range tablet split requires a NOT NULL first key column, but tablet {} "
+                    "has a nullable first key column",
+                    tablet->tablet_id());
+        }
 
         // Sample the key space: decode the first key column from every segment's min/max key
         // across all rowsets. These bounds are real keys carried in the rowset meta (no extra
         // IO) and are identical on every BE at this version -> deterministic boundaries.
+        //
+        // Coverage correctness requires the global min/max sample to equal the TRUE global
+        // min/max key, so EVERY non-empty rowset must contribute decodable bounds for ALL its
+        // segments. Old rowsets may carry no segment key bounds (see RowsetMeta), and a
+        // missing/undecodable bound on any non-empty rowset would let its out-of-range keys be
+        // excluded by every split -> data loss. If that happens we cannot split safely.
         std::vector<int64_t> samples;
+        bool all_rowsets_bounded = true;
         for (auto& rs_split : entire_read_source.rs_splits) {
             auto rowset = rs_split.rs_reader->rowset();
+            if (rowset->num_rows() == 0) {
+                continue; // empty rowset contributes no keys
+            }
             std::vector<KeyBoundsPB> seg_bounds;
             RETURN_IF_ERROR(rowset->get_segments_key_bounds(&seg_bounds));
+            if (static_cast<int64_t>(seg_bounds.size()) != rowset->num_segments()) {
+                all_rowsets_bounded = false; // some segment lacks key bounds
+                break;
+            }
             for (auto& kb : seg_bounds) {
                 int64_t v = 0;
-                if (decode_first_int_key(kb.min_key(), first_key_type, &v)) {
-                    samples.emplace_back(v);
+                if (!decode_first_int_key(kb.min_key(), first_key_type, &v)) {
+                    all_rowsets_bounded = false;
+                    break;
                 }
-                if (decode_first_int_key(kb.max_key(), first_key_type, &v)) {
-                    samples.emplace_back(v);
+                samples.emplace_back(v);
+                if (!decode_first_int_key(kb.max_key(), first_key_type, &v)) {
+                    all_rowsets_bounded = false;
+                    break;
                 }
+                samples.emplace_back(v);
+            }
+            if (!all_rowsets_bounded) {
+                break;
             }
         }
 
-        if (samples.empty()) {
-            // No key bounds available (e.g. all rowsets empty). Let split_id 0 own everything and
-            // the rest own nothing -- coverage stays complete and non-overlapping.
+        if (samples.empty() || !all_rowsets_bounded) {
+            // Either there are no keys at all (all rowsets empty) or some non-empty rowset lacks
+            // decodable bounds, so we cannot derive safe boundaries. Deterministic fallback (the
+            // same decision on every BE, since they all see the same rowset metas): split 0 owns
+            // the whole tablet -- honoring the original predicate _key_ranges so the SQL filter is
+            // preserved -- and every other split owns nothing. Coverage stays complete; we only
+            // lose parallelism for this tablet.
             if (split_id == 0) {
-                build_full_scanner({});
+                build_full_scanner(_key_ranges);
             }
             ++tablet_idx;
             continue;
@@ -239,23 +303,118 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
         const int64_t hi = boundary_at(split_id + 1);
         const bool is_last = (split_id == split_count - 1);
 
-        auto range = std::make_unique<OlapScanRange>();
-        range->begin_include = true;
-        range->end_include = is_last;
-        range->has_lower_bound = true;
-        range->has_upper_bound = true;
-        if (!make_first_key_tuple(first_key_type, lo, &range->begin_scan_range) ||
-            !make_first_key_tuple(first_key_type, hi, &range->end_scan_range)) {
-            return Status::NotSupported("key-range tablet split: unsupported first key column type");
-        }
-        // NOTE: any predicate-derived key ranges (_key_ranges) are intentionally replaced by the
-        // split range here; the predicates remain as scan conjuncts, so correctness is preserved
-        // (we only forgo predicate short-key pruning for split scans). MVP trade-off.
-        // Ownership goes to the local state (outlives the scanners; this builder does not).
-        OlapScanRange* range_ptr = _parent->own_split_key_range(std::move(range));
-        std::vector<OlapScanRange*> scanner_key_ranges {range_ptr};
+        // Helper: own a single-column first-key range [r_lo, r_hi] (with the given inclusivities)
+        // in the local state (outlives the scanners; this builder does not) and stage it.
+        std::vector<OlapScanRange*> scanner_key_ranges;
+        auto own_first_key_range = [&](int64_t r_lo, bool lo_incl, int64_t r_hi,
+                                       bool hi_incl) -> Status {
+            auto range = std::make_unique<OlapScanRange>();
+            range->begin_include = lo_incl;
+            range->end_include = hi_incl;
+            range->has_lower_bound = true;
+            range->has_upper_bound = true;
+            if (!make_first_key_tuple(first_key_type, r_lo, &range->begin_scan_range) ||
+                !make_first_key_tuple(first_key_type, r_hi, &range->end_scan_range)) {
+                return Status::NotSupported(
+                        "key-range tablet split: unsupported first key column type");
+            }
+            scanner_key_ranges.push_back(_parent->own_split_key_range(std::move(range)));
+            return Status::OK();
+        };
 
-        build_full_scanner(scanner_key_ranges);
+        // Compose the split's first-key-column interval [lo, hi) ([lo, hi] for the last split)
+        // with any predicate-derived key ranges (_key_ranges). The SQL key predicate may live
+        // ONLY in these short-key ranges -- once a scan key exactly covers a predicate, the
+        // matching storage predicate is erased (see OlapScanLocalState::_init_scan_keys). So we
+        // must INTERSECT, not replace; replacing would scan the whole split range and e.g.
+        // over-count `WHERE k = 5`. A non-empty key range always constrains the first key column
+        // (scan keys are built in key order), and only carries further columns when the first
+        // column is a fixed point -- so each range is either a first-column point or interval.
+        bool has_predicate_range = false;
+        for (auto* r : _key_ranges) {
+            if (r->has_lower_bound || r->has_upper_bound) {
+                has_predicate_range = true;
+                break;
+            }
+        }
+        if (!has_predicate_range) {
+            // No predicate key range (full-scan, possibly with a has_lower_bound==false
+            // placeholder): the split interval is the only constraint.
+            RETURN_IF_ERROR(own_first_key_range(lo, true, hi, is_last));
+        } else {
+            for (auto* r : _key_ranges) {
+                if (!r->has_lower_bound && !r->has_upper_bound) {
+                    continue; // full-scan placeholder mixed in; the others carry the constraint
+                }
+                int64_t r_begin = 0;
+                int64_t r_end = 0;
+                const bool has_begin =
+                        r->has_lower_bound && first_key_field_to_int(r->begin_scan_range, &r_begin);
+                const bool has_end =
+                        r->has_upper_bound && first_key_field_to_int(r->end_scan_range, &r_end);
+                // A first-column bound we cannot decode to int (non-integer / null) is unsafe to
+                // intersect. Fail loudly and identically on every BE (FE gating should make this
+                // unreachable) rather than drop or duplicate rows across splits.
+                if ((r->has_lower_bound && !has_begin) || (r->has_upper_bound && !has_end)) {
+                    return Status::NotSupported(
+                            "key-range tablet split: cannot intersect predicate key range with "
+                            "split boundary (non-integer or null first key bound)");
+                }
+
+                // Point on the first column (begin==end, possibly with secondary columns): the
+                // point is wholly inside or outside the split -> keep R verbatim or drop it. Reuse
+                // the original range pointer (owned by the local state) to preserve any secondary
+                // column bounds.
+                const bool is_point = r->begin_scan_range.size() > 1 ||
+                                      r->end_scan_range.size() > 1 ||
+                                      (has_begin && has_end && r_begin == r_end);
+                if (is_point) {
+                    const int64_t v = has_begin ? r_begin : r_end;
+                    const bool in_split = v >= lo && (is_last ? v <= hi : v < hi);
+                    if (in_split) {
+                        scanner_key_ranges.push_back(r);
+                    }
+                    continue;
+                }
+
+                // First-column interval: intersect [r_begin, r_end] with [lo, hi)/[lo, hi].
+                int64_t new_lo;
+                bool new_lo_incl;
+                if (!has_begin || lo > r_begin) {
+                    new_lo = lo;
+                    new_lo_incl = true;
+                } else if (lo < r_begin) {
+                    new_lo = r_begin;
+                    new_lo_incl = r->begin_include;
+                } else {
+                    new_lo = lo;
+                    new_lo_incl = r->begin_include; // both lower bounds coincide -> AND (split incl)
+                }
+                int64_t new_hi;
+                bool new_hi_incl;
+                if (!has_end || hi < r_end) {
+                    new_hi = hi;
+                    new_hi_incl = is_last;
+                } else if (hi > r_end) {
+                    new_hi = r_end;
+                    new_hi_incl = r->end_include;
+                } else {
+                    new_hi = hi;
+                    new_hi_incl = r->end_include && is_last; // upper bounds coincide -> AND
+                }
+                if (new_lo > new_hi || (new_lo == new_hi && !(new_lo_incl && new_hi_incl))) {
+                    continue; // empty intersection: this split owns none of R
+                }
+                RETURN_IF_ERROR(own_first_key_range(new_lo, new_lo_incl, new_hi, new_hi_incl));
+            }
+        }
+
+        // Empty intersection: every predicate range fell outside this split's interval, so this
+        // split owns none of the tablet. Build no scanner (an empty key-range list would mean a
+        // FULL scan, not an empty one). The other splits cover the data; correctness holds.
+        if (!scanner_key_ranges.empty()) {
+            build_full_scanner(scanner_key_ranges);
+        }
         ++tablet_idx;
     }
 
