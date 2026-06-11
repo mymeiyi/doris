@@ -26,6 +26,8 @@
 #include "cloud/config.h"
 #include "common/consts.h"
 #include "common/status.h"
+#include "core/decimal12.h"
+#include "core/extended_types.h"
 #include "core/field.h"
 #include "exec/operator/olap_scan_operator.h"
 #include "exec/scan/olap_scanner.h"
@@ -42,20 +44,87 @@ namespace doris {
 
 namespace {
 
-// MVP first-key-column types supported by key-range tablet split. Kept in sync with the FE
-// gate (OlapScanNode.isFirstKeyColumnSplittableInteger): fixed-length integers only, so the
-// boundary can be decoded from the memcomparable segment key bounds and round-tripped.
+// (FieldType, PrimitiveType) pairs whose first sort-key column supports key-range tablet split:
+// fixed-length, order-preserving scalar keys whose memcomparable segment key bounds can be
+// decoded to a single comparable value and round-tripped back into a seek key. Kept in sync with
+// the FE gate (OlapScanNode.isFirstKeyColumnSplittable). Every supported type is stored as a
+// fixed-width, order-preserving value that maps monotonically into a 256-bit signed integer (see
+// storage_to_key): integers (incl. LARGEINT) and DECIMAL32/64/128 are signed and sign-extend;
+// DECIMAL256 is a native 256-bit integer; date/datetime (legacy v1 + v2) and IPv4/IPv6 are
+// unsigned and zero-extend; legacy DECIMALV2 (decimal12_t) folds {integer, fraction} into one
+// scalar. Floats, strings, multi-column prefixes and truncated keys are excluded.
+#define DORIS_APPLY_FOR_SPLIT_KEY_TYPES(M)         \
+    M(OLAP_FIELD_TYPE_TINYINT, TYPE_TINYINT)       \
+    M(OLAP_FIELD_TYPE_SMALLINT, TYPE_SMALLINT)     \
+    M(OLAP_FIELD_TYPE_INT, TYPE_INT)               \
+    M(OLAP_FIELD_TYPE_BIGINT, TYPE_BIGINT)         \
+    M(OLAP_FIELD_TYPE_LARGEINT, TYPE_LARGEINT)     \
+    M(OLAP_FIELD_TYPE_DATE, TYPE_DATE)             \
+    M(OLAP_FIELD_TYPE_DATETIME, TYPE_DATETIME)     \
+    M(OLAP_FIELD_TYPE_DATEV2, TYPE_DATEV2)         \
+    M(OLAP_FIELD_TYPE_DATETIMEV2, TYPE_DATETIMEV2) \
+    M(OLAP_FIELD_TYPE_DECIMAL, TYPE_DECIMALV2)     \
+    M(OLAP_FIELD_TYPE_DECIMAL32, TYPE_DECIMAL32)   \
+    M(OLAP_FIELD_TYPE_DECIMAL64, TYPE_DECIMAL64)   \
+    M(OLAP_FIELD_TYPE_DECIMAL128I, TYPE_DECIMAL128I) \
+    M(OLAP_FIELD_TYPE_DECIMAL256, TYPE_DECIMAL256) \
+    M(OLAP_FIELD_TYPE_IPV4, TYPE_IPV4)             \
+    M(OLAP_FIELD_TYPE_IPV6, TYPE_IPV6)
+
 bool is_supported_split_key_type(FieldType ft) {
-    return ft == FieldType::OLAP_FIELD_TYPE_TINYINT ||
-           ft == FieldType::OLAP_FIELD_TYPE_SMALLINT ||
-           ft == FieldType::OLAP_FIELD_TYPE_INT || ft == FieldType::OLAP_FIELD_TYPE_BIGINT;
+    switch (ft) {
+#define M(FT, PT) case FieldType::FT:
+        DORIS_APPLY_FOR_SPLIT_KEY_TYPES(M)
+#undef M
+        return true;
+    default:
+        return false;
+    }
 }
 
-// Decode the first sort-key column of a memcomparable-encoded key (a segment min/max key, see
-// SegmentWriter::_full_encode_keys) into int64. The key is laid out as a 1-byte per-column
+// Common comparable domain for split boundaries: a 256-bit signed integer, wide enough to hold
+// DECIMAL256 exactly and to keep unsigned 128-bit IPv6 non-negative (which a signed __int128
+// could not). DecimalV2 stores a fixed scale of 9, so fraction is always in (-1e9, 1e9) and
+// shares the integer's sign; fold it to a single value below.
+constexpr int64_t kDecimalV2FractionScale = 1000000000; // == decimal12_t::FRAC_RATIO
+
+// Widen a decoded storage value to the common comparable domain. Signed integers / decimals keep
+// their value (sign-extended); LARGEINT and DECIMAL128 are already 128-bit; DECIMAL256 is already
+// 256-bit; date/datetime (uint24/uint32/uint64) and IPv4/IPv6 (uint32/uint128) are unsigned,
+// order-preserving integers -> non-negative; DECIMALV2 (decimal12_t) folds to
+// integer*FRAC_RATIO + fraction. Within one column type this mapping is monotonic with key order,
+// so a plain sort/quantile over the widened samples matches key order.
+template <typename S>
+wide::Int256 storage_to_key(const S& v) {
+    if constexpr (std::is_same_v<S, uint24_t>) {
+        return wide::Int256(static_cast<uint32_t>(v));
+    } else if constexpr (std::is_same_v<S, decimal12_t>) {
+        return wide::Int256(v.integer) * kDecimalV2FractionScale + wide::Int256(v.fraction);
+    } else {
+        return wide::Int256(v);
+    }
+}
+
+template <typename S>
+S key_to_storage(const wide::Int256& v) {
+    if constexpr (std::is_same_v<S, uint24_t>) {
+        return uint24_t(static_cast<uint32_t>(v));
+    } else if constexpr (std::is_same_v<S, decimal12_t>) {
+        decimal12_t d;
+        d.integer = static_cast<int64_t>(v / kDecimalV2FractionScale);
+        d.fraction = static_cast<int32_t>(v % kDecimalV2FractionScale);
+        return d;
+    } else {
+        return static_cast<S>(v);
+    }
+}
+
+// Decode the first sort-key column of a memcomparable-encoded key (a segment min/max key or a
+// short key index entry, see SegmentWriter::_full_encode_keys / RowCursor::encode_key_with_padding)
+// into the common comparable domain (wide::Int256). The key is laid out as a 1-byte per-column
 // marker followed by the order-preserving value bytes. Returns false (caller skips the sample)
 // for a null/minimal first column, a too-short key, or an unsupported type.
-bool decode_first_int_key(const std::string& encoded, FieldType ft, int64_t* out) {
+bool decode_first_key(const std::string& encoded, FieldType ft, wide::Int256* out) {
     if (encoded.size() < 2) {
         return false;
     }
@@ -65,68 +134,50 @@ bool decode_first_int_key(const std::string& encoded, FieldType ft, int64_t* out
     Slice s(encoded.data() + 1, encoded.size() - 1);
     const KeyCoder* coder = get_key_coder(ft);
     switch (ft) {
-    case FieldType::OLAP_FIELD_TYPE_TINYINT: {
-        int8_t v;
-        if (!coder->decode_ascending(&s, sizeof(v), reinterpret_cast<uint8_t*>(&v)).ok()) {
-            return false;
-        }
-        *out = v;
-        return true;
+#define M(FT, PT)                                                                           \
+    case FieldType::FT: {                                                                   \
+        typename PrimitiveTypeTraits<PrimitiveType::PT>::StorageFieldType v {};             \
+        if (!coder->decode_ascending(&s, sizeof(v), reinterpret_cast<uint8_t*>(&v)).ok()) { \
+            return false;                                                                   \
+        }                                                                                   \
+        *out = storage_to_key(v);                                                           \
+        return true;                                                                        \
     }
-    case FieldType::OLAP_FIELD_TYPE_SMALLINT: {
-        int16_t v;
-        if (!coder->decode_ascending(&s, sizeof(v), reinterpret_cast<uint8_t*>(&v)).ok()) {
-            return false;
-        }
-        *out = v;
-        return true;
-    }
-    case FieldType::OLAP_FIELD_TYPE_INT: {
-        int32_t v;
-        if (!coder->decode_ascending(&s, sizeof(v), reinterpret_cast<uint8_t*>(&v)).ok()) {
-            return false;
-        }
-        *out = v;
-        return true;
-    }
-    case FieldType::OLAP_FIELD_TYPE_BIGINT: {
-        int64_t v;
-        if (!coder->decode_ascending(&s, sizeof(v), reinterpret_cast<uint8_t*>(&v)).ok()) {
-            return false;
-        }
-        *out = v;
-        return true;
-    }
+        DORIS_APPLY_FOR_SPLIT_KEY_TYPES(M)
+#undef M
     default:
         return false;
     }
 }
 
-// Build a one-column OlapTuple holding `value` typed as the first sort-key column, suitable as
-// an OlapScanRange prefix bound (RowCursor::init takes the first key_size columns).
-bool make_first_key_tuple(FieldType ft, int64_t value, OlapTuple* tuple) {
+// Build a one-column OlapTuple holding `value` (in the wide::Int256 domain produced by
+// decode_first_key) typed as the first sort-key column, suitable as an OlapScanRange prefix
+// bound. The widened value is narrowed back to the storage representation and lifted to the
+// compute-layer Field via the same olap-value path the storage engine uses
+// (Field::create_field_from_olap_value), so re-encoding the seek key reproduces the exact bytes.
+bool make_first_key_tuple(FieldType ft, const wide::Int256& value, OlapTuple* tuple) {
     switch (ft) {
-    case FieldType::OLAP_FIELD_TYPE_TINYINT:
-        tuple->add_field(Field::create_field<TYPE_TINYINT>(static_cast<int8_t>(value)));
-        return true;
-    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
-        tuple->add_field(Field::create_field<TYPE_SMALLINT>(static_cast<int16_t>(value)));
-        return true;
-    case FieldType::OLAP_FIELD_TYPE_INT:
-        tuple->add_field(Field::create_field<TYPE_INT>(static_cast<int32_t>(value)));
-        return true;
-    case FieldType::OLAP_FIELD_TYPE_BIGINT:
-        tuple->add_field(Field::create_field<TYPE_BIGINT>(static_cast<int64_t>(value)));
-        return true;
+#define M(FT, PT)                                                                    \
+    case FieldType::FT: {                                                            \
+        using S = typename PrimitiveTypeTraits<PrimitiveType::PT>::StorageFieldType; \
+        tuple->add_field(Field::create_field_from_olap_value<PrimitiveType::PT>(     \
+                key_to_storage<S>(value)));                                          \
+        return true;                                                                 \
+    }
+        DORIS_APPLY_FOR_SPLIT_KEY_TYPES(M)
+#undef M
     default:
         return false;
     }
 }
 
 // Extract the first sort-key column value of an OlapScanRange bound (a predicate-derived key
-// range, see OlapScanLocalState::_cond_ranges) as int64. Returns false for an empty, null, or
-// non-integer first field -- the caller then refuses to split rather than risk mis-intersecting.
-bool first_key_field_to_int(const OlapTuple& tuple, int64_t* out) {
+// range, see OlapScanLocalState::_cond_ranges) into the wide::Int256 domain used by the split
+// boundaries. The compute-layer Field value is converted to the storage representation
+// (PrimitiveTypeConvertor) and widened identically to decode_first_key. Returns false for an
+// empty, null, or non-splittable first field -- the caller then refuses to split rather than
+// risk mis-intersecting.
+bool first_key_field_to_key(const OlapTuple& tuple, wide::Int256* out) {
     if (tuple.size() == 0) {
         return false;
     }
@@ -135,18 +186,15 @@ bool first_key_field_to_int(const OlapTuple& tuple, int64_t* out) {
         return false;
     }
     switch (f.get_type()) {
-    case TYPE_TINYINT:
-        *out = f.get<TYPE_TINYINT>();
-        return true;
-    case TYPE_SMALLINT:
-        *out = f.get<TYPE_SMALLINT>();
-        return true;
-    case TYPE_INT:
-        *out = f.get<TYPE_INT>();
-        return true;
-    case TYPE_BIGINT:
-        *out = f.get<TYPE_BIGINT>();
-        return true;
+#define M(FT, PT)                                                                    \
+    case PrimitiveType::PT: {                                                        \
+        *out = storage_to_key(                                                       \
+                PrimitiveTypeConvertor<PrimitiveType::PT>::to_storage_field_type(    \
+                        f.get<PrimitiveType::PT>()));                               \
+        return true;                                                                 \
+    }
+        DORIS_APPLY_FOR_SPLIT_KEY_TYPES(M)
+#undef M
     default:
         return false;
     }
@@ -218,17 +266,17 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
 
         const FieldType first_key_type = tablet->tablet_schema()->column(0).type();
         if (!is_supported_split_key_type(first_key_type)) {
-            // FE eligibility (isFirstKeyColumnSplittableInteger) should have prevented assigning a
+            // FE eligibility (isFirstKeyColumnSplittable) should have prevented assigning a
             // split here; fail loudly if the two diverged rather than silently mis-scan.
             return Status::NotSupported(
-                    "key-range tablet split requires an integer first key column, but tablet {} "
-                    "has first key column type {}",
+                    "key-range tablet split requires an integer, date/datetime, decimal or "
+                    "ip first key column, but tablet {} has first key column type {}",
                     tablet->tablet_id(), static_cast<int>(first_key_type));
         }
         if (tablet->tablet_schema()->column(0).is_nullable()) {
-            // NULL keys are encoded with a null marker that decode_first_int_key skips, so they
+            // NULL keys are encoded with a null marker that decode_first_key skips, so they
             // would fall outside every split range and be dropped. FE
-            // (isFirstKeyColumnSplittableInteger) already excludes nullable first keys; fail
+            // (isFirstKeyColumnSplittable) already excludes nullable first keys; fail
             // loudly if the two diverged rather than silently lose NULL rows.
             return Status::NotSupported(
                     "key-range tablet split requires a NOT NULL first key column, but tablet {} "
@@ -250,10 +298,12 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
         //   * per-segment: one [min,max] entry per segment.
         // Anything else (e.g. old rowsets carrying no segment key bounds, see RowsetMeta) is
         // untrustworthy: its out-of-range keys would be excluded by every split -> data loss. We
-        // then cannot split safely and fall back below. (Truncated bounds are fine here: an
-        // integer first key column is <=9 bytes, well under the truncation threshold, so its
-        // value is never cut.)
-        std::vector<int64_t> samples;
+        // then cannot split safely and fall back below. (Truncation is fine here: the supported
+        // first key columns are <=33 bytes encoded -- DECIMAL256, 32 value bytes + 1 marker, is
+        // the widest -- under the default 36-byte segments_key_bounds_truncation_threshold, so the
+        // first column is never cut. If the threshold were lowered below the key width, decode
+        // simply fails and we fall back to no-split, never mis-scan.)
+        std::vector<wide::Int256> samples;
         bool all_rowsets_bounded = true;
         for (auto& rs_split : entire_read_source.rs_splits) {
             auto rowset = rs_split.rs_reader->rowset();
@@ -271,13 +321,13 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                 break;
             }
             for (auto& kb : seg_bounds) {
-                int64_t v = 0;
-                if (!decode_first_int_key(kb.min_key(), first_key_type, &v)) {
+                wide::Int256 v = 0;
+                if (!decode_first_key(kb.min_key(), first_key_type, &v)) {
                     all_rowsets_bounded = false;
                     break;
                 }
                 samples.emplace_back(v);
-                if (!decode_first_int_key(kb.max_key(), first_key_type, &v)) {
+                if (!decode_first_key(kb.max_key(), first_key_type, &v)) {
                     all_rowsets_bounded = false;
                     break;
                 }
@@ -340,8 +390,8 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                 }
                 const uint32_t num_items = decoder->num_items();
                 for (uint32_t i = 0; i < num_items; ++i) {
-                    int64_t v = 0;
-                    if (decode_first_int_key(decoder->key(i).to_string(), first_key_type, &v)) {
+                    wide::Int256 v = 0;
+                    if (decode_first_key(decoder->key(i).to_string(), first_key_type, &v)) {
                         samples.emplace_back(v);
                     }
                 }
@@ -354,13 +404,13 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
         // This BE owns the half-open range [b[split_id], b[split_id+1]); the LAST split closes the
         // upper end so the global max key is included. Equal boundaries -> empty splits (still
         // correct). Boundary precision only affects load balance, not correctness.
-        auto boundary_at = [&](int32_t j) -> int64_t {
+        auto boundary_at = [&](int32_t j) -> wide::Int256 {
             size_t idx = (samples.size() * static_cast<size_t>(j)) / static_cast<size_t>(split_count);
             idx = std::min(idx, samples.size() - 1);
             return samples[idx];
         };
-        const int64_t lo = boundary_at(split_id);
-        const int64_t hi = boundary_at(split_id + 1);
+        const wide::Int256 lo = boundary_at(split_id);
+        const wide::Int256 hi = boundary_at(split_id + 1);
         const bool is_last = (split_id == split_count - 1);
 
         // TabletReader stores key-range inclusivity as scalar fields, not per range. It also
@@ -383,7 +433,7 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
 
         // Helper: own a single-column first-key range [r_lo, r_hi] (with the given inclusivities)
         // in the local state (outlives the scanners; this builder does not) and stage it.
-        auto own_first_key_range = [&](int64_t r_lo, bool lo_incl, int64_t r_hi,
+        auto own_first_key_range = [&](wide::Int256 r_lo, bool lo_incl, wide::Int256 r_hi,
                                        bool hi_incl) -> Status {
             auto range = std::make_unique<OlapScanRange>();
             range->begin_include = lo_incl;
@@ -423,12 +473,12 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                 if (!r->has_lower_bound && !r->has_upper_bound) {
                     continue; // full-scan placeholder mixed in; the others carry the constraint
                 }
-                int64_t r_begin = 0;
-                int64_t r_end = 0;
+                wide::Int256 r_begin = 0;
+                wide::Int256 r_end = 0;
                 const bool has_begin =
-                        r->has_lower_bound && first_key_field_to_int(r->begin_scan_range, &r_begin);
+                        r->has_lower_bound && first_key_field_to_key(r->begin_scan_range, &r_begin);
                 const bool has_end =
-                        r->has_upper_bound && first_key_field_to_int(r->end_scan_range, &r_end);
+                        r->has_upper_bound && first_key_field_to_key(r->end_scan_range, &r_end);
                 // A first-column bound we cannot decode to int (non-integer / null) is unsafe to
                 // intersect. Fail loudly and identically on every BE (FE gating should make this
                 // unreachable) rather than drop or duplicate rows across splits.
@@ -446,7 +496,7 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                                       r->end_scan_range.size() > 1 ||
                                       (has_begin && has_end && r_begin == r_end);
                 if (is_point) {
-                    const int64_t v = has_begin ? r_begin : r_end;
+                    const wide::Int256 v = has_begin ? r_begin : r_end;
                     const bool in_split = v >= lo && (is_last ? v <= hi : v < hi);
                     if (in_split) {
                         stage_key_range(r);
@@ -455,7 +505,7 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                 }
 
                 // First-column interval: intersect [r_begin, r_end] with [lo, hi)/[lo, hi].
-                int64_t new_lo;
+                wide::Int256 new_lo;
                 bool new_lo_incl;
                 if (!has_begin || lo > r_begin) {
                     new_lo = lo;
@@ -467,7 +517,7 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
                     new_lo = lo;
                     new_lo_incl = r->begin_include; // both lower bounds coincide -> AND (split incl)
                 }
-                int64_t new_hi;
+                wide::Int256 new_hi;
                 bool new_hi_incl;
                 if (!has_end || hi < r_end) {
                     new_hi = hi;

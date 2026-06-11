@@ -335,28 +335,32 @@ public class OlapScanNode extends ScanNode {
         }
         // AGG, or MoR-unique (UNIQUE without MoW): scanners must merge same-key rows across
         // rowsets, so rowid split is wrong. The BE instead splits by key range (each key + all
-        // its versions stay on one BE). The MVP supports this only when the first sort-key column
-        // is a fixed-length integer, so the BE can decode boundaries from segment key bounds.
+        // its versions stay on one BE). This is supported when the first sort-key column is a
+        // fixed-length, order-preserving scalar (integer / LARGEINT / date / datetime), so the BE
+        // can decode boundaries from the memcomparable segment key bounds.
         if (keysType == KeysType.AGG_KEYS
                 || (keysType == KeysType.UNIQUE_KEYS && !olapTable.getEnableUniqueKeyMergeOnWrite())) {
-            return isFirstKeyColumnSplittableInteger();
+            return isFirstKeyColumnSplittable();
         }
         return false;
     }
 
     /**
-     * Whether the first sort-key column is a fixed-length integer (TINYINT/SMALLINT/INT/BIGINT).
-     * This is the MVP precondition for key-range tablet split of merge-required tables (AGG /
-     * MoR-unique): the BE derives split boundaries by decoding the first key column from the
-     * memcomparable segment key bounds, which is only implemented for these integer types. Kept
-     * in sync with the BE guard {@code is_supported_split_key_type} in parallel_scanner_builder.cpp.
+     * Whether the first sort-key column is a fixed-length, order-preserving scalar that key-range
+     * tablet split supports: TINYINT/SMALLINT/INT/BIGINT/LARGEINT, DATE/DATETIME (legacy v1 and
+     * v2), DECIMALV2/DECIMAL32/DECIMAL64/DECIMAL128/DECIMAL256, or IPV4/IPV6. This is the
+     * precondition for key-range tablet split of merge-required tables (AGG / MoR-unique): the BE
+     * derives split boundaries by decoding the first key column from the memcomparable segment key
+     * bounds, which is implemented only for these types (each stored as a fixed-width,
+     * order-preserving value that folds into a single 256-bit comparable integer). Kept in sync
+     * with the BE guard {@code is_supported_split_key_type} in parallel_scanner_builder.cpp.
      *
      * <p>The column must also be NOT NULL: NULL keys are encoded with a null marker that the BE
      * boundary decoder skips, so a nullable first key would leave NULL rows outside every split
      * range and silently drop them. Disallow nullable first keys until split0 is extended to cover
      * the {@code [null, first_boundary)} prefix.
      */
-    private boolean isFirstKeyColumnSplittableInteger() {
+    private boolean isFirstKeyColumnSplittable() {
         long indexId = selectedIndexId != -1 ? selectedIndexId : olapTable.getBaseIndexId();
         List<Column> keyColumns = olapTable.getKeyColumnsByIndexId(indexId);
         if (keyColumns.isEmpty()) {
@@ -368,7 +372,14 @@ public class OlapScanNode extends ScanNode {
         }
         PrimitiveType type = firstKey.getDataType();
         return type == PrimitiveType.TINYINT || type == PrimitiveType.SMALLINT
-                || type == PrimitiveType.INT || type == PrimitiveType.BIGINT;
+                || type == PrimitiveType.INT || type == PrimitiveType.BIGINT
+                || type == PrimitiveType.LARGEINT
+                || type == PrimitiveType.DATE || type == PrimitiveType.DATETIME
+                || type == PrimitiveType.DATEV2 || type == PrimitiveType.DATETIMEV2
+                || type == PrimitiveType.DECIMALV2 || type == PrimitiveType.DECIMAL32
+                || type == PrimitiveType.DECIMAL64 || type == PrimitiveType.DECIMAL128
+                || type == PrimitiveType.DECIMAL256
+                || type == PrimitiveType.IPV4 || type == PrimitiveType.IPV6;
     }
 
     /**
