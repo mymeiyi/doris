@@ -239,10 +239,18 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
         // IO) and are identical on every BE at this version -> deterministic boundaries.
         //
         // Coverage correctness requires the global min/max sample to equal the TRUE global
-        // min/max key, so EVERY non-empty rowset must contribute decodable bounds for ALL its
-        // segments. Old rowsets may carry no segment key bounds (see RowsetMeta), and a
-        // missing/undecodable bound on any non-empty rowset would let its out-of-range keys be
-        // excluded by every split -> data loss. If that happens we cannot split safely.
+        // min/max key, so EVERY non-empty rowset must contribute decodable bounds that span its
+        // own first-key min/max. Two valid shapes:
+        //   * aggregated: non-MoW rowsets (exactly the AGG/MoR tables handled here) collapse the
+        //     per-segment bounds into a single rowset-level [min,max] by default (see
+        //     BetaRowsetWriter / config segments key-bounds aggregation). That one entry already
+        //     spans the rowset's true first-key min/max -- accept it.
+        //   * per-segment: one [min,max] entry per segment.
+        // Anything else (e.g. old rowsets carrying no segment key bounds, see RowsetMeta) is
+        // untrustworthy: its out-of-range keys would be excluded by every split -> data loss. We
+        // then cannot split safely and fall back below. (Truncated bounds are fine here: an
+        // integer first key column is <=9 bytes, well under the truncation threshold, so its
+        // value is never cut.)
         std::vector<int64_t> samples;
         bool all_rowsets_bounded = true;
         for (auto& rs_split : entire_read_source.rs_splits) {
@@ -252,8 +260,12 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPt
             }
             std::vector<KeyBoundsPB> seg_bounds;
             RETURN_IF_ERROR(rowset->get_segments_key_bounds(&seg_bounds));
-            if (static_cast<int64_t>(seg_bounds.size()) != rowset->num_segments()) {
-                all_rowsets_bounded = false; // some segment lacks key bounds
+            const bool bounds_ok =
+                    rowset->is_segments_key_bounds_aggregated()
+                            ? seg_bounds.size() == 1
+                            : static_cast<int64_t>(seg_bounds.size()) == rowset->num_segments();
+            if (!bounds_ok) {
+                all_rowsets_bounded = false; // missing / unexpected segment key bounds
                 break;
             }
             for (auto& kb : seg_bounds) {
