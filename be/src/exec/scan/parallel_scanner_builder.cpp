@@ -699,31 +699,137 @@ Status ParallelScannerBuilder::_build_scanners_by_rowid(std::list<ScannerSPtr>& 
             ExecEnv::GetInstance()->storage_engine().to_cloud().tablet_hotspot().count(*tablet);
         }
 
-        // Build the per-rowset segment row layout, aligned 1:1 with `rs_splits` (version_path
-        // order). Together with the snapshot `version` this defines the tablet-global rowid
-        // space deterministically across BEs (see rowid_split_planner.h).
-        std::vector<std::vector<int64_t>> rowsets_segment_rows;
-        rowsets_segment_rows.reserve(entire_read_source.rs_splits.size());
-        int64_t tablet_total_rows = 0;
-        for (auto& rs_split : entire_read_source.rs_splits) {
-            const auto rowset_id = rs_split.rs_reader->rowset()->rowset_id();
-            const auto& segs = _all_segments_rows[rowset_id];
-            auto& dst = rowsets_segment_rows.emplace_back();
-            dst.reserve(segs.size());
-            for (auto rows : segs) {
-                dst.emplace_back(static_cast<int64_t>(rows));
-                tablet_total_rows += static_cast<int64_t>(rows);
+        // §10.7 prune-then-split: before laying out the tablet-global rowid space, drop whole
+        // rowsets whose first-key-column [min,max] bound provably cannot intersect ANY predicate
+        // key range, so parallelism is spread only over candidate data. Without this, a rowset all
+        // of whose keys miss the predicate still gets rowid slots and an empty-returning scanner --
+        // wasting a fan-out BE slot (see the r1..r5 example in the design doc).
+        //
+        // Determinism (the rowid-split correctness root): the dropped set must be identical on every
+        // fan-out BE so they all derive the same total_rows / layout. We therefore use ONLY inputs
+        // that are the same on every BE -- the FE predicate `_key_ranges` and the rowset-meta
+        // segment key bounds (zero extra IO) -- and stay at SEGMENT granularity (no page zone-map /
+        // bloom / bitmap index, which are read-path-dependent).
+        //
+        // Conservative (never drop a matching row): only a fixed-width scalar, non-nullable first
+        // key column is eligible -- its segment key bounds are exact and untruncated (<=33 encoded
+        // bytes < the 36-byte truncation threshold), so the disjointness test is sound. Anything
+        // undecodable / unexpected (strings, which may be truncated prefixes; nullable first keys;
+        // missing or aggregated-to-unexpected-shape bounds; an undecodable predicate bound) makes
+        // the rowset non-prunable -> kept, falling back to today's "no pruning" behavior.
+        //
+        // Granularity: pruning is at ROWSET level (a rowset is dropped only when ALL its key bounds
+        // miss). plan_rowid_scanners already skips zero-row rowsets, so emitting all-zero segment
+        // rows for a pruned rowset needs no planner change. Finer per-segment pruning would require
+        // the planner to tolerate interior empty segments (offset/row-range alignment) and is left
+        // as a future refinement; it is a balance optimization only, not a correctness change.
+        struct PruneInterval {
+            bool has_lo = false;
+            bool has_hi = false;
+            wide::Int256 lo {};
+            wide::Int256 hi {};
+        };
+        const auto& key_col0 = tablet->tablet_schema()->column(0);
+        const FieldType first_key_type = key_col0.type();
+        std::vector<PruneInterval> prune_intervals;
+        bool pruning_enabled = false;
+        if (tablet->tablet_schema()->num_key_columns() > 0 &&
+            !is_string_split_key_type(first_key_type) &&
+            is_supported_split_key_type(first_key_type) && !key_col0.is_nullable()) {
+            bool any_bounded = false;
+            bool all_decodable = true;
+            for (auto* r : _key_ranges) {
+                if (!r->has_lower_bound && !r->has_upper_bound) {
+                    continue; // full-scan placeholder, carries no constraint
+                }
+                any_bounded = true;
+                PruneInterval iv;
+                iv.has_lo = r->has_lower_bound;
+                iv.has_hi = r->has_upper_bound;
+                // Treat both ends as inclusive (conservative: only ever keeps more segments).
+                if ((iv.has_lo && !first_key_field_to_key(r->begin_scan_range, &iv.lo)) ||
+                    (iv.has_hi && !first_key_field_to_key(r->end_scan_range, &iv.hi))) {
+                    all_decodable = false; // a bound we cannot read -> cannot prune safely
+                    break;
+                }
+                prune_intervals.emplace_back(iv);
             }
+            // A predicate is a UNION of ranges; if any member is undecodable it could match
+            // anything, so only prune when every bounded range decoded and at least one exists.
+            pruning_enabled = any_bounded && all_decodable;
         }
 
+        // True only if EVERY decodable segment key bound of `rowset` is disjoint from EVERY
+        // predicate interval -> no row in the rowset can match -> safe to drop the whole rowset.
+        // Any undecodable / unexpected bound shape makes the rowset non-prunable (returns false).
+        auto rowset_disjoint = [&](const RowsetSharedPtr& rowset) -> bool {
+            std::vector<KeyBoundsPB> seg_bounds;
+            if (!rowset->get_segments_key_bounds(&seg_bounds).ok() || seg_bounds.empty()) {
+                return false;
+            }
+            const bool bounds_ok = rowset->is_segments_key_bounds_aggregated()
+                                           ? seg_bounds.size() == 1
+                                           : static_cast<int64_t>(seg_bounds.size()) ==
+                                                     rowset->num_segments();
+            if (!bounds_ok) {
+                return false;
+            }
+            for (const auto& kb : seg_bounds) {
+                wide::Int256 seg_lo {};
+                wide::Int256 seg_hi {};
+                if (!decode_first_key(kb.min_key(), first_key_type, &seg_lo) ||
+                    !decode_first_key(kb.max_key(), first_key_type, &seg_hi)) {
+                    return false; // undecodable bound -> cannot prove disjoint -> keep
+                }
+                for (const auto& iv : prune_intervals) {
+                    // [seg_lo, seg_hi] ∩ [iv.lo, iv.hi] != empty ? (closed / conservative)
+                    const bool below = iv.has_lo && seg_hi < iv.lo; // segment entirely below range
+                    const bool above = iv.has_hi && seg_lo > iv.hi; // segment entirely above range
+                    if (!below && !above) {
+                        return false; // intersects some predicate range -> keep the rowset
+                    }
+                }
+            }
+            return true; // every segment misses every predicate range
+        };
+
         // Resolve this tablet's split identity into a global rowid sub-range. split_count <= 1
-        // (the default for the legacy single-BE path) means the whole tablet [0, total).
+        // (the default for the legacy single-BE / intra-BE parallel path) means the whole tablet
+        // [0, total). Resolved before the layout so pruning can be gated on it.
         int32_t split_id = 0;
         int32_t split_count = 1;
         if (tablet_idx < _tablet_splits.size() && _tablet_splits[tablet_idx].second > 1) {
             split_id = _tablet_splits[tablet_idx].first;
             split_count = _tablet_splits[tablet_idx].second;
         }
+        // Only prune in the cross-BE tablet-split case (split_count > 1), where a rowset that the
+        // predicate cannot match otherwise wastes a whole fan-out BE on an empty scanner. In the
+        // intra-BE parallel path (split_count == 1) the scanners share this BE and the read-time
+        // zone-map skip already handles non-matching rowsets cheaply, so leave that hot path
+        // byte-for-byte unchanged.
+        const bool prune_this_tablet = pruning_enabled && split_count > 1;
+
+        // Build the per-rowset segment row layout, aligned 1:1 with `rs_splits` (version_path
+        // order). Together with the snapshot `version` this defines the tablet-global rowid
+        // space deterministically across BEs (see rowid_split_planner.h). A pruned rowset
+        // contributes all-zero segment rows -> it occupies no global rowid space and is skipped.
+        std::vector<std::vector<int64_t>> rowsets_segment_rows;
+        rowsets_segment_rows.reserve(entire_read_source.rs_splits.size());
+        int64_t tablet_total_rows = 0;
+        for (auto& rs_split : entire_read_source.rs_splits) {
+            auto rowset = rs_split.rs_reader->rowset();
+            const auto& segs = _all_segments_rows[rowset->rowset_id()];
+            auto& dst = rowsets_segment_rows.emplace_back();
+            dst.reserve(segs.size());
+            const bool pruned =
+                    prune_this_tablet && rowset->num_rows() > 0 && rowset_disjoint(rowset);
+            for (auto rows : segs) {
+                const int64_t r = pruned ? 0 : static_cast<int64_t>(rows);
+                dst.emplace_back(r);
+                tablet_total_rows += r;
+            }
+        }
+
         const auto [g_begin, g_end] = rowid_split_range(tablet_total_rows, split_id, split_count);
 
         // Plan (pure) then materialize: attach a cloned reader per slice and the shared delete
