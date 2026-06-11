@@ -19,7 +19,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <optional>
 #include <utility>
 
 #include "cloud/cloud_storage_engine.h"
@@ -217,17 +216,20 @@ bool first_key_field_to_key(const OlapTuple& tuple, wide::Int256* out) {
 // Comparable-domain policy for key-range tablet split. The split machinery is identical for every
 // first-key type except (1) the comparable value it folds a memcomparable key into, (2) how it
 // decodes that value, (3) how it re-materializes a value into a push-down OlapScanRange bound, and
-// (4) whether the two OUTER split ends are closed (fixed-width scalars round-trip exactly, so the
-// real global min/max anchor closed ends) or open (string prefixes may be truncated, so a closed
-// end could drop rows past the truncated boundary). These are captured by two policies below;
+// (4) the closed upper anchor of the LAST split. Every split is a finite, closed/half-open range
+// [lo, hi) ([lo, hi] for the last split) so the reader always gets equal-width start/end keys (it
+// rejects an empty/asymmetric bound, see TabletReader::_init_keys_param). The two policies differ
+// only in how that last-split upper anchor is chosen: scalars round-trip exactly so the sampled
+// global max is the real max; string samples may be truncated prefixes (< real max), so the last
+// split instead closes on an all-0xFF column-width sentinel that is >= every value (the LOW side is
+// truncation-safe: a truncated min sorts <= the real min and nothing is below it). Captured below;
 // _build_scanners_by_key_range_impl is templated on them.
 
 // Fixed-width, order-preserving scalars: fold the first key column into a single 256-bit signed
-// integer (see storage_to_key) and anchor both outer ends on the real global min/max (exact
+// integer (see storage_to_key); both outer ends anchor on the real sampled global min/max (exact
 // round-trip via key_to_storage / make_first_key_tuple).
 struct Int256KeyDomain {
     using Value = wide::Int256;
-    // String keys ⇒ open outer ends; scalar keys ⇒ closed real min/max anchors.
     static constexpr bool kStringKeys = false;
 
     static bool decode(const std::string& encoded, FieldType ft, int32_t /*max_len*/, Value* out) {
@@ -239,14 +241,16 @@ struct Int256KeyDomain {
     static bool make_tuple(FieldType ft, const Value& v, OlapTuple* tuple) {
         return make_first_key_tuple(ft, v, tuple);
     }
+    // Never used (only consulted when kStringKeys); scalars keep the sampled max. Present so the
+    // domain-generic last-split branch type-checks.
+    static Value max_sentinel(int32_t /*len*/) { return Value {}; }
 };
 
 // Variable-length CHAR/VARCHAR: the raw memcomparable bytes are themselves the comparable value
 // (lexicographic byte order == key order == std::string::operator<), so there is NO decode and no
-// round-trip. Boundaries may be truncated prefixes, so the outer ends are left open (unbounded);
-// see the §12 design. The first byte is the per-column null/normal marker (skipped); the remaining
-// order-preserving bytes are the value, optionally capped to the column's schema length to bound
-// the size of a push-down key (a composite key has no separator after the first column).
+// round-trip. The first byte is the per-column null/normal marker (skipped); the remaining
+// order-preserving bytes are the value, capped to the column's schema length to bound the size of a
+// push-down key (a composite key has no separator after the first column).
 struct StringKeyDomain {
     using Value = std::string;
     static constexpr bool kStringKeys = true;
@@ -288,6 +292,12 @@ struct StringKeyDomain {
             return false;
         }
     }
+    // An all-0xFF string of the column's max byte width: >= every value the column can hold (a
+    // VARCHAR(len)/CHAR(len) value is <= len bytes, and 0xFF is the maximal byte), so closing the
+    // last split on it covers the real max even when the sampled max is a truncated prefix.
+    static Value max_sentinel(int32_t len) {
+        return std::string(static_cast<size_t>(len > 0 ? len : 0), '\xff');
+    }
 };
 
 } // namespace
@@ -316,10 +326,11 @@ Status ParallelScannerBuilder::build_scanners(std::list<ScannerSPtr>& scanners) 
 
 Status ParallelScannerBuilder::_build_scanners_by_key_range(std::list<ScannerSPtr>& scanners) {
     // Pick the comparable domain from the first sort-key column type, which is uniform across this
-    // scan's tablets (same table / index schema). Fixed-width scalars fold into wide::Int256 with
-    // closed real min/max anchors; CHAR/VARCHAR compare by raw memcomparable bytes (std::string)
-    // with open outer ends. See Int256KeyDomain / StringKeyDomain. Per-tablet guards inside the
-    // impl re-validate the type so a schema/FE drift fails loudly rather than mis-scanning.
+    // scan's tablets (same table / index schema). Fixed-width scalars fold into wide::Int256;
+    // CHAR/VARCHAR compare by raw memcomparable bytes (std::string), with the last split's upper
+    // anchored on an all-0xFF sentinel to stay correct under key-bound truncation. See
+    // Int256KeyDomain / StringKeyDomain. Per-tablet guards inside the impl re-validate the type so
+    // a schema/FE drift fails loudly rather than mis-scanning.
     if (_tablets.empty()) {
         return Status::OK();
     }
@@ -405,11 +416,12 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range_impl(
         // IO) and are identical on every BE at this version -> deterministic boundaries.
         //
         // Coverage correctness:
-        //   * scalar (closed) domain: the global min/max sample must equal the TRUE global
-        //     min/max key, so EVERY non-empty rowset must contribute decodable bounds spanning its
-        //     own first-key min/max (otherwise out-of-range keys would be dropped -> fall back).
-        //   * string (open) domain: outer ends are unbounded, so even truncated-prefix bounds are
-        //     safe; decode still succeeds on a prefix, only balance (not coverage) is affected.
+        //   * scalar domain: the global min/max sample must equal the TRUE global min/max key, so
+        //     EVERY non-empty rowset must contribute decodable bounds spanning its own first-key
+        //     min/max (otherwise out-of-range keys would be dropped -> fall back).
+        //   * string domain: the last split's upper closes on the all-0xFF sentinel (not the
+        //     sampled max), so even truncated-prefix bounds are coverage-safe; decode still
+        //     succeeds on a prefix, only balance (not coverage) is affected.
         // Two valid bound shapes either way:
         //   * aggregated: non-MoW rowsets (exactly the AGG/MoR tables handled here) collapse the
         //     per-segment bounds into a single rowset-level [min,max] by default (see
@@ -517,17 +529,17 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range_impl(
         }
         std::sort(samples.begin(), samples.end());
 
-        // Interior boundaries b[j] = samples[size*j/split_count] at even sample quantiles. The two
-        // OUTER ends differ by domain:
-        //   * scalar (closed): b[0]=real global min, b[split_count]=real global max are exact
-        //     round-trippable keys, so the first split's lower and last split's upper are CLOSED
-        //     anchors and every key is covered.
-        //   * string (open): the sampled bounds may be truncated prefixes, so a closed outer end
-        //     could drop rows past the truncated boundary. The first split is therefore lower-
-        //     UNBOUNDED and the last split upper-UNBOUNDED; only the interior cut points are used.
-        // Either way a key's split membership is a pure function of its first column vs the b[j],
-        // so the same key (and all its versions) always lands on one split -> merge stays correct.
-        // nullopt = unbounded on that side.
+        // Boundaries b[0..split_count] at even sample quantiles. b[0]=sampled global min, interior
+        // b[j]=samples[size*j/split_count]. This BE owns [b[split_id], b[split_id+1]); the LAST
+        // split closes its upper so the max key is included. The upper outer anchor differs by
+        // domain: scalars round-trip exactly so b[split_count]=sampled max is the real max; string
+        // samples may be truncated prefixes (< real max), so a closed sampled max would drop
+        // (sampled_max, real_max] -- the last string split instead closes on an all-0xFF
+        // column-width sentinel that is >= every value. (The low side needs no sentinel: a
+        // truncated min sorts <= the real min and nothing is below it.) Every split is a finite
+        // range so the reader always gets equal-width start/end keys. A key's split membership is a
+        // pure function of its first column vs the b[j], so the same key (and all its versions)
+        // always lands on one split -> merge stays correct. Boundary precision only affects balance.
         auto boundary_at = [&](int32_t j) -> Value {
             size_t idx =
                     (samples.size() * static_cast<size_t>(j)) / static_cast<size_t>(split_count);
@@ -535,21 +547,9 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range_impl(
             return samples[idx];
         };
         const bool is_last = (split_id == split_count - 1);
-        std::optional<Value> split_lo; // this split's lower bound (nullopt = -inf)
-        std::optional<Value> split_hi; // this split's upper bound (nullopt = +inf)
-        if (Domain::kStringKeys && split_id == 0) {
-            split_lo = std::nullopt;
-        } else {
-            split_lo = boundary_at(split_id);
-        }
-        if (Domain::kStringKeys && is_last) {
-            split_hi = std::nullopt;
-        } else {
-            split_hi = boundary_at(split_id + 1);
-        }
-        // The split's lower (when finite) is always inclusive; the upper is exclusive except the
-        // last split of the closed (scalar) domain, which closes on the real global max.
-        const bool split_hi_incl = is_last && !Domain::kStringKeys;
+        const Value lo = boundary_at(split_id);
+        const Value hi = (Domain::kStringKeys && is_last) ? Domain::max_sentinel(first_key_len)
+                                                          : boundary_at(split_id + 1);
 
         // TabletReader stores key-range inclusivity as scalar fields, not per range. It also
         // requires every key tuple in one scanner to have the same width. Stage ranges into
@@ -569,23 +569,17 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range_impl(
             scanner_key_range_groups.push_back({range});
         };
 
-        // Helper: own a single-column first-key range [r_lo, r_hi] (with the given inclusivities;
-        // a nullopt bound means unbounded on that side) in the local state (outlives the scanners;
-        // this builder does not) and stage it.
-        auto own_first_key_range = [&](const std::optional<Value>& r_lo, bool lo_incl,
-                                       const std::optional<Value>& r_hi, bool hi_incl) -> Status {
+        // Helper: own a single-column first-key range [r_lo, r_hi] (with the given inclusivities)
+        // in the local state (outlives the scanners; this builder does not) and stage it.
+        auto own_first_key_range = [&](const Value& r_lo, bool lo_incl, const Value& r_hi,
+                                       bool hi_incl) -> Status {
             auto range = std::make_unique<OlapScanRange>();
             range->begin_include = lo_incl;
             range->end_include = hi_incl;
-            range->has_lower_bound = r_lo.has_value();
-            range->has_upper_bound = r_hi.has_value();
-            if (r_lo.has_value() &&
-                !Domain::make_tuple(first_key_type, *r_lo, &range->begin_scan_range)) {
-                return Status::NotSupported(
-                        "key-range tablet split: unsupported first key column type");
-            }
-            if (r_hi.has_value() &&
-                !Domain::make_tuple(first_key_type, *r_hi, &range->end_scan_range)) {
+            range->has_lower_bound = true;
+            range->has_upper_bound = true;
+            if (!Domain::make_tuple(first_key_type, r_lo, &range->begin_scan_range) ||
+                !Domain::make_tuple(first_key_type, r_hi, &range->end_scan_range)) {
                 return Status::NotSupported(
                         "key-range tablet split: unsupported first key column type");
             }
@@ -593,14 +587,14 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range_impl(
             return Status::OK();
         };
 
-        // Compose the split's first-key-column interval [split_lo, split_hi) with any predicate-
-        // derived key ranges (_key_ranges). The SQL key predicate may live ONLY in these short-key
-        // ranges -- once a scan key exactly covers a predicate, the matching storage predicate is
-        // erased (see OlapScanLocalState::_init_scan_keys). So we must INTERSECT, not replace;
-        // replacing would scan the whole split range and e.g. over-count `WHERE k = 5`. A non-empty
-        // key range always constrains the first key column (scan keys are built in key order), and
-        // only carries further columns when the first column is a fixed point -- so each range is
-        // either a first-column point or interval.
+        // Compose the split's first-key-column interval [lo, hi) ([lo, hi] for the last split)
+        // with any predicate-derived key ranges (_key_ranges). The SQL key predicate may live
+        // ONLY in these short-key ranges -- once a scan key exactly covers a predicate, the
+        // matching storage predicate is erased (see OlapScanLocalState::_init_scan_keys). So we
+        // must INTERSECT, not replace; replacing would scan the whole split range and e.g.
+        // over-count `WHERE k = 5`. A non-empty key range always constrains the first key column
+        // (scan keys are built in key order), and only carries further columns when the first
+        // column is a fixed point -- so each range is either a first-column point or interval.
         bool has_predicate_range = false;
         for (auto* r : _key_ranges) {
             if (r->has_lower_bound || r->has_upper_bound) {
@@ -611,7 +605,7 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range_impl(
         if (!has_predicate_range) {
             // No predicate key range (full-scan, possibly with a has_lower_bound==false
             // placeholder): the split interval is the only constraint.
-            RETURN_IF_ERROR(own_first_key_range(split_lo, true, split_hi, split_hi_incl));
+            RETURN_IF_ERROR(own_first_key_range(lo, true, hi, is_last));
         } else {
             for (auto* r : _key_ranges) {
                 if (!r->has_lower_bound && !r->has_upper_bound) {
@@ -641,50 +635,39 @@ Status ParallelScannerBuilder::_build_scanners_by_key_range_impl(
                                       (has_begin && has_end && r_begin == r_end);
                 if (is_point) {
                     const Value& v = has_begin ? r_begin : r_end;
-                    const bool ge_lo = !split_lo.has_value() || v >= *split_lo;
-                    const bool lt_hi = !split_hi.has_value() ||
-                                       (split_hi_incl ? v <= *split_hi : v < *split_hi);
-                    if (ge_lo && lt_hi) {
+                    const bool in_split = v >= lo && (is_last ? v <= hi : v < hi);
+                    if (in_split) {
                         stage_key_range(r);
                     }
                     continue;
                 }
 
-                // First-column interval: intersect [r_begin, r_end] with [split_lo, split_hi).
-                // nullopt on either side means unbounded (the predicate or the split end is open).
-                std::optional<Value> new_lo;
+                // First-column interval: intersect [r_begin, r_end] with [lo, hi)/[lo, hi].
+                Value new_lo;
                 bool new_lo_incl;
-                if (!split_lo.has_value()) {
-                    new_lo = has_begin ? std::optional<Value>(r_begin) : std::nullopt;
-                    new_lo_incl = has_begin && r->begin_include;
-                } else if (!has_begin || *split_lo > r_begin) {
-                    new_lo = *split_lo;
+                if (!has_begin || lo > r_begin) {
+                    new_lo = lo;
                     new_lo_incl = true;
-                } else if (*split_lo < r_begin) {
+                } else if (lo < r_begin) {
                     new_lo = r_begin;
                     new_lo_incl = r->begin_include;
                 } else {
-                    new_lo = *split_lo;
+                    new_lo = lo;
                     new_lo_incl = r->begin_include; // both lower bounds coincide -> AND (split incl)
                 }
-                std::optional<Value> new_hi;
+                Value new_hi;
                 bool new_hi_incl;
-                if (!split_hi.has_value()) {
-                    new_hi = has_end ? std::optional<Value>(r_end) : std::nullopt;
-                    new_hi_incl = has_end && r->end_include;
-                } else if (!has_end || *split_hi < r_end) {
-                    new_hi = *split_hi;
-                    new_hi_incl = split_hi_incl;
-                } else if (*split_hi > r_end) {
+                if (!has_end || hi < r_end) {
+                    new_hi = hi;
+                    new_hi_incl = is_last;
+                } else if (hi > r_end) {
                     new_hi = r_end;
                     new_hi_incl = r->end_include;
                 } else {
-                    new_hi = *split_hi;
-                    new_hi_incl = r->end_include && split_hi_incl; // upper bounds coincide -> AND
+                    new_hi = hi;
+                    new_hi_incl = r->end_include && is_last; // upper bounds coincide -> AND
                 }
-                if (new_lo.has_value() && new_hi.has_value() &&
-                    (*new_lo > *new_hi ||
-                     (*new_lo == *new_hi && !(new_lo_incl && new_hi_incl)))) {
+                if (new_lo > new_hi || (new_lo == new_hi && !(new_lo_incl && new_hi_incl))) {
                     continue; // empty intersection: this split owns none of R
                 }
                 RETURN_IF_ERROR(own_first_key_range(new_lo, new_lo_incl, new_hi, new_hi_incl));
