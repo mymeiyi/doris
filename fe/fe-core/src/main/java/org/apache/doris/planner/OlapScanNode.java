@@ -346,14 +346,20 @@ public class OlapScanNode extends ScanNode {
     }
 
     /**
-     * Whether the first sort-key column is a fixed-length, order-preserving scalar that key-range
-     * tablet split supports: TINYINT/SMALLINT/INT/BIGINT/LARGEINT, DATE/DATETIME (legacy v1 and
-     * v2), DECIMALV2/DECIMAL32/DECIMAL64/DECIMAL128/DECIMAL256, or IPV4/IPV6. This is the
-     * precondition for key-range tablet split of merge-required tables (AGG / MoR-unique): the BE
-     * derives split boundaries by decoding the first key column from the memcomparable segment key
-     * bounds, which is implemented only for these types (each stored as a fixed-width,
-     * order-preserving value that folds into a single 256-bit comparable integer). Kept in sync
-     * with the BE guard {@code is_supported_split_key_type} in parallel_scanner_builder.cpp.
+     * Whether the first sort-key column is order-preserving in its memcomparable encoding and thus
+     * supports key-range tablet split. Two families:
+     * <ul>
+     *   <li>fixed-length scalars -- TINYINT/SMALLINT/INT/BIGINT/LARGEINT, DATE/DATETIME (legacy v1
+     *   and v2), DECIMALV2/DECIMAL32/DECIMAL64/DECIMAL128/DECIMAL256, IPV4/IPV6 -- whose first key
+     *   column the BE decodes from the memcomparable segment key bounds into a single 256-bit
+     *   comparable integer (each stored as a fixed-width, order-preserving value);</li>
+     *   <li>variable-length strings -- CHAR/VARCHAR -- whose raw memcomparable bytes are already
+     *   lexicographically ordered, so the BE compares them directly as std::string (no decode) and
+     *   uses open outer split ends to stay correct under key-bound truncation.</li>
+     * </ul>
+     * This is the precondition for key-range tablet split of merge-required tables (AGG /
+     * MoR-unique). Kept in sync with the BE guard {@code is_supported_split_key_type} in
+     * parallel_scanner_builder.cpp.
      *
      * <p>The column must also be NOT NULL: NULL keys are encoded with a null marker that the BE
      * boundary decoder skips, so a nullable first key would leave NULL rows outside every split
@@ -379,7 +385,8 @@ public class OlapScanNode extends ScanNode {
                 || type == PrimitiveType.DECIMALV2 || type == PrimitiveType.DECIMAL32
                 || type == PrimitiveType.DECIMAL64 || type == PrimitiveType.DECIMAL128
                 || type == PrimitiveType.DECIMAL256
-                || type == PrimitiveType.IPV4 || type == PrimitiveType.IPV6;
+                || type == PrimitiveType.IPV4 || type == PrimitiveType.IPV6
+                || type == PrimitiveType.CHAR || type == PrimitiveType.VARCHAR;
     }
 
     /**

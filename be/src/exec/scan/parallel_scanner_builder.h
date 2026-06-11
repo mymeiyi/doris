@@ -84,7 +84,11 @@ private:
     // rowsets/segments but only the rows whose first sort-key column falls in its range, so a
     // key (and all its versions) is owned by exactly one BE -> the cross-rowset merge stays
     // correct. Boundaries are derived deterministically from segment key bounds (see .cpp).
+    // Dispatches to the templated impl by first-key comparable domain (scalar / string).
     Status _build_scanners_by_key_range(std::list<ScannerSPtr>& scanners);
+
+    template <typename Domain>
+    Status _build_scanners_by_key_range_impl(std::list<ScannerSPtr>& scanners);
 
     // Build scanners so that each segment is handled by its own scanner.
     Status _build_scanners_by_per_segment(std::list<ScannerSPtr>& scanners);
