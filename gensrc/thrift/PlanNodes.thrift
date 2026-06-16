@@ -88,6 +88,49 @@ enum TBinlogScanType {
   UNKNOWN = 4
 }
 
+// A row id range [begin_row, end_row) within a single segment.
+// begin_row is inclusive, end_row is exclusive.
+struct TRowRange {
+  1: required i64 begin_row
+  2: required i64 end_row
+}
+
+// The (possibly multiple, disjoint) row id ranges to scan within a single segment.
+struct TSegmentRowRanges {
+  1: required list<TRowRange> ranges
+}
+
+// Describes how to scan a subset of one rowset for a cross-BE scan split.
+// The full RowsetMetaPB is carried so any compute node can rebuild the rowset
+// reader without re-capturing the tablet (the layout that the split was computed
+// against is shipped as an entity, see cross_be_parallel_scan.md).
+struct TRowSetSplit {
+  // serialized RowsetMetaPB of the data rowset (contains rowset_id / num_segments /
+  // num_rows / tablet_schema / remote resource info)
+  1: required binary rowset_meta_pb
+  // scan segments in [start_segment_id, end_segment_id)
+  2: required i64 start_segment_id
+  3: required i64 end_segment_id
+  // Optional per-segment row id ranges, one entry per segment in
+  // [start_segment_id, end_segment_id). Empty means scan whole segments.
+  4: optional list<TSegmentRowRanges> segment_row_ranges
+}
+
+// A single cross-BE scan split of one tablet. All splits of the same tablet share
+// the same pinned version V so that the MVCC snapshot is aligned across nodes.
+struct TTabletSplit {
+  // consistent version V the split was computed against
+  1: required i64 pinned_version
+  // data rowsets (and their segment/row ranges) this split should scan
+  2: required list<TRowSetSplit> rs_splits
+  // serialized RowsetMetaPB of delete-predicate rowsets, applied wholesale
+  3: optional list<binary> delete_predicate_metas
+  // serialized DeleteBitmapPB for MoW tables
+  4: optional binary delete_bitmap_pb
+  // for debugging / profiling
+  5: optional i64 split_id
+}
+
 struct TPaloScanRange {
   1: required list<Types.TNetworkAddress> hosts
   2: required string schema_hash
@@ -101,6 +144,9 @@ struct TPaloScanRange {
   10: optional i64 start_tso
   11: optional i64 end_tso
   12: optional TBinlogScanType binlog_scan_type
+  // When set, this scan range is a cross-BE scan split: the BE rebuilds the read
+  // source from the shipped rowset entities instead of capturing the tablet itself.
+  13: optional TTabletSplit tablet_split
 }
 
 enum TFileFormatType {

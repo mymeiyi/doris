@@ -52,6 +52,8 @@
 #include <vector>
 
 #include "cloud/cloud_storage_engine.h"
+#include "cloud/cloud_tablet.h"
+#include "exec/scan/tablet_split_serde.h"
 #include "cloud/cloud_tablet_mgr.h"
 #include "cloud/config.h"
 #include "common/config.h"
@@ -2553,6 +2555,111 @@ void PInternalService::get_tablet_rowsets(google::protobuf::RpcController* contr
         *response->mutable_delete_bitmap() = std::move(diffset);
     }
     Status::OK().to_protobuf(response->mutable_status());
+}
+
+void PInternalService::get_tablet_split(google::protobuf::RpcController* controller,
+                                        const PGetTabletSplitRequest* request,
+                                        PGetTabletSplitResponse* response,
+                                        google::protobuf::Closure* done) {
+    bool ret = _heavy_work_pool.try_offer([request, response, done]() {
+        brpc::ClosureGuard closure_guard(done);
+        DCHECK(config::is_cloud_mode());
+        auto impl = [&]() -> Status {
+            if (!request->has_tablet_id() || !request->has_version()) {
+                return Status::InvalidArgument("missing params tablet_id/version");
+            }
+            const int64_t tablet_id = request->tablet_id();
+            const int64_t version = request->version();
+            const int64_t max_splits =
+                    request->has_max_splits() && request->max_splits() > 0 ? request->max_splits()
+                                                                           : 1;
+            const int64_t min_rows_per_split =
+                    request->has_min_rows_per_split() && request->min_rows_per_split() > 0
+                            ? request->min_rows_per_split()
+                            : (2 * 1024 * 1024);
+            const bool enable_segment_cache =
+                    request->has_enable_segment_cache() ? request->enable_segment_cache() : true;
+
+            // 1. Capture the tablet at the pinned version on the home BE.
+            SyncRowsetStats sync_stats;
+            auto tablet = DORIS_TRY(ExecEnv::get_tablet(tablet_id, &sync_stats));
+            auto cloud_tablet = std::dynamic_pointer_cast<CloudTablet>(tablet);
+            if (cloud_tablet == nullptr) {
+                return Status::InternalError("tablet {} is not a cloud tablet", tablet_id);
+            }
+            SyncOptions options;
+            options.query_version = version;
+            options.merge_schema = true;
+            RETURN_IF_ERROR(cloud_tablet->sync_rowsets(options, &sync_stats));
+
+            auto read_source = DORIS_TRY(tablet->capture_read_source(
+                    {0, version},
+                    {.skip_missing_versions = false,
+                     .enable_fetch_rowsets_from_peers =
+                             config::enable_fetch_rowsets_from_peer_replicas}));
+            read_source.fill_delete_predicates();
+
+            // 2. Compute per-segment row counts and total rows (mirrors
+            //    ParallelScannerBuilder::_load).
+            std::map<RowsetId, std::vector<size_t>> all_segments_rows;
+            OlapReaderStatistics read_stats;
+            int64_t total_rows = 0;
+            for (auto& rs_split : read_source.rs_splits) {
+                auto rowset = rs_split.rs_reader->rowset();
+                RETURN_IF_ERROR(rowset->load());
+                auto beta_rowset = std::dynamic_pointer_cast<BetaRowset>(rowset);
+                if (beta_rowset == nullptr) {
+                    return Status::InternalError("rowset {} is not a beta rowset",
+                                                 rowset->rowset_id().to_string());
+                }
+                std::vector<uint32_t> segment_rows;
+                RETURN_IF_ERROR(beta_rowset->get_segment_num_rows(&segment_rows,
+                                                                  enable_segment_cache, &read_stats));
+                auto& rows_vec = all_segments_rows[rowset->rowset_id()];
+                for (int64_t i = 0; i != rowset->num_segments(); ++i) {
+                    rows_vec.emplace_back(segment_rows[i]);
+                }
+                total_rows += rowset->num_rows();
+            }
+
+            size_t rows_per_scanner = max_splits > 0 ? total_rows / max_splits : total_rows;
+            rows_per_scanner =
+                    std::max<size_t>(rows_per_scanner, static_cast<size_t>(min_rows_per_split));
+
+            // 3. Split the entire read source by row id (single-point capture).
+            std::vector<TabletReadSource> partials;
+            RETURN_IF_ERROR(compute_rowid_splits(read_source, all_segments_rows, rows_per_scanner,
+                                                 &partials));
+
+            // 4. Serialize each partial read source as a TTabletSplit entity.
+            const bool is_mow = cloud_tablet->enable_unique_key_merge_on_write();
+            ThriftSerializer serializer(false, 4096);
+            int64_t split_id = 0;
+            for (auto& partial : partials) {
+                TTabletSplit tablet_split;
+                RETURN_IF_ERROR(read_source_to_tablet_split(version, split_id, partial, is_mow,
+                                                            &tablet_split));
+                std::string bytes;
+                RETURN_IF_ERROR(serializer.serialize(&tablet_split, &bytes));
+                int64_t est_rows = 0;
+                for (auto& rs : partial.rs_splits) {
+                    for (auto& row_ranges : rs.segment_row_ranges) {
+                        est_rows += static_cast<int64_t>(row_ranges.count());
+                    }
+                }
+                auto* meta = response->add_splits();
+                meta->set_tablet_split(std::move(bytes));
+                meta->set_est_rows(est_rows);
+                ++split_id;
+            }
+            response->set_total_rows(total_rows);
+            return Status::OK();
+        };
+        impl().to_protobuf(response->mutable_status());
+    });
+    if (!ret) {
+        offer_failed(response, done, _heavy_work_pool);
+    }
 }
 
 void PInternalService::request_cdc_client(google::protobuf::RpcController* controller,

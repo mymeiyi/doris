@@ -33,6 +33,7 @@
 #include "exec/runtime_filter/runtime_filter_consumer_helper.h"
 #include "exec/scan/olap_scanner.h"
 #include "exec/scan/parallel_scanner_builder.h"
+#include "exec/scan/tablet_split_serde.h"
 #include "exprs/function/in.h"
 #include "exprs/hybrid_set.h"
 #include "exprs/score_runtime.h"
@@ -660,6 +661,15 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
     bool read_row_binlog =
             p._olap_scan_node.__isset.read_row_binlog && p._olap_scan_node.read_row_binlog;
 
+    // Cross-BE scan split (Scheme A): when the scan range carries a pre-computed
+    // tablet split shipped from the home BE, rebuild the read source from the
+    // embedded rowset entities and build a single scanner per split, skipping the
+    // local capture / ParallelScannerBuilder path. See doc/cross_be_parallel_scan.md.
+    if (!_scan_ranges.empty() && _scan_ranges[0]->__isset.tablet_split) {
+        RETURN_IF_ERROR(_build_scanners_from_splits(scanners));
+        return Status::OK();
+    }
+
     // The flag of preagg's meaning is whether return pre agg data(or partial agg data)
     // PreAgg ON: The storage layer returns partially aggregated data without additional processing. (Fast data reading)
     // for example, if a table is select userid,count(*) from base table.
@@ -789,6 +799,62 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
     return Status::OK();
 }
 
+Status OlapScanLocalState::_build_scanners_from_splits(std::list<ScannerSPtr>* scanners) {
+    auto& p = _parent->cast<OlapScanOperatorX>();
+
+    // Reuse the pushed-down key ranges, skipping the "full scan" placeholder.
+    std::vector<OlapScanRange*> key_ranges;
+    for (auto& range : _cond_ranges) {
+        if (!range->has_lower_bound) {
+            continue;
+        }
+        key_ranges.emplace_back(range.get());
+    }
+
+    for (size_t i = 0; i < _scan_ranges.size(); ++i) {
+        const auto& palo_scan_range = *_scan_ranges[i];
+        if (!palo_scan_range.__isset.tablet_split) {
+            return Status::InternalError(
+                    "mixed tablet_split and normal scan ranges within one scan node");
+        }
+        const auto& tablet_split = palo_scan_range.tablet_split;
+        const auto& tablet = _tablets[i].tablet;
+        const int64_t version = tablet_split.pinned_version;
+
+        // Rebuild the read source from the shipped rowset entities (no local capture).
+        TabletReadSource read_source;
+        RETURN_IF_ERROR(tablet_split_to_read_source(tablet_split, tablet->tablet_schema(),
+                                                    tablet->tablet_id(), &read_source));
+
+        if (config::is_cloud_mode()) {
+            // Count hotspot so this node can act as / benefit from a warm cache peer.
+            ExecEnv::GetInstance()->storage_engine().to_cloud().tablet_hotspot().count(*tablet);
+        }
+
+        auto scanner = OlapScanner::create_shared(
+                this, OlapScanner::Params {
+                              state(),
+                              _scanner_profile.get(),
+                              key_ranges,
+                              tablet,
+                              version,
+                              std::move(read_source),
+                              p._limit,
+                              p._olap_scan_node.is_preaggregation,
+                              false,
+                              TBinlogScanType::NONE,
+                              std::nullopt,
+                              std::nullopt,
+                      });
+        RETURN_IF_ERROR(scanner->init(state(), _conjuncts));
+        scanners->push_back(std::move(scanner));
+    }
+
+    _tablets.clear();
+    _read_sources.clear();
+    return Status::OK();
+}
+
 Status OlapScanLocalState::_sync_cloud_tablets(RuntimeState* state) {
     if (config::is_cloud_mode() && !_sync_tablet) {
         _pending_tablets_num = _scan_ranges.size();
@@ -829,6 +895,13 @@ Status OlapScanLocalState::_sync_cloud_tablets(RuntimeState* state) {
                     auto tablet =
                             DORIS_TRY(ExecEnv::get_tablet(_scan_ranges[i]->tablet_id, sync_stats));
                     _tablets[i] = {std::move(tablet), version};
+                    // Cross-BE scan split (Scheme A): the read source is rebuilt from
+                    // the shipped rowset entities, so this node only needs the light
+                    // tablet meta and must NOT sync_rowsets (which could pick up a
+                    // different, post-compaction layout). See cross_be_parallel_scan.md.
+                    if (_scan_ranges[i]->__isset.tablet_split) {
+                        return Status::OK();
+                    }
                     SyncOptions options;
                     options.query_version = version;
                     options.merge_schema = true;
@@ -943,6 +1016,12 @@ Status OlapScanLocalState::prepare(RuntimeState* state) {
     }
 
     for (size_t i = 0; i < _scan_ranges.size(); i++) {
+        // Cross-BE scan split (Scheme A): read source is rebuilt later from the
+        // shipped rowset entities in _build_scanners_from_splits, so skip local
+        // capture here. See cross_be_parallel_scan.md.
+        if (_scan_ranges[i]->__isset.tablet_split) {
+            continue;
+        }
         _read_sources[i] = DORIS_TRY(_tablets[i].tablet->capture_read_source(
                 {0, _tablets[i].version},
                 {.skip_missing_versions = _state->skip_missing_version(),

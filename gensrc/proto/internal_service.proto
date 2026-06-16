@@ -1159,6 +1159,32 @@ message PGetTabletRowsetsResponse {
     optional DeleteBitmapPB delete_bitmap = 3;
 }
 
+// Cross-BE parallel scan (Scheme A): the home BE captures the tablet at `version`,
+// splits its read source by row id and returns one entity-carrying split per
+// target scanner. See doc/cross_be_parallel_scan.md.
+message PGetTabletSplitRequest {
+    optional int64 tablet_id = 1;
+    // pinned consistent version V to split at
+    optional int64 version = 2;
+    // target number of splits / scanners (parallelism)
+    optional int64 max_splits = 3;
+    optional int64 min_rows_per_split = 4;
+    optional bool enable_segment_cache = 5;
+}
+
+message PTabletSplitMeta {
+    // serialized TTabletSplit thrift (binary protocol); the FE attaches it as-is
+    // onto TPaloScanRange.tablet_split
+    optional bytes tablet_split = 1;
+    optional int64 est_rows = 2;
+}
+
+message PGetTabletSplitResponse {
+    required PStatus status = 1;
+    repeated PTabletSplitMeta splits = 2;
+    optional int64 total_rows = 3;
+}
+
 message CacheBlockReqest {
     // PEER_FILE_CACHE_BLOCK
     optional int64 block_offset = 1;
@@ -1262,6 +1288,7 @@ service PBackendService {
     rpc commit_refresh_dictionary(PCommitRefreshDictionaryRequest) returns (PCommitRefreshDictionaryResponse);
     rpc abort_refresh_dictionary(PAbortRefreshDictionaryRequest) returns (PAbortRefreshDictionaryResponse);
     rpc get_tablet_rowsets(PGetTabletRowsetsRequest) returns (PGetTabletRowsetsResponse);
+    rpc get_tablet_split(PGetTabletSplitRequest) returns (PGetTabletSplitResponse);
     rpc fetch_peer_data(PFetchPeerDataRequest) returns (PFetchPeerDataResponse);
     rpc request_cdc_client(PRequestCdcClientRequest) returns (PRequestCdcClientResult);
 };

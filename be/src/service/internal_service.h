@@ -242,6 +242,10 @@ public:
                             PGetTabletRowsetsResponse* response,
                             google::protobuf::Closure* done) override;
 
+    void get_tablet_split(google::protobuf::RpcController* controller,
+                          const PGetTabletSplitRequest* request, PGetTabletSplitResponse* response,
+                          google::protobuf::Closure* done) override;
+
     void request_cdc_client(google::protobuf::RpcController* controller,
                             const PRequestCdcClientRequest* request,
                             PRequestCdcClientResult* result,

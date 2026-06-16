@@ -122,6 +122,11 @@ private:
 
     Status _init_scanners(std::list<ScannerSPtr>* scanners) override;
 
+    // Cross-BE scan split (Scheme A): build one scanner per pre-computed tablet
+    // split shipped from the home BE, rebuilding the read source from the embedded
+    // rowset entities. See doc/cross_be_parallel_scan.md.
+    Status _build_scanners_from_splits(std::list<ScannerSPtr>* scanners);
+
     Status _build_key_ranges_and_filters();
 
     std::vector<std::unique_ptr<TPaloScanRange>> _scan_ranges;
