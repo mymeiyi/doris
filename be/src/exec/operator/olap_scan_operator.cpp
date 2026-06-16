@@ -28,6 +28,7 @@
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/cloud_tablet_hotspot.h"
+#include "cloud/cloud_warm_up_manager.h"
 #include "cloud/config.h"
 #include "exec/operator/scan_operator.h"
 #include "exec/runtime_filter/runtime_filter_consumer_helper.h"
@@ -843,6 +844,22 @@ Status OlapScanLocalState::_build_scanners_from_splits(std::list<ScannerSPtr>* s
         if (config::is_cloud_mode()) {
             // Count hotspot so this node can act as / benefit from a warm cache peer.
             ExecEnv::GetInstance()->storage_engine().to_cloud().tablet_hotspot().count(*tablet);
+            // The split carries the home BE (the tablet's cache-affinity owner) as a
+            // warm file-cache peer. Record it so a local cache miss on this segment
+            // tries to fetch the block from the home BE before falling back to S3.
+            // See CachedRemoteFileReader::get_peer_connection_info. The home BE itself
+            // does not set peer_addr (it reads its own splits), so this only fires on
+            // non-home execution nodes.
+            if (tablet_split.__isset.peer_addr && !tablet_split.peer_addr.hostname.empty() &&
+                tablet_split.peer_addr.port > 0) {
+                ExecEnv::GetInstance()
+                        ->storage_engine()
+                        .to_cloud()
+                        .cloud_warm_up_manager()
+                        .record_balanced_tablet(tablet->tablet_id(),
+                                                tablet_split.peer_addr.hostname,
+                                                tablet_split.peer_addr.port);
+            }
         }
 
         auto scanner = OlapScanner::create_shared(

@@ -129,6 +129,11 @@ struct TTabletSplit {
   4: optional binary delete_bitmap_pb
   // for debugging / profiling
   5: optional i64 split_id
+  // brpc address of the home BE that captured this split. The execution node uses
+  // it as a warm file-cache peer source: on a local cache miss it first tries to
+  // fetch the block from this peer (the tablet's cache-affinity owner, which is
+  // likely warm for the whole tablet) before falling back to S3.
+  6: optional Types.TNetworkAddress peer_addr
 }
 
 struct TPaloScanRange {

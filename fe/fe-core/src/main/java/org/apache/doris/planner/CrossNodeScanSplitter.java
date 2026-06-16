@@ -137,9 +137,16 @@ public class CrossNodeScanSplitter {
 
             // Place the home BE first so it keeps acting as a warm cache source.
             List<Backend> ordered = orderWithHomeFirst(candidateBackends, homeBe);
+            TNetworkAddress homePeer = homeBe.getBrpcAddress();
             for (TTabletSplit ts : splits) {
                 Backend target = ordered.get(roundRobin % ordered.size());
                 roundRobin++;
+                // Point non-home execution BEs at the home BE as a warm-cache peer so a
+                // local cache miss tries the home BE before S3. The home BE itself reads
+                // its own splits, so no peer hint is needed when target == home.
+                if (target.getId() != homeBe.getId()) {
+                    ts.setPeerAddr(homePeer);
+                }
                 result.add(buildSplitLocation(palo, ts, target));
             }
         }
