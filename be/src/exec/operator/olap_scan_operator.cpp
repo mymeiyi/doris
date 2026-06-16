@@ -665,7 +665,19 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
     // tablet split shipped from the home BE, rebuild the read source from the
     // embedded rowset entities and build a single scanner per split, skipping the
     // local capture / ParallelScannerBuilder path. See doc/cross_be_parallel_scan.md.
+    //
+    // A tablet_split is a row-id split, so it is only valid under exactly the same
+    // semantic conditions as the single-BE row-id parallel scan below. Keep a hard
+    // check here so that a mis-routed split (FE eligibility bug) fails loudly
+    // instead of silently changing scan semantics for AGG/MoR / agg-pushdown /
+    // binlog-row / forced-serial scans.
     if (!_scan_ranges.empty() && _scan_ranges[0]->__isset.tablet_split) {
+        if (p._should_run_serial || p._push_down_agg_type != TPushAggOp::NONE ||
+            !(_storage_no_merge() || p._olap_scan_node.is_preaggregation) || read_row_binlog) {
+            return Status::InternalError(
+                    "tablet_split scan range is incompatible with this scan node's semantics "
+                    "(forced serial / agg pushdown / merge-on-read / binlog row scan)");
+        }
         RETURN_IF_ERROR(_build_scanners_from_splits(scanners));
         return Status::OK();
     }

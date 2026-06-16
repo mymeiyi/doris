@@ -94,6 +94,7 @@ import org.apache.doris.thrift.TPartitionBoundary;
 import org.apache.doris.thrift.TPlanNode;
 import org.apache.doris.thrift.TPlanNodeType;
 import org.apache.doris.thrift.TPrimitiveType;
+import org.apache.doris.thrift.TPushAggOp;
 import org.apache.doris.thrift.TScanRange;
 import org.apache.doris.thrift.TScanRangeLocation;
 import org.apache.doris.thrift.TScanRangeLocations;
@@ -1056,7 +1057,7 @@ public class OlapScanNode extends ScanNode {
             return;
         }
         SessionVariable sv = ctx.getSessionVariable();
-        if (!sv.getEnableCrossNodeScan() || isPointQuery()) {
+        if (!sv.getEnableCrossNodeScan() || isPointQuery() || !isCrossNodeScanEligible()) {
             return;
         }
         List<Backend> candidates = new ArrayList<>();
@@ -1077,6 +1078,40 @@ public class OlapScanNode extends ScanNode {
         }
         scanRangeLocations = CrossNodeScanSplitter.split(scanRangeLocations, tabletRowCounts,
                 candidates, sv);
+    }
+
+    /**
+     * Whether this scan is eligible for cross-BE row-id splitting. Mirrors the BE-side
+     * conditions of the single-BE row-id parallel scan (OlapScanLocalState::_init_scanners
+     * / _storage_no_merge): only DUP / MoW / read-MoR-as-dup / preaggregation scans
+     * without agg pushdown or binlog-row reads can be safely split by row id. The BE
+     * keeps a hard check as well; this FE gate avoids generating splits the BE would
+     * reject.
+     */
+    private boolean isCrossNodeScanEligible() {
+        // Agg pushdown changes the storage return semantics; not row-id splittable.
+        if (pushDownAggNoGroupingOp != null && pushDownAggNoGroupingOp != TPushAggOp.NONE) {
+            return false;
+        }
+        // Binlog<row> must be read in order.
+        if (olapTable instanceof RowBinlogTableWrapper) {
+            return false;
+        }
+        KeysType keysType = (selectedIndexId != -1)
+                ? olapTable.getIndexMetaByIndexId(selectedIndexId).getKeysType()
+                : olapTable.getKeysType();
+        boolean storageNoMerge = keysType == KeysType.DUP_KEYS
+                || (keysType == KeysType.UNIQUE_KEYS && olapTable.getEnableUniqueKeyMergeOnWrite())
+                || isReadMorAsDup();
+        return storageNoMerge || isPreAggregation();
+    }
+
+    private boolean isReadMorAsDup() {
+        if (!olapTable.isMorTable() || ConnectContext.get() == null) {
+            return false;
+        }
+        return ConnectContext.get().getSessionVariable()
+                .isReadMorAsDupEnabled(olapTable.getQualifiedDbName(), olapTable.getName());
     }
 
     /**
