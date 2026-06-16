@@ -463,6 +463,15 @@ public class OlapScanNode extends ScanNode {
             }
         }
         this.maxVersion = visibleVersionMap.values().stream().max(Long::compareTo).orElse(0L);
+
+        // Cross-BE scan splitting must run here, AFTER the final cloud snapshot
+        // version has been written into every TPaloScanRange.version: the split is
+        // captured at that version and the embedded tablet_split.pinned_version then
+        // matches sibling scan nodes' MVCC snapshot. Running it earlier (in
+        // computeTabletInfo) would split at the PARTITION_INIT_VERSION placeholder.
+        // It also runs after the one-loc-per-tablet toMap above, so expanding a
+        // tablet into multiple locations here cannot trigger a duplicate-key error.
+        maybeSplitForCrossNodeScan();
     }
 
     public Long getTabletSingleReplicaSize(Long tabletId) {
@@ -1025,8 +1034,6 @@ public class OlapScanNode extends ScanNode {
             }
             addScanRangeLocations(partition, tablets, backendAlivePathHashs);
         }
-
-        maybeSplitForCrossNodeScan();
     }
 
     /**
@@ -1034,6 +1041,10 @@ public class OlapScanNode extends ScanNode {
      * expand qualifying large tablets' scan ranges into per-split scan ranges placed
      * on multiple compute BEs. Non-qualifying ranges are kept unchanged, and any
      * failure falls back to the normal single-BE scan.
+     *
+     * <p>Must be invoked from {@link #updateScanRangeVersions} after the final cloud
+     * snapshot version is applied, so the split is captured at the same MVCC version
+     * as sibling scan nodes (see the call site for details).
      *
      * <p>TODO: exclude colocate / bucket-shuffle scans (bucketSeq2locations is not
      * updated for the expanded ranges); currently guarded only by the default-off
