@@ -1057,7 +1057,11 @@ public class OlapScanNode extends ScanNode {
             return;
         }
         SessionVariable sv = ctx.getSessionVariable();
-        if (!sv.getEnableCrossNodeScan() || isPointQuery() || !isCrossNodeScanEligible()) {
+        // Cross-BE split is a row-id split, so single-machine parallel scan must be
+        // enabled first: it shares the same semantic prerequisites and the design
+        // requires enable_parallel_scan as a gate (see doc/cross_be_parallel_scan.md).
+        if (!sv.getEnableParallelScan() || !sv.getEnableCrossNodeScan()
+                || isPointQuery() || !isCrossNodeScanEligible()) {
             return;
         }
         List<Backend> candidates = new ArrayList<>();

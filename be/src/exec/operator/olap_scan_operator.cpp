@@ -672,11 +672,13 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
     // instead of silently changing scan semantics for AGG/MoR / agg-pushdown /
     // binlog-row / forced-serial scans.
     if (!_scan_ranges.empty() && _scan_ranges[0]->__isset.tablet_split) {
-        if (p._should_run_serial || p._push_down_agg_type != TPushAggOp::NONE ||
+        if (!enable_parallel_scan || p._should_run_serial ||
+            p._push_down_agg_type != TPushAggOp::NONE ||
             !(_storage_no_merge() || p._olap_scan_node.is_preaggregation) || read_row_binlog) {
             return Status::InternalError(
                     "tablet_split scan range is incompatible with this scan node's semantics "
-                    "(forced serial / agg pushdown / merge-on-read / binlog row scan)");
+                    "(parallel scan disabled / forced serial / agg pushdown / merge-on-read / "
+                    "binlog row scan)");
         }
         RETURN_IF_ERROR(_build_scanners_from_splits(scanners));
         return Status::OK();
