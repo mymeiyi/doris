@@ -1109,8 +1109,12 @@ public class OlapScanNode extends ScanNode {
         if (pushDownAggNoGroupingOp != null && pushDownAggNoGroupingOp != TPushAggOp.NONE) {
             return false;
         }
-        // Binlog<row> must be read in order.
-        if (olapTable instanceof RowBinlogTableWrapper) {
+        // Binlog<row> must be read in order, and the BE hard-rejects a row-binlog
+        // read on a split. Reuse the exact toThrift() read_row_binlog decision so
+        // eligibility never disagrees with what actually gets serialized (the
+        // RowBinlogTableWrapper check alone misses parseBinlogScanType / row-binlog
+        // index cases).
+        if (olapTable instanceof RowBinlogTableWrapper || isReadRowBinlog()) {
             return false;
         }
         // Colocate / bucket-shuffle scans rely on the per-bucket scan-range layout
@@ -1131,6 +1135,14 @@ public class OlapScanNode extends ScanNode {
                 || (keysType == KeysType.UNIQUE_KEYS && olapTable.getEnableUniqueKeyMergeOnWrite())
                 || isReadMorAsDup();
         return storageNoMerge || isPreAggregation();
+    }
+
+    // Mirrors the read_row_binlog decision serialized in toThrift(); shared so the
+    // cross-node eligibility check can never disagree with the emitted plan.
+    private boolean isReadRowBinlog() {
+        return parseBinlogScanType(scanParams, olapTable) != TBinlogScanType.NONE
+                || (selectedIndexId != -1
+                        && olapTable.getIndexMetaByIndexId(selectedIndexId).isRowBinlogIndex());
     }
 
     private boolean isReadMorAsDup() {
@@ -1437,8 +1449,7 @@ public class OlapScanNode extends ScanNode {
 
         msg.olap_scan_node.setDistributeColumnIds(new ArrayList<>(distributionColumnIds));
 
-        if (parseBinlogScanType(scanParams, olapTable) != TBinlogScanType.NONE
-                || (selectedIndexId != -1 && olapTable.getIndexMetaByIndexId(selectedIndexId).isRowBinlogIndex())) {
+        if (isReadRowBinlog()) {
             msg.olap_scan_node.setReadRowBinlog(true);
         }
 
