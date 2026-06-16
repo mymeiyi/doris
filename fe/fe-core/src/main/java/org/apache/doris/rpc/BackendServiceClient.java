@@ -103,6 +103,11 @@ public class BackendServiceClient {
         return blockingStub.fetchData(request);
     }
 
+    public Future<InternalService.PGetTabletSplitResponse> getTabletSplit(
+            InternalService.PGetTabletSplitRequest request) {
+        return stub.getTabletSplit(request);
+    }
+
     public Future<InternalService.PFetchArrowFlightSchemaResult> fetchArrowFlightSchema(
             InternalService.PFetchArrowFlightSchemaRequest request) {
         return stub.fetchArrowFlightSchema(request);

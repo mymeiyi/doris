@@ -352,6 +352,15 @@ public class SessionVariable implements Serializable, Writable {
     // Avoid splitting small segments, each scanner should scan `parallel_scan_min_rows_per_scanner` rows.
     public static final String PARALLEL_SCAN_MIN_ROWS_PER_SCANNER = "parallel_scan_min_rows_per_scanner";
 
+    // Cross-BE single-tablet parallel scan (cloud mode only). When enabled, a large
+    // tablet's scan is split on the home BE and the splits are distributed across
+    // multiple compute BEs. See doc/cross_be_parallel_scan.md (Scheme A).
+    public static final String ENABLE_CROSS_NODE_SCAN = "enable_cross_node_scan";
+    // Minimum tablet row count to trigger cross-BE scan splitting.
+    public static final String CROSS_NODE_SCAN_MIN_ROWS = "cross_node_scan_min_rows";
+    // Target number of splits per tablet (0 = derive from parallel_scan_max_scanners_count).
+    public static final String CROSS_NODE_SCAN_MAX_SPLITS = "cross_node_scan_max_splits";
+
     public static final String ENABLE_LOCAL_SHUFFLE = "enable_local_shuffle";
 
     public static final String FORCE_TO_LOCAL_SHUFFLE = "force_to_local_shuffle";
@@ -1601,6 +1610,21 @@ public class SessionVariable implements Serializable, Writable {
     @VarAttrDef.VarAttr(name = PARALLEL_SCAN_MIN_ROWS_PER_SCANNER, fuzzy = true,
             varType = VariableAnnotation.EXPERIMENTAL, needForward = true)
     private long parallelScanMinRowsPerScanner = 2097152; // 2M
+
+    @VarAttrDef.VarAttr(name = ENABLE_CROSS_NODE_SCAN, varType = VariableAnnotation.EXPERIMENTAL,
+            needForward = true, description = {"是否开启单 tablet 跨 BE 并发扫描（仅存算分离）",
+                "Whether to enable cross-BE single-tablet parallel scan (cloud mode only)"})
+    private boolean enableCrossNodeScan = false;
+
+    @VarAttrDef.VarAttr(name = CROSS_NODE_SCAN_MIN_ROWS, needForward = true,
+            description = {"触发跨 BE 并发扫描的 tablet 最小行数",
+                "Minimum tablet row count to trigger cross-BE scan splitting"})
+    private long crossNodeScanMinRows = 10000000L; // 10M
+
+    @VarAttrDef.VarAttr(name = CROSS_NODE_SCAN_MAX_SPLITS, needForward = true,
+            description = {"单 tablet 拆分的目标 split 数（0 表示从 parallel_scan_max_scanners_count 推导）",
+                "Target number of splits per tablet (0 = derive from parallel_scan_max_scanners_count)"})
+    private int crossNodeScanMaxSplits = 0;
 
     @VarAttrDef.VarAttr(name = IGNORE_STORAGE_DATA_DISTRIBUTION, fuzzy = false,
             varType = VariableAnnotation.EXPERIMENTAL, needForward = true)
@@ -5901,6 +5925,26 @@ public class SessionVariable implements Serializable, Writable {
 
     public boolean getEnableParallelScan() {
         return enableParallelScan;
+    }
+
+    public boolean getEnableCrossNodeScan() {
+        return enableCrossNodeScan;
+    }
+
+    public int getParallelScanMaxScannersCount() {
+        return parallelScanMaxScannersCount;
+    }
+
+    public long getParallelScanMinRowsPerScanner() {
+        return parallelScanMinRowsPerScanner;
+    }
+
+    public long getCrossNodeScanMinRows() {
+        return crossNodeScanMinRows;
+    }
+
+    public int getCrossNodeScanMaxSplits() {
+        return crossNodeScanMaxSplits;
     }
 
     public boolean getEnableAggregateFunctionNullV2() {

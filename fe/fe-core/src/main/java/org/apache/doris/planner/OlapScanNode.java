@@ -75,6 +75,7 @@ import org.apache.doris.nereids.trees.plans.ScoreRangeInfo;
 import org.apache.doris.planner.normalize.Normalizer;
 import org.apache.doris.planner.normalize.PartitionRangePredicateNormalizer;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.resource.computegroup.ComputeGroup;
 import org.apache.doris.system.Backend;
 import org.apache.doris.thrift.TAggregationType;
@@ -115,6 +116,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -202,6 +204,8 @@ public class OlapScanNode extends ScanNode {
     private TableSample tableSample;
 
     private Map<Long, Integer> tabletId2BucketSeq = Maps.newHashMap();
+    // tabletId -> row count, used by cross-BE scan splitting threshold.
+    private Map<Long, Long> tabletRowCounts = new HashMap<>();
     // a bucket seq may map to many tablets, and each tablet has a
     // TScanRangeLocations.
     public ArrayListMultimap<Integer, TScanRangeLocations> bucketSeq2locations = ArrayListMultimap.create();
@@ -1016,8 +1020,52 @@ public class OlapScanNode extends ScanNode {
 
             totalTabletsNum += selectedTable.getTablets().size();
             selectedSplitNum += tablets.size();
+            for (Tablet tablet : tablets) {
+                tabletRowCounts.put(tablet.getId(), tablet.getRowCount(true));
+            }
             addScanRangeLocations(partition, tablets, backendAlivePathHashs);
         }
+
+        maybeSplitForCrossNodeScan();
+    }
+
+    /**
+     * Cross-BE single-tablet parallel scan (cloud mode only, Scheme A). When enabled,
+     * expand qualifying large tablets' scan ranges into per-split scan ranges placed
+     * on multiple compute BEs. Non-qualifying ranges are kept unchanged, and any
+     * failure falls back to the normal single-BE scan.
+     *
+     * <p>TODO: exclude colocate / bucket-shuffle scans (bucketSeq2locations is not
+     * updated for the expanded ranges); currently guarded only by the default-off
+     * session flag.
+     */
+    private void maybeSplitForCrossNodeScan() {
+        ConnectContext ctx = ConnectContext.get();
+        if (ctx == null || !Config.isCloudMode() || scanRangeLocations.isEmpty()) {
+            return;
+        }
+        SessionVariable sv = ctx.getSessionVariable();
+        if (!sv.getEnableCrossNodeScan() || isPointQuery()) {
+            return;
+        }
+        List<Backend> candidates = new ArrayList<>();
+        try {
+            for (Backend be : ((CloudSystemInfoService) Env.getCurrentSystemInfo())
+                    .getBackendsByCurrentCluster().values()) {
+                if (be.isQueryAvailable()) {
+                    candidates.add(be);
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn("cross node scan: failed to resolve current cluster backends, skip", e);
+            return;
+        }
+        if (candidates.size() <= 1) {
+            // No spread possible with a single BE.
+            return;
+        }
+        scanRangeLocations = CrossNodeScanSplitter.split(scanRangeLocations, tabletRowCounts,
+                candidates, sv);
     }
 
     /**

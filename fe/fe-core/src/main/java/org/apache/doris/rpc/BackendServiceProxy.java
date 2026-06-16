@@ -322,6 +322,18 @@ public class BackendServiceProxy {
         }
     }
 
+    public Future<InternalService.PGetTabletSplitResponse> getTabletSplit(
+            TNetworkAddress address, InternalService.PGetTabletSplitRequest request) throws RpcException {
+        try {
+            final BackendServiceClient client = getProxy(address);
+            return client.getTabletSplit(request);
+        } catch (Throwable e) {
+            LOG.warn("get tablet split catch a exception, address={}:{}",
+                    address.getHostname(), address.getPort(), e);
+            throw new RpcException(address.hostname, e.getMessage());
+        }
+    }
+
     public Future<InternalService.PFetchArrowFlightSchemaResult> fetchArrowFlightSchema(
             TNetworkAddress address, InternalService.PFetchArrowFlightSchemaRequest request) throws RpcException {
         try {
