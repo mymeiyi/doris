@@ -163,6 +163,7 @@ struct CacheContext {
         }
         query_id = io_context->query_id ? *io_context->query_id : TUniqueId();
         is_warmup = io_context->is_warmup;
+        skip_fill_local_cache = io_context->skip_fill_local_cache;
     }
     CacheContext() = default;
     bool operator==(const CacheContext& rhs) const {
@@ -175,6 +176,9 @@ struct CacheContext {
     bool is_cold_data {false};
     ReadStatistics* stats;
     bool is_warmup {false};
+    // When true, missing ranges are returned as SKIP_CACHE blocks so the read is
+    // served (peer/remote) without populating the local file cache. See IOContext.
+    bool skip_fill_local_cache {false};
     int64_t tablet_id {0};
 };
 

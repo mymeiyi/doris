@@ -134,6 +134,10 @@ public:
         // for compaction, schema_change, check_sum: we don't use page cache
         // for query, when the BE config disable_storage_page_cache is false, we use page cache
         bool use_page_cache = false;
+        // A non-home (cold) execution node of a cross-BE single-tablet parallel
+        // scan sets this so its reads are served through the file cache (from the
+        // home BE peer or remote) without populating the local cache.
+        bool skip_fill_local_cache = false;
         Version version = Version(-1, 0);
 
         std::vector<OlapTuple> start_key;

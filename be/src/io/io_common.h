@@ -96,6 +96,13 @@ struct IOContext {
     bool is_dryrun = false;
     // if `is_warmup` == true, this I/O request is from a warm up task
     bool is_warmup {false};
+    // If true, data fetched on a local cache miss is read through (from peer or
+    // remote) and returned to the reader, but NOT populated into the local file
+    // cache. Already-cached blocks are still served locally. Used by cross-BE
+    // single-tablet parallel scan: a non-home (cold) execution node should not
+    // pollute its cache, because the next query's row-id split may not land the
+    // same byte ranges on this node again. See doc/cross_be_parallel_scan.md.
+    bool skip_fill_local_cache = false;
     int64_t condition_cache_filtered_rows = 0;
 };
 

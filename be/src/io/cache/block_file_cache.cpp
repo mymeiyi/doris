@@ -780,9 +780,16 @@ FileBlocks BlockFileCache::split_range_into_cells(const UInt128Wrapper& hash,
     while (current_pos < end_pos_non_included) {
         current_size = std::min(remaining_size, _max_file_block_size);
         remaining_size -= current_size;
-        state = try_reserve(hash, context, current_pos, current_size, cache_lock)
-                        ? state
-                        : FileBlock::State::SKIP_CACHE;
+        // When the read opts out of populating the local cache, hand back a
+        // SKIP_CACHE block (no cell, no reservation) so the data is read through
+        // without being persisted or touching the LRU.
+        if (context.skip_fill_local_cache) {
+            state = FileBlock::State::SKIP_CACHE;
+        } else {
+            state = try_reserve(hash, context, current_pos, current_size, cache_lock)
+                            ? state
+                            : FileBlock::State::SKIP_CACHE;
+        }
         if (state == FileBlock::State::SKIP_CACHE) [[unlikely]] {
             FileCacheKey key;
             key.hash = hash;

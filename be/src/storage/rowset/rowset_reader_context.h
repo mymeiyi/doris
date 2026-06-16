@@ -72,6 +72,9 @@ struct RowsetReaderContext {
     RuntimeState* runtime_state = nullptr;
     VExprContextSPtrs common_expr_ctxs_push_down;
     bool use_page_cache = false;
+    // Read through the local file cache without populating it on a miss. Set by a
+    // non-home (cold) execution node of a cross-BE single-tablet parallel scan.
+    bool skip_fill_local_cache = false;
     int sequence_id_idx = -1;
     int batch_size = 1024;
     // Effective adaptive batch size byte budget. 0 means disabled internally.

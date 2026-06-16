@@ -796,6 +796,7 @@ Status OlapScanLocalState::_init_scanners(std::list<ScannerSPtr>* scanners) {
                                   p._limit,
                                   p._olap_scan_node.is_preaggregation,
                                   read_row_binlog,
+                                  /*skip_fill_local_cache=*/false,
                                   resolve_binlog_scan_type(palo_scan_range),
                                   palo_scan_range.__isset.start_tso
                                           ? std::make_optional(palo_scan_range.start_tso)
@@ -841,17 +842,20 @@ Status OlapScanLocalState::_build_scanners_from_splits(std::list<ScannerSPtr>* s
         RETURN_IF_ERROR(tablet_split_to_read_source(tablet_split, tablet->tablet_schema(),
                                                     tablet->tablet_id(), &read_source));
 
+        // A split carrying peer_addr means this node is a non-home (cold) execution
+        // node for the tablet: the home BE is shipped as the warm cache-affinity peer.
+        const bool is_cold_split = tablet_split.__isset.peer_addr &&
+                                   !tablet_split.peer_addr.hostname.empty() &&
+                                   tablet_split.peer_addr.port > 0;
         if (config::is_cloud_mode()) {
             // Count hotspot so this node can act as / benefit from a warm cache peer.
             ExecEnv::GetInstance()->storage_engine().to_cloud().tablet_hotspot().count(*tablet);
-            // The split carries the home BE (the tablet's cache-affinity owner) as a
-            // warm file-cache peer. Record it so a local cache miss on this segment
-            // tries to fetch the block from the home BE before falling back to S3.
-            // See CachedRemoteFileReader::get_peer_connection_info. The home BE itself
-            // does not set peer_addr (it reads its own splits), so this only fires on
-            // non-home execution nodes.
-            if (tablet_split.__isset.peer_addr && !tablet_split.peer_addr.hostname.empty() &&
-                tablet_split.peer_addr.port > 0) {
+            // Record the home BE as a warm file-cache peer so a local cache miss on
+            // this segment tries to fetch the block from the home BE before falling
+            // back to S3. See CachedRemoteFileReader::get_peer_connection_info. The
+            // home BE itself does not set peer_addr (it reads its own splits), so this
+            // only fires on non-home execution nodes.
+            if (is_cold_split) {
                 ExecEnv::GetInstance()
                         ->storage_engine()
                         .to_cloud()
@@ -873,6 +877,11 @@ Status OlapScanLocalState::_build_scanners_from_splits(std::list<ScannerSPtr>* s
                               p._limit,
                               p._olap_scan_node.is_preaggregation,
                               false,
+                              // A cold split reads through the file cache without
+                              // populating it: the next query's row-id split may not
+                              // place the same byte ranges on this node again, so
+                              // caching here would only pollute this node's cache.
+                              /*skip_fill_local_cache=*/is_cold_split,
                               TBinlogScanType::NONE,
                               std::nullopt,
                               std::nullopt,

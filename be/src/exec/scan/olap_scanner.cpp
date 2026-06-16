@@ -107,6 +107,7 @@ OlapScanner::OlapScanner(ScanLocalStateBase* parent, OlapScanner::Params&& param
           _end_tso(params.end_tso) {
     _tablet_reader_params.set_read_source(std::move(params.read_source),
                                           _state->skip_delete_bitmap());
+    _tablet_reader_params.skip_fill_local_cache = params.skip_fill_local_cache;
     _has_prepared = false;
     _vector_search_params = params.state->get_vector_search_params();
 }

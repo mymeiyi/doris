@@ -70,6 +70,9 @@ public:
         int64_t limit;
         bool aggregation;
         bool read_row_binlog = false;
+        // Set on a non-home (cold) execution node of a cross-BE single-tablet
+        // parallel scan: read through the file cache without populating it.
+        bool skip_fill_local_cache = false;
         TBinlogScanType::type binlog_scan_type = TBinlogScanType::NONE;
         std::optional<int64_t> start_tso;
         std::optional<int64_t> end_tso;
