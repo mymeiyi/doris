@@ -123,8 +123,7 @@ public class CrossNodeScanSplitter {
 
             List<TTabletSplit> splits;
             try {
-                splits = fetchSplits(homeBe, tabletId, version, maxSplits, minRowsPerSplit,
-                        sv.enableSegmentCache);
+                splits = fetchSplits(homeBe, tabletId, version, maxSplits, minRowsPerSplit, sv);
             } catch (Exception e) {
                 LOG.warn("get_tablet_split failed for tablet {} on be {}, fall back to single-BE "
                         + "scan", tabletId, homeBe.getId(), e);
@@ -148,13 +147,16 @@ public class CrossNodeScanSplitter {
     }
 
     private static List<TTabletSplit> fetchSplits(Backend homeBe, long tabletId, long version,
-            int maxSplits, long minRowsPerSplit, boolean enableSegmentCache) throws Exception {
+            int maxSplits, long minRowsPerSplit, SessionVariable sv) throws Exception {
         PGetTabletSplitRequest request = PGetTabletSplitRequest.newBuilder()
                 .setTabletId(tabletId)
                 .setVersion(version)
                 .setMaxSplits(maxSplits)
                 .setMinRowsPerSplit(minRowsPerSplit)
-                .setEnableSegmentCache(enableSegmentCache)
+                .setEnableSegmentCache(sv.enableSegmentCache)
+                // mirror the query options so the split has the same semantics as a local scan
+                .setSkipDeletePredicate(sv.skipDeletePredicate)
+                .setSkipDeleteBitmap(sv.skipDeleteBitmap)
                 .build();
         Future<PGetTabletSplitResponse> future =
                 BackendServiceProxy.getInstance().getTabletSplit(homeBe.getBrpcAddress(), request);

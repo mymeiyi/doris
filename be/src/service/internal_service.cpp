@@ -2597,7 +2597,12 @@ void PInternalService::get_tablet_split(google::protobuf::RpcController* control
                     {.skip_missing_versions = false,
                      .enable_fetch_rowsets_from_peers =
                              config::enable_fetch_rowsets_from_peer_replicas}));
-            read_source.fill_delete_predicates();
+            // Mirror RuntimeState::skip_delete_predicate(): the BRPC handler has no
+            // RuntimeState, so the option is carried in the request. Skipping the
+            // fill keeps cross-node results identical to a local scan.
+            if (!request->skip_delete_predicate()) {
+                read_source.fill_delete_predicates();
+            }
 
             // 2. Compute per-segment row counts and total rows (mirrors
             //    ParallelScannerBuilder::_load).
@@ -2632,13 +2637,17 @@ void PInternalService::get_tablet_split(google::protobuf::RpcController* control
                                                  &partials));
 
             // 4. Serialize each partial read source as a TTabletSplit entity.
-            const bool is_mow = cloud_tablet->enable_unique_key_merge_on_write();
+            //    Skip the delete bitmap when the query option asks to (the consume
+            //    side also honors skip_delete_bitmap, so this only avoids shipping
+            //    bytes that would be dropped).
+            const bool serialize_delete_bitmap = cloud_tablet->enable_unique_key_merge_on_write() &&
+                                                 !request->skip_delete_bitmap();
             ThriftSerializer serializer(false, 4096);
             int64_t split_id = 0;
             for (auto& partial : partials) {
                 TTabletSplit tablet_split;
-                RETURN_IF_ERROR(read_source_to_tablet_split(version, split_id, partial, is_mow,
-                                                            &tablet_split));
+                RETURN_IF_ERROR(read_source_to_tablet_split(version, split_id, partial,
+                                                            serialize_delete_bitmap, &tablet_split));
                 std::string bytes;
                 RETURN_IF_ERROR(serializer.serialize(&tablet_split, &bytes));
                 int64_t est_rows = 0;

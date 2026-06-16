@@ -1170,6 +1170,9 @@ message PGetTabletSplitRequest {
     optional int64 max_splits = 3;
     optional int64 min_rows_per_split = 4;
     optional bool enable_segment_cache = 5;
+    // mirror the query options so the split has the same semantics as a local scan
+    optional bool skip_delete_predicate = 6;
+    optional bool skip_delete_bitmap = 7;
 }
 
 message PTabletSplitMeta {
