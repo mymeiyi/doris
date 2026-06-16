@@ -1097,6 +1097,17 @@ public class OlapScanNode extends ScanNode {
         if (olapTable instanceof RowBinlogTableWrapper) {
             return false;
         }
+        // Colocate / bucket-shuffle scans rely on the per-bucket scan-range layout
+        // (bucketSeq2locations) which is NOT updated for the expanded split ranges;
+        // splitting one tablet into multiple cross-BE ranges would break bucketing.
+        PlanFragment planFragment = getFragment();
+        if (planFragment != null
+                && (planFragment.hasColocatePlanNode() || planFragment.hasBucketShuffleNode())) {
+            return false;
+        }
+        if (olapTable.isColocateTable()) {
+            return false;
+        }
         KeysType keysType = (selectedIndexId != -1)
                 ? olapTable.getIndexMetaByIndexId(selectedIndexId).getKeysType()
                 : olapTable.getKeysType();
