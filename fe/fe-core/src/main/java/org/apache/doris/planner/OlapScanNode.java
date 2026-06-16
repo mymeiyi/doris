@@ -1061,7 +1061,7 @@ public class OlapScanNode extends ScanNode {
         // enabled first: it shares the same semantic prerequisites and the design
         // requires enable_parallel_scan as a gate (see doc/cross_be_parallel_scan.md).
         if (!sv.getEnableParallelScan() || !sv.getEnableCrossNodeScan()
-                || isPointQuery() || !isCrossNodeScanEligible()) {
+                || isPointQuery() || !isCrossNodeScanEligible(sv)) {
             return;
         }
         List<Backend> candidates = new ArrayList<>();
@@ -1092,7 +1092,19 @@ public class OlapScanNode extends ScanNode {
      * keeps a hard check as well; this FE gate avoids generating splits the BE would
      * reject.
      */
-    private boolean isCrossNodeScanEligible() {
+    private boolean isCrossNodeScanEligible(SessionVariable sv) {
+        // Adaptive serial-read-on-limit: the BE forces a single serial scanner for
+        // small-limit queries (scan_operator.cpp), and our split branch's hard check
+        // rejects _should_run_serial outright. Match the limit gate conservatively
+        // (ignoring the BE's conjunct/keyType sub-conditions, which only make the BE
+        // serial *less* often) so a splittable small-limit query stays a working
+        // single-BE serial scan instead of becoming a failed cross-node scan.
+        if (sv.enableAdaptivePipelineTaskSerialReadOnLimit) {
+            long limit = getLimit();
+            if (limit > 0 && limit <= sv.adaptivePipelineTaskSerialReadOnLimit) {
+                return false;
+            }
+        }
         // Agg pushdown changes the storage return semantics; not row-id splittable.
         if (pushDownAggNoGroupingOp != null && pushDownAggNoGroupingOp != TPushAggOp.NONE) {
             return false;
