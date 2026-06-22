@@ -541,9 +541,11 @@ void CloudStorageEngine::_compaction_tasks_producer_callback() {
             }
 
             bool check_score = false;
-            if (round < config::cumulative_compaction_rounds_for_each_base_compaction_round) {
+            bool disable_base_compaction = config::disable_base_compaction;
+            if (round < config::cumulative_compaction_rounds_for_each_base_compaction_round ||
+                disable_base_compaction) {
                 compaction_type = CompactionType::CUMULATIVE_COMPACTION;
-                round++;
+                round = disable_base_compaction ? 0 : round + 1;
                 if (cur_time - last_cumulative_score_update_time >= check_score_interval_ms) {
                     check_score = true;
                     last_cumulative_score_update_time = cur_time;
@@ -646,6 +648,10 @@ bool CloudStorageEngine::register_index_change_compaction(
 std::vector<CloudTabletSPtr> CloudStorageEngine::_generate_cloud_compaction_tasks(
         CompactionType compaction_type, bool check_score) {
     std::vector<std::shared_ptr<CloudTablet>> tablets_compaction;
+    if (compaction_type == CompactionType::BASE_COMPACTION &&
+        config::disable_base_compaction) {
+        return tablets_compaction;
+    }
 
     int64_t max_compaction_score = 0;
     std::unordered_set<int64_t> tablet_preparing_cumu_compaction;

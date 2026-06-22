@@ -199,6 +199,36 @@ TEST_F(CloudCompactionTest, failure_cumu_compaction_tablet_sleep_test) {
     ASSERT_EQ(tablets.size(), 0);
 }
 
+TEST_F(CloudCompactionTest, disable_base_compaction) {
+    struct ConfigGuard {
+        bool old_value;
+        ~ConfigGuard() { config::disable_base_compaction = old_value; }
+    } guard {config::disable_base_compaction};
+
+    std::vector<RowsetMetaSharedPtr> rs_metas;
+    init_rs_meta_small_base(&rs_metas);
+
+    CloudTabletSPtr tablet = std::make_shared<CloudTablet>(_engine, _tablet_meta);
+    for (auto& rs_meta : rs_metas) {
+        ASSERT_TRUE(_tablet_meta->add_rs_meta(rs_meta).ok());
+    }
+    tablet->tablet_meta()->_tablet_id = 10000;
+    tablet->set_last_base_compaction_failure_time(0);
+    tablet->tablet_meta()->tablet_schema()->set_disable_auto_compaction(false);
+    tablet->_approximate_num_rowsets = 10;
+    _engine.tablet_mgr().put_tablet_for_UT(tablet);
+
+    config::disable_base_compaction = false;
+    auto tablets = _engine.generate_cloud_compaction_tasks_for_test(
+            CompactionType::BASE_COMPACTION, false);
+    ASSERT_EQ(tablets.size(), 1);
+
+    config::disable_base_compaction = true;
+    tablets = _engine.generate_cloud_compaction_tasks_for_test(
+            CompactionType::BASE_COMPACTION, false);
+    ASSERT_TRUE(tablets.empty());
+}
+
 static RowsetSharedPtr create_rowset(Version version, int num_segments, bool overlapping,
                                      int data_size) {
     auto rs_meta = std::make_shared<RowsetMeta>();
