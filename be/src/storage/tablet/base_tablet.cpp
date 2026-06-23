@@ -52,6 +52,7 @@
 #include "storage/rowset/rowset.h"
 #include "storage/rowset/rowset_factory.h"
 #include "storage/rowset/rowset_fwd.h"
+#include "storage/rowset/rowset_meta.h"
 #include "storage/rowset/rowset_reader.h"
 #include "storage/rowset/rowset_writer_context.h"
 #include "storage/segment/column_reader.h"
@@ -183,6 +184,31 @@ void BaseTablet::update_max_version_schema(const TabletSchemaSPtr& tablet_schema
     if (!_max_version_schema ||
         tablet_schema->schema_version() > _max_version_schema->schema_version()) {
         _max_version_schema = tablet_schema;
+    }
+}
+
+void BaseTablet::set_disable_auto_compaction(bool disable_auto_compaction) {
+    // Copy-on-write helper: every schema below may be a shared TabletSchemaCache object,
+    // so build an independent copy with the new value instead of mutating in place.
+    auto cow_set = [disable_auto_compaction](const TabletSchemaSPtr& schema) {
+        auto new_schema = std::make_shared<TabletSchema>();
+        new_schema->copy_from(*schema);
+        new_schema->set_disable_auto_compaction(disable_auto_compaction);
+        return new_schema;
+    };
+
+    std::lock_guard wrlock(_meta_lock);
+    // TabletMeta rebinds to the matching cache entry by content (see TabletMeta::COW).
+    _tablet_meta->set_disable_auto_compaction(disable_auto_compaction);
+    // RowsetMeta::set_tablet_schema rebinds to the cache entry keyed by the new content.
+    for (auto& [_, rowset_meta] : _tablet_meta->all_mutable_rs_metas()) {
+        if (rowset_meta->tablet_schema()->disable_auto_compaction() != disable_auto_compaction) {
+            rowset_meta->set_tablet_schema(cow_set(rowset_meta->tablet_schema()));
+        }
+    }
+    if (_max_version_schema &&
+        _max_version_schema->disable_auto_compaction() != disable_auto_compaction) {
+        _max_version_schema = cow_set(_max_version_schema);
     }
 }
 

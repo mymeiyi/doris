@@ -98,6 +98,13 @@ public:
 
     void update_max_version_schema(const TabletSchemaSPtr& tablet_schema);
 
+    // Update `disable_auto_compaction` on the tablet meta schema, all rowset meta schemas
+    // and the max-version schema using copy-on-write. These schemas come from the shared
+    // TabletSchemaCache, so they must never be mutated in place (that would silently
+    // pollute every other tablet referencing the same cached object). Acquires the
+    // exclusive meta lock internally.
+    void set_disable_auto_compaction(bool disable_auto_compaction);
+
     TabletSchemaSPtr tablet_schema() const {
         std::shared_lock rlock(_meta_lock);
         return _max_version_schema;

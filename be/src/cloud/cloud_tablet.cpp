@@ -1508,9 +1508,12 @@ Status CloudTablet::sync_meta() {
     }
     // Sync disable_auto_compaction (stored in tablet_schema). The schema may be shared
     // via TabletSchemaCache, so go through copy-on-write instead of mutating in place to
-    // avoid polluting other tablets that share the same schema object.
+    // avoid polluting other tablets that share the same schema object. The COW rebinds the
+    // _schema shared_ptr, so take the exclusive meta lock to guard against concurrent
+    // readers (e.g. the compaction scheduler in cloud_tablet_mgr.cpp).
     auto new_disable_auto_compaction = tablet_meta->tablet_schema()->disable_auto_compaction();
     if (_tablet_meta->tablet_schema()->disable_auto_compaction() != new_disable_auto_compaction) {
+        std::unique_lock<std::shared_mutex> wlock(_meta_lock);
         _tablet_meta->set_disable_auto_compaction(new_disable_auto_compaction);
     }
     // Sync vertical_compaction_num_columns_per_group

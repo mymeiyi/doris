@@ -20,6 +20,7 @@
 #include <bthread/countdown_event.h>
 
 #include <chrono>
+#include <shared_mutex>
 
 #include "cloud/cloud_cluster_info.h"
 #include "cloud/cloud_meta_mgr.h"
@@ -475,8 +476,13 @@ Status CloudTabletMgr::get_topn_tablets_to_compact(
         g_cumu_compaction_not_frozen_tablet_num << !is_frozen;
         return is_recent_failure || is_recent_no_suitable_version || is_frozen;
     };
-    // We don't schedule tablets that are disabled for compaction
-    auto disable = [](CloudTablet* t) { return t->tablet_meta()->tablet_schema()->disable_auto_compaction(); };
+    // We don't schedule tablets that are disabled for compaction.
+    // sync_meta() may rebind the _schema shared_ptr under the exclusive meta lock
+    // (copy-on-write), so read it under a shared meta lock to avoid a data race.
+    auto disable = [](CloudTablet* t) {
+        std::shared_lock rlock(t->get_header_lock());
+        return t->tablet_meta()->tablet_schema()->disable_auto_compaction();
+    };
 
     auto [num_filtered, num_disabled, num_skipped] = std::make_tuple(0, 0, 0);
 

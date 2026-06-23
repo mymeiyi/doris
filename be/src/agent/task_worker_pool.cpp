@@ -1003,15 +1003,11 @@ void update_tablet_meta_callback(StorageEngine& engine, const TAgentTaskRequest&
             need_to_save = true;
         }
         if (tablet_meta_info.__isset.disable_auto_compaction) {
-            std::shared_lock rlock(tablet->get_header_lock());
-            tablet->tablet_meta()->mutable_tablet_schema()->set_disable_auto_compaction(
-                    tablet_meta_info.disable_auto_compaction);
-            for (auto& [_, rowset_meta] : tablet->tablet_meta()->all_mutable_rs_metas()) {
-                rowset_meta->tablet_schema()->set_disable_auto_compaction(
-                        tablet_meta_info.disable_auto_compaction);
-            }
-            tablet->tablet_schema_unlocked()->set_disable_auto_compaction(
-                    tablet_meta_info.disable_auto_compaction);
+            // The tablet/rowset schemas come from the shared TabletSchemaCache, so update
+            // via copy-on-write under the exclusive meta lock (acquired inside the method)
+            // instead of mutating the shared objects in place, which would pollute other
+            // tablets that share the same cached TabletSchema.
+            tablet->set_disable_auto_compaction(tablet_meta_info.disable_auto_compaction);
             need_to_save = true;
         }
 
