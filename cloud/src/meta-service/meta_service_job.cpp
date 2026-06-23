@@ -270,8 +270,14 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                        a.input_versions(1) < b.input_versions(0);
             };
             for (auto& c : compactions) {
-                if (c.type() != compaction.type() && c.type() != TabletCompactionJobPB::FULL)
-                    continue;
+                // A new compaction must not overlap the version range of ANY in-flight
+                // compaction, regardless of type. Previously cross-type jobs were skipped
+                // here, which let a BASE job pick rowsets already owned by an in-flight
+                // CUMULATIVE job (and vice versa) under enable_parallel_cumu_compaction:
+                // the two then committed overlapping output rowsets (e.g. [2-195] vs
+                // [186-200]) and base compaction got wedged forever with
+                // "versions are not continuity". FULL clears all jobs on start (handled
+                // above), so the only conflict to check here is actual range overlap.
                 if (c.input_versions_size() > 0 && version_not_conflict(c, compaction)) continue;
                 if (c.id() == compaction.id()) return; // Same job, return OK to keep idempotency
                 msg = fmt::format("compaction has already started, tablet_id={} job={}", tablet_id,

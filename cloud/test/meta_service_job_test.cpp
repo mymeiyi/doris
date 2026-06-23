@@ -531,6 +531,78 @@ TEST(MetaServiceJobTest, StartFullCompaction) {
     }
 }
 
+// Reproduces the "base vs cumu overlapping rowsets" bug that hangs base compaction
+// forever with `[INTERNAL_ERROR]versions are not continuity` under
+// enable_parallel_cumu_compaction=true (single BE).
+//
+// Real-incident timeline (tablet 1782180153475, be.INFO.log.20260601-115404):
+//   - cumu[186-200] starts and is still in-flight (registered in job_pb)
+//   - a later cumu[201-209] commits first, advancing cumulative_point past 200
+//   - base then picks every rowset below cumulative_point and selects the
+//     still-unmerged single rowsets 186..195 -> base input [2-195]
+//   - MS lets base[2-195] start even though cumu[186-200] is running, because
+//     start_compaction_job skips the conflict check for *different* job types
+//     (meta_service_job.cpp: `if (c.type() != compaction.type() && c.type() != FULL) continue;`)
+//   - both commit -> output rowsets [2-195] and [186-200] overlap on 186..195
+//   - base's full check_version_continuity fails forever and never self-heals.
+//
+// The missing invariant: a BASE job whose version range overlaps an in-flight
+// CUMULATIVE job (or vice versa) MUST be rejected. This test asserts that
+// correct behavior, so it FAILS on current master/branch-4.1 -> reproduction.
+TEST(MetaServiceJobTest, BaseCumuOverlapShouldBeRejected) {
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        SyncPoint::get_instance()->clear_all_call_backs();
+    };
+    sp->set_call_back("get_instance_id", [&](auto&& args) {
+        auto* ret = try_any_cast_ret<std::string>(args);
+        ret->first = instance_id;
+        ret->second = true;
+    });
+    sp->enable_processing();
+
+    auto meta_service = get_meta_service();
+    constexpr int64_t table_id = 20001;
+    constexpr int64_t index_id = 20002;
+    constexpr int64_t partition_id = 20003;
+    constexpr int64_t tablet_id = 20004;
+    create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false);
+
+    // An in-flight cumulative compaction over [186, 200] is registered in job_pb.
+    StartTabletJobResponse cumu_res;
+    start_compaction_job(meta_service.get(), tablet_id, "cumu_186_200", "be1:9050", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, cumu_res, {186, 200});
+    ASSERT_EQ(cumu_res.status().code(), MetaServiceCode::OK);
+
+    // Base compaction picks [2, 195], which overlaps the in-flight cumu on 186..195.
+    StartTabletJobResponse base_res;
+    start_compaction_job(meta_service.get(), tablet_id, "base_2_195", "be1:9050", 0, 0,
+                         TabletCompactionJobPB::BASE, base_res, {2, 195});
+
+    // CORRECT behavior: base must be rejected because it overlaps a running cumu.
+    // BUG (master/branch-4.1): returns OK here -> this assertion fails, reproducing
+    // the overlap that later wedges base compaction permanently.
+    EXPECT_EQ(base_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << "base[2-195] overlapping in-flight cumu[186-200] was wrongly allowed; "
+               "this is the root cause of the permanent 'versions are not continuity' hang";
+
+    // Symmetric direction: a new cumu overlapping an in-flight base must also be rejected.
+    auto meta_service2 = get_meta_service();
+    constexpr int64_t tablet_id2 = 20005;
+    create_tablet(meta_service2.get(), table_id, index_id, partition_id, tablet_id2, false);
+
+    StartTabletJobResponse base_res2;
+    start_compaction_job(meta_service2.get(), tablet_id2, "base_2_195", "be1:9050", 0, 0,
+                         TabletCompactionJobPB::BASE, base_res2, {2, 195});
+    ASSERT_EQ(base_res2.status().code(), MetaServiceCode::OK);
+
+    StartTabletJobResponse cumu_res2;
+    start_compaction_job(meta_service2.get(), tablet_id2, "cumu_186_200", "be1:9050", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, cumu_res2, {186, 200});
+    EXPECT_EQ(cumu_res2.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << "cumu[186-200] overlapping in-flight base[2-195] was wrongly allowed";
+}
+
 TEST(MetaServiceJobTest, StartSchemaChangeArguments) {
     auto sp = SyncPoint::get_instance();
     DORIS_CLOUD_DEFER {
