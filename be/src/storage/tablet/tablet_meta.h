@@ -197,6 +197,14 @@ public:
 
     TabletSchema* mutable_tablet_schema();
 
+    // Update `disable_auto_compaction` using copy-on-write semantics.
+    // `_schema` may be a shared object owned by `TabletSchemaCache` (multiple tablets
+    // with identical schema content share the same instance). Modifying it in place
+    // would silently pollute every other tablet referencing the same object, so we
+    // build an independent copy, set the new value on it, and rebind `_schema`/`_handle`
+    // to the cache entry keyed by the new schema content.
+    void set_disable_auto_compaction(bool disable_auto_compaction);
+
     const RowsetMetaMapContainer& all_rs_metas() const;
     RowsetMetaMapContainer& all_mutable_rs_metas();
     Status add_rs_meta(const RowsetMetaSharedPtr& rs_meta);

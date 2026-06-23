@@ -35,6 +35,7 @@
 #include "storage/rowset/rowset_factory.h"
 #include "storage/rowset/rowset_meta.h"
 #include "storage/tablet/tablet_meta.h"
+#include "storage/tablet/tablet_schema_cache.h"
 #include "util/uid_util.h"
 
 namespace doris {
@@ -941,6 +942,194 @@ TEST_F(CloudTabletSyncMetaTest, TestSyncMetaMultipleProperties) {
     sp->disable_processing();
     sp->clear_all_call_backs();
 }
+// Test class that reproduces TabletSchemaCache sharing between structurally-identical
+// tablets that belong to *different* tables. Unlike CloudTabletSyncMetaTest (which uses a
+// unique column name per tablet to deliberately avoid cache sharing), these tests build
+// tablets with identical schema content so they map to the *same* cached TabletSchema
+// object, then verify that syncing disable_auto_compaction on one tablet does not pollute
+// the others (copy-on-write).
+class CloudTabletSchemaCacheCowTest : public testing::Test {
+public:
+    CloudTabletSchemaCacheCowTest() : _engine(CloudStorageEngine(EngineOptions {})) {}
+
+    void SetUp() override { config::enable_file_cache = true; }
+
+    void TearDown() override {
+        auto* sp = SyncPoint::get_instance();
+        sp->disable_processing();
+        sp->clear_all_call_backs();
+        config::enable_file_cache = false;
+    }
+
+protected:
+    // Build a thrift schema with a fixed single-column layout. Tablets created with the
+    // same `col_name` and `disable_auto_compaction` produce identical schema content and
+    // therefore share the same TabletSchemaCache entry, regardless of tablet_id/table_id.
+    TTabletSchema makeSchema(bool disable_auto_compaction, const std::string& col_name) {
+        TTabletSchema schema;
+        schema.__set_disable_auto_compaction(disable_auto_compaction);
+        TColumn col;
+        col.__set_column_name(col_name);
+        col.__set_column_type(TColumnType());
+        col.column_type.__set_type(TPrimitiveType::INT);
+        col.__set_is_key(true);
+        col.__set_aggregation_type(TAggregationType::NONE);
+        col.__set_col_unique_id(0);
+        schema.__set_columns({col});
+        schema.__set_keys_type(TKeysType::DUP_KEYS);
+        return schema;
+    }
+
+    TabletMetaSharedPtr makeMeta(int64_t table_id, int64_t tablet_id,
+                                 bool disable_auto_compaction, const std::string& col_name) {
+        TTabletSchema schema = makeSchema(disable_auto_compaction, col_name);
+        TabletMetaSharedPtr meta;
+        meta.reset(new TabletMeta(table_id, 2, tablet_id, 15674, 4, 5, schema, 1, {{0, 0}},
+                                  UniqueId(9, 10), TTabletType::TABLET_TYPE_DISK,
+                                  TCompressionType::LZ4F));
+        return meta;
+    }
+
+    std::shared_ptr<CloudTablet> makeTablet(int64_t table_id, int64_t tablet_id,
+                                            bool disable_auto_compaction,
+                                            const std::string& col_name) {
+        return std::make_shared<CloudTablet>(
+                _engine, makeMeta(table_id, tablet_id, disable_auto_compaction, col_name));
+    }
+
+    // Run sync_meta on `tablet`, mocking the MS response to carry `mock_meta`.
+    void syncFromMs(const std::shared_ptr<CloudTablet>& tablet,
+                    const TabletMetaSharedPtr& mock_meta) {
+        auto* sp = SyncPoint::get_instance();
+        sp->clear_all_call_backs();
+        sp->enable_processing();
+        sp->set_call_back("CloudMetaMgr::get_tablet_meta", [mock_meta](auto&& args) {
+            auto* tablet_meta_ptr = try_any_cast<TabletMetaSharedPtr*>(args[1]);
+            *tablet_meta_ptr = mock_meta;
+            try_any_cast_ret<Status>(args)->second = true;
+        });
+        Status st = tablet->sync_meta();
+        EXPECT_TRUE(st.ok());
+        sp->clear_all_call_backs();
+    }
+
+    CloudStorageEngine _engine;
+    static inline int _counter = 0;
+};
+
+// Two tablets from different tables, both created with disable_auto_compaction=false, share
+// the same cached TabletSchema object. Syncing one to true must not pollute the other, and
+// the two must end up referencing different schema objects (copy-on-write separation).
+TEST_F(CloudTabletSchemaCacheCowTest, SyncDoesNotPolluteSharedSchema) {
+    const std::string col = "cow_col_" + std::to_string(_counter++);
+
+    auto tablet_a = makeTablet(/*table_id*/ 100, /*tablet_id*/ 200001, false, col);
+    auto tablet_b = makeTablet(/*table_id*/ 101, /*tablet_id*/ 200002, false, col);
+
+    // Precondition: structurally identical => same shared schema object.
+    ASSERT_EQ(tablet_a->tablet_meta()->tablet_schema().get(),
+              tablet_b->tablet_meta()->tablet_schema().get());
+    ASSERT_FALSE(tablet_a->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    ASSERT_FALSE(tablet_b->tablet_meta()->tablet_schema()->disable_auto_compaction());
+
+    // Sync tablet_a from MS with disable_auto_compaction=true (e.g. b9's ALTER).
+    syncFromMs(tablet_a, makeMeta(100, 200001, true, col));
+
+    EXPECT_TRUE(tablet_a->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    // tablet_b must remain false -- not polluted.
+    EXPECT_FALSE(tablet_b->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    // COW: the two tablets now reference different schema objects.
+    EXPECT_NE(tablet_a->tablet_meta()->tablet_schema().get(),
+              tablet_b->tablet_meta()->tablet_schema().get());
+}
+
+// After COW, the tablet's schema object content must stay consistent with the cache key it
+// is stored under: looking the schema up again by its own to_key() returns the same object.
+TEST_F(CloudTabletSchemaCacheCowTest, CacheKeyMatchesSchemaContentAfterCow) {
+    const std::string col = "cow_col_" + std::to_string(_counter++);
+
+    auto tablet = makeTablet(100, 200101, false, col);
+    syncFromMs(tablet, makeMeta(100, 200101, true, col));
+
+    const auto& schema = tablet->tablet_meta()->tablet_schema();
+    EXPECT_TRUE(schema->disable_auto_compaction());
+
+    // Invariant: the object serializes to the key under which it lives in the cache, so a
+    // fresh lookup with that key returns the very same shared instance.
+    auto pair = TabletSchemaCache::instance()->insert(schema->to_key());
+    EXPECT_EQ(pair.second.get(), schema.get());
+    EXPECT_TRUE(pair.second->disable_auto_compaction());
+    TabletSchemaCache::instance()->release(pair.first);
+}
+
+// Bidirectional: syncing a shared tablet from true to false must not pollute the other
+// shared tablet either.
+TEST_F(CloudTabletSchemaCacheCowTest, SyncTrueToFalseDoesNotPollute) {
+    const std::string col = "cow_col_" + std::to_string(_counter++);
+
+    auto tablet_a = makeTablet(100, 200201, true, col);
+    auto tablet_b = makeTablet(101, 200202, true, col);
+
+    ASSERT_EQ(tablet_a->tablet_meta()->tablet_schema().get(),
+              tablet_b->tablet_meta()->tablet_schema().get());
+
+    syncFromMs(tablet_a, makeMeta(100, 200201, false, col));
+
+    EXPECT_FALSE(tablet_a->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    EXPECT_TRUE(tablet_b->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    EXPECT_NE(tablet_a->tablet_meta()->tablet_schema().get(),
+              tablet_b->tablet_meta()->tablet_schema().get());
+}
+
+// Three structurally-identical tablets share one schema object; changing one leaves the
+// other two untouched and still sharing.
+TEST_F(CloudTabletSchemaCacheCowTest, ThreeWaySharingOnlyTargetChanges) {
+    const std::string col = "cow_col_" + std::to_string(_counter++);
+
+    auto t1 = makeTablet(100, 200301, false, col);
+    auto t2 = makeTablet(101, 200302, false, col);
+    auto t3 = makeTablet(102, 200303, false, col);
+
+    ASSERT_EQ(t1->tablet_meta()->tablet_schema().get(),
+              t2->tablet_meta()->tablet_schema().get());
+    ASSERT_EQ(t2->tablet_meta()->tablet_schema().get(),
+              t3->tablet_meta()->tablet_schema().get());
+
+    syncFromMs(t2, makeMeta(101, 200302, true, col));
+
+    EXPECT_TRUE(t2->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    EXPECT_FALSE(t1->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    EXPECT_FALSE(t3->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    // t1 and t3 stay on the original shared object.
+    EXPECT_EQ(t1->tablet_meta()->tablet_schema().get(),
+              t3->tablet_meta()->tablet_schema().get());
+    EXPECT_NE(t2->tablet_meta()->tablet_schema().get(),
+              t1->tablet_meta()->tablet_schema().get());
+}
+
+// Multiple tablets of the *same* table that are synced to the same new value must converge
+// on (reuse) the same new cached schema entry -- COW does not break intra-table sharing.
+TEST_F(CloudTabletSchemaCacheCowTest, SameTableTabletsReuseNewEntry) {
+    const std::string col = "cow_col_" + std::to_string(_counter++);
+
+    auto t1 = makeTablet(/*table_id*/ 300, /*tablet_id*/ 200401, false, col);
+    auto t2 = makeTablet(/*table_id*/ 300, /*tablet_id*/ 200402, false, col);
+
+    ASSERT_EQ(t1->tablet_meta()->tablet_schema().get(),
+              t2->tablet_meta()->tablet_schema().get());
+
+    // Both tablets receive the ALTER (disable_auto_compaction=true) and get synced.
+    syncFromMs(t1, makeMeta(300, 200401, true, col));
+    syncFromMs(t2, makeMeta(300, 200402, true, col));
+
+    EXPECT_TRUE(t1->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    EXPECT_TRUE(t2->tablet_meta()->tablet_schema()->disable_auto_compaction());
+    // They independently re-resolved to the cache with an identical key, so they share the
+    // same *new* schema object again.
+    EXPECT_EQ(t1->tablet_meta()->tablet_schema().get(),
+              t2->tablet_meta()->tablet_schema().get());
+}
+
 class CloudTabletApplyVisiblePendingTest : public testing::Test {
 public:
     CloudTabletApplyVisiblePendingTest() : _engine(CloudStorageEngine(EngineOptions {})) {}

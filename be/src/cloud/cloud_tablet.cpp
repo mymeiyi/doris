@@ -1506,11 +1506,12 @@ Status CloudTablet::sync_meta() {
         _tablet_meta->set_time_series_compaction_level_threshold(
                 new_time_series_compaction_level_threshold);
     }
-    // Sync disable_auto_compaction (stored in tablet_schema)
+    // Sync disable_auto_compaction (stored in tablet_schema). The schema may be shared
+    // via TabletSchemaCache, so go through copy-on-write instead of mutating in place to
+    // avoid polluting other tablets that share the same schema object.
     auto new_disable_auto_compaction = tablet_meta->tablet_schema()->disable_auto_compaction();
     if (_tablet_meta->tablet_schema()->disable_auto_compaction() != new_disable_auto_compaction) {
-        _tablet_meta->mutable_tablet_schema()->set_disable_auto_compaction(
-                new_disable_auto_compaction);
+        _tablet_meta->set_disable_auto_compaction(new_disable_auto_compaction);
     }
     // Sync vertical_compaction_num_columns_per_group
     auto new_vertical_compaction_num_columns_per_group =

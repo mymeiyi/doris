@@ -808,6 +808,24 @@ Status TabletMeta::deserialize(std::string_view meta_binary) {
     return Status::OK();
 }
 
+void TabletMeta::set_disable_auto_compaction(bool disable_auto_compaction) {
+    if (_schema->disable_auto_compaction() == disable_auto_compaction) {
+        return;
+    }
+    // Copy-on-write: `_schema` may be shared via TabletSchemaCache, so never mutate it
+    // in place. Build an independent copy with the new value and rebind to the cache
+    // entry keyed by the new schema content (same path as init_from_pb).
+    TabletSchemaSPtr new_schema = std::make_shared<TabletSchema>();
+    new_schema->copy_from(*_schema);
+    new_schema->set_disable_auto_compaction(disable_auto_compaction);
+    auto pair = TabletSchemaCache::instance()->insert(new_schema->to_key());
+    if (_handle) {
+        TabletSchemaCache::instance()->release(_handle);
+    }
+    _handle = pair.first;
+    _schema = pair.second;
+}
+
 void TabletMeta::init_from_pb(const TabletMetaPB& tablet_meta_pb) {
     _table_id = tablet_meta_pb.table_id();
     _index_id = tablet_meta_pb.index_id();
