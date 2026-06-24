@@ -3501,4 +3501,214 @@ TEST(TxnLazyCommitTest, CommitTxnEventuallyWithManyPartitions) {
     }
 }
 
+TEST(TxnLazyCommitTest, RecycleTmpRowsetDataLossTest) {
+    // Reproduces a real race condition where recycle_tmp_rowsets deletes tmp rowsets
+    // that a COMMITTED (but not yet VISIBLE) lazy txn still needs.
+    //
+    // Timeline:
+    //   1. commit_txn → commit_txn_eventually → TxnLazyCommitTask submitted
+    //   2. Lazy commit thread: scan_tmp_rowset finds tmp rowsets [SYNC POINT: block here]
+    //   3. Test thread: InstanceRecycler.recycle_tmp_rowsets() deletes tmp rowsets
+    //   4. [Release sync point]
+    //   5. Lazy commit thread: convert_tmp_rowsets finds nothing, skips silently
+    //   6. make_committed_txn_visible → txn=VISIBLE, but rowset data is lost
+    //
+    // Result: commit_txn returns OK, but the rowset data is permanently lost.
+
+    auto old_retention = config::retention_seconds;
+    DORIS_CLOUD_DEFER { config::retention_seconds = old_retention; };
+    config::retention_seconds = 0;
+
+    auto txn_kv = get_mem_txn_kv();
+    int64_t db_id = 7788990011;
+    int64_t table_id = 1122334455;
+    int64_t index_id = 667788990;
+    int64_t partition_id = 9988776655443;
+    std::string mock_instance = "test_instance";
+
+    auto sp = SyncPoint::get_instance();
+    std::mutex recycler_done_mutex;
+    std::condition_variable recycler_done_cv;
+    bool recycler_done = false;
+
+    // Block the lazy commit thread after it scans tmp rowsets, before convert_tmp_rowsets
+    sp->set_call_back("TxnLazyCommitTask::commit::after_scan_tmp_rowset", [&](auto&&) {
+        std::unique_lock lock(recycler_done_mutex);
+        LOG(INFO) << "lazy commit blocked after scan_tmp_rowset, waiting for recycler";
+        recycler_done_cv.wait(lock, [&]() { return recycler_done; });
+        LOG(INFO) << "lazy commit released, continuing with convert_tmp_rowsets";
+    });
+    sp->enable_processing();
+    DORIS_CLOUD_DEFER {
+        sp->clear_all_call_backs();
+        sp->clear_trace();
+        sp->disable_processing();
+    };
+
+    auto meta_service = get_meta_service(txn_kv, true);
+
+    // Step 1: Create tablets (need > txn_lazy_commit_rowsets_thresold=1000 to force lazy commit)
+    int64_t tablet_id_base = 1103;
+    for (int i = 0; i < 2999; ++i) {
+        create_tablet_without_db_id(meta_service.get(), table_id, index_id, partition_id,
+                                    tablet_id_base + i);
+    }
+
+    // Step 2: Begin txn and commit rowsets (writes tmp rowset keys)
+    int64_t txn_id;
+    {
+        brpc::Controller cntl;
+        BeginTxnRequest req;
+        req.set_cloud_unique_id("test_cloud_unique_id");
+        TxnInfoPB txn_info_pb;
+        txn_info_pb.set_db_id(db_id);
+        txn_info_pb.set_label("test_recycle_tmp_data_loss");
+        txn_info_pb.add_table_ids(table_id);
+        txn_info_pb.set_timeout_ms(36000);
+        req.mutable_txn_info()->CopyFrom(txn_info_pb);
+        BeginTxnResponse res;
+        meta_service->begin_txn(&cntl, &req, &res, nullptr);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+        txn_id = res.txn_id();
+    }
+
+    for (int i = 0; i < 2999; ++i) {
+        auto tmp_rowset = create_rowset(txn_id, tablet_id_base + i, index_id, partition_id);
+        CreateRowsetResponse res;
+        prepare_rowset(meta_service.get(), tmp_rowset, res);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+        commit_rowset(meta_service.get(), tmp_rowset, res);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+    }
+
+    // Step 3: Commit txn with lazy commit (triggers lazy commit in background)
+    std::atomic_bool commit_finished = false;
+    std::thread commit_thread([&]() {
+        brpc::Controller cntl;
+        CommitTxnRequest req;
+        req.set_cloud_unique_id("test_cloud_unique_id");
+        req.set_db_id(db_id);
+        req.set_txn_id(txn_id);
+        req.set_is_2pc(false);
+        req.set_enable_txn_lazy_commit(true);
+        for (int i = 0; i < 2999; ++i) {
+            req.add_base_tablet_ids(tablet_id_base + i);
+        }
+        CommitTxnResponse res;
+        meta_service->commit_txn(&cntl, &req, &res, nullptr);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+        commit_finished = true;
+    });
+    DORIS_CLOUD_DEFER {
+        // Always release the sync point and join the thread, even if assertions fail
+        {
+            std::lock_guard lock(recycler_done_mutex);
+            recycler_done = true;
+        }
+        recycler_done_cv.notify_all();
+        if (commit_thread.joinable()) {
+            commit_thread.join();
+        }
+    };
+
+    // Step 4: Wait for the lazy commit to hit the sync point (blocked)
+    while (!sp->has_point("TxnLazyCommitTask::commit::after_scan_tmp_rowset") ||
+           !sp->get_enable()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    // Give the lazy commit thread time to reach the sync point
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // Verify tmp rowset keys still exist (lazy commit is blocked before convert)
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        std::string tmp_key = meta_rowset_tmp_key({mock_instance, txn_id, tablet_id_base});
+        std::string val;
+        ASSERT_EQ(txn->get(tmp_key, &val), TxnErrorCode::TXN_OK)
+                << "tmp rowset key should exist while lazy commit is blocked";
+    }
+
+    // Step 5: Delete tmp rowset keys directly (simulates what recycle_tmp_rowsets does)
+    // This directly removes all tmp rowset keys for this txn from KV
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        for (int i = 0; i < 2999; ++i) {
+            std::string tmp_key = meta_rowset_tmp_key({mock_instance, txn_id, tablet_id_base + i});
+            txn->remove(tmp_key);
+        }
+        ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+    }
+
+    // Verify tmp rowset keys are deleted
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        std::string tmp_key = meta_rowset_tmp_key({mock_instance, txn_id, tablet_id_base});
+        std::string val;
+        ASSERT_EQ(txn->get(tmp_key, &val), TxnErrorCode::TXN_KEY_NOT_FOUND)
+                << "tmp rowset key should be deleted";
+    }
+
+    // Step 6: Release the lazy commit (convert_tmp_rowsets will find nothing)
+    {
+        std::lock_guard lock(recycler_done_mutex);
+        recycler_done = true;
+    }
+    recycler_done_cv.notify_all();
+
+    // Step 7: Wait for commit to finish (join is handled by DORIS_CLOUD_DEFER above)
+    if (commit_thread.joinable()) {
+        commit_thread.join();
+    }
+    ASSERT_TRUE(commit_finished);
+
+    // Step 8: Verify data loss
+    // Txn is VISIBLE (lazy commit "succeeded")
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        std::string info_key = txn_info_key({mock_instance, db_id, txn_id});
+        std::string info_val;
+        ASSERT_EQ(txn->get(info_key, &info_val), TxnErrorCode::TXN_OK);
+        TxnInfoPB txn_info;
+        ASSERT_TRUE(txn_info.ParseFromString(info_val));
+        ASSERT_EQ(txn_info.status(), TxnStatusPB::TXN_STATUS_VISIBLE)
+                << "txn was made VISIBLE by lazy commit";
+    }
+
+    // Tmp rowset key is gone (deleted by recycler)
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        std::string tmp_key = meta_rowset_tmp_key({mock_instance, txn_id, tablet_id_base});
+        std::string val;
+        ASSERT_EQ(txn->get(tmp_key, &val), TxnErrorCode::TXN_KEY_NOT_FOUND)
+                << "DATA LOSS: tmp rowset key deleted by recycler, never converted";
+    }
+
+    // No formal rowset was written (convert_tmp_rowsets skipped the missing tmp key)
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        // After successful convert, rowset would be at version 2
+        std::string rowset_key = meta_rowset_key({mock_instance, tablet_id_base, 2});
+        std::string rowset_val;
+        ASSERT_EQ(txn->get(rowset_key, &rowset_val), TxnErrorCode::TXN_KEY_NOT_FOUND)
+                << "DATA LOSS: no formal rowset exists, txn is VISIBLE but data is gone";
+    }
+
+    // No formal rowset was written (convert_tmp_rowsets skipped the missing tmp key)
+    {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        // After successful convert, rowset would be at version 2
+        std::string rowset_key = meta_rowset_key({mock_instance, 10001, 2});
+        std::string rowset_val;
+        ASSERT_EQ(txn->get(rowset_key, &rowset_val), TxnErrorCode::TXN_KEY_NOT_FOUND)
+                << "DATA LOSS: no formal rowset exists, txn is VISIBLE but data is gone";
+    }
+}
+
 } // namespace doris::cloud

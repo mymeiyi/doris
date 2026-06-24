@@ -696,6 +696,8 @@ void TxnLazyCommitTask::commit() {
             std::vector<std::pair<std::string, doris::RowsetMetaCloudPB>> all_tmp_rowset_metas;
             scan_tmp_rowset(instance_id_, txn_id_, txn_kv_, code_, msg_, &all_tmp_rowset_metas,
                             nullptr);
+            TEST_SYNC_POINT_CALLBACK("TxnLazyCommitTask::commit::after_scan_tmp_rowset",
+                                     &txn_id_);
             if (code_ != MetaServiceCode::OK) {
                 LOG(WARNING) << "scan_tmp_rowset failed, txn_id=" << txn_id_ << " code=" << code_;
                 break;
