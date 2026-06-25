@@ -72,13 +72,14 @@ void HashPartitioner::partition(const Block* block, const DorisVector<uint32_t>&
     }
     // update_hashes_with_value() chains via the existing seed value, so applying it
     // column by column yields one combined xxHash per row across all hashed columns.
+    // assign() reuses _hashes' capacity (and re-seeds every row to 0) across calls.
     size_t num_block_rows = block->rows();
-    std::vector<uint64_t> hashes(num_block_rows, 0);
+    _hashes.assign(num_block_rows, 0);
     for (uint32_t pos : _hash_block_pos) {
-        block->get_by_position(pos).column->update_hashes_with_value(hashes.data(), nullptr);
+        block->get_by_position(pos).column->update_hashes_with_value(_hashes.data(), nullptr);
     }
     for (size_t i = 0; i < rows.size(); ++i) {
-        shard_ids[i] = static_cast<uint32_t>(hashes[rows[i]] % _num_shards);
+        shard_ids[i] = static_cast<uint32_t>(_hashes[rows[i]] % _num_shards);
     }
 }
 

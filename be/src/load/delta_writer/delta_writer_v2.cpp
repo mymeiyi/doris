@@ -164,6 +164,7 @@ Status DeltaWriterV2::init() {
         auto partitioner = std::make_unique<HashPartitioner>(_sub_writer_count);
         RETURN_IF_ERROR(partitioner->init(_req.slots, _req.tuple_desc, _tablet_schema));
         _partitioner = std::move(partitioner);
+        _buckets.resize(_sub_writer_count);
     }
 
     _is_init = true;
@@ -207,13 +208,15 @@ Status DeltaWriterV2::write(const Block* block, const DorisVector<uint32_t>& row
     }
     // Scatter the rows of this block across the K sub-writers by hash(key).
     _partitioner->partition(block, row_idxs, _shard_ids);
-    std::vector<DorisVector<uint32_t>> buckets(_sub_writer_count);
+    for (auto& bucket : _buckets) {
+        bucket.clear(); // keeps capacity, avoids re-allocating each write()
+    }
     for (size_t i = 0; i < row_idxs.size(); ++i) {
-        buckets[_shard_ids[i]].push_back(row_idxs[i]);
+        _buckets[_shard_ids[i]].push_back(row_idxs[i]);
     }
     for (int s = 0; s < _sub_writer_count; ++s) {
-        if (!buckets[s].empty()) {
-            RETURN_IF_ERROR(_sub_writers[s]->write(block, buckets[s]));
+        if (!_buckets[s].empty()) {
+            RETURN_IF_ERROR(_sub_writers[s]->write(block, _buckets[s]));
         }
     }
     return Status::OK();

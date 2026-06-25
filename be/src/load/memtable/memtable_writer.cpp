@@ -364,7 +364,8 @@ const FlushStatistic& MemTableWriter::get_flush_token_stats() {
 }
 
 int64_t MemTableWriter::merged_rows() const {
-    return _flush_token == nullptr ? 0 : _flush_token->memtable_stat().merged_rows;
+    return _flush_token == nullptr ? int64_t {0}
+                                   : _flush_token->memtable_stat().merged_rows.load();
 }
 
 uint64_t MemTableWriter::flush_running_count() const {

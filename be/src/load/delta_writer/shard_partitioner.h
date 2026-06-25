@@ -74,6 +74,9 @@ public:
 private:
     // Block column positions of the columns we hash on (key columns, in schema order).
     std::vector<uint32_t> _hash_block_pos;
+    // Reused scratch for the per-block-row combined hashes (not thread-safe; one
+    // partitioner is only ever driven from a single DeltaWriter's write() path).
+    std::vector<uint64_t> _hashes;
 };
 
 } // namespace doris

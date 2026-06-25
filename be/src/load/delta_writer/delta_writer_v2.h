@@ -116,6 +116,9 @@ private:
     std::unique_ptr<ShardPartitioner> _partitioner;
     // Reused scratch for the per-row shard ids computed in write().
     std::vector<uint32_t> _shard_ids;
+    // Reused per-shard row buckets (sized to K in init()); cleared each write() to
+    // avoid re-allocating this vector-of-vectors on the hot path.
+    std::vector<DorisVector<uint32_t>> _buckets;
     MonotonicStopWatch _lock_watch;
 
     std::vector<std::shared_ptr<LoadStreamStub>> _streams;
