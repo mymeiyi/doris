@@ -58,9 +58,15 @@ public:
 
     ~MemTableWriter();
 
+    // `shared_rowset_writer` indicates this writer is one of K sub-writers sharing a
+    // single rowset writer (Phase 1). When true, the per-writer row-count consistency
+    // check in close_wait is skipped (rowset_writer->num_rows() is the aggregate over
+    // all sub-writers); the caller does the aggregate check instead.
+    // `sub_writer_count` is K, used to scale down the per-memtable flush threshold.
     Status init(std::shared_ptr<RowsetWriter> rowset_writer, TabletSchemaSPtr tablet_schema,
                 std::shared_ptr<PartialUpdateInfo> partial_update_info,
-                std::shared_ptr<WorkloadGroup> wg_sptr, bool unique_key_mow = false);
+                std::shared_ptr<WorkloadGroup> wg_sptr, bool unique_key_mow = false,
+                bool shared_rowset_writer = false, int sub_writer_count = 1);
 
     Status write(const Block* block, const DorisVector<uint32_t>& row_idxs);
 
@@ -95,6 +101,9 @@ public:
 
     int64_t total_received_rows() const { return _total_received_rows; }
 
+    // Rows merged away by this writer's memtables (dedup/agg). Valid after close_wait.
+    int64_t merged_rows() const;
+
     const FlushStatistic& get_flush_token_stats();
 
     uint64_t flush_running_count() const;
@@ -126,6 +135,8 @@ private:
     std::shared_ptr<MemTable> _mem_table;
     TabletSchemaSPtr _tablet_schema;
     bool _unique_key_mow = false;
+    bool _shared_rowset_writer = false;
+    int _sub_writer_count = 1;
 
     // This variable is accessed from writer thread and token flush thread
     // use a shared ptr to avoid use after free problem.

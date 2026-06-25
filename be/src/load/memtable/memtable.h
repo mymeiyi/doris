@@ -174,7 +174,7 @@ public:
     MemTable(int64_t tablet_id, std::shared_ptr<TabletSchema> tablet_schema,
              const std::vector<SlotDescriptor*>* slot_descs, TupleDescriptor* tuple_desc,
              bool enable_unique_key_mow, PartialUpdateInfo* partial_update_info,
-             const std::shared_ptr<ResourceContext>& resource_ctx);
+             const std::shared_ptr<ResourceContext>& resource_ctx, int sub_writer_count = 1);
     ~MemTable();
 
     int64_t tablet_id() const { return _tablet_id; }
@@ -224,6 +224,10 @@ private:
 private:
     std::atomic<MemType> _mem_type;
     int64_t _tablet_id;
+    // Number of sub-writers sharing one rowset writer for this load (Phase 1).
+    // Used to scale down the per-memtable flush threshold so K memtables together
+    // keep roughly the original single-memtable memory budget.
+    int _sub_writer_count = 1;
     bool _enable_unique_key_mow = false;
     bool _is_flush_success = false;
     UniqueKeyUpdateModePB _partial_update_mode {UniqueKeyUpdateModePB::UPSERT};

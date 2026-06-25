@@ -51,6 +51,10 @@ struct WriteRequest {
     bool write_file_cache = false;
     WriteRequestType write_req_type = WriteRequestType::DATA;
     std::string storage_vault_id;
+    // Phase 1: number of intra-node sub-writers to fan this tablet's writer into.
+    // 1 means disabled (original single-writer behavior). Sourced from the
+    // load_sub_writer_count session var (cloud-only) by the sink.
+    int32_t sub_writer_count = 1;
 };
 
 } // namespace doris

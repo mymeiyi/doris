@@ -498,6 +498,9 @@ struct TQueryOptions {
   221: optional i64 ann_index_candidate_rows_threshold = 0
   // Candidate row ratio threshold against segment rows. Existing default is 0.3.
   222: optional double ann_index_candidate_rows_percent_threshold = 0.3
+  // Phase 1 load parallelism: number of intra-node sub-writers a single tablet's
+  // DeltaWriter fans out into (cloud-only). 1 means disabled.
+  223: optional i32 load_sub_writer_count = 1
   // For cloud, to control if the content would be written into file cache
   // In write path, to control if the content would be written into file cache.
   // In read path, read from file cache or remote storage when execute query.

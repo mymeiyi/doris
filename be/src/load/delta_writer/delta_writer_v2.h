@@ -33,6 +33,7 @@
 
 #include "common/status.h"
 #include "load/delta_writer/delta_writer_context.h"
+#include "load/delta_writer/shard_partitioner.h"
 #include "load/memtable/memtable_writer.h"
 #include "storage/olap_common.h"
 #include "storage/partial_update_info.h"
@@ -105,7 +106,16 @@ private:
     int64_t _wait_flush_limit_time = 0;
     int64_t _close_wait_time = 0;
 
-    std::shared_ptr<MemTableWriter> _memtable_writer;
+    // Phase 1: a tablet's writer fans out into K sub-writers, each owning its own
+    // MemTableWriter (own SERIAL flush token => K concurrent flush streams) but all
+    // sharing one rowset writer, so the K shards' segments land in the same rowset.
+    // With K == 1 this degrades to the original single-writer behavior.
+    int _sub_writer_count = 1;
+    std::vector<std::shared_ptr<MemTableWriter>> _sub_writers;
+    // Scatters incoming rows to sub-writers by hash(key) (null when K == 1).
+    std::unique_ptr<ShardPartitioner> _partitioner;
+    // Reused scratch for the per-row shard ids computed in write().
+    std::vector<uint32_t> _shard_ids;
     MonotonicStopWatch _lock_watch;
 
     std::vector<std::shared_ptr<LoadStreamStub>> _streams;

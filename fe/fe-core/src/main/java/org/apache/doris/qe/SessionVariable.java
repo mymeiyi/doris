@@ -617,6 +617,8 @@ public class SessionVariable implements Serializable, Writable {
 
     public static final String LOAD_STREAM_PER_NODE = "load_stream_per_node";
 
+    public static final String LOAD_SUB_WRITER_COUNT = "load_sub_writer_count";
+
     public static final String ENABLE_UNIQUE_KEY_PARTIAL_UPDATE = "enable_unique_key_partial_update";
 
     public static final String PARTIAL_UPDATE_NEW_KEY_BEHAVIOR = "partial_update_new_key_behavior";
@@ -2600,6 +2602,14 @@ public class SessionVariable implements Serializable, Writable {
 
     @VarAttrDef.VarAttr(name = LOAD_STREAM_PER_NODE)
     public int loadStreamPerNode = 2;
+
+    @VarAttrDef.VarAttr(name = LOAD_SUB_WRITER_COUNT, needForward = true, description = {
+            "存算分离下单 tablet 导入时，DeltaWriter 在节点内拆分出的 sub-writer 个数，"
+                    + "用于恢复降桶后丢失的排序/flush 并行度。1 表示关闭（默认）。",
+            "Number of intra-node sub-writers a single tablet's DeltaWriter fans out into for "
+                    + "cloud loads (Phase 1), to recover sort/flush parallelism lost when bucket "
+                    + "count is reduced. 1 disables it (default)."})
+    public int loadSubWriterCount = 1;
 
     @VarAttrDef.VarAttr(name = GROUP_COMMIT, needForward = true)
     public String groupCommit = "off_mode";
@@ -5514,6 +5524,7 @@ public class SessionVariable implements Serializable, Writable {
 
         tResult.setTruncateCharOrVarcharColumns(truncateCharOrVarcharColumns);
         tResult.setEnableMemtableOnSinkNode(enableMemtableOnSinkNode);
+        tResult.setLoadSubWriterCount(loadSubWriterCount);
 
         tResult.setInvertedIndexConjunctionOptThreshold(invertedIndexConjunctionOptThreshold);
         tResult.setInvertedIndexMaxExpansions(invertedIndexMaxExpansions);

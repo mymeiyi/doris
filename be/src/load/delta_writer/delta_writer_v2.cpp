@@ -23,10 +23,12 @@
 #include <gen_cpp/internal_service.pb.h>
 #include <gen_cpp/olap_file.pb.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <ostream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/config.h"
@@ -70,7 +72,6 @@ DeltaWriterV2::DeltaWriterV2(WriteRequest* req,
         : _req(*req),
           _workload_group(std::move(workload_group)),
           _tablet_schema(new TabletSchema),
-          _memtable_writer(new MemTableWriter(*req)),
           _streams(streams) {}
 
 void DeltaWriterV2::_update_profile(RuntimeProfile* profile) {
@@ -89,7 +90,9 @@ DeltaWriterV2::~DeltaWriterV2() {
     }
 
     // cancel and wait all memtables in flush queue to be finished
-    static_cast<void>(_memtable_writer->cancel());
+    for (auto& sub_writer : _sub_writers) {
+        static_cast<void>(sub_writer->cancel());
+    }
 }
 
 Status DeltaWriterV2::init() {
@@ -127,12 +130,42 @@ Status DeltaWriterV2::init() {
     context.memtable_on_sink_support_index_v2 = true;
     context.encrypt_algorithm = EncryptionAlgorithmPB::PLAINTEXT;
 
+    bool enable_mow = _streams[0]->enable_unique_mow(_req.index_id);
+
+    // Phase 1: fan out into K sub-writers sharing one rowset writer. K comes from the
+    // load session var (cloud-only, set in the sink). Be conservative for partial
+    // update for now -> fall back to a single writer.
+    // Clamp to a sane range so a misconfigured session var cannot spawn an unbounded
+    // number of memtable writers / flush tokens for one tablet.
+    constexpr int kMaxSubWriterCount = 64;
+    _sub_writer_count = std::clamp(_req.sub_writer_count, 1, kMaxSubWriterCount);
+    if (_req.table_schema_param != nullptr && _req.table_schema_param->is_partial_update()) {
+        _sub_writer_count = 1;
+    }
+    bool shared_rowset_writer = _sub_writer_count > 1;
+
     _rowset_writer = std::make_shared<BetaRowsetWriterV2>(_streams);
     RETURN_IF_ERROR(_rowset_writer->init(context));
-    RETURN_IF_ERROR(_memtable_writer->init(_rowset_writer, _tablet_schema, _partial_update_info,
-                                           _workload_group,
-                                           _streams[0]->enable_unique_mow(_req.index_id)));
-    ExecEnv::GetInstance()->memtable_memory_limiter()->register_writer(_memtable_writer);
+
+    _sub_writers.reserve(_sub_writer_count);
+    for (int i = 0; i < _sub_writer_count; ++i) {
+        auto sub_writer = std::make_shared<MemTableWriter>(_req);
+        RETURN_IF_ERROR(sub_writer->init(_rowset_writer, _tablet_schema, _partial_update_info,
+                                         _workload_group, enable_mow, shared_rowset_writer,
+                                         _sub_writer_count));
+        ExecEnv::GetInstance()->memtable_memory_limiter()->register_writer(sub_writer);
+        _sub_writers.push_back(std::move(sub_writer));
+    }
+
+    if (_sub_writer_count > 1) {
+        // Hash on key columns -> same key always lands in the same sub-writer, so MoW
+        // dedup / sequence "latest-wins" stays local and cross-shard segments are
+        // key-disjoint.
+        auto partitioner = std::make_unique<HashPartitioner>(_sub_writer_count);
+        RETURN_IF_ERROR(partitioner->init(_req.slots, _req.tuple_desc, _tablet_schema));
+        _partitioner = std::move(partitioner);
+    }
+
     _is_init = true;
     _streams.clear();
     return Status::OK();
@@ -154,14 +187,36 @@ Status DeltaWriterV2::write(const Block* block, const DorisVector<uint32_t>& row
         auto memtable_flush_running_count_limit = config::memtable_flush_running_count_limit;
         DBUG_EXECUTE_IF("DeltaWriterV2.write.back_pressure",
                         { std::this_thread::sleep_for(std::chrono::milliseconds(10 * 1000)); });
-        while (_memtable_writer->flush_running_count() >= memtable_flush_running_count_limit) {
+        // Back-pressure on the busiest sub-writer.
+        auto max_flush_running_count = [&]() {
+            uint64_t maxc = 0;
+            for (auto& sub_writer : _sub_writers) {
+                maxc = std::max(maxc, sub_writer->flush_running_count());
+            }
+            return maxc;
+        };
+        while (max_flush_running_count() >= memtable_flush_running_count_limit) {
             DBUG_EXECUTE_IF("DeltaWriterV2.write.flush_limit_wait", DBUG_RUN_CALLBACK());
             RETURN_IF_ERROR(cancel_check());
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
     SCOPED_RAW_TIMER(&_write_memtable_time);
-    return _memtable_writer->write(block, row_idxs);
+    if (_sub_writer_count == 1) {
+        return _sub_writers[0]->write(block, row_idxs);
+    }
+    // Scatter the rows of this block across the K sub-writers by hash(key).
+    _partitioner->partition(block, row_idxs, _shard_ids);
+    std::vector<DorisVector<uint32_t>> buckets(_sub_writer_count);
+    for (size_t i = 0; i < row_idxs.size(); ++i) {
+        buckets[_shard_ids[i]].push_back(row_idxs[i]);
+    }
+    for (int s = 0; s < _sub_writer_count; ++s) {
+        if (!buckets[s].empty()) {
+            RETURN_IF_ERROR(_sub_writers[s]->write(block, buckets[s]));
+        }
+    }
+    return Status::OK();
 }
 
 Status DeltaWriterV2::close() {
@@ -176,7 +231,10 @@ Status DeltaWriterV2::close() {
         // for this tablet when being closed.
         RETURN_IF_ERROR(init());
     }
-    return _memtable_writer->close();
+    for (auto& sub_writer : _sub_writers) {
+        RETURN_IF_ERROR(sub_writer->close());
+    }
+    return Status::OK();
 }
 
 Status DeltaWriterV2::close_wait(int32_t& num_segments, RuntimeProfile* profile) {
@@ -188,7 +246,23 @@ Status DeltaWriterV2::close_wait(int32_t& num_segments, RuntimeProfile* profile)
     if (profile != nullptr) {
         _update_profile(profile);
     }
-    RETURN_IF_ERROR(_memtable_writer->close_wait(profile));
+    int64_t total_received_rows = 0;
+    int64_t total_merged_rows = 0;
+    for (auto& sub_writer : _sub_writers) {
+        RETURN_IF_ERROR(sub_writer->close_wait(profile));
+        total_received_rows += sub_writer->total_received_rows();
+        total_merged_rows += sub_writer->merged_rows();
+    }
+    // Aggregate row-count consistency check across all sub-writers (each sub-writer
+    // skips its own check because they share one rowset writer).
+    if (_sub_writer_count > 1 &&
+        _rowset_writer->num_rows() + total_merged_rows != total_received_rows) {
+        LOG(WARNING) << "the rows number written doesn't match, rowset num rows written to file: "
+                     << _rowset_writer->num_rows() << ", total merged_rows: " << total_merged_rows
+                     << ", total received rows: " << total_received_rows
+                     << ", tablet_id: " << _req.tablet_id;
+        return Status::InternalError("rows number written by delta writer dosen't match");
+    }
     num_segments = _rowset_writer->next_segment_id();
 
     _delta_written_success = true;
@@ -204,7 +278,9 @@ Status DeltaWriterV2::cancel_with_status(const Status& st) {
     if (_is_cancelled) {
         return Status::OK();
     }
-    RETURN_IF_ERROR(_memtable_writer->cancel_with_status(st));
+    for (auto& sub_writer : _sub_writers) {
+        RETURN_IF_ERROR(sub_writer->cancel_with_status(st));
+    }
     _is_cancelled = true;
     return Status::OK();
 }

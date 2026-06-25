@@ -51,9 +51,10 @@ using namespace ErrorCode;
 MemTable::MemTable(int64_t tablet_id, std::shared_ptr<TabletSchema> tablet_schema,
                    const std::vector<SlotDescriptor*>* slot_descs, TupleDescriptor* tuple_desc,
                    bool enable_unique_key_mow, PartialUpdateInfo* partial_update_info,
-                   const std::shared_ptr<ResourceContext>& resource_ctx)
+                   const std::shared_ptr<ResourceContext>& resource_ctx, int sub_writer_count)
         : _mem_type(MemType::ACTIVE),
           _tablet_id(tablet_id),
+          _sub_writer_count(sub_writer_count < 1 ? 1 : sub_writer_count),
           _enable_unique_key_mow(enable_unique_key_mow),
           _keys_type(tablet_schema->keys_type()),
           _tablet_schema(tablet_schema),
@@ -696,6 +697,12 @@ void MemTable::shrink_memtable_by_agg() {
 bool MemTable::need_flush() const {
     DBUG_EXECUTE_IF("MemTable.need_flush", { return true; });
     auto max_size = _adaptive_write_buffer_size();
+    // When a load fans out into K sub-writers (Phase 1), each memtable only carries
+    // ~1/K of the rows, so scale the flush threshold down to keep the aggregate
+    // active-memtable budget for one tablet roughly unchanged.
+    if (_sub_writer_count > 1) {
+        max_size = max_size / _sub_writer_count;
+    }
     if (_partial_update_mode == UniqueKeyUpdateModePB::UPDATE_FIXED_COLUMNS) {
         auto update_columns_size = _num_columns;
         auto min_buffer_size = config::min_write_buffer_size_for_partial_update;

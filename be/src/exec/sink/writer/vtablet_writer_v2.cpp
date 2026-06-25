@@ -24,6 +24,7 @@
 #include <gen_cpp/Types_types.h>
 #include <gen_cpp/internal_service.pb.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <mutex>
 #include <ranges>
@@ -33,6 +34,7 @@
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/logging.h"
 #include "common/metrics/doris_metrics.h"
+#include "cloud/config.h"
 #include "common/object_pool.h"
 #include "common/signal_handler.h"
 #include "common/status.h"
@@ -559,6 +561,12 @@ Status VTabletWriterV2::_write_memtable(std::shared_ptr<Block> block, int64_t ta
                 .is_high_priority = _is_high_priority,
                 .write_file_cache = _write_file_cache,
                 .storage_vault_id {},
+                // Phase 1 sub-writer fan-out is cloud-only and driven by a session var.
+                .sub_writer_count =
+                        (config::is_cloud_mode() && _state != nullptr &&
+                         _state->query_options().__isset.load_sub_writer_count)
+                                ? std::max(1, _state->query_options().load_sub_writer_count)
+                                : 1,
         };
         bool index_not_found = true;
         for (const auto& index : _schema->indexes()) {

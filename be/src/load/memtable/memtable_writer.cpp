@@ -66,10 +66,13 @@ MemTableWriter::~MemTableWriter() {
 Status MemTableWriter::init(std::shared_ptr<RowsetWriter> rowset_writer,
                             TabletSchemaSPtr tablet_schema,
                             std::shared_ptr<PartialUpdateInfo> partial_update_info,
-                            std::shared_ptr<WorkloadGroup> wg_sptr, bool unique_key_mow) {
+                            std::shared_ptr<WorkloadGroup> wg_sptr, bool unique_key_mow,
+                            bool shared_rowset_writer, int sub_writer_count) {
     _rowset_writer = rowset_writer;
     _tablet_schema = tablet_schema;
     _unique_key_mow = unique_key_mow;
+    _shared_rowset_writer = shared_rowset_writer;
+    _sub_writer_count = sub_writer_count < 1 ? 1 : sub_writer_count;
     _partial_update_info = partial_update_info;
     _resource_ctx = thread_context()->resource_ctx();
 
@@ -214,7 +217,8 @@ void MemTableWriter::_reset_mem_table() {
     {
         std::lock_guard<std::mutex> l(_mem_table_ptr_lock);
         _mem_table.reset(new MemTable(_req.tablet_id, _tablet_schema, _req.slots, _req.tuple_desc,
-                                      _unique_key_mow, _partial_update_info.get(), _resource_ctx));
+                                      _unique_key_mow, _partial_update_info.get(), _resource_ctx,
+                                      _sub_writer_count));
     }
 
     _segment_num++;
@@ -270,8 +274,12 @@ Status MemTableWriter::_do_close_wait() {
         return st;
     }
 
-    if (_rowset_writer->num_rows() + _flush_token->memtable_stat().merged_rows !=
-        _total_received_rows) {
+    // When sharing a rowset writer across K sub-writers, _rowset_writer->num_rows() is
+    // the aggregate over all sub-writers, so it cannot match this single writer's
+    // received rows. The aggregate consistency check is done by the owning DeltaWriter.
+    if (!_shared_rowset_writer &&
+        _rowset_writer->num_rows() + _flush_token->memtable_stat().merged_rows !=
+                _total_received_rows) {
         LOG(WARNING) << "the rows number written doesn't match, rowset num rows written to file: "
                      << _rowset_writer->num_rows()
                      << ", merged_rows: " << _flush_token->memtable_stat().merged_rows
@@ -353,6 +361,10 @@ Status MemTableWriter::cancel_with_status(const Status& st) {
 
 const FlushStatistic& MemTableWriter::get_flush_token_stats() {
     return _flush_token->get_stats();
+}
+
+int64_t MemTableWriter::merged_rows() const {
+    return _flush_token == nullptr ? 0 : _flush_token->memtable_stat().merged_rows;
 }
 
 uint64_t MemTableWriter::flush_running_count() const {
