@@ -455,4 +455,137 @@ TEST_F(RowsetMetaTest, TestSegmentsKeyBoundsAggregationTruncation) {
     EXPECT_TRUE(rs_meta.is_segments_key_bounds_truncated());
 }
 
+TEST_F(RowsetMetaTest, TestSegmentIdsAccessors) {
+    RowsetMeta rowset_meta;
+    EXPECT_TRUE(rowset_meta.init_from_json(_json_rowset_meta));
+
+    // Legacy rowset (no segment_ids) falls back to contiguous ids [0, num_segments).
+    rowset_meta.set_num_segments(3);
+    EXPECT_FALSE(rowset_meta.has_segment_ids());
+    EXPECT_EQ(rowset_meta.num_segments(), 3);
+    EXPECT_EQ(rowset_meta.segment_id(0), 0);
+    EXPECT_EQ(rowset_meta.segment_id(2), 2);
+    EXPECT_EQ(rowset_meta.position_of(2), 2);
+    EXPECT_EQ(rowset_meta.next_segment_id(), 3);
+
+    // Non-contiguous segment_ids: position <-> real id mapping and next_segment_id.
+    rowset_meta.set_segment_ids({0, 2, 5});
+    EXPECT_TRUE(rowset_meta.has_segment_ids());
+    EXPECT_EQ(rowset_meta.num_segments(), 3);
+    EXPECT_EQ(rowset_meta.segment_id(0), 0);
+    EXPECT_EQ(rowset_meta.segment_id(1), 2);
+    EXPECT_EQ(rowset_meta.segment_id(2), 5);
+    EXPECT_EQ(rowset_meta.position_of(0), 0);
+    EXPECT_EQ(rowset_meta.position_of(2), 1);
+    EXPECT_EQ(rowset_meta.position_of(5), 2);
+    // No persisted counter -> max(segment_ids) + 1.
+    EXPECT_EQ(rowset_meta.next_segment_id(), 6);
+
+    // Persisted counter takes precedence (may exceed max + 1 due to recycled ids).
+    rowset_meta.set_next_segment_id(9);
+    EXPECT_EQ(rowset_meta.next_segment_id(), 9);
+}
+
+// Partial-update append where the transient rowset DID persist its own segment_ids
+// (enable_segment_list on while writing it). Merge must concatenate the real ids.
+TEST_F(RowsetMetaTest, TestMergeSegmentListAppendWithOtherIds) {
+    auto sp = SyncPoint::get_instance();
+    sp->set_call_back("RowsetMeta::merge_rowset_meta:skip_schema_merge", [&](auto&& args) {
+        *try_any_cast<bool*>(args.back()) = true;
+    });
+    sp->enable_processing();
+    auto restore = std::shared_ptr<void>(nullptr, [&](void*) {
+        sp->clear_all_call_backs();
+        sp->disable_processing();
+        sp->clear_trace();
+    });
+
+    RowsetMeta base;
+    EXPECT_TRUE(base.init_from_json(_json_rowset_meta));
+    base.set_segment_ids({0, 2});
+
+    RowsetMeta transient;
+    EXPECT_TRUE(transient.init_from_json(_json_rowset_meta));
+    transient.set_segment_ids({3}); // allocated from base.next_segment_id() == 3
+    transient.set_next_segment_id(4);
+
+    base.merge_rowset_meta(transient);
+
+    ASSERT_EQ(base.num_segments(), 3);
+    EXPECT_EQ(base.segment_id(0), 0);
+    EXPECT_EQ(base.segment_id(1), 2);
+    EXPECT_EQ(base.segment_id(2), 3);
+    EXPECT_EQ(base.position_of(3), 2);
+    EXPECT_EQ(base.next_segment_id(), 4);
+}
+
+// Partial-update append where the transient rowset did NOT persist segment_ids
+// (enable_segment_list off while writing it) but `base` already carries a
+// non-contiguous segment_ids. Reconstructing as iota-from-0 would corrupt the mapping
+// (would yield [0,2,0]); it must reconstruct from base.next_segment_id() -> [0,2,3].
+TEST_F(RowsetMetaTest, TestMergeSegmentListAppendWithoutOtherIds) {
+    auto sp = SyncPoint::get_instance();
+    sp->set_call_back("RowsetMeta::merge_rowset_meta:skip_schema_merge", [&](auto&& args) {
+        *try_any_cast<bool*>(args.back()) = true;
+    });
+    sp->enable_processing();
+    auto restore = std::shared_ptr<void>(nullptr, [&](void*) {
+        sp->clear_all_call_backs();
+        sp->disable_processing();
+        sp->clear_trace();
+    });
+
+    RowsetMeta base;
+    EXPECT_TRUE(base.init_from_json(_json_rowset_meta));
+    base.set_segment_ids({0, 2}); // next_segment_id() == 3, == transient writer's start id
+
+    RowsetMeta transient;
+    EXPECT_TRUE(transient.init_from_json(_json_rowset_meta));
+    transient.set_num_segments(1); // physical file is rowset_3.dat, no segment_ids persisted
+    EXPECT_FALSE(transient.has_segment_ids());
+
+    base.merge_rowset_meta(transient);
+
+    ASSERT_EQ(base.num_segments(), 3);
+    EXPECT_EQ(base.segment_id(0), 0);
+    EXPECT_EQ(base.segment_id(1), 2);
+    EXPECT_EQ(base.segment_id(2), 3); // NOT 0
+    EXPECT_EQ(base.position_of(3), 2);
+    // next_segment_id must advance past the appended id so a later append never reuses it.
+    EXPECT_EQ(base.next_segment_id(), 4);
+}
+
+// Append onto a legacy `base` (no segment_ids) from a transient that has segment_ids:
+// base must be back-filled with iota and the real id appended -> [0,1,2].
+TEST_F(RowsetMetaTest, TestMergeSegmentListBaseLegacyOtherHasIds) {
+    auto sp = SyncPoint::get_instance();
+    sp->set_call_back("RowsetMeta::merge_rowset_meta:skip_schema_merge", [&](auto&& args) {
+        *try_any_cast<bool*>(args.back()) = true;
+    });
+    sp->enable_processing();
+    auto restore = std::shared_ptr<void>(nullptr, [&](void*) {
+        sp->clear_all_call_backs();
+        sp->disable_processing();
+        sp->clear_trace();
+    });
+
+    RowsetMeta base;
+    EXPECT_TRUE(base.init_from_json(_json_rowset_meta));
+    base.set_num_segments(2); // legacy contiguous [0, 1]
+    EXPECT_FALSE(base.has_segment_ids());
+
+    RowsetMeta transient;
+    EXPECT_TRUE(transient.init_from_json(_json_rowset_meta));
+    transient.set_segment_ids({2}); // start id == base.next_segment_id() == 2
+    transient.set_next_segment_id(3);
+
+    base.merge_rowset_meta(transient);
+
+    ASSERT_EQ(base.num_segments(), 3);
+    EXPECT_EQ(base.segment_id(0), 0);
+    EXPECT_EQ(base.segment_id(1), 1);
+    EXPECT_EQ(base.segment_id(2), 2);
+    EXPECT_EQ(base.next_segment_id(), 3);
+}
+
 } // namespace doris

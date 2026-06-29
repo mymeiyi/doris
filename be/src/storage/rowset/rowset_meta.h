@@ -20,6 +20,7 @@
 
 #include <gen_cpp/olap_file.pb.h>
 #include <glog/logging.h>
+#include <parallel_hashmap/phmap.h>
 
 #include <atomic>
 #include <chrono>
@@ -567,7 +568,9 @@ private:
     RowsetId _rowset_id;
     StorageResource _storage_resource;
     bool _is_removed_from_rowset_meta = false;
-    std::unordered_map<int64_t, size_t> _segment_id_to_pos;
+    // seg_id -> position lookup for non-contiguous segment_ids; on the delete-bitmap /
+    // RowIdConversion hot paths, so use flat_hash_map rather than std::unordered_map.
+    phmap::flat_hash_map<int64_t, size_t> _segment_id_to_pos;
     DorisCallOnce<Result<EncryptionAlgorithmPB>> _determine_encryption_once;
     std::atomic<int64_t> _stale_at_s {0};
 };

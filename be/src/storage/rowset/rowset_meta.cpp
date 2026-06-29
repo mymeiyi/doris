@@ -393,6 +393,15 @@ void RowsetMeta::merge_rowset_meta(const RowsetMeta& other) {
     const auto old_num_segments = num_segments();
     set_num_segments(old_num_segments + other.num_segments());
     if (has_segment_ids() || other.has_segment_ids()) {
+        // `other` is a transient rowset appended to this rowset during partial-update publish.
+        // Its segments are allocated contiguously starting from this rowset's next_segment_id()
+        // (see Tablet/CloudTablet::create_transient_rowset_writer). Capture that start id before
+        // mutating segment_ids so we can reconstruct the appended real ids when `other` did not
+        // persist its own segment_ids -- e.g. enable_segment_list was off while writing `other`
+        // even though this rowset already carries a non-contiguous segment_ids. Reconstructing as
+        // iota from 0 (the previous behavior) would mis-map positions to real ids and collide with
+        // the actual segment files, which are named by the real ids.
+        const int64_t appended_start = next_segment_id();
         if (!has_segment_ids()) {
             for (int64_t pos = 0; pos < old_num_segments; ++pos) {
                 _rowset_meta_pb.add_segment_ids(cast_set<int32_t>(pos));
@@ -402,12 +411,20 @@ void RowsetMeta::merge_rowset_meta(const RowsetMeta& other) {
             _rowset_meta_pb.mutable_segment_ids()->Add(other.segment_ids().begin(),
                                                        other.segment_ids().end());
         } else {
-            for (int64_t pos = 0; pos < other.num_segments(); ++pos) {
-                _rowset_meta_pb.add_segment_ids(cast_set<int32_t>(pos));
+            for (int64_t k = 0; k < other.num_segments(); ++k) {
+                _rowset_meta_pb.add_segment_ids(cast_set<int32_t>(appended_start + k));
             }
         }
         set_num_segments(_rowset_meta_pb.segment_ids_size());
-        set_next_segment_id(std::max(next_segment_id(), other.next_segment_id()));
+        // next_segment_id must stay strictly greater than every real id now held, so that any
+        // subsequent append never reuses an id (the persisted counter may predate appended_start).
+        int64_t merged_next = std::max(next_segment_id(), other.next_segment_id());
+        for (const auto seg_id : _rowset_meta_pb.segment_ids()) {
+            merged_next = std::max<int64_t>(merged_next, seg_id + 1);
+        }
+        set_next_segment_id(merged_next);
+        // _reset_segment_id_index() DORIS_CHECKs that the merged segment_ids are unique, which
+        // guards against any accidental id collision introduced by the reconstruction above.
         _reset_segment_id_index();
     }
     set_num_rows(num_rows() + other.num_rows());

@@ -2404,7 +2404,10 @@ Status Tablet::_cooldown_data(RowsetSharedPtr rowset) {
     Status st;
     Defer defer {[&] {
         if (!st.ok()) {
-            // reclaim the incomplete rowset data in remote storage
+            // reclaim the incomplete rowset data in remote storage.
+            // `upload_to` writes the remote segments named by contiguous position, so the new
+            // remote rowset is contiguous regardless of `old_rowset`'s layout; the count-based
+            // overload (iota GC) is correct here.
             record_unused_remote_rowset(new_rowset_id, storage_resource.fs->id(),
                                         old_rowset->num_segments());
         }
