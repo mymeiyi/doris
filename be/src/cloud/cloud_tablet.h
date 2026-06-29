@@ -71,6 +71,7 @@ struct SyncOptions {
 struct RecycledRowsets {
     RowsetId rowset_id;
     int64_t num_segments;
+    std::vector<int32_t> segment_ids;
     std::vector<std::string> index_file_names;
 };
 
@@ -443,7 +444,8 @@ private:
 
     // Submit a segment download task for warming up
     void _submit_segment_download_task(const RowsetSharedPtr& rs,
-                                       const StorageResource* storage_resource, int seg_id,
+                                       const StorageResource* storage_resource, size_t pos,
+                                       int64_t seg_id,
                                        int64_t expiration_time);
 
     // Submit an inverted index download task for warming up

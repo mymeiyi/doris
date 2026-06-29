@@ -272,7 +272,8 @@ void CloudWarmUpManager::handle_jobs() {
                               << ", skip it";
                     continue;
                 }
-                for (int64_t seg_id = 0; seg_id < rs->num_segments(); seg_id++) {
+                for (size_t pos = 0; pos < cast_set<size_t>(rs->num_segments()); ++pos) {
+                    auto seg_id = rs->segment_id(pos);
                     // 1st. download segment files
                     // Use rs->fs() instead of storage_resource.value()->fs to support packed
                     // files. PackedFileSystem wrapper in RowsetMeta::fs() handles the index_map
@@ -280,7 +281,7 @@ void CloudWarmUpManager::handle_jobs() {
                     if (!config::file_cache_enable_only_warm_up_idx) {
                         submit_download_tasks(
                                 storage_resource.value()->remote_segment_path(*rs, seg_id),
-                                rs->segment_file_size(cast_set<int>(seg_id)), rs->fs(),
+                                rs->segment_file_size(cast_set<int>(pos)), rs->fs(),
                                 expiration_time, wait, false,
                                 [tablet, rs, seg_id](Status st) {
                                     VLOG_DEBUG << "warmup rowset " << rs->version() << " segment "
@@ -300,10 +301,10 @@ void CloudWarmUpManager::handle_jobs() {
                     int64_t file_size = -1;
                     auto schema_ptr = rs->tablet_schema();
                     auto idx_version = schema_ptr->get_inverted_index_storage_format();
-                    const auto& idx_file_info = rs->inverted_index_file_info(cast_set<int>(seg_id));
+                    const auto& idx_file_info = rs->inverted_index_file_info(cast_set<int>(pos));
                     if (idx_version == InvertedIndexStorageFormatPB::V1) {
                         auto&& inverted_index_info =
-                                rs->inverted_index_file_info(cast_set<int>(seg_id));
+                                rs->inverted_index_file_info(cast_set<int>(pos));
                         std::unordered_map<int64_t, int64_t> index_size_map;
                         for (const auto& info : inverted_index_info.index_info()) {
                             if (info.index_file_size() != -1) {
@@ -794,8 +795,9 @@ Status CloudWarmUpManager::_do_warm_up_rowset(RowsetMeta& rs_meta, int64_t table
         // update metrics
         auto schema_ptr = rs_meta.tablet_schema();
         auto idx_version = schema_ptr->get_inverted_index_storage_format();
-        for (int64_t segment_id = 0; segment_id < rs_meta.num_segments(); segment_id++) {
-            auto seg_size = rs_meta.segment_file_size(cast_set<int>(segment_id));
+        for (size_t pos = 0; pos < cast_set<size_t>(rs_meta.num_segments()); ++pos) {
+            auto segment_id = rs_meta.segment_id(pos);
+            auto seg_size = rs_meta.segment_file_size(cast_set<int>(pos));
 
             g_file_cache_event_driven_warm_up_requested_segment_num << 1;
             g_warmup_ed_requested_segment_num.put({job_id_str}, 1);
@@ -806,7 +808,7 @@ Status CloudWarmUpManager::_do_warm_up_rowset(RowsetMeta& rs_meta, int64_t table
             if (schema_ptr->has_inverted_index() || schema_ptr->has_ann_index()) {
                 if (idx_version == InvertedIndexStorageFormatPB::V1) {
                     auto&& inverted_index_info =
-                            rs_meta.inverted_index_file_info(cast_set<int>(segment_id));
+                            rs_meta.inverted_index_file_info(cast_set<int>(pos));
                     if (inverted_index_info.index_info().empty()) {
                         VLOG_DEBUG << "No index info available for segment " << segment_id;
                         continue;
@@ -827,7 +829,7 @@ Status CloudWarmUpManager::_do_warm_up_rowset(RowsetMeta& rs_meta, int64_t table
                     }
                 } else { // InvertedIndexStorageFormatPB::V2
                     auto&& inverted_index_info =
-                            rs_meta.inverted_index_file_info(cast_set<int>(segment_id));
+                            rs_meta.inverted_index_file_info(cast_set<int>(pos));
                     g_file_cache_event_driven_warm_up_requested_index_num << 1;
                     g_warmup_ed_requested_index_num.put({job_id_str}, 1);
 
@@ -920,6 +922,7 @@ void CloudWarmUpManager::_recycle_cache(int64_t tablet_id,
         meta->set_tablet_id(tablet_id);
         meta->set_rowset_id(rowset.rowset_id.to_string());
         meta->set_num_segments(rowset.num_segments);
+        meta->mutable_segment_ids()->Add(rowset.segment_ids.begin(), rowset.segment_ids.end());
         for (const auto& name : rowset.index_file_names) {
             meta->add_index_file_names(name);
         }

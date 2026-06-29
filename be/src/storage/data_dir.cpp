@@ -1152,8 +1152,9 @@ void DataDir::perform_remote_rowset_gc() {
         std::vector<io::Path> seg_paths;
         seg_paths.reserve(gc_pb.num_segments());
         for (int i = 0; i < gc_pb.num_segments(); ++i) {
-            seg_paths.emplace_back(
-                    storage_resource->first.remote_segment_path(gc_pb.tablet_id(), rowset_id, i));
+            auto seg_id = gc_pb.segment_ids_size() > 0 ? gc_pb.segment_ids(i) : i;
+            seg_paths.emplace_back(storage_resource->first.remote_segment_path(
+                    gc_pb.tablet_id(), rowset_id, seg_id));
         }
 
         auto& fs = storage_resource->first.fs;

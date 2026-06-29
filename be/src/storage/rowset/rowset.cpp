@@ -125,15 +125,17 @@ const TabletSchemaSPtr& Rowset::tablet_schema() const {
 void Rowset::clear_cache() {
     {
         SCOPED_SIMPLE_TRACE_IF_TIMEOUT(std::chrono::seconds(1));
-        SegmentLoader::instance()->erase_segments(rowset_id(), num_segments());
+        SegmentLoader::instance()->erase_segments(*rowset_meta());
     }
     {
         SCOPED_SIMPLE_TRACE_IF_TIMEOUT(std::chrono::seconds(1));
         clear_inverted_index_cache();
     }
     if (config::enable_file_cache) {
-        for (int seg_id = 0; seg_id < num_segments(); ++seg_id) {
-            auto file_key = segment_v2::Segment::file_cache_key(rowset_id().to_string(), seg_id);
+        for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+            auto seg_id = rowset_meta()->segment_id(pos);
+            auto file_key = segment_v2::Segment::file_cache_key(rowset_id().to_string(),
+                                                                cast_set<uint32_t>(seg_id));
             auto* file_cache = io::FileCacheFactory::instance()->get_by_path(file_key);
             file_cache->remove_if_cached_async(file_key);
         }
@@ -185,7 +187,8 @@ void Rowset::merge_rowset_meta(const RowsetMeta& other) {
 std::vector<std::string> Rowset::get_index_file_names() {
     std::vector<std::string> file_names;
     auto idx_version = _schema->get_inverted_index_storage_format();
-    for (int64_t seg_id = 0; seg_id < num_segments(); ++seg_id) {
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_id = rowset_meta()->segment_id(pos);
         if (idx_version == InvertedIndexStorageFormatPB::V1) {
             for (const auto& index : _schema->inverted_indexes()) {
                 auto file_name = segment_v2::InvertedIndexDescriptor::get_index_file_name_v1(
@@ -208,8 +211,10 @@ int64_t Rowset::approximate_cached_data_size() {
     }
 
     int64_t total_cache_size = 0;
-    for (int seg_id = 0; seg_id < num_segments(); ++seg_id) {
-        auto cache_key = segment_v2::Segment::file_cache_key(rowset_id().to_string(), seg_id);
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_id = rowset_meta()->segment_id(pos);
+        auto cache_key = segment_v2::Segment::file_cache_key(rowset_id().to_string(),
+                                                             cast_set<uint32_t>(seg_id));
         int64_t cache_size =
                 io::FileCacheFactory::instance()->get_cache_file_size_by_path(cache_key);
         total_cache_size += cache_size;

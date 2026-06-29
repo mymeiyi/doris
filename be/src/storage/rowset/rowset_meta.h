@@ -26,9 +26,11 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "common/cast_set.h"
+#include "common/check.h"
 #include "common/config.h"
 #include "common/status.h"
 #include "io/fs/encrypted_fs_factory.h"
@@ -260,9 +262,34 @@ public:
         return _rowset_meta_pb.set_partition_id(partition_id);
     }
 
-    int64_t num_segments() const { return _rowset_meta_pb.num_segments(); }
+    int64_t num_segments() const {
+        return _rowset_meta_pb.segment_ids_size() > 0 ? _rowset_meta_pb.segment_ids_size()
+                                                      : _rowset_meta_pb.num_segments();
+    }
 
     void set_num_segments(int64_t num_segments) { _rowset_meta_pb.set_num_segments(num_segments); }
+
+    bool has_segment_ids() const { return _rowset_meta_pb.segment_ids_size() > 0; }
+
+    const auto& segment_ids() const { return _rowset_meta_pb.segment_ids(); }
+
+    void set_segment_ids(const std::vector<int32_t>& segment_ids);
+
+    void append_segment_ids(const google::protobuf::RepeatedField<int32_t>& segment_ids);
+
+    int64_t segment_id(size_t pos) const {
+        DORIS_CHECK_LT(pos, cast_set<size_t>(num_segments()));
+        return has_segment_ids() ? _rowset_meta_pb.segment_ids(cast_set<int>(pos))
+                                 : cast_set<int64_t>(pos);
+    }
+
+    size_t position_of(int64_t seg_id) const;
+
+    int64_t next_segment_id() const;
+
+    void set_next_segment_id(int64_t next_segment_id) {
+        _rowset_meta_pb.set_next_segment_id(next_segment_id);
+    }
 
     // Convert to RowsetMetaPB, skip_schema is only used by cloud to separate schema from rowset meta.
     void to_rowset_pb(RowsetMetaPB* rs_meta_pb, bool skip_schema = false) const;
@@ -447,18 +474,18 @@ public:
 
     int64_t compaction_level() { return _rowset_meta_pb.compaction_level(); }
 
-    // `seg_file_size` MUST ordered by segment id
+    // `seg_file_size` MUST be ordered by rowset segment position.
     void add_segments_file_size(const std::vector<size_t>& seg_file_size);
 
     // Return -1 if segment file size is unknown
-    int64_t segment_file_size(int seg_id) const;
+    int64_t segment_file_size(int pos) const;
 
     const auto& segments_file_size() const { return _rowset_meta_pb.segments_file_size(); }
 
     // Used for partial update, when publish, partial update may add a new rowset and we should update rowset meta
     void merge_rowset_meta(const RowsetMeta& other);
 
-    InvertedIndexFileInfo inverted_index_file_info(int seg_id);
+    InvertedIndexFileInfo inverted_index_file_info(int pos);
 
     const auto& inverted_index_file_info() const {
         return _rowset_meta_pb.inverted_index_file_info();
@@ -527,6 +554,8 @@ private:
 
     void _init();
 
+    void _reset_segment_id_index();
+
     friend bool operator==(const RowsetMeta& a, const RowsetMeta& b);
 
     friend bool operator!=(const RowsetMeta& a, const RowsetMeta& b) { return !(a == b); }
@@ -538,6 +567,7 @@ private:
     RowsetId _rowset_id;
     StorageResource _storage_resource;
     bool _is_removed_from_rowset_meta = false;
+    std::unordered_map<int64_t, size_t> _segment_id_to_pos;
     DorisCallOnce<Result<EncryptionAlgorithmPB>> _determine_encryption_once;
     std::atomic<int64_t> _stale_at_s {0};
 };

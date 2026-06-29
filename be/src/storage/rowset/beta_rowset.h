@@ -80,6 +80,9 @@ public:
     Status load_segment(int64_t seg_id, OlapReaderStatistics* read_stats,
                         segment_v2::SegmentSharedPtr* segment);
 
+    Status load_segment(size_t pos, int64_t seg_id, OlapReaderStatistics* read_stats,
+                        segment_v2::SegmentSharedPtr* segment);
+
     Status get_segments_size(std::vector<size_t>* segments_size);
 
     Status get_inverted_index_size(int64_t* index_size) override;

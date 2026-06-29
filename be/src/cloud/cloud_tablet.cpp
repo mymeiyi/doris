@@ -713,10 +713,13 @@ void CloudTablet::remove_unused_rowsets() {
 
         for (auto& rs : removed_rowsets) {
             auto index_names = rs->get_index_file_names();
-            recycled_rowsets.emplace_back(rs->rowset_id(), rs->num_segments(), index_names);
+            std::vector<int32_t> segment_ids(rs->rowset_meta()->segment_ids().begin(),
+                                             rs->rowset_meta()->segment_ids().end());
+            recycled_rowsets.emplace_back(rs->rowset_id(), rs->num_segments(),
+                                          std::move(segment_ids), index_names);
             int64_t segment_size_sum = 0;
-            for (int32_t i = 0; i < rs->num_segments(); i++) {
-                segment_size_sum += rs->rowset_meta()->segment_file_size(i);
+            for (size_t pos = 0; pos < cast_set<size_t>(rs->num_segments()); ++pos) {
+                segment_size_sum += rs->rowset_meta()->segment_file_size(cast_set<int>(pos));
             }
             g_file_cache_recycle_cached_data_segment_num << rs->num_segments();
             g_file_cache_recycle_cached_data_segment_size << segment_size_sum;
@@ -791,11 +794,14 @@ std::vector<RecycledRowsets> CloudTablet::recycle_cached_data(
         }
         rs->clear_cache();
         auto index_names = rs->get_index_file_names();
-        recycled_rowsets.emplace_back(rs->rowset_id(), rs->num_segments(), index_names);
+        std::vector<int32_t> segment_ids(rs->rowset_meta()->segment_ids().begin(),
+                                         rs->rowset_meta()->segment_ids().end());
+        recycled_rowsets.emplace_back(rs->rowset_id(), rs->num_segments(), std::move(segment_ids),
+                                      index_names);
 
         int64_t segment_size_sum = 0;
-        for (int32_t i = 0; i < rs->num_segments(); i++) {
-            segment_size_sum += rs->rowset_meta()->segment_file_size(i);
+        for (size_t pos = 0; pos < cast_set<size_t>(rs->num_segments()); ++pos) {
+            segment_size_sum += rs->rowset_meta()->segment_file_size(cast_set<int>(pos));
         }
         g_file_cache_recycle_cached_data_segment_num << rs->num_segments();
         g_file_cache_recycle_cached_data_segment_size << segment_size_sum;
@@ -893,7 +899,7 @@ Result<std::unique_ptr<RowsetWriter>> CloudTablet::create_transient_rowset_write
 
     return RowsetFactory::create_rowset_writer(_engine, context, false)
             .transform([&](auto&& writer) {
-                writer->set_segment_start_id(cast_set<int32_t>(rowset.num_segments()));
+                writer->set_segment_start_id(cast_set<int32_t>(rowset.rowset_meta()->next_segment_id()));
                 return writer;
             });
 }
@@ -1435,7 +1441,8 @@ void CloudTablet::agg_delete_bitmap_for_compaction(
         DeleteBitmapPtr& new_delete_bitmap,
         std::map<std::string, int64_t>& pre_rowset_to_versions) {
     for (auto& rowset : pre_rowsets) {
-        for (uint32_t seg_id = 0; seg_id < rowset->num_segments(); ++seg_id) {
+        for (size_t pos = 0; pos < cast_set<size_t>(rowset->num_segments()); ++pos) {
+            auto seg_id = cast_set<uint32_t>(rowset->rowset_meta()->segment_id(pos));
             auto d = tablet_meta()->delete_bitmap().get_agg_without_cache(
                     {rowset->rowset_id(), seg_id, end_version}, start_version);
             if (d->isEmpty()) {
@@ -1754,9 +1761,8 @@ bool CloudTablet::_check_rowset_should_be_visible_but_not_warmed_up(
 }
 
 void CloudTablet::_submit_segment_download_task(const RowsetSharedPtr& rs,
-                                                const StorageResource* storage_resource, int seg_id,
-
-                                                int64_t expiration_time) {
+                                                const StorageResource* storage_resource, size_t pos,
+                                                int64_t seg_id, int64_t expiration_time) {
     // clang-format off
     const auto& rowset_meta = rs->rowset_meta();
     auto self = std::dynamic_pointer_cast<CloudTablet>(shared_from_this());
@@ -1772,7 +1778,7 @@ void CloudTablet::_submit_segment_download_task(const RowsetSharedPtr& rs,
     }
     _engine.file_cache_block_downloader().submit_download_task(io::DownloadFileMeta {
             .path = storage_resource->remote_segment_path(*rowset_meta, seg_id),
-            .file_size = rs->rowset_meta()->segment_file_size(seg_id),
+            .file_size = rs->rowset_meta()->segment_file_size(cast_set<int>(pos)),
             .file_system = file_system,
             .ctx = {
                     .expiration_time = expiration_time,
@@ -1862,8 +1868,9 @@ void CloudTablet::_add_rowsets_directly(std::vector<RowsetSharedPtr>& rowsets,
             rs->rowset_meta()->set_encryption_algorithm(_tablet_meta->encryption_algorithm());
             bool warm_up_state_updated = false;
             // Warmup rowset data in background
-            for (int seg_id = 0; seg_id < rs->num_segments(); ++seg_id) {
+            for (size_t pos = 0; pos < cast_set<size_t>(rs->num_segments()); ++pos) {
                 const auto& rowset_meta = rs->rowset_meta();
+                auto seg_id = rowset_meta->segment_id(pos);
                 constexpr int64_t interval = 600; // 10 mins
                 // When BE restart and receive the `load_sync` rpc, it will sync all historical rowsets first time.
                 // So we need to filter out the old rowsets avoid to download the whole table.
@@ -1880,9 +1887,9 @@ void CloudTablet::_add_rowsets_directly(std::vector<RowsetSharedPtr>& rowsets,
 
                 int64_t expiration_time = _tablet_meta->ttl_seconds();
                 g_file_cache_cloud_tablet_submitted_segment_num << 1;
-                if (rs->rowset_meta()->segment_file_size(seg_id) > 0) {
+                if (rs->rowset_meta()->segment_file_size(cast_set<int>(pos)) > 0) {
                     g_file_cache_cloud_tablet_submitted_segment_size
-                            << rs->rowset_meta()->segment_file_size(seg_id);
+                            << rs->rowset_meta()->segment_file_size(cast_set<int>(pos));
                 }
                 if (!warm_up_state_updated) {
                     VLOG_DEBUG << "warm up rowset " << rs->version() << "(" << rs->rowset_id()
@@ -1897,7 +1904,7 @@ void CloudTablet::_add_rowsets_directly(std::vector<RowsetSharedPtr>& rowsets,
                 }
 
                 if (!config::file_cache_enable_only_warm_up_idx) {
-                    _submit_segment_download_task(rs, storage_resource.value(), seg_id,
+                    _submit_segment_download_task(rs, storage_resource.value(), pos, seg_id,
                                                   expiration_time);
                 }
 
@@ -1905,7 +1912,8 @@ void CloudTablet::_add_rowsets_directly(std::vector<RowsetSharedPtr>& rowsets,
                 auto idx_version = schema_ptr->get_inverted_index_storage_format();
                 if (idx_version == InvertedIndexStorageFormatPB::V1) {
                     std::unordered_map<int64_t, int64_t> index_size_map;
-                    auto&& inverted_index_info = rowset_meta->inverted_index_file_info(seg_id);
+                    auto&& inverted_index_info =
+                            rowset_meta->inverted_index_file_info(cast_set<int>(pos));
                     for (const auto& info : inverted_index_info.index_info()) {
                         if (info.index_file_size() != -1) {
                             index_size_map[info.index_id()] = info.index_file_size();
@@ -1923,7 +1931,8 @@ void CloudTablet::_add_rowsets_directly(std::vector<RowsetSharedPtr>& rowsets,
                     }
                 } else {
                     if (schema_ptr->has_inverted_index() || schema_ptr->has_ann_index()) {
-                        auto&& inverted_index_info = rowset_meta->inverted_index_file_info(seg_id);
+                        auto&& inverted_index_info =
+                                rowset_meta->inverted_index_file_info(cast_set<int>(pos));
                         int64_t idx_size = 0;
                         if (inverted_index_info.has_index_size()) {
                             idx_size = inverted_index_info.index_size();

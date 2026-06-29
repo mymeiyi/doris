@@ -85,6 +85,10 @@ using namespace std::chrono;
 
 namespace {
 
+int64_t rowset_segment_id(const doris::RowsetMetaCloudPB& rowset, int64_t pos) {
+    return rowset.segment_ids_size() > 0 ? rowset.segment_ids(static_cast<int>(pos)) : pos;
+}
+
 int64_t packed_file_retry_sleep_ms() {
     const int64_t min_ms = std::max<int64_t>(0, config::packed_file_txn_retry_sleep_min_ms);
     const int64_t max_ms = std::max<int64_t>(min_ms, config::packed_file_txn_retry_sleep_max_ms);
@@ -3190,13 +3194,14 @@ int InstanceRecycler::delete_rowset_data(const RowsetMetaCloudPB& rs_meta_pb) {
     int64_t tablet_id = rs_meta_pb.tablet_id();
     const auto& rowset_id = rs_meta_pb.rowset_id_v2();
     for (int64_t i = 0; i < num_segments; ++i) {
-        add_file_to_delete_if_not_packed(rs_meta_pb, segment_path(tablet_id, rowset_id, i),
+        auto segment_id = rowset_segment_id(rs_meta_pb, i);
+        add_file_to_delete_if_not_packed(rs_meta_pb, segment_path(tablet_id, rowset_id, segment_id),
                                          &file_paths);
         if (index_format == InvertedIndexStorageFormatPB::V1) {
             for (const auto& index_id : index_ids) {
                 add_file_to_delete_if_not_packed(
                         rs_meta_pb,
-                        inverted_index_path_v1(tablet_id, rowset_id, i, index_id.first,
+                        inverted_index_path_v1(tablet_id, rowset_id, segment_id, index_id.first,
                                                index_id.second),
                         &file_paths);
             }
@@ -3946,14 +3951,15 @@ int InstanceRecycler::delete_rowset_data(
             continue;
         }
         for (int64_t i = 0; i < num_segments; ++i) {
-            add_file_to_delete_if_not_packed(rs, segment_path(tablet_id, rowset_id, i),
+            auto segment_id = rowset_segment_id(rs, i);
+            add_file_to_delete_if_not_packed(rs, segment_path(tablet_id, rowset_id, segment_id),
                                              &file_paths);
             if (index_format == InvertedIndexStorageFormatPB::V1) {
                 for (const auto& index_id : index_ids) {
                     add_file_to_delete_if_not_packed(
                             rs,
-                            inverted_index_path_v1(tablet_id, rowset_id, i, index_id.first,
-                                                   index_id.second),
+                            inverted_index_path_v1(tablet_id, rowset_id, segment_id,
+                                                   index_id.first, index_id.second),
                             &file_paths);
                 }
             } else if (!index_ids.empty() || inverted_index_get_ret == 1) {

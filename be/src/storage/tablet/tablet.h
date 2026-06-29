@@ -455,6 +455,7 @@ public:
 
     void record_unused_remote_rowset(const RowsetId& rowset_id, const std::string& resource,
                                      int64_t num_segments);
+    void record_unused_remote_rowset(const RowsetMeta& rowset_meta);
 
     uint32_t calc_cold_data_compaction_score() const;
 

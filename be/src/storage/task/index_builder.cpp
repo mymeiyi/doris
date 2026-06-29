@@ -972,9 +972,7 @@ void IndexBuilder::gc_output_rowset() {
         DBUG_EXECUTE_IF("IndexBuilder::gc_output_rowset_is_local_rowset",
                         { is_local_rowset = false; })
         if (!is_local_rowset) {
-            _tablet->record_unused_remote_rowset(output_rowset->rowset_id(),
-                                                 output_rowset->rowset_meta()->resource_id(),
-                                                 output_rowset->num_segments());
+            _tablet->record_unused_remote_rowset(*output_rowset->rowset_meta());
             return;
         }
         _engine.add_unused_rowset(output_rowset);

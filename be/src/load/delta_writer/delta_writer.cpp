@@ -29,6 +29,7 @@
 #include <utility>
 
 // IWYU pragma: no_include <opentelemetry/common/threadlocal.h>
+#include "common/cast_set.h"
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/config.h"
 #include "common/logging.h"
@@ -311,7 +312,9 @@ void DeltaWriter::_request_slave_tablet_pull_rowset(const PNodeInfo& node_info) 
     request->set_token(ExecEnv::GetInstance()->token());
     request->set_brpc_port(config::brpc_port);
     request->set_node_id(static_cast<int32_t>(node_info.id()));
-    for (int segment_id = 0; segment_id < cur_rowset->rowset_meta()->num_segments(); segment_id++) {
+    for (size_t pos = 0; pos < cast_set<size_t>(cur_rowset->rowset_meta()->num_segments());
+         ++pos) {
+        auto segment_id = cur_rowset->rowset_meta()->segment_id(pos);
         auto seg_path =
                 local_segment_path(tablet_path, cur_rowset->rowset_id().to_string(), segment_id);
         int64_t segment_size = std::filesystem::file_size(seg_path);

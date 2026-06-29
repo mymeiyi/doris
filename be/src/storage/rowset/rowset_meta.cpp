@@ -20,6 +20,7 @@
 #include <gen_cpp/olap_file.pb.h>
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <memory>
 #include <random>
 
@@ -268,7 +269,58 @@ void RowsetMeta::_init() {
     } else {
         _rowset_id.init(_rowset_meta_pb.rowset_id_v2());
     }
+    _reset_segment_id_index();
     update_metadata_size();
+}
+
+void RowsetMeta::_reset_segment_id_index() {
+    _segment_id_to_pos.clear();
+    if (!has_segment_ids()) {
+        return;
+    }
+    DORIS_CHECK_EQ(_rowset_meta_pb.segment_ids_size(), _rowset_meta_pb.num_segments());
+    _segment_id_to_pos.reserve(_rowset_meta_pb.segment_ids_size());
+    for (int pos = 0; pos < _rowset_meta_pb.segment_ids_size(); ++pos) {
+        const auto [_, inserted] = _segment_id_to_pos.emplace(_rowset_meta_pb.segment_ids(pos), pos);
+        DORIS_CHECK(inserted);
+    }
+}
+
+void RowsetMeta::set_segment_ids(const std::vector<int32_t>& segment_ids) {
+    _rowset_meta_pb.mutable_segment_ids()->Assign(segment_ids.begin(), segment_ids.end());
+    set_num_segments(cast_set<int64_t>(segment_ids.size()));
+    _reset_segment_id_index();
+}
+
+void RowsetMeta::append_segment_ids(const google::protobuf::RepeatedField<int32_t>& segment_ids) {
+    _rowset_meta_pb.mutable_segment_ids()->Add(segment_ids.begin(), segment_ids.end());
+    set_num_segments(_rowset_meta_pb.segment_ids_size());
+    _reset_segment_id_index();
+}
+
+size_t RowsetMeta::position_of(int64_t seg_id) const {
+    DORIS_CHECK_GE(seg_id, 0);
+    if (!has_segment_ids()) {
+        DORIS_CHECK_LT(seg_id, num_segments());
+        return cast_set<size_t>(seg_id);
+    }
+    const auto it = _segment_id_to_pos.find(seg_id);
+    DORIS_CHECK(it != _segment_id_to_pos.end());
+    return it->second;
+}
+
+int64_t RowsetMeta::next_segment_id() const {
+    if (_rowset_meta_pb.has_next_segment_id()) {
+        return _rowset_meta_pb.next_segment_id();
+    }
+    if (!has_segment_ids()) {
+        return num_segments();
+    }
+    int64_t next_id = 0;
+    for (const auto segment_id : _rowset_meta_pb.segment_ids()) {
+        next_id = std::max<int64_t>(next_id, segment_id + 1);
+    }
+    return next_id;
 }
 
 void RowsetMeta::add_segments_file_size(const std::vector<size_t>& seg_file_size) {
@@ -278,13 +330,13 @@ void RowsetMeta::add_segments_file_size(const std::vector<size_t>& seg_file_size
     }
 }
 
-int64_t RowsetMeta::segment_file_size(int seg_id) const {
+int64_t RowsetMeta::segment_file_size(int pos) const {
     DCHECK(_rowset_meta_pb.segments_file_size().empty() ||
-           _rowset_meta_pb.segments_file_size_size() > seg_id)
-            << _rowset_meta_pb.segments_file_size_size() << ' ' << seg_id;
+           _rowset_meta_pb.segments_file_size_size() > pos)
+            << _rowset_meta_pb.segments_file_size_size() << ' ' << pos;
     return _rowset_meta_pb.enable_segments_file_size()
-                   ? (_rowset_meta_pb.segments_file_size_size() > seg_id
-                              ? _rowset_meta_pb.segments_file_size(seg_id)
+                   ? (_rowset_meta_pb.segments_file_size_size() > pos
+                              ? _rowset_meta_pb.segments_file_size(pos)
                               : -1)
                    : -1;
 }
@@ -338,7 +390,26 @@ void RowsetMeta::set_segments_key_bounds(const std::vector<KeyBoundsPB>& segment
 }
 
 void RowsetMeta::merge_rowset_meta(const RowsetMeta& other) {
-    set_num_segments(num_segments() + other.num_segments());
+    const auto old_num_segments = num_segments();
+    set_num_segments(old_num_segments + other.num_segments());
+    if (has_segment_ids() || other.has_segment_ids()) {
+        if (!has_segment_ids()) {
+            for (int64_t pos = 0; pos < old_num_segments; ++pos) {
+                _rowset_meta_pb.add_segment_ids(cast_set<int32_t>(pos));
+            }
+        }
+        if (other.has_segment_ids()) {
+            _rowset_meta_pb.mutable_segment_ids()->Add(other.segment_ids().begin(),
+                                                       other.segment_ids().end());
+        } else {
+            for (int64_t pos = 0; pos < other.num_segments(); ++pos) {
+                _rowset_meta_pb.add_segment_ids(cast_set<int32_t>(pos));
+            }
+        }
+        set_num_segments(_rowset_meta_pb.segment_ids_size());
+        set_next_segment_id(std::max(next_segment_id(), other.next_segment_id()));
+        _reset_segment_id_index();
+    }
     set_num_rows(num_rows() + other.num_rows());
     set_data_disk_size(data_disk_size() + other.data_disk_size());
     set_total_disk_size(total_disk_size() + other.total_disk_size());
@@ -404,10 +475,10 @@ int64_t RowsetMeta::get_metadata_size() const {
     return sizeof(RowsetMeta) + _rowset_meta_pb.ByteSizeLong();
 }
 
-InvertedIndexFileInfo RowsetMeta::inverted_index_file_info(int seg_id) {
+InvertedIndexFileInfo RowsetMeta::inverted_index_file_info(int pos) {
     return _rowset_meta_pb.enable_inverted_index_file_info()
-                   ? (_rowset_meta_pb.inverted_index_file_info_size() > seg_id
-                              ? _rowset_meta_pb.inverted_index_file_info(seg_id)
+                   ? (_rowset_meta_pb.inverted_index_file_info_size() > pos
+                              ? _rowset_meta_pb.inverted_index_file_info(pos)
                               : InvertedIndexFileInfo())
                    : InvertedIndexFileInfo();
 }

@@ -29,6 +29,7 @@
 #include <utility>
 
 #include "cloud/config.h"
+#include "common/cast_set.h"
 #include "common/config.h"
 #include "common/logging.h"
 #include "common/metrics/doris_metrics.h"
@@ -177,7 +178,8 @@ Status BetaRowset::get_inverted_index_size(int64_t* index_size) {
 
     if (_schema->get_inverted_index_storage_format() == InvertedIndexStorageFormatPB::V1) {
         for (const auto& index : _schema->inverted_indexes()) {
-            for (int seg_id = 0; seg_id < num_segments(); ++seg_id) {
+            for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+                auto seg_id = _rowset_meta->segment_id(pos);
                 auto seg_path = DORIS_TRY(segment_path(seg_id));
                 int64_t file_size = 0;
 
@@ -190,7 +192,8 @@ Status BetaRowset::get_inverted_index_size(int64_t* index_size) {
             }
         }
     } else {
-        for (int seg_id = 0; seg_id < num_segments(); ++seg_id) {
+        for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+            auto seg_id = _rowset_meta->segment_id(pos);
             auto seg_path = DORIS_TRY(segment_path(seg_id));
             int64_t file_size = 0;
 
@@ -204,8 +207,8 @@ Status BetaRowset::get_inverted_index_size(int64_t* index_size) {
 }
 
 void BetaRowset::clear_inverted_index_cache() {
-    for (int i = 0; i < num_segments(); ++i) {
-        auto seg_path = segment_path(i);
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_path = segment_path(_rowset_meta->segment_id(pos));
         if (!seg_path) {
             continue;
         }
@@ -232,7 +235,8 @@ Status BetaRowset::get_segments_size(std::vector<size_t>* segments_size) {
                                           _rowset_meta->resource_id());
     }
 
-    for (int seg_id = 0; seg_id < num_segments(); ++seg_id) {
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_id = _rowset_meta->segment_id(pos);
         auto seg_path = DORIS_TRY(segment_path(seg_id));
         int64_t file_size;
         RETURN_IF_ERROR(fs->file_size(seg_path, &file_size));
@@ -242,7 +246,12 @@ Status BetaRowset::get_segments_size(std::vector<size_t>* segments_size) {
 }
 
 Status BetaRowset::load_segments(std::vector<segment_v2::SegmentSharedPtr>* segments) {
-    return load_segments(0, num_segments(), segments);
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        std::shared_ptr<segment_v2::Segment> segment;
+        RETURN_IF_ERROR(load_segment(pos, _rowset_meta->segment_id(pos), nullptr, &segment));
+        segments->push_back(std::move(segment));
+    }
+    return Status::OK();
 }
 
 Status BetaRowset::load_segments(int64_t seg_id_begin, int64_t seg_id_end,
@@ -259,6 +268,11 @@ Status BetaRowset::load_segments(int64_t seg_id_begin, int64_t seg_id_end,
 
 Status BetaRowset::load_segment(int64_t seg_id, OlapReaderStatistics* stats,
                                 segment_v2::SegmentSharedPtr* segment) {
+    return load_segment(_rowset_meta->position_of(seg_id), seg_id, stats, segment);
+}
+
+Status BetaRowset::load_segment(size_t pos, int64_t seg_id, OlapReaderStatistics* stats,
+                                segment_v2::SegmentSharedPtr* segment) {
     auto fs = _rowset_meta->fs();
     if (!fs) {
         return Status::Error<INIT_FAILED>("get fs failed");
@@ -271,14 +285,14 @@ Status BetaRowset::load_segment(int64_t seg_id, OlapReaderStatistics* stats,
                                                     : io::FileCachePolicy::NO_CACHE,
             .is_doris_table = true,
             .cache_base_path = "",
-            .file_size = _rowset_meta->segment_file_size(static_cast<int>(seg_id)),
+            .file_size = _rowset_meta->segment_file_size(cast_set<int>(pos)),
             .tablet_id = _rowset_meta->tablet_id(),
     };
 
     auto s = segment_v2::Segment::open(
-            fs, seg_path, _rowset_meta->tablet_id(), static_cast<uint32_t>(seg_id), rowset_id(),
+            fs, seg_path, _rowset_meta->tablet_id(), cast_set<uint32_t>(seg_id), rowset_id(),
             _schema, reader_options, segment,
-            _rowset_meta->inverted_index_file_info(static_cast<int>(seg_id)), stats);
+            _rowset_meta->inverted_index_file_info(cast_set<int>(pos)), stats);
     if (!s.ok()) {
         LOG(WARNING) << "failed to open segment. " << seg_path << " under rowset " << rowset_id()
                      << " : " << s.to_string();
@@ -309,8 +323,9 @@ Status BetaRowset::remove() {
     bool success = true;
     Status st;
     const auto& fs = io::global_local_filesystem();
-    for (int i = 0; i < num_segments(); ++i) {
-        auto seg_path = local_segment_path(_tablet_path, rowset_id().to_string(), i);
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_id = _rowset_meta->segment_id(pos);
+        auto seg_path = local_segment_path(_tablet_path, rowset_id().to_string(), seg_id);
         LOG(INFO) << "deleting " << seg_path;
         st = fs->delete_file(seg_path);
         if (!st.ok()) {
@@ -381,16 +396,17 @@ Status BetaRowset::link_files_to(const std::string& dir, RowsetId new_rowset_id,
         }
     }};
 
-    for (int i = 0; i < num_segments(); ++i) {
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
         auto dst_path =
-                local_segment_path(dir, new_rowset_id.to_string(), i + new_rowset_start_seg_id);
+                local_segment_path(dir, new_rowset_id.to_string(), pos + new_rowset_start_seg_id);
         bool dst_path_exist = false;
         if (!local_fs->exists(dst_path, &dst_path_exist).ok() || dst_path_exist) {
             status = Status::Error<FILE_ALREADY_EXIST>(
                     "failed to create hard link, file already exist: {}", dst_path);
             return status;
         }
-        auto src_path = local_segment_path(_tablet_path, rowset_id().to_string(), i);
+        auto src_path =
+                local_segment_path(_tablet_path, rowset_id().to_string(), _rowset_meta->segment_id(pos));
         // TODO(lingbin): how external storage support link?
         //     use copy? or keep refcount to avoid being delete?
         if (!local_fs->link_file(src_path, dst_path).ok()) {
@@ -484,13 +500,14 @@ Status BetaRowset::copy_files_to(const std::string& dir, const RowsetId& new_row
     }
 
     bool exists = false;
-    for (int i = 0; i < num_segments(); ++i) {
-        auto dst_path = local_segment_path(dir, new_rowset_id.to_string(), i);
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto dst_path = local_segment_path(dir, new_rowset_id.to_string(), pos);
         RETURN_IF_ERROR(io::global_local_filesystem()->exists(dst_path, &exists));
         if (exists) {
             return Status::Error<FILE_ALREADY_EXIST>("file already exist: {}", dst_path);
         }
-        auto src_path = local_segment_path(_tablet_path, rowset_id().to_string(), i);
+        auto src_path =
+                local_segment_path(_tablet_path, rowset_id().to_string(), _rowset_meta->segment_id(pos));
         RETURN_IF_ERROR(io::global_local_filesystem()->copy_path(src_path, dst_path));
         if (_schema->get_inverted_index_storage_format() == InvertedIndexStorageFormatPB::V1) {
             for (const auto& column : _schema->columns()) {
@@ -544,11 +561,12 @@ Status BetaRowset::upload_to(const StorageResource& dest_fs, const RowsetId& new
     local_paths.reserve(num_segments());
     std::vector<io::Path> dest_paths;
     dest_paths.reserve(num_segments());
-    for (int i = 0; i < num_segments(); ++i) {
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
         // Note: Here we use relative path for remote.
         auto remote_seg_path = dest_fs.remote_segment_path(_rowset_meta->tablet_id(),
-                                                           new_rowset_id.to_string(), i);
-        auto local_seg_path = local_segment_path(_tablet_path, rowset_id().to_string(), i);
+                                                           new_rowset_id.to_string(), pos);
+        auto local_seg_path =
+                local_segment_path(_tablet_path, rowset_id().to_string(), _rowset_meta->segment_id(pos));
         dest_paths.emplace_back(remote_seg_path);
         local_paths.emplace_back(local_seg_path);
         if (_schema->get_inverted_index_storage_format() == InvertedIndexStorageFormatPB::V1) {
@@ -602,8 +620,8 @@ Status BetaRowset::check_file_exist() {
                                      _rowset_meta->resource_id());
     }
 
-    for (int i = 0; i < num_segments(); ++i) {
-        auto seg_path = DORIS_TRY(segment_path(i));
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_path = DORIS_TRY(segment_path(_rowset_meta->segment_id(pos)));
         bool seg_file_exist = false;
         RETURN_IF_ERROR(fs->exists(seg_path, &seg_file_exist));
         if (!seg_file_exist) {
@@ -622,7 +640,8 @@ Status BetaRowset::check_current_rowset_segment() {
                                      _rowset_meta->resource_id());
     }
 
-    for (int seg_id = 0; seg_id < num_segments(); ++seg_id) {
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_id = _rowset_meta->segment_id(pos);
         auto seg_path = DORIS_TRY(segment_path(seg_id));
 
         std::shared_ptr<segment_v2::Segment> segment;
@@ -631,13 +650,15 @@ Status BetaRowset::check_current_rowset_segment() {
                                                         : io::FileCachePolicy::NO_CACHE,
                 .is_doris_table = true,
                 .cache_base_path {},
-                .file_size = _rowset_meta->segment_file_size(seg_id),
+                .file_size = _rowset_meta->segment_file_size(cast_set<int>(pos)),
                 .tablet_id = _rowset_meta->tablet_id(),
         };
 
-        auto s = segment_v2::Segment::open(fs, seg_path, _rowset_meta->tablet_id(), seg_id,
-                                           rowset_id(), _schema, reader_options, &segment,
-                                           _rowset_meta->inverted_index_file_info(seg_id));
+        auto s = segment_v2::Segment::open(fs, seg_path, _rowset_meta->tablet_id(),
+                                           cast_set<uint32_t>(seg_id), rowset_id(), _schema,
+                                           reader_options, &segment,
+                                           _rowset_meta->inverted_index_file_info(
+                                                   cast_set<int>(pos)));
         if (!s.ok()) {
             LOG(WARNING) << "segment can not be opened. file=" << seg_path;
             return s;
@@ -758,7 +779,8 @@ Status BetaRowset::calc_file_crc(uint32_t* crc_value, int64_t* file_count) {
 
     // 1. pick up all the files including dat file and idx file
     std::vector<io::Path> file_paths;
-    for (int seg_id = 0; seg_id < num_segments(); ++seg_id) {
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_id = _rowset_meta->segment_id(pos);
         auto seg_path = DORIS_TRY(segment_path(seg_id));
         file_paths.emplace_back(seg_path);
         if (_schema->get_inverted_index_storage_format() == InvertedIndexStorageFormatPB::V1) {
@@ -836,7 +858,8 @@ Status BetaRowset::show_nested_index_file(rapidjson::Value* rowset_value,
     rowset_value->AddMember("index_storage_format", rapidjson::Value(format_str.c_str(), allocator),
                             allocator);
     rapidjson::Value segments(rapidjson::kArrayType);
-    for (int seg_id = 0; seg_id < num_segments(); ++seg_id) {
+    for (size_t pos = 0; pos < cast_set<size_t>(num_segments()); ++pos) {
+        auto seg_id = _rowset_meta->segment_id(pos);
         rapidjson::Value segment(rapidjson::kObjectType);
         segment.AddMember("segment_id", rapidjson::Value(seg_id).Move(), allocator);
 

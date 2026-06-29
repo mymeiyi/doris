@@ -62,7 +62,7 @@ private:
                                 const VExprContextSPtrs& common_expr_ctxs_push_down,
                                 const TabletSchemaSPtr& tablet_schema,
                                 CollectInfoMap* collect_infos);
-    Status process_segment(const RowsetSharedPtr& rowset, int32_t seg_id,
+    Status process_segment(const RowsetSharedPtr& rowset, int32_t pos, int32_t seg_id,
                            const TabletSchema* tablet_schema, const CollectInfoMap& collect_infos,
                            io::IOContext* io_ctx);
 
