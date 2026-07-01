@@ -381,16 +381,16 @@ Status BetaRowset::link_files_to(const std::string& dir, RowsetId new_rowset_id,
         }
     }};
 
-    for (auto seg : segments()) {
-        auto dst_path = local_segment_path(dir, new_rowset_id.to_string(),
-                                           seg.pos() + new_rowset_start_seg_id);
+    for (int i = 0; i < num_segments(); ++i) {
+        auto dst_path =
+                local_segment_path(dir, new_rowset_id.to_string(), i + new_rowset_start_seg_id);
         bool dst_path_exist = false;
         if (!local_fs->exists(dst_path, &dst_path_exist).ok() || dst_path_exist) {
             status = Status::Error<FILE_ALREADY_EXIST>(
                     "failed to create hard link, file already exist: {}", dst_path);
             return status;
         }
-        auto src_path = local_segment_path(_tablet_path, rowset_id().to_string(), seg.id());
+        auto src_path = local_segment_path(_tablet_path, rowset_id().to_string(), i);
         // TODO(lingbin): how external storage support link?
         //     use copy? or keep refcount to avoid being delete?
         if (!local_fs->link_file(src_path, dst_path).ok()) {
@@ -484,13 +484,13 @@ Status BetaRowset::copy_files_to(const std::string& dir, const RowsetId& new_row
     }
 
     bool exists = false;
-    for (auto seg : segments()) {
-        auto dst_path = local_segment_path(dir, new_rowset_id.to_string(), seg.pos());
+    for (int i = 0; i < num_segments(); ++i) {
+        auto dst_path = local_segment_path(dir, new_rowset_id.to_string(), i);
         RETURN_IF_ERROR(io::global_local_filesystem()->exists(dst_path, &exists));
         if (exists) {
             return Status::Error<FILE_ALREADY_EXIST>("file already exist: {}", dst_path);
         }
-        auto src_path = local_segment_path(_tablet_path, rowset_id().to_string(), seg.id());
+        auto src_path = local_segment_path(_tablet_path, rowset_id().to_string(), i);
         RETURN_IF_ERROR(io::global_local_filesystem()->copy_path(src_path, dst_path));
         if (_schema->get_inverted_index_storage_format() == InvertedIndexStorageFormatPB::V1) {
             for (const auto& column : _schema->columns()) {
@@ -544,13 +544,11 @@ Status BetaRowset::upload_to(const StorageResource& dest_fs, const RowsetId& new
     local_paths.reserve(num_segments());
     std::vector<io::Path> dest_paths;
     dest_paths.reserve(num_segments());
-    for (auto seg : segments()) {
+    for (int i = 0; i < num_segments(); ++i) {
         // Note: Here we use relative path for remote.
-        // Source local files are named by this rowset's real segment ids. The uploaded remote
-        // files form a new rowset layout, so name them by contiguous destination positions.
         auto remote_seg_path = dest_fs.remote_segment_path(_rowset_meta->tablet_id(),
-                                                           new_rowset_id.to_string(), seg.pos());
-        auto local_seg_path = local_segment_path(_tablet_path, rowset_id().to_string(), seg.id());
+                                                           new_rowset_id.to_string(), i);
+        auto local_seg_path = local_segment_path(_tablet_path, rowset_id().to_string(), i);
         dest_paths.emplace_back(remote_seg_path);
         local_paths.emplace_back(local_seg_path);
         if (_schema->get_inverted_index_storage_format() == InvertedIndexStorageFormatPB::V1) {
