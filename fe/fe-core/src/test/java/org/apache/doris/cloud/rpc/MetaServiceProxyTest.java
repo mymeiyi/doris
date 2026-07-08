@@ -119,6 +119,33 @@ public class MetaServiceProxyTest {
         Mockito.verify(client).shutdown(true);
     }
 
+    @Test
+    public void testExecuteRequestShutdownOnTooBusy() throws RpcException {
+        MetaServiceProxy proxy = new MetaServiceProxy();
+        MetaServiceClient client = mockNormalClient();
+
+        Map<String, MetaServiceClient> serviceMap = Deencapsulation.getField(proxy, "serviceMap");
+        serviceMap.put(Config.meta_service_endpoint, client);
+        Queue<Long> lastConnTimeMs = Deencapsulation.getField(proxy, "lastConnTimeMs");
+        lastConnTimeMs.clear();
+        lastConnTimeMs.add(0L);
+        lastConnTimeMs.add(0L);
+        lastConnTimeMs.add(0L);
+
+        MetaServiceProxy.MetaServiceClientWrapper wrapper = Deencapsulation.getField(proxy, "w");
+        Cloud.MetaServiceResponseStatus status = Cloud.MetaServiceResponseStatus.newBuilder()
+                .setCode(Cloud.MetaServiceCode.MS_TOO_BUSY)
+                .setMsg("server is overloaded")
+                .build();
+        Cloud.GetVersionResponse response = Cloud.GetVersionResponse.newBuilder()
+                .setStatus(status)
+                .build();
+
+        Cloud.GetVersionResponse result = wrapper.executeRequest("ignored", (ignored) -> response);
+        Assert.assertEquals(Cloud.MetaServiceCode.MS_TOO_BUSY, result.getStatus().getCode());
+        Mockito.verify(client, Mockito.never()).shutdown(Mockito.anyBoolean());
+    }
+
     private MetaServiceClient mockNormalClient() {
         MetaServiceClient client = Mockito.mock(MetaServiceClient.class);
         Mockito.when(client.isNormalState()).thenReturn(true);
