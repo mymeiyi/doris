@@ -31,6 +31,7 @@
 #include "runtime/fragment_mgr.h"
 #include "runtime/memory/mem_tracker_limiter.h"
 #include "runtime/thread_context.h"
+#include "service/backend_options.h"
 #include "util/client_cache.h"
 #include "util/debug_points.h"
 #include "util/thrift_rpc_helper.h"
@@ -334,9 +335,9 @@ Status GroupCommitTable::_check_wal_backlog(TGroupCommitMode::type group_commit_
         failed_reason = "no replay wal failure has been recorded yet";
     }
     return Status::Error<ErrorCode::EXCEEDED_LIMIT>(
-            "Too many group commit async WALs for table {}. wal num={}, limit={}, last replay wal "
-            "failed reason: {}",
-            _table_id, wal_num, max_wal_num, failed_reason);
+            "Too many group commit async WALs for table {} on be host {}. wal num={}, limit={}, "
+            "last replay wal failed reason: {}",
+            _table_id, BackendOptions::get_localhost(), wal_num, max_wal_num, failed_reason);
 }
 
 Status GroupCommitTable::submit_create_group_commit_load() {
