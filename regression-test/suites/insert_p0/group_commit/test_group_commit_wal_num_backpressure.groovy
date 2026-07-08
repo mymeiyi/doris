@@ -73,7 +73,7 @@ suite("test_group_commit_wal_num_backpressure", "nonConcurrent") {
             }
 
             def blocked = false
-            def maxAttempts = 30
+            def maxAttempts = 100
             for (int i = 0; i < maxAttempts && !blocked; ++i) {
                 try {
                     streamLoadToBe()
@@ -83,12 +83,9 @@ suite("test_group_commit_wal_num_backpressure", "nonConcurrent") {
                     assertTrue(e.getMessage().contains("Too many group commit async WALs"))
                     assertTrue(e.getMessage().contains("limit=5"))
                     assertTrue(e.getMessage().contains("last replay wal failed reason"))
-                    if (e.getMessage().contains("WalTable::_handle_stream_load.fail")) {
-                        blocked = true
-                        break
-                    }
-                    assertTrue(e.getMessage().contains("no replay wal failure has been recorded yet"))
-                    sleep(1000)
+                    assertTrue(e.getMessage().contains("WalTable::_handle_stream_load.fail"))
+                    blocked = true
+                    break
                 }
             }
             assertTrue(blocked)

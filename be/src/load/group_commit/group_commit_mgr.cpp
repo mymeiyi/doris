@@ -332,7 +332,7 @@ Status GroupCommitTable::_check_wal_backlog(TGroupCommitMode::type group_commit_
     }
     std::string failed_reason = _exec_env->wal_mgr()->get_last_replay_wal_failed_reason(_table_id);
     if (failed_reason.empty()) {
-        failed_reason = "no replay wal failure has been recorded yet";
+        return Status::OK();
     }
     return Status::Error<ErrorCode::EXCEEDED_LIMIT>(
             "Too many group commit async WALs for table {} on be host {}. wal num={}, limit={}, "
