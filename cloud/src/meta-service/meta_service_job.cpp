@@ -26,7 +26,12 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <vector>
 
 #include "common/bvars.h"
 #include "common/config.h"
@@ -146,6 +151,135 @@ static inline bool may_conflict_by_type(TabletCompactionJobPB::CompactionType a,
     return is_rowset_compaction_family(a) && is_rowset_compaction_family(b);
 }
 
+static constexpr std::string_view PENDING_CUMULATIVE_POINT_JOB_ID_PREFIX = "pcp:";
+
+static inline bool is_pending_cumulative_point_marker(const TabletCompactionJobPB& compaction) {
+    return compaction.type() == TabletCompactionJobPB::PENDING_CUMULATIVE_POINT;
+}
+
+static TabletCompactionJobPB build_pending_cumulative_point_marker(
+        const TabletCompactionJobPB& compaction) {
+    DCHECK_EQ(compaction.input_versions_size(), 2) << proto_to_json(compaction);
+    TabletCompactionJobPB marker;
+    marker.set_id(fmt::format("{}{}", PENDING_CUMULATIVE_POINT_JOB_ID_PREFIX, compaction.id()));
+    marker.set_type(TabletCompactionJobPB::PENDING_CUMULATIVE_POINT);
+    marker.add_input_versions(compaction.input_versions(0));
+    marker.add_input_versions(compaction.input_versions(1));
+    marker.set_output_cumulative_point(compaction.output_cumulative_point());
+    return marker;
+}
+
+struct OrderedCumulativePointUpdate {
+    int64_t cumulative_point = -1;
+    bool add_pending_marker = false;
+    TabletCompactionJobPB pending_marker;
+    std::unordered_set<std::string> consumed_pending_marker_ids;
+};
+
+// Calculates the ordered cumulative point update for a compaction commit.
+//
+// With parallel cumulative compaction, a higher version range may commit before a lower one:
+//   current cumulative_point = 186
+//   low  cumulative [186, 200] is still running
+//   high cumulative [201, 209] commits first with output_cumulative_point = 210
+// The high compaction has already produced its rowset, but advancing cumulative_point to 210
+// would falsely tell BE that all rowsets below 210 are compacted. Keep the point at 186 and
+// record a PENDING_CUMULATIVE_POINT marker instead. When [186, 200] later commits and advances
+// the point to 201, this function consumes the pending marker and advances the point to 210.
+//
+// The returned object tells the caller:
+//   - which cumulative_point should be written to tablet stats;
+//   - whether a new pending marker should be appended to TabletJobInfoPB;
+//   - which existing pending markers became continuous and should be removed.
+static OrderedCumulativePointUpdate calc_ordered_cumulative_point_update(
+        const TabletJobInfoPB& recorded_job, const TabletCompactionJobPB& compaction,
+        int64_t current_cumulative_point) {
+    struct PointInterval {
+        std::string id;
+        int64_t start = 0;
+        int64_t output_point = 0;
+        bool pending_marker = false;
+    };
+
+    std::vector<PointInterval> intervals;
+    intervals.reserve(recorded_job.compaction_size() + 1);
+    for (const auto& c : recorded_job.compaction()) {
+        if (!is_pending_cumulative_point_marker(c)) {
+            continue;
+        }
+        DCHECK_EQ(c.input_versions_size(), 2) << proto_to_json(c);
+        DCHECK(c.has_output_cumulative_point()) << proto_to_json(c);
+        intervals.push_back({c.id(), c.input_versions(0), c.output_cumulative_point(), true});
+    }
+
+    OrderedCumulativePointUpdate update;
+    update.cumulative_point = current_cumulative_point;
+    if (compaction.type() != TabletCompactionJobPB::CUMULATIVE &&
+        compaction.type() != TabletCompactionJobPB::EMPTY_CUMULATIVE && intervals.empty()) {
+        return update;
+    }
+    bool blocked_by_lower_inflight_compaction = false;
+    if (compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
+        compaction.input_versions_size() == 2 &&
+        compaction.input_versions(0) > current_cumulative_point) {
+        for (const auto& c : recorded_job.compaction()) {
+            if (c.id() == compaction.id() || is_pending_cumulative_point_marker(c)) {
+                continue;
+            }
+            if (!may_conflict_by_type(c.type(), compaction.type()) || c.input_versions_size() != 2) {
+                continue;
+            }
+            if (c.input_versions(0) <= current_cumulative_point) {
+                blocked_by_lower_inflight_compaction = true;
+                break;
+            }
+        }
+        if (!blocked_by_lower_inflight_compaction && intervals.empty()) {
+            update.cumulative_point = compaction.output_cumulative_point();
+            return update;
+        }
+    }
+    if (compaction.output_cumulative_point() > current_cumulative_point) {
+        if (compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) {
+            intervals.push_back({compaction.id(), current_cumulative_point,
+                                 compaction.output_cumulative_point(), false});
+        } else if (compaction.input_versions_size() == 2) {
+            intervals.push_back({compaction.id(), compaction.input_versions(0),
+                                 compaction.output_cumulative_point(), false});
+        }
+    }
+
+    bool advanced = true;
+    while (advanced) {
+        advanced = false;
+        for (const auto& interval : intervals) {
+            if (interval.start > update.cumulative_point ||
+                interval.output_point <= update.cumulative_point) {
+                continue;
+            }
+            update.cumulative_point = interval.output_point;
+            advanced = true;
+            if (interval.pending_marker) {
+                update.consumed_pending_marker_ids.insert(interval.id);
+            }
+        }
+    }
+    for (const auto& interval : intervals) {
+        if (interval.pending_marker && interval.output_point <= update.cumulative_point) {
+            update.consumed_pending_marker_ids.insert(interval.id);
+        }
+    }
+
+    if (compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
+        compaction.input_versions_size() == 2 &&
+        blocked_by_lower_inflight_compaction &&
+        compaction.output_cumulative_point() > update.cumulative_point) {
+        update.add_pending_marker = true;
+        update.pending_marker = build_pending_cumulative_point_marker(compaction);
+    }
+    return update;
+}
+
 void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringstream& ss,
                           std::unique_ptr<Transaction>& txn, const StartTabletJobRequest* request,
                           StartTabletJobResponse* response, std::string& instance_id,
@@ -258,6 +392,9 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
         // clang-format off
         int64_t now = time(nullptr);
         compactions.erase(std::remove_if(compactions.begin(), compactions.end(), [&](auto& c) {
+            if (is_pending_cumulative_point_marker(c)) {
+                return false;
+            }
             DCHECK(c.expiration() > 0 || c.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) << proto_to_json(c);
             DCHECK(c.lease() > 0) << proto_to_json(c);
             if (c.expiration() > 0 && c.expiration() < now) {
@@ -287,6 +424,12 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
             code = MetaServiceCode::JOB_TABLET_BUSY;
             return;
         }
+        bool has_input_version_range = compaction.input_versions_size() == 2;
+        auto version_not_conflict = [](const TabletCompactionJobPB& a,
+                                       const TabletCompactionJobPB& b) {
+            return a.input_versions(0) > b.input_versions(1) ||
+                   a.input_versions(1) < b.input_versions(0);
+        };
         if (compaction.type() == TabletCompactionJobPB::FULL) {
             // Full compaction is generally used for data correctness repair
             // for MOW table, so priority should be given to performing full
@@ -305,6 +448,24 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
             // cumulative_point past the in-flight cumu's input range and let base compaction race
             // with it).
             for (auto& c : compactions) {
+                if (is_pending_cumulative_point_marker(c)) {
+                    if (has_input_version_range && version_not_conflict(c, compaction)) {
+                        continue;
+                    }
+                    if (has_input_version_range &&
+                        compaction.input_versions(0) <= stats.cumulative_point()) {
+                        continue;
+                    }
+                    if (compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) {
+                        continue;
+                    }
+                    msg = fmt::format("compaction has already started, tablet_id={} job={}",
+                                      tablet_id, proto_to_json(c));
+                    code = MetaServiceCode::JOB_TABLET_BUSY;
+                    response->add_version_in_compaction(c.input_versions(0));
+                    response->add_version_in_compaction(c.input_versions(1));
+                    return;
+                }
                 if (!is_same_conflict_family(c.type(), compaction.type()) &&
                     c.type() != TabletCompactionJobPB::FULL) {
                     continue;
@@ -319,11 +480,6 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
             DCHECK_EQ(compaction.input_versions_size(), 2) << proto_to_json(compaction);
             DCHECK_LE(compaction.input_versions(0), compaction.input_versions(1))
                     << proto_to_json(compaction);
-            auto version_not_conflict = [](const TabletCompactionJobPB& a,
-                                           const TabletCompactionJobPB& b) {
-                return a.input_versions(0) > b.input_versions(1) ||
-                       a.input_versions(1) < b.input_versions(0);
-            };
             for (auto& c : compactions) {
                 // Plan D: BASE and CUMULATIVE on the same tablet may also conflict when their
                 // input version ranges overlap. Previously we only checked same-type conflicts,
@@ -332,6 +488,22 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                 // advanced. Now we treat any pair within (BASE, CUMULATIVE, EMPTY_CUMULATIVE,
                 // FULL) as potentially conflicting and rely on the input-version-range check
                 // below to make the final decision.
+                if (is_pending_cumulative_point_marker(c)) {
+                    if (version_not_conflict(c, compaction)) continue;
+                    if (compaction.input_versions(0) <= stats.cumulative_point()) continue;
+                    msg = fmt::format("compaction has already started, tablet_id={} job={}",
+                                      tablet_id, proto_to_json(c));
+                    code = MetaServiceCode::JOB_TABLET_BUSY;
+                    for (auto& c : compactions) {
+                        if (c.input_versions_size() != 2) continue;
+                        if (is_pending_cumulative_point_marker(c) ||
+                            may_conflict_by_type(c.type(), compaction.type())) {
+                            response->add_version_in_compaction(c.input_versions(0));
+                            response->add_version_in_compaction(c.input_versions(1));
+                        }
+                    }
+                    return;
+                }
                 if (!may_conflict_by_type(c.type(), compaction.type())) continue;
                 if (c.input_versions_size() > 0 && version_not_conflict(c, compaction)) continue;
                 if (c.id() == compaction.id()) return; // Same job, return OK to keep idempotency
@@ -348,10 +520,13 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                 //
                 // An in-flight EMPTY_CUMULATIVE (or any other family member without a concrete
                 // [v_lo, v_hi]) carries no usable range; surfacing fabricated zeros would
-                // mislead BE retry. Skip such entries defensively here - the real conflict is
-                // already enforced by the version-range check above.
+                // mislead BE retry. Pending cumulative-point markers do carry a committed rowset
+                // range, so surface them as well to keep stale BE retries away from that range.
                 for (auto& c : compactions) {
-                    if (!may_conflict_by_type(c.type(), compaction.type())) continue;
+                    if (!is_pending_cumulative_point_marker(c) &&
+                        !may_conflict_by_type(c.type(), compaction.type())) {
+                        continue;
+                    }
                     if (c.input_versions_size() != 2) continue;
                     response->add_version_in_compaction(c.input_versions(0));
                     response->add_version_in_compaction(c.input_versions(1));
@@ -1068,8 +1243,23 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
         }
     }
 
-    if (compaction_update_tablet_stats(compaction, stats, code, msg, now) == -1) {
+    auto cumulative_point_update =
+            calc_ordered_cumulative_point_update(recorded_job, compaction,
+                                                 stats->cumulative_point());
+    auto compaction_for_stats = compaction;
+    if (compaction_for_stats.has_output_cumulative_point() &&
+        ((compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
+          compaction.input_versions_size() == 2) ||
+         compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE)) {
+        compaction_for_stats.set_output_cumulative_point(
+                cumulative_point_update.cumulative_point);
+    }
+
+    if (compaction_update_tablet_stats(compaction_for_stats, stats, code, msg, now) == -1) {
         return;
+    }
+    if (cumulative_point_update.cumulative_point > stats->cumulative_point()) {
+        stats->set_cumulative_point(cumulative_point_update.cumulative_point);
     }
 
     auto stats_key = stats_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
@@ -1126,7 +1316,11 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
     VLOG_DEBUG << "update tablet stats tablet_id=" << tablet_id << " key=" << hex(stats_key)
                << " stats=" << proto_to_json(*stats);
     if (compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) {
-        recorded_job.mutable_compaction()->erase(recorded_compaction);
+        auto* compactions = recorded_job.mutable_compaction();
+        compactions->erase(std::remove_if(compactions->begin(), compactions->end(), [&](auto& c) {
+            return c.id() == compaction.id() ||
+                   cumulative_point_update.consumed_pending_marker_ids.contains(c.id());
+        }), compactions->end());
         auto job_val = recorded_job.SerializeAsString();
         txn->put(job_key, job_val);
         INSTANCE_LOG(INFO) << "remove compaction job, tablet_id=" << tablet_id
@@ -1347,7 +1541,14 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
     //                      Remove compaction job
     //==========================================================================
     // TODO(gavin): move deleted job info into recycle or history
-    recorded_job.mutable_compaction()->erase(recorded_compaction);
+    auto* compactions = recorded_job.mutable_compaction();
+    compactions->erase(std::remove_if(compactions->begin(), compactions->end(), [&](auto& c) {
+        return c.id() == compaction.id() ||
+               cumulative_point_update.consumed_pending_marker_ids.contains(c.id());
+    }), compactions->end());
+    if (cumulative_point_update.add_pending_marker) {
+        recorded_job.add_compaction()->Swap(&cumulative_point_update.pending_marker);
+    }
     auto job_val = recorded_job.SerializeAsString();
     txn->put(job_key, job_val);
     INSTANCE_LOG(INFO) << "remove compaction job tabelt_id=" << tablet_id
