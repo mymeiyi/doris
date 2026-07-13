@@ -4825,6 +4825,511 @@ TEST(MetaServiceJobTest, BaseCumulativeCrossTypeConflictTest) {
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << res.status().msg();
 }
 
+TEST(MetaServiceJobTest, ParallelCumulativeCommitKeepsCumulativePointOrderedTest) {
+    auto meta_service = get_meta_service();
+
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        SyncPoint::get_instance()->clear_all_call_backs();
+    };
+    sp->set_call_back("get_instance_id", [&](auto&& args) {
+        auto* ret = try_any_cast_ret<std::string>(args);
+        ret->first = instance_id;
+        ret->second = true;
+    });
+    sp->enable_processing();
+
+    constexpr int64_t table_id = 9101;
+    constexpr int64_t index_id = 9102;
+    constexpr int64_t partition_id = 9103;
+    constexpr int64_t tablet_id = 9104;
+    ASSERT_NO_FATAL_FAILURE(
+            create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false));
+
+    std::vector<doris::RowsetMetaCloudPB> existed_rowsets;
+    for (int64_t version = 2; version <= 7; ++version) {
+        existed_rowsets.push_back(create_rowset(tablet_id, version, version));
+    }
+    ASSERT_NO_FATAL_FAILURE(insert_rowsets(meta_service->txn_kv().get(), table_id, index_id,
+                                           partition_id, tablet_id, existed_rowsets));
+
+    StartTabletJobResponse start_res;
+    start_compaction_job(meta_service.get(), tablet_id, "low_cumu", "BE1", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {2, 4});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+    start_res.Clear();
+    start_compaction_job(meta_service.get(), tablet_id, "high_cumu", "BE2", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {5, 7});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+
+    auto commit_cumu = [&](const std::string& job_id, const std::string& initiator,
+                           int64_t start_version, int64_t end_version,
+                           int64_t output_cumulative_point) {
+        auto output_rowset = create_rowset(tablet_id, start_version, end_version);
+        CreateRowsetResponse rowset_res;
+        prepare_rowset(meta_service.get(), output_rowset, rowset_res);
+        EXPECT_EQ(rowset_res.status().code(), MetaServiceCode::OK);
+        commit_rowset(meta_service.get(), output_rowset, rowset_res);
+        EXPECT_EQ(rowset_res.status().code(), MetaServiceCode::OK);
+
+        brpc::Controller cntl;
+        FinishTabletJobRequest req;
+        FinishTabletJobResponse res;
+        req.set_action(FinishTabletJobRequest::COMMIT);
+        req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+        auto* compaction = req.mutable_job()->add_compaction();
+        compaction->set_id(job_id);
+        compaction->set_initiator(initiator);
+        compaction->set_type(TabletCompactionJobPB::CUMULATIVE);
+        compaction->add_input_versions(start_version);
+        compaction->add_input_versions(end_version);
+        compaction->add_txn_id(output_rowset.txn_id());
+        compaction->add_output_versions(end_version);
+        compaction->add_output_rowset_ids(output_rowset.rowset_id_v2());
+        compaction->set_output_cumulative_point(output_cumulative_point);
+        int64_t input_rowsets = end_version - start_version + 1;
+        compaction->set_num_input_rows(input_rowsets * 100);
+        compaction->set_num_input_rowsets(input_rowsets);
+        compaction->set_num_input_segments(input_rowsets);
+        compaction->set_size_input_rowsets(input_rowsets * 10000);
+        compaction->set_index_size_input_rowsets(input_rowsets * 5000);
+        compaction->set_segment_size_input_rowsets(input_rowsets * 5000);
+        compaction->set_num_output_rows(100);
+        compaction->set_num_output_rowsets(1);
+        compaction->set_num_output_segments(1);
+        compaction->set_size_output_rowsets(10000);
+        compaction->set_index_size_output_rowsets(5000);
+        compaction->set_segment_size_output_rowsets(5000);
+        meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+        return res;
+    };
+
+    auto high_res = commit_cumu("high_cumu", "BE2", 5, 7, 8);
+    ASSERT_EQ(high_res.status().code(), MetaServiceCode::OK) << high_res.status().msg();
+    ASSERT_TRUE(high_res.has_stats());
+    EXPECT_EQ(high_res.stats().cumulative_point(), 2);
+
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    auto job_key = job_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
+    std::string job_val;
+    ASSERT_EQ(txn->get(job_key, &job_val), TxnErrorCode::TXN_OK);
+    TabletJobInfoPB job_pb;
+    ASSERT_TRUE(job_pb.ParseFromString(job_val));
+    ASSERT_EQ(job_pb.compaction_size(), 2);
+    ASSERT_EQ(job_pb.compaction(0).id(), "low_cumu");
+    ASSERT_EQ(job_pb.compaction(1).type(), TabletCompactionJobPB::PENDING_CUMULATIVE_POINT);
+    ASSERT_EQ(job_pb.compaction(1).input_versions(0), 5);
+    ASSERT_EQ(job_pb.compaction(1).input_versions(1), 7);
+    ASSERT_EQ(job_pb.compaction(1).output_cumulative_point(), 8);
+
+    start_res.Clear();
+    start_compaction_job(meta_service.get(), tablet_id, "stale_overlap_cumu", "BE3", 0, 1,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {6, 9});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << start_res.status().msg();
+    ASSERT_EQ(start_res.version_in_compaction_size(), 4);
+    EXPECT_EQ(start_res.version_in_compaction(0), 2);
+    EXPECT_EQ(start_res.version_in_compaction(1), 4);
+    EXPECT_EQ(start_res.version_in_compaction(2), 5);
+    EXPECT_EQ(start_res.version_in_compaction(3), 7);
+
+    auto low_res = commit_cumu("low_cumu", "BE1", 2, 4, 5);
+    ASSERT_EQ(low_res.status().code(), MetaServiceCode::OK) << low_res.status().msg();
+    ASSERT_TRUE(low_res.has_stats());
+    EXPECT_EQ(low_res.stats().cumulative_point(), 8);
+
+    txn.reset();
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    ASSERT_EQ(txn->get(job_key, &job_val), TxnErrorCode::TXN_OK);
+    job_pb.Clear();
+    ASSERT_TRUE(job_pb.ParseFromString(job_val));
+    EXPECT_EQ(job_pb.compaction_size(), 0);
+}
+
+TEST(MetaServiceJobTest, OutOfOrderCumulativeCommitBlocksStaleBaseStartTest) {
+    auto meta_service = get_meta_service();
+
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        SyncPoint::get_instance()->clear_all_call_backs();
+    };
+    sp->set_call_back("get_instance_id", [&](auto&& args) {
+        auto* ret = try_any_cast_ret<std::string>(args);
+        ret->first = instance_id;
+        ret->second = true;
+    });
+    sp->enable_processing();
+
+    constexpr int64_t table_id = 9151;
+    constexpr int64_t index_id = 9152;
+    constexpr int64_t partition_id = 9153;
+    constexpr int64_t tablet_id = 9154;
+    ASSERT_NO_FATAL_FAILURE(
+            create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false));
+
+    std::vector<doris::RowsetMetaCloudPB> existed_rowsets;
+    for (int64_t version = 2; version <= 7; ++version) {
+        existed_rowsets.push_back(create_rowset(tablet_id, version, version));
+    }
+    ASSERT_NO_FATAL_FAILURE(insert_rowsets(meta_service->txn_kv().get(), table_id, index_id,
+                                           partition_id, tablet_id, existed_rowsets));
+
+    StartTabletJobResponse start_res;
+    start_compaction_job(meta_service.get(), tablet_id, "low_cumu", "BE1", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {2, 4});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+    start_res.Clear();
+    start_compaction_job(meta_service.get(), tablet_id, "high_cumu", "BE2", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {5, 7});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+
+    auto commit_cumu = [&](const std::string& job_id, const std::string& initiator,
+                           int64_t start_version, int64_t end_version,
+                           int64_t output_cumulative_point) {
+        auto output_rowset = create_rowset(tablet_id, start_version, end_version);
+        CreateRowsetResponse rowset_res;
+        prepare_rowset(meta_service.get(), output_rowset, rowset_res);
+        EXPECT_EQ(rowset_res.status().code(), MetaServiceCode::OK);
+        commit_rowset(meta_service.get(), output_rowset, rowset_res);
+        EXPECT_EQ(rowset_res.status().code(), MetaServiceCode::OK);
+
+        brpc::Controller cntl;
+        FinishTabletJobRequest req;
+        FinishTabletJobResponse res;
+        req.set_action(FinishTabletJobRequest::COMMIT);
+        req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+        auto* compaction = req.mutable_job()->add_compaction();
+        compaction->set_id(job_id);
+        compaction->set_initiator(initiator);
+        compaction->set_type(TabletCompactionJobPB::CUMULATIVE);
+        compaction->add_input_versions(start_version);
+        compaction->add_input_versions(end_version);
+        compaction->add_txn_id(output_rowset.txn_id());
+        compaction->add_output_versions(end_version);
+        compaction->add_output_rowset_ids(output_rowset.rowset_id_v2());
+        compaction->set_output_cumulative_point(output_cumulative_point);
+        int64_t input_rowsets = end_version - start_version + 1;
+        compaction->set_num_input_rows(input_rowsets * 100);
+        compaction->set_num_input_rowsets(input_rowsets);
+        compaction->set_num_input_segments(input_rowsets);
+        compaction->set_size_input_rowsets(input_rowsets * 10000);
+        compaction->set_index_size_input_rowsets(input_rowsets * 5000);
+        compaction->set_segment_size_input_rowsets(input_rowsets * 5000);
+        compaction->set_num_output_rows(100);
+        compaction->set_num_output_rowsets(1);
+        compaction->set_num_output_segments(1);
+        compaction->set_size_output_rowsets(10000);
+        compaction->set_index_size_output_rowsets(5000);
+        compaction->set_segment_size_output_rowsets(5000);
+        meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+        return res;
+    };
+
+    auto start_base = [&](const std::string& job_id, int base_cnt, int cumu_cnt,
+                          std::pair<int64_t, int64_t> versions) {
+        brpc::Controller cntl;
+        StartTabletJobRequest req;
+        StartTabletJobResponse res;
+        req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+        auto* compaction = req.mutable_job()->add_compaction();
+        compaction->set_id(job_id);
+        compaction->set_initiator("BE3");
+        compaction->set_base_compaction_cnt(base_cnt);
+        compaction->set_cumulative_compaction_cnt(cumu_cnt);
+        compaction->set_type(TabletCompactionJobPB::BASE);
+        long now = ::time(nullptr);
+        compaction->set_expiration(now + 12);
+        compaction->set_lease(now + 3);
+        compaction->add_input_versions(versions.first);
+        compaction->add_input_versions(versions.second);
+        meta_service->start_tablet_job(&cntl, &req, &res, nullptr);
+        return res;
+    };
+
+    auto high_res = commit_cumu("high_cumu", "BE2", 5, 7, 8);
+    ASSERT_EQ(high_res.status().code(), MetaServiceCode::OK) << high_res.status().msg();
+    ASSERT_TRUE(high_res.has_stats());
+    EXPECT_EQ(high_res.stats().cumulative_point(), 2);
+
+    start_res = start_base("base_before_low_cumu_finish", 0, 1, {0, 4});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << start_res.status().msg();
+    ASSERT_GE(start_res.version_in_compaction_size(), 2);
+    bool has_low_cumu_range = false;
+    for (int i = 0; i + 1 < start_res.version_in_compaction_size(); i += 2) {
+        has_low_cumu_range |= start_res.version_in_compaction(i) == 2 &&
+                              start_res.version_in_compaction(i + 1) == 4;
+    }
+    EXPECT_TRUE(has_low_cumu_range);
+
+    auto low_res = commit_cumu("low_cumu", "BE1", 2, 4, 5);
+    ASSERT_EQ(low_res.status().code(), MetaServiceCode::OK) << low_res.status().msg();
+    ASSERT_TRUE(low_res.has_stats());
+    EXPECT_EQ(low_res.stats().cumulative_point(), 8);
+
+    start_res = start_base("base_after_low_cumu_finish", 0, 2, {0, 4});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+}
+
+TEST(MetaServiceJobTest, PendingCumulativePointMarkerUsesRangeWhenParallelDisabledTest) {
+    auto meta_service = get_meta_service();
+
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        SyncPoint::get_instance()->clear_all_call_backs();
+    };
+    sp->set_call_back("get_instance_id", [&](auto&& args) {
+        auto* ret = try_any_cast_ret<std::string>(args);
+        ret->first = instance_id;
+        ret->second = true;
+    });
+    sp->enable_processing();
+
+    constexpr int64_t table_id = 9201;
+    constexpr int64_t index_id = 9202;
+    constexpr int64_t partition_id = 9203;
+    constexpr int64_t tablet_id = 9204;
+    ASSERT_NO_FATAL_FAILURE(
+            create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false));
+
+    auto job_key = job_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
+    TabletJobInfoPB job_pb;
+    job_pb.mutable_idx()->set_table_id(table_id);
+    job_pb.mutable_idx()->set_index_id(index_id);
+    job_pb.mutable_idx()->set_partition_id(partition_id);
+    job_pb.mutable_idx()->set_tablet_id(tablet_id);
+    auto* marker = job_pb.add_compaction();
+    marker->set_id("pcp:high_cumu");
+    marker->set_type(TabletCompactionJobPB::PENDING_CUMULATIVE_POINT);
+    marker->add_input_versions(5);
+    marker->add_input_versions(7);
+    marker->set_output_cumulative_point(8);
+
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    txn->put(job_key, job_pb.SerializeAsString());
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+    auto start_cumu_with_parallel_disabled =
+            [&](const std::string& job_id, std::pair<int64_t, int64_t> input_version) {
+                brpc::Controller cntl;
+                StartTabletJobRequest req;
+                StartTabletJobResponse res;
+                req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+                auto* compaction = req.mutable_job()->add_compaction();
+                compaction->set_id(job_id);
+                compaction->set_initiator("BE1");
+                compaction->set_base_compaction_cnt(0);
+                compaction->set_cumulative_compaction_cnt(0);
+                compaction->set_type(TabletCompactionJobPB::CUMULATIVE);
+                long now = time(nullptr);
+                compaction->set_expiration(now + 12);
+                compaction->set_lease(now + 3);
+                compaction->add_input_versions(input_version.first);
+                compaction->add_input_versions(input_version.second);
+                compaction->set_check_input_versions_range(false);
+                meta_service->start_tablet_job(&cntl, &req, &res, nullptr);
+                return res;
+            };
+
+    auto overlap_res = start_cumu_with_parallel_disabled("overlap_cumu", {6, 9});
+    ASSERT_EQ(overlap_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << overlap_res.status().msg();
+    ASSERT_EQ(overlap_res.version_in_compaction_size(), 2);
+    EXPECT_EQ(overlap_res.version_in_compaction(0), 5);
+    EXPECT_EQ(overlap_res.version_in_compaction(1), 7);
+
+    auto non_overlap_res = start_cumu_with_parallel_disabled("non_overlap_cumu", {2, 4});
+    ASSERT_EQ(non_overlap_res.status().code(), MetaServiceCode::OK)
+            << non_overlap_res.status().msg();
+}
+
+TEST(MetaServiceJobTest, CoveringCumulativeConsumesPendingMarkerAfterLowerAbortTest) {
+    auto meta_service = get_meta_service();
+
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        SyncPoint::get_instance()->clear_all_call_backs();
+    };
+    sp->set_call_back("get_instance_id", [&](auto&& args) {
+        auto* ret = try_any_cast_ret<std::string>(args);
+        ret->first = instance_id;
+        ret->second = true;
+    });
+    sp->enable_processing();
+
+    constexpr int64_t table_id = 9301;
+    constexpr int64_t index_id = 9302;
+    constexpr int64_t partition_id = 9303;
+    constexpr int64_t tablet_id = 9304;
+    ASSERT_NO_FATAL_FAILURE(
+            create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false));
+
+    std::vector<doris::RowsetMetaCloudPB> existed_rowsets;
+    for (int64_t version = 2; version <= 10; ++version) {
+        existed_rowsets.push_back(create_rowset(tablet_id, version, version));
+    }
+    ASSERT_NO_FATAL_FAILURE(insert_rowsets(meta_service->txn_kv().get(), table_id, index_id,
+                                           partition_id, tablet_id, existed_rowsets));
+
+    StartTabletJobResponse start_res;
+    start_compaction_job(meta_service.get(), tablet_id, "low_cumu", "BE1", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {2, 4});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+    start_res.Clear();
+    start_compaction_job(meta_service.get(), tablet_id, "high_cumu", "BE2", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {5, 7});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+
+    auto commit_cumu = [&](const std::string& job_id, const std::string& initiator,
+                           int64_t start_version, int64_t end_version,
+                           int64_t output_cumulative_point, int64_t num_input_rowsets) {
+        auto output_rowset = create_rowset(tablet_id, start_version, end_version);
+        CreateRowsetResponse rowset_res;
+        prepare_rowset(meta_service.get(), output_rowset, rowset_res);
+        EXPECT_EQ(rowset_res.status().code(), MetaServiceCode::OK);
+        commit_rowset(meta_service.get(), output_rowset, rowset_res);
+        EXPECT_EQ(rowset_res.status().code(), MetaServiceCode::OK);
+
+        brpc::Controller cntl;
+        FinishTabletJobRequest req;
+        FinishTabletJobResponse res;
+        req.set_action(FinishTabletJobRequest::COMMIT);
+        req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+        auto* compaction = req.mutable_job()->add_compaction();
+        compaction->set_id(job_id);
+        compaction->set_initiator(initiator);
+        compaction->set_type(TabletCompactionJobPB::CUMULATIVE);
+        compaction->add_input_versions(start_version);
+        compaction->add_input_versions(end_version);
+        compaction->add_txn_id(output_rowset.txn_id());
+        compaction->add_output_versions(end_version);
+        compaction->add_output_rowset_ids(output_rowset.rowset_id_v2());
+        compaction->set_output_cumulative_point(output_cumulative_point);
+        compaction->set_num_input_rows(num_input_rowsets * 100);
+        compaction->set_num_input_rowsets(num_input_rowsets);
+        compaction->set_num_input_segments(num_input_rowsets);
+        compaction->set_size_input_rowsets(num_input_rowsets * 10000);
+        compaction->set_index_size_input_rowsets(num_input_rowsets * 5000);
+        compaction->set_segment_size_input_rowsets(num_input_rowsets * 5000);
+        compaction->set_num_output_rows(100);
+        compaction->set_num_output_rowsets(1);
+        compaction->set_num_output_segments(1);
+        compaction->set_size_output_rowsets(10000);
+        compaction->set_index_size_output_rowsets(5000);
+        compaction->set_segment_size_output_rowsets(5000);
+        meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+        return res;
+    };
+
+    auto high_res = commit_cumu("high_cumu", "BE2", 5, 7, 8, 3);
+    ASSERT_EQ(high_res.status().code(), MetaServiceCode::OK) << high_res.status().msg();
+    ASSERT_TRUE(high_res.has_stats());
+    EXPECT_EQ(high_res.stats().cumulative_point(), 2);
+
+    brpc::Controller cntl;
+    FinishTabletJobRequest abort_req;
+    FinishTabletJobResponse abort_res;
+    abort_req.set_action(FinishTabletJobRequest::ABORT);
+    abort_req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+    auto* abort_compaction = abort_req.mutable_job()->add_compaction();
+    abort_compaction->set_id("low_cumu");
+    abort_compaction->set_initiator("BE1");
+    abort_compaction->set_type(TabletCompactionJobPB::CUMULATIVE);
+    meta_service->finish_tablet_job(&cntl, &abort_req, &abort_res, nullptr);
+    ASSERT_EQ(abort_res.status().code(), MetaServiceCode::OK) << abort_res.status().msg();
+
+    start_res.Clear();
+    start_compaction_job(meta_service.get(), tablet_id, "covering_cumu", "BE3", 0, 1,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {2, 10});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+
+    auto covering_res = commit_cumu("covering_cumu", "BE3", 2, 10, 11, 7);
+    ASSERT_EQ(covering_res.status().code(), MetaServiceCode::OK) << covering_res.status().msg();
+    ASSERT_TRUE(covering_res.has_stats());
+    EXPECT_EQ(covering_res.stats().cumulative_point(), 11);
+
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    auto job_key = job_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
+    std::string job_val;
+    ASSERT_EQ(txn->get(job_key, &job_val), TxnErrorCode::TXN_OK);
+    TabletJobInfoPB job_pb;
+    ASSERT_TRUE(job_pb.ParseFromString(job_val));
+    EXPECT_EQ(job_pb.compaction_size(), 0);
+}
+
+TEST(MetaServiceJobTest, EmptyCumulativeConsumesPendingMarkerTest) {
+    auto meta_service = get_meta_service();
+
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        SyncPoint::get_instance()->clear_all_call_backs();
+    };
+    sp->set_call_back("get_instance_id", [&](auto&& args) {
+        auto* ret = try_any_cast_ret<std::string>(args);
+        ret->first = instance_id;
+        ret->second = true;
+    });
+    sp->enable_processing();
+
+    constexpr int64_t table_id = 9401;
+    constexpr int64_t index_id = 9402;
+    constexpr int64_t partition_id = 9403;
+    constexpr int64_t tablet_id = 9404;
+    ASSERT_NO_FATAL_FAILURE(
+            create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false));
+
+    auto job_key = job_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
+    TabletJobInfoPB job_pb;
+    job_pb.mutable_idx()->set_table_id(table_id);
+    job_pb.mutable_idx()->set_index_id(index_id);
+    job_pb.mutable_idx()->set_partition_id(partition_id);
+    job_pb.mutable_idx()->set_tablet_id(tablet_id);
+    auto* marker = job_pb.add_compaction();
+    marker->set_id("pcp:high_cumu");
+    marker->set_type(TabletCompactionJobPB::PENDING_CUMULATIVE_POINT);
+    marker->add_input_versions(5);
+    marker->add_input_versions(7);
+    marker->set_output_cumulative_point(8);
+    auto* empty = job_pb.add_compaction();
+    empty->set_id("empty_cumu");
+    empty->set_initiator("BE1");
+    empty->set_type(TabletCompactionJobPB::EMPTY_CUMULATIVE);
+    empty->set_base_compaction_cnt(0);
+    empty->set_cumulative_compaction_cnt(0);
+    empty->set_lease(time(nullptr) + 12);
+
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    txn->put(job_key, job_pb.SerializeAsString());
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+    brpc::Controller cntl;
+    FinishTabletJobRequest req;
+    FinishTabletJobResponse res;
+    req.set_action(FinishTabletJobRequest::COMMIT);
+    req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+    auto* compaction = req.mutable_job()->add_compaction();
+    compaction->set_id("empty_cumu");
+    compaction->set_initiator("BE1");
+    compaction->set_type(TabletCompactionJobPB::EMPTY_CUMULATIVE);
+    compaction->set_output_cumulative_point(8);
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << res.status().msg();
+    ASSERT_TRUE(res.has_stats());
+    EXPECT_EQ(res.stats().cumulative_point(), 8);
+
+    txn.reset();
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    std::string job_val;
+    ASSERT_EQ(txn->get(job_key, &job_val), TxnErrorCode::TXN_OK);
+    job_pb.Clear();
+    ASSERT_TRUE(job_pb.ParseFromString(job_val));
+    EXPECT_EQ(job_pb.compaction_size(), 0);
+}
+
 TEST(MetaServiceJobTest, SchemaChangeJobPersistTest) {
     auto meta_service = get_meta_service();
 
