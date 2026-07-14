@@ -5392,6 +5392,57 @@ TEST(MetaServiceJobTest, PendingCumulativePointMarkerUsesRangeWhenParallelDisabl
             << non_overlap_res.status().msg();
 }
 
+TEST(MetaServiceJobTest, CumulativeCoveringPendingMarkerCanStartTest) {
+    auto meta_service = get_meta_service();
+
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        SyncPoint::get_instance()->clear_all_call_backs();
+    };
+    sp->set_call_back("get_instance_id", [&](auto&& args) {
+        auto* ret = try_any_cast_ret<std::string>(args);
+        ret->first = instance_id;
+        ret->second = true;
+    });
+    sp->enable_processing();
+
+    constexpr int64_t table_id = 9251;
+    constexpr int64_t index_id = 9252;
+    constexpr int64_t partition_id = 9253;
+    constexpr int64_t tablet_id = 9254;
+    ASSERT_NO_FATAL_FAILURE(
+            create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false));
+
+    auto job_key = job_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
+    TabletJobInfoPB job_pb;
+    job_pb.mutable_idx()->set_table_id(table_id);
+    job_pb.mutable_idx()->set_index_id(index_id);
+    job_pb.mutable_idx()->set_partition_id(partition_id);
+    job_pb.mutable_idx()->set_tablet_id(tablet_id);
+    auto* marker = job_pb.add_compaction();
+    marker->set_id("pcp:high_cumu");
+    marker->set_type(TabletCompactionJobPB::PENDING_CUMULATIVE_POINT);
+    marker->add_input_versions(5);
+    marker->add_input_versions(7);
+    marker->set_output_cumulative_point(8);
+
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    txn->put(job_key, job_pb.SerializeAsString());
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+    StartTabletJobResponse start_res;
+    start_compaction_job(meta_service.get(), tablet_id, "partial_overlap_cumu", "BE1", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {6, 8});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << start_res.status().msg();
+
+    start_res.Clear();
+    start_compaction_job(meta_service.get(), tablet_id, "cover_pending_cumu", "BE1", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {5, 8});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+}
+
 TEST(MetaServiceJobTest, CoveringCumulativeConsumesPendingMarkerAfterLowerAbortTest) {
     auto meta_service = get_meta_service();
 

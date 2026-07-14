@@ -476,6 +476,14 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
             return a.input_versions(0) > b.input_versions(1) ||
                    a.input_versions(1) < b.input_versions(0);
         };
+        auto cumulative_covers_pending_marker = [](const TabletCompactionJobPB& marker,
+                                                   const TabletCompactionJobPB& cumu) {
+            DCHECK_EQ(marker.input_versions_size(), 2) << proto_to_json(marker);
+            DCHECK_EQ(cumu.input_versions_size(), 2) << proto_to_json(cumu);
+            return cumu.type() == TabletCompactionJobPB::CUMULATIVE &&
+                   cumu.input_versions(0) <= marker.input_versions(0) &&
+                   cumu.input_versions(1) >= marker.input_versions(1);
+        };
         if (compaction.type() == TabletCompactionJobPB::FULL) {
             // Full compaction is generally used for data correctness repair
             // for MOW table, so priority should be given to performing full
@@ -496,6 +504,10 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
             for (auto& c : compactions) {
                 if (is_pending_cumulative_point_marker(c)) {
                     if (has_input_version_range && version_not_conflict(c, compaction)) {
+                        continue;
+                    }
+                    if (has_input_version_range &&
+                        cumulative_covers_pending_marker(c, compaction)) {
                         continue;
                     }
                     if (has_input_version_range &&
@@ -536,6 +548,7 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                 // below to make the final decision.
                 if (is_pending_cumulative_point_marker(c)) {
                     if (version_not_conflict(c, compaction)) continue;
+                    if (cumulative_covers_pending_marker(c, compaction)) continue;
                     if (compaction.input_versions(0) <= stats.cumulative_point()) continue;
                     msg = fmt::format("compaction has already started, tablet_id={} job={}",
                                       tablet_id, proto_to_json(c));
