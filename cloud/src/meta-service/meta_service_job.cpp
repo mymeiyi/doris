@@ -508,8 +508,9 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                     if (compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) {
                         continue;
                     }
-                    msg = fmt::format("compaction has already started, tablet_id={} job={}",
-                                      tablet_id, proto_to_json(c));
+                    msg = fmt::format(
+                            "compaction has already started, tablet_id={} request_job={} job={}",
+                            tablet_id, proto_to_json(compaction), proto_to_json(c));
                     code = MetaServiceCode::JOB_TABLET_BUSY;
                     response->add_version_in_compaction(c.input_versions(0));
                     response->add_version_in_compaction(c.input_versions(1));
@@ -517,8 +518,9 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                 }
                 if (!may_conflict_by_type(c.type(), compaction.type())) continue;
                 if (c.id() == compaction.id()) return; // Same job, return OK to keep idempotency
-                msg = fmt::format("compaction has already started, tablet_id={} job={}", tablet_id,
-                                  proto_to_json(c));
+                msg = fmt::format(
+                        "compaction has already started, tablet_id={} request_job={} job={}",
+                        tablet_id, proto_to_json(compaction), proto_to_json(c));
                 code = MetaServiceCode::JOB_TABLET_BUSY;
                 return;
             }
@@ -538,8 +540,9 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                     if (version_not_conflict(c, compaction)) continue;
                     if (cumulative_covers_pending_marker(c, compaction)) continue;
                     if (compaction.input_versions(0) <= stats.cumulative_point()) continue;
-                    msg = fmt::format("compaction has already started, tablet_id={} job={}",
-                                      tablet_id, proto_to_json(c));
+                    msg = fmt::format(
+                            "compaction has already started, tablet_id={} request_job={} job={}",
+                            tablet_id, proto_to_json(compaction), proto_to_json(c));
                     code = MetaServiceCode::JOB_TABLET_BUSY;
                     for (auto& c : compactions) {
                         if (c.input_versions_size() != 2) continue;
@@ -554,8 +557,9 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                 if (!may_conflict_by_type(c.type(), compaction.type())) continue;
                 if (c.input_versions_size() > 0 && version_not_conflict(c, compaction)) continue;
                 if (c.id() == compaction.id()) return; // Same job, return OK to keep idempotency
-                msg = fmt::format("compaction has already started, tablet_id={} job={}", tablet_id,
-                                  proto_to_json(c));
+                msg = fmt::format(
+                        "compaction has already started, tablet_id={} request_job={} job={}",
+                        tablet_id, proto_to_json(compaction), proto_to_json(c));
                 code = MetaServiceCode::JOB_TABLET_BUSY;
                 // Unknown version range of started compaction, BE should not retry other version range
                 if (c.input_versions_size() == 0) return;
