@@ -335,8 +335,6 @@ CONF_Bool(enable_cloud_txn_lazy_commit, "true");
 CONF_Int32(txn_lazy_commit_rowsets_thresold, "1000");
 CONF_Int32(txn_lazy_commit_num_threads, "8");
 CONF_mBool(enable_cloud_parallel_txn_lazy_commit, "true");
-// Persist and consume bridge markers for non-promotion cumulative compaction commits.
-CONF_mBool(enable_cloud_non_promotion_cumu_point_bridge, "false");
 CONF_Int32(parallel_txn_lazy_commit_num_threads, "0"); // hardware concurrency if zero.
 CONF_mInt64(txn_lazy_max_rowsets_per_batch, "1000");
 CONF_mBool(txn_lazy_commit_shuffle_partitions, "true");

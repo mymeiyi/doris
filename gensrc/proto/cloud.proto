@@ -688,10 +688,6 @@ message TabletCompactionJobPB {
         STOP_TOKEN = 5; // fail existing compactions and deny newly incomming compactions
         PENDING_CUMULATIVE_POINT = 6; // pending cumulative point update marker
     }
-    enum PendingCumulativePointType {
-        PENDING_CUMULATIVE_POINT_PROMOTION = 0;
-        PENDING_CUMULATIVE_POINT_BRIDGE = 1;
-    }
     // IP and port of the node which initiates this job
     optional string initiator = 1; // prepare
     optional int64 ctime = 2;
@@ -725,8 +721,6 @@ message TabletCompactionJobPB {
     optional int64 segment_size_input_rowsets = 28;
     optional int64 index_size_output_rowsets = 29;
     optional int64 segment_size_output_rowsets = 30;
-    optional PendingCumulativePointType pending_cumulative_point_type = 31
-        [default = PENDING_CUMULATIVE_POINT_PROMOTION];
 }
 
 message TabletSchemaChangeJobPB {
