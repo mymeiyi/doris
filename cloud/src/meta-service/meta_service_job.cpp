@@ -169,6 +169,67 @@ static TabletCompactionJobPB build_pending_cumulative_point_marker(
     return marker;
 }
 
+static void compact_pending_cumulative_point_markers(TabletJobInfoPB* job) {
+    struct PendingMarker {
+        int index = 0;
+        int64_t start = 0;
+        int64_t end = 0;
+        int64_t output_point = 0;
+    };
+
+    std::vector<PendingMarker> markers;
+    markers.reserve(job->compaction_size());
+    for (int i = 0; i < job->compaction_size(); ++i) {
+        const auto& compaction = job->compaction(i);
+        if (!is_pending_cumulative_point_marker(compaction)) {
+            continue;
+        }
+        DCHECK_EQ(compaction.input_versions_size(), 2) << proto_to_json(compaction);
+        DCHECK(compaction.has_output_cumulative_point()) << proto_to_json(compaction);
+        markers.push_back({i, compaction.input_versions(0), compaction.input_versions(1),
+                           compaction.output_cumulative_point()});
+    }
+    if (markers.size() < 2) {
+        return;
+    }
+
+    std::sort(markers.begin(), markers.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.start != rhs.start) {
+            return lhs.start < rhs.start;
+        }
+        return lhs.output_point > rhs.output_point;
+    });
+
+    std::unordered_set<std::string> merged_marker_ids;
+    int keeper_index = markers.front().index;
+    int64_t current_output_point = markers.front().output_point;
+    for (size_t i = 1; i < markers.size(); ++i) {
+        if (markers[i].start > current_output_point) {
+            keeper_index = markers[i].index;
+            current_output_point = markers[i].output_point;
+            continue;
+        }
+
+        auto* keeper = job->mutable_compaction(keeper_index);
+        const auto& merged = job->compaction(markers[i].index);
+        if (markers[i].output_point > current_output_point) {
+            keeper->set_input_versions(1, markers[i].end);
+            keeper->set_output_cumulative_point(markers[i].output_point);
+            current_output_point = markers[i].output_point;
+        }
+        merged_marker_ids.insert(merged.id());
+    }
+
+    if (merged_marker_ids.empty()) {
+        return;
+    }
+
+    auto* compactions = job->mutable_compaction();
+    compactions->erase(std::remove_if(compactions->begin(), compactions->end(), [&](auto& c) {
+        return merged_marker_ids.contains(c.id());
+    }), compactions->end());
+}
+
 struct OrderedCumulativePointUpdate {
     int64_t cumulative_point = -1;
     bool add_pending_marker = false;
@@ -1334,6 +1395,7 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
             return c.id() == compaction.id() ||
                    cumulative_point_update.consumed_pending_marker_ids.contains(c.id());
         }), compactions->end());
+        compact_pending_cumulative_point_markers(&recorded_job);
         auto job_val = recorded_job.SerializeAsString();
         txn->put(job_key, job_val);
         INSTANCE_LOG(INFO) << "remove compaction job, tablet_id=" << tablet_id
@@ -1562,6 +1624,7 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
     if (cumulative_point_update.add_pending_marker) {
         recorded_job.add_compaction()->Swap(&cumulative_point_update.pending_marker);
     }
+    compact_pending_cumulative_point_markers(&recorded_job);
     auto job_val = recorded_job.SerializeAsString();
     txn->put(job_key, job_val);
     INSTANCE_LOG(INFO) << "remove compaction job tabelt_id=" << tablet_id
