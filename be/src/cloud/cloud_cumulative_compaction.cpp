@@ -17,6 +17,8 @@
 
 #include "cloud/cloud_cumulative_compaction.h"
 
+#include <algorithm>
+
 #include <gen_cpp/cloud.pb.h>
 
 #include "cloud/cloud_meta_mgr.h"
@@ -64,11 +66,11 @@ Status CloudCumulativeCompaction::prepare_compact() {
 
     std::vector<std::shared_ptr<CloudCumulativeCompaction>> cumu_compactions;
     _engine.get_cumu_compaction(_tablet->tablet_id(), cumu_compactions);
-    if (!cumu_compactions.empty()) {
-        for (auto& cumu : cumu_compactions) {
-            _max_conflict_version =
-                    std::max(_max_conflict_version, cumu->_input_rowsets.back()->end_version());
-        }
+    for (auto& cumu : cumu_compactions) {
+        _min_conflict_version =
+                std::min(_min_conflict_version, cumu->_input_rowsets.front()->start_version());
+        _max_conflict_version =
+                std::max(_max_conflict_version, cumu->_input_rowsets.back()->end_version());
     }
 
     bool need_sync_tablet = true;
@@ -494,32 +496,8 @@ Status CloudCumulativeCompaction::garbage_collection() {
 Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
     _input_rowsets.clear();
 
-    std::vector<RowsetSharedPtr> candidate_rowsets;
-    {
-        std::shared_lock rlock(_tablet->get_header_lock());
-        _base_compaction_cnt = cloud_tablet()->base_compaction_cnt();
-        _cumulative_compaction_cnt = cloud_tablet()->cumulative_compaction_cnt();
-        int64_t candidate_version = std::max(
-                std::max(cloud_tablet()->cumulative_layer_point(), _max_conflict_version + 1),
-                cloud_tablet()->alter_version() + 1);
-        // Get all rowsets whose version >= `candidate_version` as candidate rowsets
-        cloud_tablet()->traverse_rowsets_unlocked(
-                [&candidate_rowsets, candidate_version](const RowsetSharedPtr& rs) {
-                    if (rs->start_version() >= candidate_version) {
-                        candidate_rowsets.push_back(rs);
-                    }
-                });
-    }
-    if (candidate_rowsets.empty()) {
-        return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
-                "no suitable versions: candidate rowsets empty");
-    }
-    std::sort(candidate_rowsets.begin(), candidate_rowsets.end(), Rowset::comparator);
-    if (auto st = check_version_continuity(candidate_rowsets); !st.ok()) {
-        DCHECK(false) << st;
-        return st;
-    }
-
+    int64_t min_conflict_version = _min_conflict_version;
+    int64_t max_conflict_version = _max_conflict_version;
     int64_t max_score = config::cumulative_compaction_max_deltas;
     double process_memory_usage =
             cast_set<double>(doris::GlobalMemoryArbitrator::process_memory_usage());
@@ -532,22 +510,72 @@ Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
                              config::cumulative_compaction_min_deltas + 1);
     }
 
-    size_t compaction_score = 0;
     auto compaction_policy = cloud_tablet()->tablet_meta()->compaction_policy();
-    _engine.cumu_compaction_policy(compaction_policy)
-            ->pick_input_rowsets(cloud_tablet(), candidate_rowsets, max_score,
-                                 config::cumulative_compaction_min_deltas, &_input_rowsets,
-                                 &_last_delete_version, &compaction_score);
+    auto pick_from_candidates = [&](std::vector<RowsetSharedPtr>& candidates) {
+        _input_rowsets.clear();
+        _last_delete_version = Version {-1, -1};
 
-    if (_input_rowsets.empty()) {
-        return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
-                "no suitable versions: input rowsets empty");
-    } else if (_input_rowsets.size() == 1 &&
-               !_input_rowsets.front()->rowset_meta()->is_segments_overlapping()) {
-        VLOG_DEBUG << "there is only one rowset and not overlapping. tablet_id="
-                   << _tablet->tablet_id() << ", version=" << _input_rowsets.front()->version();
-        return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
-                "no suitable versions: only one rowset and not overlapping");
+        if (candidates.empty()) {
+            return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
+                    "no suitable versions: candidate rowsets empty");
+        }
+        std::sort(candidates.begin(), candidates.end(), Rowset::comparator);
+        if (auto st = check_version_continuity(candidates); !st.ok()) {
+            DCHECK(false) << st;
+            return st;
+        }
+
+        size_t compaction_score = 0;
+        _engine.cumu_compaction_policy(compaction_policy)
+                ->pick_input_rowsets(cloud_tablet(), candidates, max_score,
+                                     config::cumulative_compaction_min_deltas, &_input_rowsets,
+                                     &_last_delete_version, &compaction_score);
+
+        if (_input_rowsets.empty()) {
+            return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
+                    "no suitable versions: input rowsets empty");
+        } else if (_input_rowsets.size() == 1 &&
+                   !_input_rowsets.front()->rowset_meta()->is_segments_overlapping()) {
+            VLOG_DEBUG << "there is only one rowset and not overlapping. tablet_id="
+                       << _tablet->tablet_id()
+                       << ", version=" << _input_rowsets.front()->version();
+            _input_rowsets.clear();
+            return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
+                    "no suitable versions: only one rowset and not overlapping");
+        }
+        return Status::OK();
+    };
+
+    auto pick_from_version_range = [&](int64_t start_version, int64_t end_version) {
+        std::vector<RowsetSharedPtr> candidates;
+        {
+            std::shared_lock rlock(_tablet->get_header_lock());
+            _base_compaction_cnt = cloud_tablet()->base_compaction_cnt();
+            _cumulative_compaction_cnt = cloud_tablet()->cumulative_compaction_cnt();
+            int64_t range_start_version =
+                    std::max(std::max(cloud_tablet()->cumulative_layer_point(), start_version),
+                             cloud_tablet()->alter_version() + 1);
+            // Get candidate rowsets from the selected non-conflicting version range.
+            cloud_tablet()->traverse_rowsets_unlocked(
+                    [&candidates, range_start_version, end_version](const RowsetSharedPtr& rs) {
+                        if (rs->start_version() >= range_start_version &&
+                            rs->start_version() < end_version) {
+                            candidates.push_back(rs);
+                        }
+                    });
+        }
+        return pick_from_candidates(candidates);
+    };
+
+    // pick_from_version_range clamps the lower bound by cumulative point and alter version.
+    auto st = pick_from_version_range(0, min_conflict_version);
+    if (!st.ok()) {
+        if (!st.is<CUMULATIVE_NO_SUITABLE_VERSION>() ||
+            min_conflict_version == std::numeric_limits<int64_t>::max()) {
+            return st;
+        }
+        st = pick_from_version_range(max_conflict_version + 1, std::numeric_limits<int64_t>::max());
+        RETURN_IF_ERROR(st);
     }
 
     apply_txn_size_truncation_and_log("CloudCumulativeCompaction");
