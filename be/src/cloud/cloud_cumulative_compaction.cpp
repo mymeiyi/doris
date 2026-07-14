@@ -166,8 +166,8 @@ Status CloudCumulativeCompaction::request_global_lock() {
         } else if (resp.status().code() == cloud::JOB_TABLET_BUSY) {
             LOG_WARNING("failed to prepare cumu compaction")
                     .tag("job_id", _uuid)
-                    .tag("version", fmt::format("[{}-{}]", compaction_job->input_versions(0),
-                                                compaction_job->input_versions(1)))
+                    .tag("range", fmt::format("[{}-{}]", compaction_job->input_versions(0),
+                                                 compaction_job->input_versions(1)))
                     .tag("msg", resp.status().msg());
             return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
                     "cumu no suitable versions: job tablet busy");
