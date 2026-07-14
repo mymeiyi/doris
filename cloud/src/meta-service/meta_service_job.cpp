@@ -102,53 +102,31 @@ bool check_compaction_input_verions(const TabletCompactionJobPB& compaction,
     return false;
 }
 
-// Normalize compaction type for conflict detection.
-// EMPTY_CUMULATIVE only updates cumulative_point and cumulative_compaction_cnt without producing
-// any output rowset. It MUST be considered the same family as CUMULATIVE so that an EMPTY_CUMULATIVE
-// cannot be accepted while a real CUMULATIVE is still running on the same tablet (which would
-// otherwise advance cumulative_point past the input range of the in-flight cumu and let base
-// compaction race with it).
-static inline TabletCompactionJobPB::CompactionType normalize_compaction_type_for_conflict(
-        TabletCompactionJobPB::CompactionType t) {
-    return t == TabletCompactionJobPB::EMPTY_CUMULATIVE ? TabletCompactionJobPB::CUMULATIVE : t;
-}
-
-// Two compaction jobs are considered to be in the same conflict family iff their normalized
-// compaction types are equal, OR either side is FULL (full compaction conflicts with anything),
-// OR they are different in (BASE, CUMULATIVE) - in this case the conflict still depends on whether
-// their input version ranges overlap, callers should additionally consult version range checks.
-static inline bool is_same_conflict_family(TabletCompactionJobPB::CompactionType a,
-                                           TabletCompactionJobPB::CompactionType b) {
-    return normalize_compaction_type_for_conflict(a) == normalize_compaction_type_for_conflict(b);
-}
-
-// Whether a compaction type belongs to the "rowset compaction family", i.e. any compaction
-// kind that operates on rowsets bounded by `cumulative_point`. Only members of this family
-// are subject to the cross-type version-range conflict check below. Note that STOP_TOKEN is
-// already filtered out by the caller (see the early-return on STOP_TOKEN in start_compaction_job),
-// so it is intentionally excluded here.
-static inline bool is_rowset_compaction_family(TabletCompactionJobPB::CompactionType t) {
+// Whether a compaction type needs overlap conflict checks against base/cumulative compactions.
+// FULL has its own start policy (an incoming FULL clears existing compactions), so it must not be
+// folded into this range-overlap predicate.
+static inline bool needs_base_cumu_overlap_check(TabletCompactionJobPB::CompactionType t) {
     return t == TabletCompactionJobPB::BASE || t == TabletCompactionJobPB::CUMULATIVE ||
-           t == TabletCompactionJobPB::EMPTY_CUMULATIVE || t == TabletCompactionJobPB::FULL;
+           t == TabletCompactionJobPB::EMPTY_CUMULATIVE;
 }
 
 // Whether two compaction jobs MAY conflict on the rowset range (regardless of the actual
 // input version range). The caller still needs to compare `input_versions` to make the
 // final decision.
 //
-// Conflict matrix (Plan D extends this from same-type-only to cross-type within the family):
-//   FULL     vs anything-in-family : true (full compaction touches the whole rowset range)
-//   BASE     vs BASE / CUMULATIVE  : true (their rowset ranges may overlap around cumu_point)
-//   CUMU     vs CUMU / BASE        : true (symmetric of the above)
-//   EMPTY_CU vs anything-in-family : true (it advances cumu_point and would race with the others)
+// Conflict matrix:
+//   BASE     vs BASE / CUMULATIVE / EMPTY_CUMULATIVE : true
+//   CUMU     vs BASE / CUMULATIVE / EMPTY_CUMULATIVE : true
+//   EMPTY_CU vs BASE / CUMULATIVE / EMPTY_CUMULATIVE : true
+//   FULL     vs BASE / CUMULATIVE                    : false
 //
-// Any compaction type outside this family (or that we don't yet model) is conservatively NOT
+// Any compaction type outside this set (or that we don't yet model) is conservatively NOT
 // considered conflicting here - if a new type is added later, the author MUST revisit this
 // function and decide its conflict semantics explicitly, instead of silently inheriting the
 // "everything conflicts" behaviour.
 static inline bool may_conflict_by_type(TabletCompactionJobPB::CompactionType a,
                                         TabletCompactionJobPB::CompactionType b) {
-    return is_rowset_compaction_family(a) && is_rowset_compaction_family(b);
+    return needs_base_cumu_overlap_check(a) && needs_base_cumu_overlap_check(b);
 }
 
 static constexpr std::string_view PENDING_CUMULATIVE_POINT_JOB_ID_PREFIX = "pcp:";
@@ -450,11 +428,9 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                     compaction.input_versions().empty()) ||
                    (compaction.has_check_input_versions_range() &&
                     !compaction.check_input_versions_range())) {
-            // Unknown input version range, doesn't support parallel compaction of same family.
-            // EMPTY_CUMULATIVE is normalized to CUMULATIVE here so it conflicts with an in-flight
-            // CUMULATIVE on the same tablet (otherwise EMPTY_CUMULATIVE could advance
-            // cumulative_point past the in-flight cumu's input range and let base compaction race
-            // with it).
+            // Unknown input version range, doesn't support parallel compaction among BASE,
+            // CUMULATIVE, and EMPTY_CUMULATIVE. Without a comparable range, MS cannot prove
+            // that these compactions do not overlap.
             for (auto& c : compactions) {
                 if (is_pending_cumulative_point_marker(c)) {
                     if (has_input_version_range && version_not_conflict(c, compaction)) {
@@ -478,10 +454,7 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                     response->add_version_in_compaction(c.input_versions(1));
                     return;
                 }
-                if (!is_same_conflict_family(c.type(), compaction.type()) &&
-                    c.type() != TabletCompactionJobPB::FULL) {
-                    continue;
-                }
+                if (!may_conflict_by_type(c.type(), compaction.type())) continue;
                 if (c.id() == compaction.id()) return; // Same job, return OK to keep idempotency
                 msg = fmt::format("compaction has already started, tablet_id={} job={}", tablet_id,
                                   proto_to_json(c));
@@ -493,13 +466,13 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
             DCHECK_LE(compaction.input_versions(0), compaction.input_versions(1))
                     << proto_to_json(compaction);
             for (auto& c : compactions) {
-                // Plan D: BASE and CUMULATIVE on the same tablet may also conflict when their
+                // BASE and CUMULATIVE on the same tablet may also conflict when their
                 // input version ranges overlap. Previously we only checked same-type conflicts,
                 // which left a window where BASE could be accepted with versions that overlap an
                 // in-flight CUMULATIVE (and vice versa) after cumulative_point was unsafely
-                // advanced. Now we treat any pair within (BASE, CUMULATIVE, EMPTY_CUMULATIVE,
-                // FULL) as potentially conflicting and rely on the input-version-range check
-                // below to make the final decision.
+                // advanced. Now we treat BASE, CUMULATIVE, and EMPTY_CUMULATIVE as potentially
+                // conflicting and rely on the input-version-range check below to make the final
+                // decision.
                 if (is_pending_cumulative_point_marker(c)) {
                     if (version_not_conflict(c, compaction)) continue;
                     if (cumulative_covers_pending_marker(c, compaction)) continue;
@@ -531,7 +504,7 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                 // (`may_conflict_by_type`); previously only same-family ranges were surfaced,
                 // which left BE blind to cross-family (BASE vs CUMULATIVE) conflicts.
                 //
-                // An in-flight EMPTY_CUMULATIVE (or any other family member without a concrete
+                // An in-flight EMPTY_CUMULATIVE (or any other checked type without a concrete
                 // [v_lo, v_hi]) carries no usable range; surfacing fabricated zeros would
                 // mislead BE retry. Pending cumulative-point markers do carry a committed rowset
                 // range, so surface them as well to keep stale BE retries away from that range.

@@ -514,7 +514,7 @@ TEST(MetaServiceJobTest, StartFullCompaction) {
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction5", "ip:port", 0, 0,
                              TabletCompactionJobPB::BASE, res);
-        ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
     }
     {
         start_compaction_job(meta_service.get(), tablet_id, "compaction6", "ip:port", 0, 0,
@@ -523,11 +523,15 @@ TEST(MetaServiceJobTest, StartFullCompaction) {
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction7", "ip:port", 0, 0,
                              TabletCompactionJobPB::CUMULATIVE, res, {18, 22});
-        ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction8", "ip:port", 0, 0,
-                             TabletCompactionJobPB::CUMULATIVE, res, {21, 26});
+                             TabletCompactionJobPB::BASE, res, {5, 10});
         ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+
+        start_compaction_job(meta_service.get(), tablet_id, "compaction9", "ip:port", 0, 0,
+                             TabletCompactionJobPB::CUMULATIVE, res, {21, 26});
+        ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
     }
 }
 
@@ -4679,17 +4683,15 @@ TEST(MetaServiceJobTest, EmptyCumulativeBlockedByCumulativeTest) {
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
 
     // Step 4: A BASE compaction arrives via the same code path used by EMPTY_CUMULATIVE -
-    // i.e. without `input_versions`. Because is_same_conflict_family(BASE, CUMULATIVE) is
-    // false, BASE should still be accepted on this branch (the cross-family conflict is
-    // enforced only on the version-range branch validated by Plan D test below).
+    // i.e. without `input_versions`. Without a comparable range, MS cannot prove that BASE and
+    // the in-flight CUMULATIVE do not overlap, so it must reject the request.
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "base1", "BE1", 0, 0,
                          TabletCompactionJobPB::BASE, res);
-    ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY) << res.status().msg();
 
     // Step 5: A second EMPTY_CUMULATIVE should also be rejected by the now-active CUMULATIVE.
-    // (Even though job_pb already contains an EMPTY_CUMULATIVE-equivalent, the same-family
-    // check primarily catches the CUMULATIVE side here.)
+    // The rowset-family check primarily catches the CUMULATIVE side here.
     res.Clear();
     start_empty_cumu("empty2", "BE2", 0, 0, res);
     ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY) << res.status().msg();
@@ -4799,8 +4801,8 @@ TEST(MetaServiceJobTest, BaseCumulativeCrossTypeConflictTest) {
                          TabletCompactionJobPB::CUMULATIVE, res, {22, 28});
     ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY) << res.status().msg();
     // The version_in_compaction notification predicate is kept consistent with the conflict
-    // predicate (`may_conflict_by_type`): every in-flight job in the rowset compaction family
-    // (BASE / CUMULATIVE) is surfaced so BE can pick a non-overlapping range to retry.
+    // predicate (`may_conflict_by_type`): every in-flight BASE/CUMULATIVE job is surfaced so BE
+    // can pick a non-overlapping range to retry.
     // Active jobs at this point: cumu1[10,20], base_safe_below[0,9], base_safe_above[21,30].
     // All three carry concrete input_versions so all three must be reported.
     ASSERT_EQ(res.version_in_compaction_size(), 6);
