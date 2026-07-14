@@ -18,6 +18,7 @@
 #include "cloud/cloud_cumulative_compaction.h"
 
 #include <algorithm>
+#include <random>
 
 #include <gen_cpp/cloud.pb.h>
 
@@ -307,6 +308,40 @@ Status CloudCumulativeCompaction::modify_rowsets() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
             }
             LOG(INFO) << "release NOTREADY tablet compaction, tablet_id=" << _tablet->tablet_id();
+        }
+    });
+
+    DBUG_EXECUTE_IF("CloudCumulativeCompaction::modify_rowsets.random_sleep", {
+        auto probability = dp->param("probability", dp->param("percent", 0.0));
+        DORIS_CHECK(probability >= 0.0 && probability <= 1.0);
+        static thread_local std::mt19937 gen(std::random_device {}());
+        std::bernoulli_distribution inject_sleep {probability};
+        if (inject_sleep(gen)) {
+            auto max_sleep_ms = dp->param<int64_t>(
+                    "max_sleep_ms",
+                    dp->param<int64_t>("max_sleep_time_ms",
+                                       dp->param<int64_t>("max_sleep_time", 0)));
+            DORIS_CHECK(max_sleep_ms >= 0);
+            std::uniform_int_distribution<int64_t> sleep_dist(0, max_sleep_ms);
+            auto sleep_ms = sleep_dist(gen);
+            LOG(INFO) << "CloudCumulativeCompaction::modify_rowsets.random_sleep"
+                      << ", tablet_id=" << _tablet->tablet_id() << ", sleep_ms=" << sleep_ms
+                      << ", probability=" << probability;
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+        }
+    });
+
+    DBUG_EXECUTE_IF("CloudCumulativeCompaction::modify_rowsets.random_fail", {
+        auto probability = dp->param("probability", dp->param("percent", 0.0));
+        DORIS_CHECK(probability >= 0.0 && probability <= 1.0);
+        static thread_local std::mt19937 gen(std::random_device {}());
+        std::bernoulli_distribution inject_fail {probability};
+        if (inject_fail(gen)) {
+            LOG(WARNING) << "CloudCumulativeCompaction::modify_rowsets.random_fail"
+                         << ", tablet_id=" << _tablet->tablet_id()
+                         << ", probability=" << probability;
+            return Status::InternalError(
+                    "debug cloud cumulative compaction modify rowsets random failed");
         }
     });
 
