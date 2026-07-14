@@ -1178,6 +1178,7 @@ DEFINE_Bool(enable_fuzzy_mode, "false");
 DEFINE_Bool(enable_graceful_exit_check, "false");
 
 DEFINE_Bool(enable_debug_points, "false");
+DEFINE_mString(enable_debug_point_modules, "*");
 
 DEFINE_Int32(pipeline_executor_size, "0");
 DEFINE_Int32(blocking_pipeline_executor_size, "0");

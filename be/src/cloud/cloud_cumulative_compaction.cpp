@@ -48,7 +48,8 @@ CloudCumulativeCompaction::CloudCumulativeCompaction(CloudStorageEngine& engine,
 CloudCumulativeCompaction::~CloudCumulativeCompaction() = default;
 
 Status CloudCumulativeCompaction::prepare_compact() {
-    DBUG_EXECUTE_IF("CloudCumulativeCompaction.prepare_compact.sleep", { sleep(5); })
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::COMPACTION,
+                           "CloudCumulativeCompaction.prepare_compact.sleep", { sleep(5); })
     Status st;
     Defer defer_set_st([&] {
         if (!st.ok()) {
@@ -282,30 +283,42 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     compaction_job->set_index_size_output_rowsets(_output_rowset->index_disk_size());
     compaction_job->set_segment_size_output_rowsets(_output_rowset->data_disk_size());
 
-    DBUG_EXECUTE_IF("CloudCumulativeCompaction::modify_rowsets.enable_spin_wait", {
-        LOG(INFO) << "CloudCumulativeCompaction::modify_rowsets.enable_spin_wait, start";
-        while (DebugPoints::instance()->is_enable(
-                "CloudCumulativeCompaction::modify_rowsets.block")) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        LOG(INFO) << "CloudCumulativeCompaction::modify_rowsets.enable_spin_wait, exit";
-    });
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::COMPACTION,
+                           "CloudCumulativeCompaction::modify_rowsets.enable_spin_wait", {
+                               LOG(INFO)
+                                       << "CloudCumulativeCompaction::modify_rowsets."
+                                          "enable_spin_wait, start";
+                               while (DebugPoints::instance()->is_enable(
+                                       "CloudCumulativeCompaction::modify_rowsets.block")) {
+                                   std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                               }
+                               LOG(INFO)
+                                       << "CloudCumulativeCompaction::modify_rowsets."
+                                          "enable_spin_wait, exit";
+                           });
 
     // Block only NOTREADY tablets (SC new tablets) before compaction commit.
     // RUNNING tablets (system tables, base tablets) are not affected.
-    DBUG_EXECUTE_IF("CloudCumulativeCompaction::modify_rowsets.block_notready", {
-        if (_tablet->tablet_state() == TABLET_NOTREADY) {
-            LOG(INFO) << "block NOTREADY tablet compaction before commit"
-                      << ", tablet_id=" << _tablet->tablet_id() << ", output=["
-                      << _input_rowsets.front()->start_version() << "-"
-                      << _input_rowsets.back()->end_version() << "]";
-            while (DebugPoints::instance()->is_enable(
-                    "CloudCumulativeCompaction::modify_rowsets.block_notready")) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            }
-            LOG(INFO) << "release NOTREADY tablet compaction, tablet_id=" << _tablet->tablet_id();
-        }
-    });
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::COMPACTION,
+                           "CloudCumulativeCompaction::modify_rowsets.block_notready", {
+                               if (_tablet->tablet_state() == TABLET_NOTREADY) {
+                                   LOG(INFO)
+                                           << "block NOTREADY tablet compaction before commit"
+                                           << ", tablet_id=" << _tablet->tablet_id()
+                                           << ", output=["
+                                           << _input_rowsets.front()->start_version() << "-"
+                                           << _input_rowsets.back()->end_version() << "]";
+                                   while (DebugPoints::instance()->is_enable(
+                                           "CloudCumulativeCompaction::modify_rowsets."
+                                           "block_notready")) {
+                                       std::this_thread::sleep_for(
+                                               std::chrono::milliseconds(50));
+                                   }
+                                   LOG(INFO)
+                                           << "release NOTREADY tablet compaction, tablet_id="
+                                           << _tablet->tablet_id();
+                               }
+                           });
 
     DeleteBitmapPtr output_rowset_delete_bitmap = nullptr;
     int64_t initiator = this->initiator();
