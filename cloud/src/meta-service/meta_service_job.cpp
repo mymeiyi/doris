@@ -152,32 +152,27 @@ static inline bool may_conflict_by_type(TabletCompactionJobPB::CompactionType a,
 }
 
 static constexpr std::string_view PENDING_CUMULATIVE_POINT_JOB_ID_PREFIX = "pcp:";
-static constexpr std::string_view PENDING_CUMULATIVE_POINT_BRIDGE_JOB_ID_PREFIX = "pcb:";
 
 static inline bool is_pending_cumulative_point_marker(const TabletCompactionJobPB& compaction) {
     return compaction.type() == TabletCompactionJobPB::PENDING_CUMULATIVE_POINT;
 }
 
 static TabletCompactionJobPB build_pending_cumulative_point_marker(
-        const TabletCompactionJobPB& compaction, int64_t output_cumulative_point,
-        TabletCompactionJobPB::PendingCumulativePointType pending_type) {
+        const TabletCompactionJobPB& compaction) {
     DCHECK_EQ(compaction.input_versions_size(), 2) << proto_to_json(compaction);
     TabletCompactionJobPB marker;
-    auto id_prefix = pending_type == TabletCompactionJobPB::PENDING_CUMULATIVE_POINT_BRIDGE
-                             ? PENDING_CUMULATIVE_POINT_BRIDGE_JOB_ID_PREFIX
-                             : PENDING_CUMULATIVE_POINT_JOB_ID_PREFIX;
-    marker.set_id(fmt::format("{}{}", id_prefix, compaction.id()));
+    marker.set_id(fmt::format("{}{}", PENDING_CUMULATIVE_POINT_JOB_ID_PREFIX, compaction.id()));
     marker.set_type(TabletCompactionJobPB::PENDING_CUMULATIVE_POINT);
     marker.add_input_versions(compaction.input_versions(0));
     marker.add_input_versions(compaction.input_versions(1));
-    marker.set_output_cumulative_point(output_cumulative_point);
-    marker.set_pending_cumulative_point_type(pending_type);
+    marker.set_output_cumulative_point(compaction.output_cumulative_point());
     return marker;
 }
 
 struct OrderedCumulativePointUpdate {
     int64_t cumulative_point = -1;
-    std::vector<TabletCompactionJobPB> pending_markers;
+    bool add_pending_marker = false;
+    TabletCompactionJobPB pending_marker;
     std::unordered_set<std::string> consumed_pending_marker_ids;
 };
 
@@ -194,7 +189,7 @@ struct OrderedCumulativePointUpdate {
 //
 // The returned object tells the caller:
 //   - which cumulative_point should be written to tablet stats;
-//   - which new pending markers should be appended to TabletJobInfoPB;
+//   - whether a new pending marker should be appended to TabletJobInfoPB;
 //   - which existing pending markers became continuous and should be removed.
 static OrderedCumulativePointUpdate calc_ordered_cumulative_point_update(
         const TabletJobInfoPB& recorded_job, const TabletCompactionJobPB& compaction,
@@ -204,32 +199,21 @@ static OrderedCumulativePointUpdate calc_ordered_cumulative_point_update(
         int64_t start = 0;
         int64_t output_point = 0;
         bool pending_marker = false;
-        bool promotion = false;
     };
 
-    OrderedCumulativePointUpdate update;
-    update.cumulative_point = current_cumulative_point;
     std::vector<PointInterval> intervals;
-    intervals.reserve(recorded_job.compaction_size() + 2);
-    bool bridge_enabled = config::enable_cloud_non_promotion_cumu_point_bridge;
+    intervals.reserve(recorded_job.compaction_size() + 1);
     for (const auto& c : recorded_job.compaction()) {
         if (!is_pending_cumulative_point_marker(c)) {
             continue;
         }
         DCHECK_EQ(c.input_versions_size(), 2) << proto_to_json(c);
         DCHECK(c.has_output_cumulative_point()) << proto_to_json(c);
-        bool bridge_marker =
-                c.pending_cumulative_point_type() ==
-                TabletCompactionJobPB::PENDING_CUMULATIVE_POINT_BRIDGE;
-        if (!bridge_enabled && bridge_marker) {
-            update.consumed_pending_marker_ids.insert(c.id());
-            continue;
-        }
-        bool promotion = !bridge_marker;
-        intervals.push_back(
-                {c.id(), c.input_versions(0), c.output_cumulative_point(), true, promotion});
+        intervals.push_back({c.id(), c.input_versions(0), c.output_cumulative_point(), true});
     }
 
+    OrderedCumulativePointUpdate update;
+    update.cumulative_point = current_cumulative_point;
     if (compaction.type() != TabletCompactionJobPB::CUMULATIVE &&
         compaction.type() != TabletCompactionJobPB::EMPTY_CUMULATIVE && intervals.empty()) {
         return update;
@@ -251,54 +235,33 @@ static OrderedCumulativePointUpdate calc_ordered_cumulative_point_update(
             }
         }
         if (!blocked_by_lower_inflight_compaction && intervals.empty()) {
-            if (compaction.output_cumulative_point() > current_cumulative_point) {
-                update.cumulative_point = compaction.output_cumulative_point();
-                return update;
-            }
+            update.cumulative_point = compaction.output_cumulative_point();
+            return update;
         }
-    }
-
-    bool current_cumulative = compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
-                              compaction.input_versions_size() == 2;
-    int64_t current_bridge_output_point =
-            current_cumulative ? compaction.input_versions(1) + 1 : current_cumulative_point;
-    if (bridge_enabled && current_cumulative &&
-        current_bridge_output_point > current_cumulative_point &&
-        compaction.output_cumulative_point() != current_bridge_output_point) {
-        intervals.push_back({compaction.id(), compaction.input_versions(0),
-                             current_bridge_output_point, false, false});
     }
     if (compaction.output_cumulative_point() > current_cumulative_point) {
         if (compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) {
             intervals.push_back({compaction.id(), current_cumulative_point,
-                                 compaction.output_cumulative_point(), false, true});
-        } else if (current_cumulative) {
+                                 compaction.output_cumulative_point(), false});
+        } else if (compaction.input_versions_size() == 2) {
             intervals.push_back({compaction.id(), compaction.input_versions(0),
-                                 compaction.output_cumulative_point(), false, true});
+                                 compaction.output_cumulative_point(), false});
         }
     }
 
-    int64_t reachable_point = current_cumulative_point;
     bool advanced = true;
     while (advanced) {
         advanced = false;
         for (const auto& interval : intervals) {
-            if (interval.start > reachable_point) {
+            if (interval.start > update.cumulative_point ||
+                interval.output_point <= update.cumulative_point) {
                 continue;
             }
-            bool advance_reachable = interval.output_point > reachable_point;
-            bool advance_cumulative =
-                    interval.promotion && interval.output_point > update.cumulative_point;
-            if (!advance_reachable && !advance_cumulative) {
-                continue;
-            }
-            if (advance_reachable) {
-                reachable_point = interval.output_point;
-            }
-            if (advance_cumulative) {
-                update.cumulative_point = interval.output_point;
-            }
+            update.cumulative_point = interval.output_point;
             advanced = true;
+            if (interval.pending_marker) {
+                update.consumed_pending_marker_ids.insert(interval.id);
+            }
         }
     }
     for (const auto& interval : intervals) {
@@ -307,21 +270,12 @@ static OrderedCumulativePointUpdate calc_ordered_cumulative_point_update(
         }
     }
 
-    if (bridge_enabled && current_cumulative &&
-        current_bridge_output_point > update.cumulative_point) {
-        bool promotion_marker_covers_bridge =
-                compaction.output_cumulative_point() == current_bridge_output_point &&
-                compaction.output_cumulative_point() > update.cumulative_point;
-        if (!promotion_marker_covers_bridge) {
-            update.pending_markers.push_back(build_pending_cumulative_point_marker(
-                    compaction, current_bridge_output_point,
-                    TabletCompactionJobPB::PENDING_CUMULATIVE_POINT_BRIDGE));
-        }
-    }
-    if (current_cumulative && compaction.output_cumulative_point() > update.cumulative_point) {
-        update.pending_markers.push_back(build_pending_cumulative_point_marker(
-                compaction, compaction.output_cumulative_point(),
-                TabletCompactionJobPB::PENDING_CUMULATIVE_POINT_PROMOTION));
+    if (compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
+        compaction.input_versions_size() == 2 &&
+        blocked_by_lower_inflight_compaction &&
+        compaction.output_cumulative_point() > update.cumulative_point) {
+        update.add_pending_marker = true;
+        update.pending_marker = build_pending_cumulative_point_marker(compaction);
     }
     return update;
 }
@@ -1605,8 +1559,8 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
         return c.id() == compaction.id() ||
                cumulative_point_update.consumed_pending_marker_ids.contains(c.id());
     }), compactions->end());
-    for (auto& pending_marker : cumulative_point_update.pending_markers) {
-        recorded_job.add_compaction()->Swap(&pending_marker);
+    if (cumulative_point_update.add_pending_marker) {
+        recorded_job.add_compaction()->Swap(&cumulative_point_update.pending_marker);
     }
     auto job_val = recorded_job.SerializeAsString();
     txn->put(job_key, job_val);
