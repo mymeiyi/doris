@@ -975,10 +975,11 @@ static void injection_full_gc_fn() {
 
 int VNodeChannel::try_send_and_fetch_status(RuntimeState* state,
                                             std::unique_ptr<ThreadPoolToken>& thread_pool_token) {
-    DBUG_EXECUTE_IF("VNodeChannel.try_send_and_fetch_status_full_gc", {
-        std::thread t(injection_full_gc_fn);
-        t.join();
-    });
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::LOAD,
+                           "VNodeChannel.try_send_and_fetch_status_full_gc", {
+                               std::thread t(injection_full_gc_fn);
+                               t.join();
+                           });
 
     if (_cancelled || _send_finished) { // not run
         return 0;
@@ -1410,7 +1411,7 @@ void VNodeChannel::cancel(const std::string& cancel_msg) {
 }
 
 Status VNodeChannel::close_wait(RuntimeState* state, bool* is_closed) {
-    DBUG_EXECUTE_IF("VNodeChannel.close_wait_full_gc", {
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::LOAD, "VNodeChannel.close_wait_full_gc", {
         std::thread t(injection_full_gc_fn);
         t.join();
     });
@@ -1430,7 +1431,7 @@ Status VNodeChannel::close_wait(RuntimeState* state, bool* is_closed) {
         }
     }
 
-    DBUG_EXECUTE_IF("VNodeChannel.close_wait.cancelled", {
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::LOAD, "VNodeChannel.close_wait.cancelled", {
         _cancelled = true;
         _cancel_msg = "injected cancel";
     });

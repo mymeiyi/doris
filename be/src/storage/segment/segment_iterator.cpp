@@ -109,6 +109,7 @@
 #include "storage/types.h"
 #include "storage/utils.h"
 #include "util/concurrency_stats.h"
+#include "util/debug_points.h"
 #include "util/defer_op.h"
 #include "util/json/path_in_data.h"
 #include "util/simd/bits.h"
@@ -828,19 +829,27 @@ Status SegmentIterator::_get_row_ranges_by_column_conditions() {
         }
     }
 
-    DBUG_EXECUTE_IF("segment_iterator.inverted_index.filtered_rows", {
-        LOG(INFO) << "Debug Point: segment_iterator.inverted_index.filtered_rows: "
-                  << _opts.stats->rows_inverted_index_filtered;
-        auto filtered_rows = DebugPoints::instance()->get_debug_param_or_default<int32_t>(
-                "segment_iterator.inverted_index.filtered_rows", "filtered_rows", -1);
-        if (filtered_rows != _opts.stats->rows_inverted_index_filtered) {
-            return Status::Error<ErrorCode::INTERNAL_ERROR>(
-                    "filtered_rows: {} not equal to expected: {}",
-                    _opts.stats->rows_inverted_index_filtered, filtered_rows);
-        }
-    })
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::SCAN,
+                           "segment_iterator.inverted_index.filtered_rows", {
+                               LOG(INFO)
+                                       << "Debug Point: "
+                                          "segment_iterator.inverted_index.filtered_rows: "
+                                       << _opts.stats->rows_inverted_index_filtered;
+                               auto filtered_rows =
+                                       DebugPoints::instance()
+                                               ->get_debug_param_or_default<int32_t>(
+                                                       "segment_iterator.inverted_index."
+                                                       "filtered_rows",
+                                                       "filtered_rows", -1);
+                               if (filtered_rows != _opts.stats->rows_inverted_index_filtered) {
+                                   return Status::Error<ErrorCode::INTERNAL_ERROR>(
+                                           "filtered_rows: {} not equal to expected: {}",
+                                           _opts.stats->rows_inverted_index_filtered,
+                                           filtered_rows);
+                               }
+                           })
 
-    DBUG_EXECUTE_IF("segment_iterator.apply_inverted_index", {
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::SCAN, "segment_iterator.apply_inverted_index", {
         LOG(INFO) << "Debug Point: segment_iterator.apply_inverted_index";
         if (!_common_expr_ctxs_push_down.empty() || !_col_predicates.empty()) {
             return Status::Error<ErrorCode::INTERNAL_ERROR>(
@@ -861,7 +870,7 @@ Status SegmentIterator::_get_row_ranges_by_column_conditions() {
         _opts.stats->rows_conditions_filtered += (pre_size - _row_bitmap.cardinality());
     }
 
-    DBUG_EXECUTE_IF("bloom_filter_must_filter_data", {
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::SCAN, "bloom_filter_must_filter_data", {
         if (_opts.stats->rows_bf_filtered == 0) {
             return Status::Error<ErrorCode::INTERNAL_ERROR>(
                     "Bloom filter did not filter the data.");
@@ -2286,7 +2295,8 @@ Status SegmentIterator::_read_columns_by_index(uint32_t nrows_read_limit, uint16
                 VLOG_DEBUG << fmt::format("Column {} is pruned. No need to read data.", cid);
                 continue;
             }
-            DBUG_EXECUTE_IF("segment_iterator._read_columns_by_index", {
+            DBUG_EXECUTE_IF_MODULE(DebugPointModule::SCAN,
+                                   "segment_iterator._read_columns_by_index", {
                 auto col_name = _opts.tablet_schema->column(cid).name();
                 auto debug_col_name =
                         DebugPoints::instance()->get_debug_param_or_default<std::string>(
@@ -2510,7 +2520,8 @@ Status SegmentIterator::_read_columns_by_rowids(std::vector<ColumnId>& read_colu
             continue;
         }
 
-        DBUG_EXECUTE_IF("segment_iterator._read_columns_by_index", {
+        DBUG_EXECUTE_IF_MODULE(DebugPointModule::SCAN,
+                               "segment_iterator._read_columns_by_index", {
             auto debug_col_name = DebugPoints::instance()->get_debug_param_or_default<std::string>(
                     "segment_iterator._read_columns_by_index", "column_name", "");
             if (debug_col_name.empty()) {
@@ -2681,7 +2692,7 @@ Status SegmentIterator::_next_batch_internal(Block* block) {
     if (_can_opt_topn_reads()) {
         nrows_read_limit = std::min(static_cast<uint32_t>(_opts.topn_limit), nrows_read_limit);
     }
-    DBUG_EXECUTE_IF("segment_iterator.topn_opt_1", {
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::SCAN, "segment_iterator.topn_opt_1", {
         if (nrows_read_limit != 1) {
             return Status::Error<ErrorCode::INTERNAL_ERROR>(
                     "topn opt 1 execute failed: nrows_read_limit={}, _opts.topn_limit={}",
@@ -3347,11 +3358,11 @@ bool SegmentIterator::_can_opt_topn_reads() {
         return false;
     });
 
-    DBUG_EXECUTE_IF("segment_iterator.topn_opt_1", {
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::SCAN, "segment_iterator.topn_opt_1", {
         LOG(INFO) << "col_predicates: " << _col_predicates.size() << ", all_true: " << all_true;
     })
 
-    DBUG_EXECUTE_IF("segment_iterator.topn_opt_2", {
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::SCAN, "segment_iterator.topn_opt_2", {
         if (all_true) {
             return Status::Error<ErrorCode::INTERNAL_ERROR>("topn opt 2 execute failed");
         }

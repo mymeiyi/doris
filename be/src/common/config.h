@@ -1214,6 +1214,9 @@ DECLARE_Bool(enable_fuzzy_mode);
 DECLARE_Bool(enable_graceful_exit_check);
 
 DECLARE_Bool(enable_debug_points);
+// Comma-separated debug point modules enabled when enable_debug_points is true.
+// Supported values include: all/*, compaction, file_reader, load, scan.
+DECLARE_mString(enable_debug_point_modules);
 
 DECLARE_Int32(pipeline_executor_size);
 DECLARE_Int32(blocking_pipeline_executor_size);

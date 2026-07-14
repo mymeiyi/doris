@@ -21,6 +21,7 @@
 #include <atomic>
 #include <boost/lexical_cast.hpp>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -36,6 +37,15 @@
 // using {} around code, to avoid duplicate variable name
 #define DBUG_EXECUTE_IF(debug_point_name, code)                               \
     if (UNLIKELY(config::enable_debug_points)) {                              \
+        auto dp = DebugPoints::instance()->get_debug_point(debug_point_name); \
+        if (dp) {                                                             \
+            [[maybe_unused]] auto DP_NAME = debug_point_name;                 \
+            code;                                                             \
+        }                                                                     \
+    }
+
+#define DBUG_EXECUTE_IF_MODULE(module, debug_point_name, code)                \
+    if (UNLIKELY(DebugPoints::is_module_enabled(module))) {                   \
         auto dp = DebugPoints::instance()->get_debug_point(debug_point_name); \
         if (dp) {                                                             \
             [[maybe_unused]] auto DP_NAME = debug_point_name;                 \
@@ -87,6 +97,14 @@
 // }
 
 namespace doris {
+
+enum class DebugPointModule : uint8_t {
+    COMPACTION = 0,
+    FILE_READER,
+    LOAD,
+    SCAN,
+    MAX
+};
 
 struct DebugPoint {
     std::atomic<int64_t> execute_num {0};
@@ -158,6 +176,8 @@ public:
     }
 
     void add(const std::string& name, std::shared_ptr<DebugPoint> debug_point);
+    static bool is_module_enabled(DebugPointModule module);
+    static void update_enabled_modules(const std::string& modules);
 
     // more 'add' functions for convenient use
     void add(const std::string& name) { add(name, std::make_shared<DebugPoint>()); }

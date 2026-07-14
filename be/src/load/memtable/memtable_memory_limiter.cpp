@@ -24,6 +24,7 @@
 #include "common/metrics/metrics.h"
 #include "load/memtable/memtable.h"
 #include "load/memtable/memtable_writer.h"
+#include "util/debug_points.h"
 #include "util/mem_info.h"
 
 namespace doris {
@@ -113,12 +114,13 @@ bool MemTableMemoryLimiter::_load_usage_low() {
 }
 
 int64_t MemTableMemoryLimiter::_need_flush() {
-    DBUG_EXECUTE_IF("MemTableMemoryLimiter._need_flush.random_flush", {
-        if (rand() % 100 < (100 * dp->param("percent", 0.5))) {
-            LOG(INFO) << "debug memtable need flush return 1";
-            return 1;
-        }
-    });
+    DBUG_EXECUTE_IF_MODULE(DebugPointModule::LOAD,
+                           "MemTableMemoryLimiter._need_flush.random_flush", {
+                               if (rand() % 100 < (100 * dp->param("percent", 0.5))) {
+                                   LOG(INFO) << "debug memtable need flush return 1";
+                                   return 1;
+                               }
+                           });
     int64_t limit1 = _mem_tracker->consumption() - _load_soft_mem_limit;
     int64_t limit2 = _sys_avail_mem_less_than_warning_water_mark();
     int64_t limit3 = _process_used_mem_more_than_soft_mem_limit();
@@ -192,10 +194,11 @@ void MemTableMemoryLimiter::handle_memtable_flush(std::function<bool()> cancel_c
     // Check the soft limit.
     DCHECK(_load_soft_mem_limit > 0);
     do {
-        DBUG_EXECUTE_IF("MemTableMemoryLimiter.handle_memtable_flush.limit_reached", {
-            LOG(INFO) << "debug memtable limit reached";
-            break;
-        });
+        DBUG_EXECUTE_IF_MODULE(DebugPointModule::LOAD,
+                               "MemTableMemoryLimiter.handle_memtable_flush.limit_reached", {
+                                   LOG(INFO) << "debug memtable limit reached";
+                                   break;
+                               });
         if (!_soft_limit_reached() || _load_usage_low()) {
             return;
         }
