@@ -262,8 +262,8 @@ public:
 static TabletMetaSharedPtr create_cloud_compaction_test_tablet_meta(int64_t tablet_id) {
     return std::make_shared<TabletMeta>(1, 2, tablet_id, 15674, 4, 5, TTabletSchema(), 6,
                                         std::unordered_map<uint32_t, uint32_t> {{7, 8}},
-                                        UniqueId(9, 10),
-                                        TTabletType::TABLET_TYPE_DISK, TCompressionType::LZ4F);
+                                        UniqueId(9, 10), TTabletType::TABLET_TYPE_DISK,
+                                        TCompressionType::LZ4F);
 }
 
 static CloudTabletSPtr create_cloud_tablet_with_rowsets(CloudStorageEngine& engine,
@@ -283,8 +283,8 @@ static CloudTabletSPtr create_cloud_tablet_with_rowsets(CloudStorageEngine& engi
         tablet->add_rowsets(std::move(rowsets), false, wlock, false);
     }
     tablet->set_cumulative_layer_point(cumulative_point);
-    tablet->fetch_add_approximate_num_rowsets(
-            static_cast<int64_t>(versions.size()) - tablet->fetch_add_approximate_num_rowsets(0));
+    tablet->fetch_add_approximate_num_rowsets(static_cast<int64_t>(versions.size()) -
+                                              tablet->fetch_add_approximate_num_rowsets(0));
     tablet->last_sync_time_s = 1;
     return tablet;
 }
@@ -310,10 +310,10 @@ TEST_F(CloudCompactionTest, cumulative_pick_uses_local_conflict_window) {
 
     {
         auto tablet_meta = create_cloud_compaction_test_tablet_meta(10001);
-        auto tablet = create_cloud_tablet_with_rowsets(
-                _engine, tablet_meta, 114,
-                {114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
-                 128, 129, 130, 131, 132});
+        auto tablet =
+                create_cloud_tablet_with_rowsets(_engine, tablet_meta, 114,
+                                                 {114, 115, 116, 117, 118, 119, 120, 121, 122, 123,
+                                                  124, 125, 126, 127, 128, 129, 130, 131, 132});
         _engine._submitted_cumu_compactions[tablet->tablet_id()] = {
                 create_inflight_cumu_compaction(_engine, tablet, 117, 119),
                 create_inflight_cumu_compaction(_engine, tablet, 126, 130)};

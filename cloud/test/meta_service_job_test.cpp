@@ -5113,27 +5113,27 @@ TEST(MetaServiceJobTest, PendingCumulativePointMarkerUsesRangeWhenParallelDisabl
     txn->put(job_key, job_pb.SerializeAsString());
     ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
 
-    auto start_cumu_with_parallel_disabled =
-            [&](const std::string& job_id, std::pair<int64_t, int64_t> input_version) {
-                brpc::Controller cntl;
-                StartTabletJobRequest req;
-                StartTabletJobResponse res;
-                req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
-                auto* compaction = req.mutable_job()->add_compaction();
-                compaction->set_id(job_id);
-                compaction->set_initiator("BE1");
-                compaction->set_base_compaction_cnt(0);
-                compaction->set_cumulative_compaction_cnt(0);
-                compaction->set_type(TabletCompactionJobPB::CUMULATIVE);
-                long now = time(nullptr);
-                compaction->set_expiration(now + 12);
-                compaction->set_lease(now + 3);
-                compaction->add_input_versions(input_version.first);
-                compaction->add_input_versions(input_version.second);
-                compaction->set_check_input_versions_range(false);
-                meta_service->start_tablet_job(&cntl, &req, &res, nullptr);
-                return res;
-            };
+    auto start_cumu_with_parallel_disabled = [&](const std::string& job_id,
+                                                 std::pair<int64_t, int64_t> input_version) {
+        brpc::Controller cntl;
+        StartTabletJobRequest req;
+        StartTabletJobResponse res;
+        req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+        auto* compaction = req.mutable_job()->add_compaction();
+        compaction->set_id(job_id);
+        compaction->set_initiator("BE1");
+        compaction->set_base_compaction_cnt(0);
+        compaction->set_cumulative_compaction_cnt(0);
+        compaction->set_type(TabletCompactionJobPB::CUMULATIVE);
+        long now = time(nullptr);
+        compaction->set_expiration(now + 12);
+        compaction->set_lease(now + 3);
+        compaction->add_input_versions(input_version.first);
+        compaction->add_input_versions(input_version.second);
+        compaction->set_check_input_versions_range(false);
+        meta_service->start_tablet_job(&cntl, &req, &res, nullptr);
+        return res;
+    };
 
     auto overlap_res = start_cumu_with_parallel_disabled("overlap_cumu", {6, 9});
     ASSERT_EQ(overlap_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)

@@ -203,9 +203,9 @@ static void compact_pending_cumulative_point_markers(TabletJobInfoPB* job) {
     }
 
     auto* compactions = job->mutable_compaction();
-    compactions->erase(std::remove_if(compactions->begin(), compactions->end(), [&](auto& c) {
-        return merged_marker_ids.contains(c.id());
-    }), compactions->end());
+    compactions->erase(std::remove_if(compactions->begin(), compactions->end(),
+                                      [&](auto& c) { return merged_marker_ids.contains(c.id()); }),
+                       compactions->end());
 }
 
 struct OrderedCumulativePointUpdate {
@@ -265,7 +265,8 @@ static OrderedCumulativePointUpdate calc_ordered_cumulative_point_update(
             if (c.id() == compaction.id() || is_pending_cumulative_point_marker(c)) {
                 continue;
             }
-            if (!may_conflict_by_type(c.type(), compaction.type()) || c.input_versions_size() != 2) {
+            if (!may_conflict_by_type(c.type(), compaction.type()) ||
+                c.input_versions_size() != 2) {
                 continue;
             }
             if (c.input_versions(0) <= current_cumulative_point) {
@@ -310,8 +311,7 @@ static OrderedCumulativePointUpdate calc_ordered_cumulative_point_update(
     }
 
     if (compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
-        compaction.input_versions_size() == 2 &&
-        blocked_by_lower_inflight_compaction &&
+        compaction.input_versions_size() == 2 && blocked_by_lower_inflight_compaction &&
         compaction.output_cumulative_point() > update.cumulative_point) {
         update.add_pending_marker = true;
         update.pending_marker = build_pending_cumulative_point_marker(compaction);
@@ -1294,16 +1294,14 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
         }
     }
 
-    auto cumulative_point_update =
-            calc_ordered_cumulative_point_update(recorded_job, compaction,
-                                                 stats->cumulative_point());
+    auto cumulative_point_update = calc_ordered_cumulative_point_update(recorded_job, compaction,
+                                                                        stats->cumulative_point());
     auto compaction_for_stats = compaction;
     if (compaction_for_stats.has_output_cumulative_point() &&
         ((compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
           compaction.input_versions_size() == 2) ||
          compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE)) {
-        compaction_for_stats.set_output_cumulative_point(
-                cumulative_point_update.cumulative_point);
+        compaction_for_stats.set_output_cumulative_point(cumulative_point_update.cumulative_point);
     }
 
     if (compaction_update_tablet_stats(compaction_for_stats, stats, code, msg, now) == -1) {
@@ -1368,10 +1366,15 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
                << " stats=" << proto_to_json(*stats);
     if (compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) {
         auto* compactions = recorded_job.mutable_compaction();
-        compactions->erase(std::remove_if(compactions->begin(), compactions->end(), [&](auto& c) {
-            return c.id() == compaction.id() ||
-                   cumulative_point_update.consumed_pending_marker_ids.contains(c.id());
-        }), compactions->end());
+        compactions->erase(
+                std::remove_if(
+                        compactions->begin(), compactions->end(),
+                        [&](auto& c) {
+                            return c.id() == compaction.id() ||
+                                   cumulative_point_update.consumed_pending_marker_ids.contains(
+                                           c.id());
+                        }),
+                compactions->end());
         compact_pending_cumulative_point_markers(&recorded_job);
         auto job_val = recorded_job.SerializeAsString();
         txn->put(job_key, job_val);
@@ -1594,10 +1597,14 @@ void process_compaction_job(MetaServiceCode& code, std::string& msg, std::string
     //==========================================================================
     // TODO(gavin): move deleted job info into recycle or history
     auto* compactions = recorded_job.mutable_compaction();
-    compactions->erase(std::remove_if(compactions->begin(), compactions->end(), [&](auto& c) {
-        return c.id() == compaction.id() ||
-               cumulative_point_update.consumed_pending_marker_ids.contains(c.id());
-    }), compactions->end());
+    compactions->erase(
+            std::remove_if(compactions->begin(), compactions->end(),
+                           [&](auto& c) {
+                               return c.id() == compaction.id() ||
+                                      cumulative_point_update.consumed_pending_marker_ids.contains(
+                                              c.id());
+                           }),
+            compactions->end());
     if (cumulative_point_update.add_pending_marker) {
         recorded_job.add_compaction()->Swap(&cumulative_point_update.pending_marker);
     }

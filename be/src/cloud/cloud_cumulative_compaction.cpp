@@ -17,10 +17,10 @@
 
 #include "cloud/cloud_cumulative_compaction.h"
 
+#include <gen_cpp/cloud.pb.h>
+
 #include <algorithm>
 #include <random>
-
-#include <gen_cpp/cloud.pb.h>
 
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/cloud_tablet_mgr.h"
@@ -166,8 +166,6 @@ Status CloudCumulativeCompaction::request_global_lock() {
         } else if (resp.status().code() == cloud::JOB_TABLET_BUSY) {
             LOG_WARNING("failed to prepare cumu compaction")
                     .tag("job_id", _uuid)
-                    .tag("range", fmt::format("[{}-{}]", compaction_job->input_versions(0),
-                                                 compaction_job->input_versions(1)))
                     .tag("msg", resp.status().msg());
             return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
                     "cumu no suitable versions: job tablet busy");
@@ -319,9 +317,8 @@ Status CloudCumulativeCompaction::modify_rowsets() {
         std::bernoulli_distribution inject_sleep {probability};
         if (inject_sleep(gen)) {
             auto max_sleep_ms = dp->param<int64_t>(
-                    "max_sleep_ms",
-                    dp->param<int64_t>("max_sleep_time_ms",
-                                       dp->param<int64_t>("max_sleep_time", 0)));
+                    "max_sleep_ms", dp->param<int64_t>("max_sleep_time_ms",
+                                                       dp->param<int64_t>("max_sleep_time", 0)));
             DORIS_CHECK(max_sleep_ms >= 0);
             std::uniform_int_distribution<int64_t> sleep_dist(0, max_sleep_ms);
             auto sleep_ms = sleep_dist(gen);
@@ -574,8 +571,7 @@ Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
         } else if (_input_rowsets.size() == 1 &&
                    !_input_rowsets.front()->rowset_meta()->is_segments_overlapping()) {
             VLOG_DEBUG << "there is only one rowset and not overlapping. tablet_id="
-                       << _tablet->tablet_id()
-                       << ", version=" << _input_rowsets.front()->version();
+                       << _tablet->tablet_id() << ", version=" << _input_rowsets.front()->version();
             _input_rowsets.clear();
             return Status::Error<CUMULATIVE_NO_SUITABLE_VERSION>(
                     "no suitable versions: only one rowset and not overlapping");
