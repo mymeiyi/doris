@@ -254,13 +254,12 @@ NewPlainTextLineReader::NewPlainTextLineReader(RuntimeProfile* profile,
     _bytes_decompress_counter = ADD_COUNTER(_profile, "BytesDecompressed", TUnit::BYTES);
     _decompress_timer = ADD_TIMER(_profile, "DecompressTime");
 
-    DBUG_EXECUTE_IF_MODULE(DebugPointModule::FILE_READER,
-                           "NewPlainTextLineReader.shrink_output_buf", {
-                               size_t new_size = dp->param<int64_t>("output_buf_size", 64 * 1024);
-                               delete[] _output_buf;
-                               _output_buf = new uint8_t[new_size];
-                               _output_buf_size = new_size;
-                           });
+    DBUG_EXECUTE_IF("NewPlainTextLineReader.shrink_output_buf", {
+        size_t new_size = dp->param<int64_t>("output_buf_size", 64 * 1024);
+        delete[] _output_buf;
+        _output_buf = new uint8_t[new_size];
+        _output_buf_size = new_size;
+    });
 }
 
 NewPlainTextLineReader::~NewPlainTextLineReader() {
@@ -326,9 +325,8 @@ void NewPlainTextLineReader::extend_input_buf() {
 }
 
 Status NewPlainTextLineReader::extend_output_buf() {
-    DBUG_EXECUTE_IF_MODULE(DebugPointModule::FILE_READER,
-                           "NewPlainTextLineReader.read_line.limit_output_buf_size",
-                           { _output_buf_size = 4294967296; });
+    DBUG_EXECUTE_IF("NewPlainTextLineReader.read_line.limit_output_buf_size",
+                    { _output_buf_size = 4294967296; });
 
     if (_output_buf_size >= config::max_csv_line_reader_output_buffer_size) [[unlikely]] {
         return Status::InternalError(
@@ -393,9 +391,8 @@ Status NewPlainTextLineReader::read_line(const uint8_t** ptr, size_t* size, bool
         uint8_t* cur_ptr = _output_buf + _output_buf_pos;
         const uint8_t* pos = _line_reader_ctx->read_line(cur_ptr, output_buf_read_remaining());
 
-        DBUG_EXECUTE_IF_MODULE(DebugPointModule::FILE_READER,
-                               "NewPlainTextLineReader.read_line.limit_output_buf_size",
-                               { pos = nullptr; });
+        DBUG_EXECUTE_IF("NewPlainTextLineReader.read_line.limit_output_buf_size",
+                        { pos = nullptr; });
 
         if (pos == nullptr) {
             // didn't find line delimiter, read more data from decompressor
