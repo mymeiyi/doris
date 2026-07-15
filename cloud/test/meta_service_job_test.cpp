@@ -514,7 +514,7 @@ TEST(MetaServiceJobTest, StartFullCompaction) {
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction5", "ip:port", 0, 0,
                              TabletCompactionJobPB::BASE, res);
-        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
     }
     {
         start_compaction_job(meta_service.get(), tablet_id, "compaction6", "ip:port", 0, 0,
@@ -523,15 +523,15 @@ TEST(MetaServiceJobTest, StartFullCompaction) {
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction7", "ip:port", 0, 0,
                              TabletCompactionJobPB::CUMULATIVE, res, {18, 22});
-        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction8", "ip:port", 0, 0,
                              TabletCompactionJobPB::BASE, res, {5, 10});
-        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction9", "ip:port", 0, 0,
                              TabletCompactionJobPB::CUMULATIVE, res, {21, 26});
-        ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
     }
 }
 

@@ -102,12 +102,12 @@ bool check_compaction_input_verions(const TabletCompactionJobPB& compaction,
     return false;
 }
 
-// Whether a compaction type needs overlap conflict checks against base/cumulative compactions.
-// FULL has its own start policy (an incoming FULL clears existing compactions), so it must not be
-// folded into this range-overlap predicate.
-static inline bool needs_base_cumu_overlap_check(TabletCompactionJobPB::CompactionType t) {
+// Whether a compaction type needs rowset range overlap checks. An incoming FULL clears existing
+// compactions before conflict checks, while a recorded FULL must still block overlapping incoming
+// BASE/CUMULATIVE compactions.
+static inline bool needs_rowset_range_overlap_check(TabletCompactionJobPB::CompactionType t) {
     return t == TabletCompactionJobPB::BASE || t == TabletCompactionJobPB::CUMULATIVE ||
-           t == TabletCompactionJobPB::EMPTY_CUMULATIVE;
+           t == TabletCompactionJobPB::EMPTY_CUMULATIVE || t == TabletCompactionJobPB::FULL;
 }
 
 // Whether two compaction jobs MAY conflict on the rowset range (regardless of the actual
@@ -115,10 +115,10 @@ static inline bool needs_base_cumu_overlap_check(TabletCompactionJobPB::Compacti
 // final decision.
 //
 // Conflict matrix:
-//   BASE     vs BASE / CUMULATIVE / EMPTY_CUMULATIVE : true
-//   CUMU     vs BASE / CUMULATIVE / EMPTY_CUMULATIVE : true
-//   EMPTY_CU vs BASE / CUMULATIVE / EMPTY_CUMULATIVE : true
-//   FULL     vs BASE / CUMULATIVE                    : false
+//   BASE     vs BASE / CUMULATIVE / EMPTY_CUMULATIVE / FULL : true
+//   CUMU     vs BASE / CUMULATIVE / EMPTY_CUMULATIVE / FULL : true
+//   EMPTY_CU vs BASE / CUMULATIVE / EMPTY_CUMULATIVE / FULL : true
+//   FULL     vs BASE / CUMULATIVE / EMPTY_CUMULATIVE / FULL : true
 //
 // Any compaction type outside this set (or that we don't yet model) is conservatively NOT
 // considered conflicting here - if a new type is added later, the author MUST revisit this
@@ -126,7 +126,7 @@ static inline bool needs_base_cumu_overlap_check(TabletCompactionJobPB::Compacti
 // "everything conflicts" behaviour.
 static inline bool may_conflict_by_type(TabletCompactionJobPB::CompactionType a,
                                         TabletCompactionJobPB::CompactionType b) {
-    return needs_base_cumu_overlap_check(a) && needs_base_cumu_overlap_check(b);
+    return needs_rowset_range_overlap_check(a) && needs_rowset_range_overlap_check(b);
 }
 
 static constexpr std::string_view PENDING_CUMULATIVE_POINT_JOB_ID_PREFIX = "pcp:";
