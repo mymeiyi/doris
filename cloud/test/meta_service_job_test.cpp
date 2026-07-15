@@ -497,15 +497,15 @@ TEST(MetaServiceJobTest, StartFullCompaction) {
     StartTabletJobResponse res;
     {
         start_compaction_job(meta_service.get(), tablet_id, "compaction1", "ip:port", 0, 0,
-                             TabletCompactionJobPB::BASE, res);
+                             TabletCompactionJobPB::BASE, res, {1, 10});
         ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction2", "ip:port", 0, 0,
-                             TabletCompactionJobPB::CUMULATIVE, res);
+                             TabletCompactionJobPB::CUMULATIVE, res, {11, 20});
         ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction3", "ip:port", 0, 0,
-                             TabletCompactionJobPB::BASE, res);
+                             TabletCompactionJobPB::BASE, res, {5, 15});
         ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
 
         start_compaction_job(meta_service.get(), tablet_id, "compaction4", "ip:port", 0, 0,
@@ -4176,19 +4176,19 @@ TEST(MetaServiceJobTest, ConcurrentCompactionTest) {
     ::sleep(5);
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "job3", "BE2", 0, 0,
-                         TabletCompactionJobPB::CUMULATIVE, res);
+                         TabletCompactionJobPB::CUMULATIVE, res, {5, 10});
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "job4", "BE1", 0, 0,
-                         TabletCompactionJobPB::BASE, res);
+                         TabletCompactionJobPB::BASE, res, {0, 4});
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "job4", "BE1", 0, 0,
-                         TabletCompactionJobPB::BASE, res);
+                         TabletCompactionJobPB::BASE, res, {0, 4});
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK); // Same job id, return OK
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "job5", "BE1", 0, 0,
-                         TabletCompactionJobPB::BASE, res);
+                         TabletCompactionJobPB::BASE, res, {0, 4});
     ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
 
     // check job kv
@@ -4249,7 +4249,7 @@ TEST(MetaServiceJobTest, ConcurrentCompactionTest) {
 
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "job5", "BE2", 0, 0,
-                         TabletCompactionJobPB::CUMULATIVE, res);
+                         TabletCompactionJobPB::CUMULATIVE, res, {5, 10});
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
 
     ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
