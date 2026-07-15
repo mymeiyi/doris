@@ -4180,15 +4180,15 @@ TEST(MetaServiceJobTest, ConcurrentCompactionTest) {
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "job4", "BE1", 0, 0,
-                         TabletCompactionJobPB::BASE, res, {0, 4});
+                         TabletCompactionJobPB::BASE, res, {2, 4});
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "job4", "BE1", 0, 0,
-                         TabletCompactionJobPB::BASE, res, {0, 4});
+                         TabletCompactionJobPB::BASE, res, {2, 4});
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK); // Same job id, return OK
     res.Clear();
     start_compaction_job(meta_service.get(), tablet_id, "job5", "BE1", 0, 0,
-                         TabletCompactionJobPB::BASE, res, {0, 4});
+                         TabletCompactionJobPB::BASE, res, {2, 4});
     ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_TABLET_BUSY);
 
     // check job kv
@@ -4308,7 +4308,8 @@ TEST(MetaServiceJobTest, ConcurrentCompactionTest) {
         meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
         ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
         ASSERT_TRUE(res.has_stats());
-        EXPECT_EQ(res.stats().cumulative_point(), 11);
+        // job4 [2, 4] is still running, so job5 [5, 10] cannot advance the cumulative point yet.
+        EXPECT_EQ(res.stats().cumulative_point(), 2);
         // [0-1][2][3][4][5-10][11]
         EXPECT_EQ(res.stats().num_rows(), 500);
         EXPECT_EQ(res.stats().num_rowsets(), 6);
@@ -4379,9 +4380,13 @@ TEST(MetaServiceJobTest, ConcurrentCompactionTest) {
     ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
     ASSERT_EQ(txn->get(job_key, &job_val), TxnErrorCode::TXN_OK);
     ASSERT_TRUE(job_pb.ParseFromString(job_val));
-    ASSERT_EQ(job_pb.compaction_size(), 1);
+    ASSERT_EQ(job_pb.compaction_size(), 2);
     ASSERT_EQ(job_pb.compaction(0).id(), "job4");
     ASSERT_EQ(job_pb.compaction(0).initiator(), "BE1");
+    ASSERT_EQ(job_pb.compaction(1).type(), TabletCompactionJobPB::PENDING_CUMULATIVE_POINT);
+    ASSERT_EQ(job_pb.compaction(1).input_versions(0), 5);
+    ASSERT_EQ(job_pb.compaction(1).input_versions(1), 10);
+    ASSERT_EQ(job_pb.compaction(1).output_cumulative_point(), 11);
 
     // BE1 commit job4
     {
@@ -4422,7 +4427,8 @@ TEST(MetaServiceJobTest, ConcurrentCompactionTest) {
         meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
         ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
         ASSERT_TRUE(res.has_stats());
-        EXPECT_EQ(res.stats().cumulative_point(), 11);
+        // BASE does not advance the cumulative point, so the pending marker remains.
+        EXPECT_EQ(res.stats().cumulative_point(), 2);
         // [0-1][2-4][5-10][11]
         EXPECT_EQ(res.stats().num_rows(), 300);
         EXPECT_EQ(res.stats().num_rowsets(), 4);
@@ -4490,7 +4496,8 @@ TEST(MetaServiceJobTest, ConcurrentCompactionTest) {
     ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
     ASSERT_EQ(txn->get(job_key, &job_val), TxnErrorCode::TXN_OK);
     ASSERT_TRUE(job_pb.ParseFromString(job_val));
-    ASSERT_EQ(job_pb.compaction_size(), 0);
+    ASSERT_EQ(job_pb.compaction_size(), 1);
+    ASSERT_EQ(job_pb.compaction(0).type(), TabletCompactionJobPB::PENDING_CUMULATIVE_POINT);
 }
 
 TEST(MetaServiceJobTest, ParallelCumuCompactionTest) {
