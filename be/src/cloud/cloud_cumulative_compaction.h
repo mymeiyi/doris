@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <limits>
 #include <memory>
 #include <optional>
 
@@ -61,6 +62,7 @@ private:
     ReaderType compaction_type() const override { return ReaderType::READER_CUMULATIVE_COMPACTION; }
 
     int64_t _input_segments = 0;
+    int64_t _min_conflict_version = std::numeric_limits<int64_t>::max();
     int64_t _max_conflict_version = 0;
     // Snapshot values when pick input rowsets
     int64_t _base_compaction_cnt = 0;
