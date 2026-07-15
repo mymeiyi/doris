@@ -4925,6 +4925,17 @@ TEST(MetaServiceJobTest, ParallelCumulativeCommitKeepsCumulativePointOrderedTest
     ASSERT_EQ(job_pb.compaction(1).input_versions(1), 7);
     ASSERT_EQ(job_pb.compaction(1).output_cumulative_point(), 8);
 
+    start_res.Clear();
+    start_compaction_job(meta_service.get(), tablet_id, "stale_overlap_cumu", "BE3", 0, 1,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {6, 9});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << start_res.status().msg();
+    ASSERT_EQ(start_res.version_in_compaction_size(), 4);
+    EXPECT_EQ(start_res.version_in_compaction(0), 2);
+    EXPECT_EQ(start_res.version_in_compaction(1), 4);
+    EXPECT_EQ(start_res.version_in_compaction(2), 5);
+    EXPECT_EQ(start_res.version_in_compaction(3), 7);
+
     auto low_res = commit_cumu("low_cumu", "BE1", 2, 4, 5);
     ASSERT_EQ(low_res.status().code(), MetaServiceCode::OK) << low_res.status().msg();
     ASSERT_TRUE(low_res.has_stats());
@@ -5063,7 +5074,7 @@ TEST(MetaServiceJobTest, OutOfOrderCumulativeCommitBlocksStaleBaseStartTest) {
     ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
 }
 
-TEST(MetaServiceJobTest, PendingCumulativePointMarkerDoesNotBlockSerialCompactionTest) {
+TEST(MetaServiceJobTest, PendingCumulativePointMarkerUsesRangeWhenParallelDisabledTest) {
     auto meta_service = get_meta_service();
 
     auto sp = SyncPoint::get_instance();
@@ -5125,10 +5136,18 @@ TEST(MetaServiceJobTest, PendingCumulativePointMarkerDoesNotBlockSerialCompactio
     };
 
     auto overlap_res = start_cumu_with_parallel_disabled("overlap_cumu", {6, 9});
-    ASSERT_EQ(overlap_res.status().code(), MetaServiceCode::OK) << overlap_res.status().msg();
+    ASSERT_EQ(overlap_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << overlap_res.status().msg();
+    ASSERT_EQ(overlap_res.version_in_compaction_size(), 2);
+    EXPECT_EQ(overlap_res.version_in_compaction(0), 5);
+    EXPECT_EQ(overlap_res.version_in_compaction(1), 7);
+
+    auto non_overlap_res = start_cumu_with_parallel_disabled("non_overlap_cumu", {2, 4});
+    ASSERT_EQ(non_overlap_res.status().code(), MetaServiceCode::OK)
+            << non_overlap_res.status().msg();
 }
 
-TEST(MetaServiceJobTest, PendingCumulativePointMarkerDoesNotBlockParallelCompactionTest) {
+TEST(MetaServiceJobTest, CumulativeCoveringPendingMarkerCanStartTest) {
     auto meta_service = get_meta_service();
 
     auto sp = SyncPoint::get_instance();
@@ -5170,6 +5189,12 @@ TEST(MetaServiceJobTest, PendingCumulativePointMarkerDoesNotBlockParallelCompact
     StartTabletJobResponse start_res;
     start_compaction_job(meta_service.get(), tablet_id, "partial_overlap_cumu", "BE1", 0, 0,
                          TabletCompactionJobPB::CUMULATIVE, start_res, {6, 8});
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::JOB_TABLET_BUSY)
+            << start_res.status().msg();
+
+    start_res.Clear();
+    start_compaction_job(meta_service.get(), tablet_id, "cover_pending_cumu", "BE1", 0, 0,
+                         TabletCompactionJobPB::CUMULATIVE, start_res, {5, 8});
     ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
 }
 

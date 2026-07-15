@@ -135,6 +135,31 @@ static inline bool is_pending_cumulative_point_marker(const TabletCompactionJobP
     return compaction.type() == TabletCompactionJobPB::PENDING_CUMULATIVE_POINT;
 }
 
+static bool pending_cumulative_point_marker_conflicts(
+        const TabletCompactionJobPB& marker, const TabletCompactionJobPB& compaction,
+        int64_t cumulative_point) {
+    DCHECK(is_pending_cumulative_point_marker(marker)) << proto_to_json(marker);
+    DCHECK_EQ(marker.input_versions_size(), 2) << proto_to_json(marker);
+    if (compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) {
+        return false;
+    }
+    if (compaction.input_versions_size() != 2) {
+        return true;
+    }
+    DCHECK_LE(compaction.input_versions(0), compaction.input_versions(1))
+            << proto_to_json(compaction);
+    if (compaction.input_versions(0) > marker.input_versions(1) ||
+        compaction.input_versions(1) < marker.input_versions(0)) {
+        return false;
+    }
+    if (compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
+        compaction.input_versions(0) <= marker.input_versions(0) &&
+        compaction.input_versions(1) >= marker.input_versions(1)) {
+        return false;
+    }
+    return compaction.input_versions(0) > cumulative_point;
+}
+
 static TabletCompactionJobPB build_pending_cumulative_point_marker(
         const TabletCompactionJobPB& compaction) {
     DCHECK_EQ(compaction.input_versions_size(), 2) << proto_to_json(compaction);
@@ -468,8 +493,6 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
             return a.input_versions(0) > b.input_versions(1) ||
                    a.input_versions(1) < b.input_versions(0);
         };
-        // Pending cumulative-point markers represent committed jobs. Stale BE inputs are rejected
-        // by the compaction count check above, so markers do not participate in start conflicts.
         if (compaction.type() == TabletCompactionJobPB::FULL) {
             // Full compaction is generally used for data correctness repair
             // for MOW table, so priority should be given to performing full
@@ -486,7 +509,19 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
             // CUMULATIVE, and EMPTY_CUMULATIVE. Without a comparable range, MS cannot prove
             // that these compactions do not overlap.
             for (auto& c : compactions) {
-                if (is_pending_cumulative_point_marker(c)) continue;
+                if (is_pending_cumulative_point_marker(c)) {
+                    if (!pending_cumulative_point_marker_conflicts(
+                                c, compaction, stats.cumulative_point())) {
+                        continue;
+                    }
+                    msg = fmt::format(
+                            "compaction has already started, tablet_id={} request_job={} job={}",
+                            tablet_id, proto_to_json(compaction), proto_to_json(c));
+                    code = MetaServiceCode::JOB_TABLET_BUSY;
+                    response->add_version_in_compaction(c.input_versions(0));
+                    response->add_version_in_compaction(c.input_versions(1));
+                    return;
+                }
                 if (!may_conflict_by_type(c.type(), compaction.type())) continue;
                 if (c.id() == compaction.id()) return; // Same job, return OK to keep idempotency
                 msg = fmt::format(
@@ -507,7 +542,25 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                 // advanced. Now we treat BASE, CUMULATIVE, and EMPTY_CUMULATIVE as potentially
                 // conflicting and rely on the input-version-range check below to make the final
                 // decision.
-                if (is_pending_cumulative_point_marker(c)) continue;
+                if (is_pending_cumulative_point_marker(c)) {
+                    if (!pending_cumulative_point_marker_conflicts(
+                                c, compaction, stats.cumulative_point())) {
+                        continue;
+                    }
+                    msg = fmt::format(
+                            "compaction has already started, tablet_id={} request_job={} job={}",
+                            tablet_id, proto_to_json(compaction), proto_to_json(c));
+                    code = MetaServiceCode::JOB_TABLET_BUSY;
+                    for (auto& c : compactions) {
+                        if (c.input_versions_size() != 2) continue;
+                        if (is_pending_cumulative_point_marker(c) ||
+                            may_conflict_by_type(c.type(), compaction.type())) {
+                            response->add_version_in_compaction(c.input_versions(0));
+                            response->add_version_in_compaction(c.input_versions(1));
+                        }
+                    }
+                    return;
+                }
                 if (!may_conflict_by_type(c.type(), compaction.type())) continue;
                 if (c.input_versions_size() > 0 && version_not_conflict(c, compaction)) continue;
                 if (c.id() == compaction.id()) return; // Same job, return OK to keep idempotency
@@ -525,9 +578,13 @@ void start_compaction_job(MetaServiceCode& code, std::string& msg, std::stringst
                 //
                 // An in-flight EMPTY_CUMULATIVE (or any other checked type without a concrete
                 // [v_lo, v_hi]) carries no usable range; surfacing fabricated zeros would
-                // mislead BE retry.
+                // mislead BE retry. Pending cumulative-point markers do carry a committed rowset
+                // range, so surface them as well to keep stale BE retries away from that range.
                 for (auto& c : compactions) {
-                    if (!may_conflict_by_type(c.type(), compaction.type())) continue;
+                    if (!is_pending_cumulative_point_marker(c) &&
+                        !may_conflict_by_type(c.type(), compaction.type())) {
+                        continue;
+                    }
                     if (c.input_versions_size() != 2) continue;
                     response->add_version_in_compaction(c.input_versions(0));
                     response->add_version_in_compaction(c.input_versions(1));
