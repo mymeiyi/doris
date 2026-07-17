@@ -50,6 +50,18 @@ CloudCumulativeCompaction::CloudCumulativeCompaction(CloudStorageEngine& engine,
 
 CloudCumulativeCompaction::~CloudCumulativeCompaction() = default;
 
+int64_t CloudCumulativeCompaction::_refresh_conflict_versions() {
+    std::vector<std::shared_ptr<CloudCumulativeCompaction>> cumu_compactions;
+    _engine.get_cumu_compaction(_tablet->tablet_id(), cumu_compactions);
+    for (const auto& cumu : cumu_compactions) {
+        _min_conflict_version =
+                std::min(_min_conflict_version, cumu->_input_rowsets.front()->start_version());
+        _max_conflict_version =
+                std::max(_max_conflict_version, cumu->_input_rowsets.back()->end_version());
+    }
+    return _max_conflict_version;
+}
+
 Status CloudCumulativeCompaction::prepare_compact() {
     DBUG_EXECUTE_IF("CloudCumulativeCompaction.prepare_compact.sleep", { sleep(5); })
     Status st;
@@ -65,14 +77,7 @@ Status CloudCumulativeCompaction::prepare_compact() {
         return st;
     }
 
-    std::vector<std::shared_ptr<CloudCumulativeCompaction>> cumu_compactions;
-    _engine.get_cumu_compaction(_tablet->tablet_id(), cumu_compactions);
-    for (auto& cumu : cumu_compactions) {
-        _min_conflict_version =
-                std::min(_min_conflict_version, cumu->_input_rowsets.front()->start_version());
-        _max_conflict_version =
-                std::max(_max_conflict_version, cumu->_input_rowsets.back()->end_version());
-    }
+    _refresh_conflict_versions();
 
     bool need_sync_tablet = true;
     {
@@ -247,6 +252,8 @@ Status CloudCumulativeCompaction::execute_compact() {
 
 Status CloudCumulativeCompaction::modify_rowsets() {
     // calculate new cumulative point
+    int64_t prepare_max_conflict_version = _max_conflict_version;
+    int64_t max_conflict_version = _refresh_conflict_versions();
     int64_t input_cumulative_point;
     std::vector<RowsetSharedPtr> preceding_rowsets;
     std::vector<RowsetSharedPtr> following_conflict_rowsets;
@@ -254,12 +261,12 @@ Status CloudCumulativeCompaction::modify_rowsets() {
         std::shared_lock rlock(_tablet->get_header_lock());
         input_cumulative_point = cloud_tablet()->cumulative_layer_point();
         if (input_cumulative_point < _output_rowset->start_version() ||
-            _max_conflict_version > _output_rowset->end_version()) {
+            max_conflict_version > _output_rowset->end_version()) {
             cloud_tablet()->traverse_rowsets_unlocked(
                     [&preceding_rowsets, &following_conflict_rowsets, input_cumulative_point,
                      output_start_version = _output_rowset->start_version(),
                      output_end_version = _output_rowset->end_version(),
-                     max_conflict_version = _max_conflict_version](const RowsetSharedPtr& rowset) {
+                     max_conflict_version](const RowsetSharedPtr& rowset) {
                         if (rowset->start_version() >= input_cumulative_point &&
                             rowset->end_version() < output_start_version) {
                             preceding_rowsets.push_back(rowset);
@@ -289,7 +296,8 @@ Status CloudCumulativeCompaction::modify_rowsets() {
             .tag("output_rowset_end_version", _output_rowset->end_version())
             .tag("preceding_rowsets", preceding_rowsets.size())
             .tag("following_conflict_rowsets", following_conflict_rowsets.size())
-            .tag("max_conflict_version", _max_conflict_version);
+            .tag("prepare_max_conflict_version", prepare_max_conflict_version)
+            .tag("max_conflict_version", max_conflict_version);
     // commit compaction job
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();

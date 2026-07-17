@@ -257,6 +257,8 @@ public:
     }
 
     const std::vector<RowsetSharedPtr>& input_rowsets() const { return _input_rowsets; }
+
+    int64_t refresh_max_conflict_version() { return _refresh_conflict_versions(); }
 };
 
 static TabletMetaSharedPtr create_cloud_compaction_test_tablet_meta(int64_t tablet_id) {
@@ -357,6 +359,23 @@ TEST_F(CloudCompactionTest, cumulative_pick_uses_local_conflict_window) {
         EXPECT_EQ(119, compaction.input_rowsets().back()->end_version());
         _engine._submitted_cumu_compactions.clear();
     }
+}
+
+TEST_F(CloudCompactionTest, cumulative_refreshes_local_conflict_window) {
+    auto tablet_meta = create_cloud_compaction_test_tablet_meta(10004);
+    auto tablet = create_cloud_tablet_with_rowsets(_engine, tablet_meta, 10, {10, 11, 12});
+    TestableCloudCumulativeCompaction compaction(_engine, tablet);
+
+    _engine._submitted_cumu_compactions[tablet->tablet_id()] = {
+            create_inflight_cumu_compaction(_engine, tablet, 10, 20)};
+    EXPECT_EQ(20, compaction.refresh_max_conflict_version());
+
+    _engine._submitted_cumu_compactions[tablet->tablet_id()].push_back(
+            create_inflight_cumu_compaction(_engine, tablet, 21, 30));
+    EXPECT_EQ(30, compaction.refresh_max_conflict_version());
+
+    _engine._submitted_cumu_compactions.clear();
+    EXPECT_EQ(30, compaction.refresh_max_conflict_version());
 }
 
 TEST_F(CloudCompactionTest, test_set_storage_resource_from_input_rowsets) {
