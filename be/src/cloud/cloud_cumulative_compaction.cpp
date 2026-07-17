@@ -18,6 +18,7 @@
 #include "cloud/cloud_cumulative_compaction.h"
 
 #include <gen_cpp/cloud.pb.h>
+#include <random>
 
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/cloud_tablet_mgr.h"
