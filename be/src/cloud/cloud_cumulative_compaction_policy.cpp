@@ -35,6 +35,36 @@
 
 namespace doris {
 
+int64_t CloudCumulativeCompactionPolicy::calculate_cumulative_point(
+        CloudTablet* tablet, const std::vector<RowsetSharedPtr>& preceding_rowsets,
+        const RowsetSharedPtr& output_rowset, Version& last_delete_version,
+        int64_t input_cumulative_point) {
+    if (input_cumulative_point > output_rowset->start_version()) {
+        DORIS_CHECK_GT(input_cumulative_point, output_rowset->end_version());
+        return input_cumulative_point;
+    }
+
+    int64_t cumulative_point = input_cumulative_point;
+    Version no_delete_version {-1, -1};
+    for (const auto& rowset : preceding_rowsets) {
+        DORIS_CHECK_EQ(rowset->start_version(), cumulative_point);
+        if (!rowset->rowset_meta()->is_segments_overlapping()) {
+            return cumulative_point;
+        }
+        int64_t candidate_cumulative_point =
+                new_cumulative_point(tablet, rowset, no_delete_version, cumulative_point);
+        if (candidate_cumulative_point != rowset->end_version() + 1) {
+            return cumulative_point;
+        }
+        cumulative_point = candidate_cumulative_point;
+    }
+
+    DORIS_CHECK_EQ(cumulative_point, output_rowset->start_version());
+    return std::max(cumulative_point,
+                    new_cumulative_point(tablet, output_rowset, last_delete_version,
+                                         cumulative_point));
+}
+
 CloudSizeBasedCumulativeCompactionPolicy::CloudSizeBasedCumulativeCompactionPolicy(
         int64_t promotion_size, double promotion_ratio, int64_t promotion_min_size,
         int64_t compaction_min_size)

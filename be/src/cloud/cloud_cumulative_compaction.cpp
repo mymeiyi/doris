@@ -247,12 +247,29 @@ Status CloudCumulativeCompaction::execute_compact() {
 
 Status CloudCumulativeCompaction::modify_rowsets() {
     // calculate new cumulative point
-    int64_t input_cumulative_point = cloud_tablet()->cumulative_layer_point();
+    int64_t input_cumulative_point;
+    std::vector<RowsetSharedPtr> preceding_rowsets;
+    {
+        std::shared_lock rlock(_tablet->get_header_lock());
+        input_cumulative_point = cloud_tablet()->cumulative_layer_point();
+        if (input_cumulative_point < _output_rowset->start_version()) {
+            cloud_tablet()->traverse_rowsets_unlocked(
+                    [&preceding_rowsets, input_cumulative_point,
+                     output_start_version = _output_rowset->start_version()](
+                            const RowsetSharedPtr& rowset) {
+                        if (rowset->start_version() >= input_cumulative_point &&
+                            rowset->end_version() < output_start_version) {
+                            preceding_rowsets.push_back(rowset);
+                        }
+                    });
+        }
+    }
+    std::sort(preceding_rowsets.begin(), preceding_rowsets.end(), Rowset::comparator);
     auto compaction_policy = cloud_tablet()->tablet_meta()->compaction_policy();
     int64_t new_cumulative_point =
             _engine.cumu_compaction_policy(compaction_policy)
-                    ->new_cumulative_point(cloud_tablet(), _output_rowset, _last_delete_version,
-                                           input_cumulative_point);
+                    ->calculate_cumulative_point(cloud_tablet(), preceding_rowsets, _output_rowset,
+                                                 _last_delete_version, input_cumulative_point);
     // commit compaction job
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();
