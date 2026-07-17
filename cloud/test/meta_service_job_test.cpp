@@ -707,6 +707,7 @@ TEST(MetaServiceJobTest, ProcessCompactionArguments) {
 
     // Prepare job kv
     recorded_compaction->set_expiration(::time(nullptr) + 10);
+    recorded_compaction->set_lease(::time(nullptr) + 3);
     job_val = recorded_job.SerializeAsString();
     ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
     txn->put(job_key, job_val);
@@ -722,7 +723,12 @@ TEST(MetaServiceJobTest, ProcessCompactionArguments) {
     ASSERT_EQ(res.status().code(), MetaServiceCode::INVALID_ARGUMENT) << res.status().msg();
     EXPECT_NE(res.status().msg().find("invalid lease"), std::string::npos) << res.status().msg();
 
-    compaction->set_lease(::time(nullptr) + 5);
+    compaction->set_lease(recorded_compaction->lease() - 1);
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::INVALID_ARGUMENT) << res.status().msg();
+    EXPECT_NE(res.status().msg().find("invalid lease"), std::string::npos) << res.status().msg();
+
+    compaction->set_lease(recorded_compaction->lease() + 1);
     meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << res.status().msg();
 
@@ -1230,6 +1236,283 @@ TEST(MetaServiceJobTest, CompactionJobTest) {
     ASSERT_NO_FATAL_FAILURE(test_start_compaction_job(1, 2, 3, 7, TabletCompactionJobPB::BASE));
     ASSERT_NO_FATAL_FAILURE(test_abort_compaction_job(1, 2, 3, 7));
 }
+
+// GoogleTest assertion macros expand to nested control flow and inflate this metric for
+// branch-coverage tests.
+// NOLINTBEGIN(readability-function-cognitive-complexity)
+TEST(MetaServiceJobTest, FinishCompactionValidationBranches) {
+    auto meta_service = get_meta_service();
+    MOCK_GET_INSTANCE_ID(instance_id);
+
+    constexpr int64_t table_id = 20001;
+    constexpr int64_t index_id = 20002;
+    constexpr int64_t partition_id = 20003;
+    constexpr int64_t tablet_id = 20004;
+    create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false);
+
+    StartTabletJobResponse start_res;
+    start_compaction_job(meta_service.get(), tablet_id, "validation_job", "BE1", 0, 0,
+                         TabletCompactionJobPB::BASE, start_res);
+    ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+
+    FinishTabletJobRequest req;
+    req.set_action(FinishTabletJobRequest::COMMIT);
+    req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+    auto* compaction = req.mutable_job()->add_compaction();
+    compaction->set_id("validation_job");
+    compaction->set_initiator("BE1");
+    compaction->set_type(TabletCompactionJobPB::BASE);
+    compaction->set_num_input_rowsets(0);
+
+    brpc::Controller cntl;
+    FinishTabletJobResponse res;
+    auto expect_invalid_shape = [&](int input_versions, int output_versions,
+                                    int output_rowset_ids) {
+        compaction->clear_input_versions();
+        compaction->clear_output_versions();
+        compaction->clear_output_rowset_ids();
+        for (int i = 0; i < input_versions; ++i) {
+            compaction->add_input_versions(10 + i);
+        }
+        for (int i = 0; i < output_versions; ++i) {
+            compaction->add_output_versions(11 + i);
+        }
+        for (int i = 0; i < output_rowset_ids; ++i) {
+            compaction->add_output_rowset_ids(fmt::format("output_{}", i));
+        }
+        res.Clear();
+        meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::INVALID_ARGUMENT) << res.status().msg();
+        EXPECT_NE(res.status().msg().find("invalid input or output versions"), std::string::npos)
+                << res.status().msg();
+    };
+
+    // Exercise every operand of the input/output shape validation independently.
+    expect_invalid_shape(1, 1, 1);
+    expect_invalid_shape(2, 0, 1);
+    expect_invalid_shape(2, 1, 0);
+
+    compaction->clear_input_versions();
+    compaction->add_input_versions(10);
+    compaction->add_input_versions(11);
+    compaction->clear_output_versions();
+    compaction->add_output_versions(11);
+    compaction->clear_output_rowset_ids();
+    compaction->add_output_rowset_ids("output");
+
+    auto malformed_rowset_key = meta_rowset_key({instance_id, tablet_id, 10});
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    txn->put(malformed_rowset_key, std::string(1, '\xff'));
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::PROTOBUF_PARSE_ERR) << res.status().msg();
+
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    txn->remove(malformed_rowset_key);
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+    compaction->clear_txn_id();
+    compaction->add_txn_id(70001);
+    compaction->add_txn_id(70002);
+    res.Clear();
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::INVALID_ARGUMENT) << res.status().msg();
+    EXPECT_NE(res.status().msg().find("invalid txn_id"), std::string::npos) << res.status().msg();
+
+    compaction->clear_txn_id();
+    compaction->add_txn_id(0);
+    res.Clear();
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::INVALID_ARGUMENT) << res.status().msg();
+    EXPECT_NE(res.status().msg().find("invalid txn_id or rowset_id"), std::string::npos)
+            << res.status().msg();
+
+    compaction->set_txn_id(0, 70001);
+    compaction->set_output_rowset_ids(0, "");
+    res.Clear();
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::INVALID_ARGUMENT) << res.status().msg();
+    EXPECT_NE(res.status().msg().find("invalid txn_id or rowset_id"), std::string::npos)
+            << res.status().msg();
+
+    compaction->set_output_rowset_ids(0, "output");
+    auto tmp_rowset_key = meta_rowset_tmp_key({instance_id, 70001, tablet_id});
+    doris::RowsetMetaCloudPB tmp_rowset;
+    tmp_rowset.set_rowset_id(0);
+    tmp_rowset.set_rowset_id_v2("output");
+    tmp_rowset.set_tablet_id(tablet_id);
+    tmp_rowset.set_txn_id(70001);
+    tmp_rowset.set_is_recycled(true);
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    txn->put(tmp_rowset_key, tmp_rowset.SerializeAsString());
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+    res.Clear();
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::TXN_ALREADY_ABORTED) << res.status().msg();
+
+    // A hole compaction intentionally reports zero input rowsets and must still be committed.
+    tmp_rowset.set_is_recycled(false);
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    txn->put(tmp_rowset_key, tmp_rowset.SerializeAsString());
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+    res.Clear();
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << res.status().msg();
+    ASSERT_TRUE(res.has_stats());
+    EXPECT_EQ(res.stats().base_compaction_cnt(), 1);
+
+    auto job_key = job_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
+    std::string job_val;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    ASSERT_EQ(txn->get(job_key, &job_val), TxnErrorCode::TXN_OK);
+    TabletJobInfoPB job;
+    ASSERT_TRUE(job.ParseFromString(job_val));
+    EXPECT_TRUE(job.compaction().empty());
+}
+
+TEST(MetaServiceJobTest, FinishFullCompactionStatsBranches) {
+    auto meta_service = get_meta_service();
+    MOCK_GET_INSTANCE_ID(instance_id);
+
+    constexpr int64_t table_id = 21001;
+    constexpr int64_t index_id = 21002;
+    constexpr int64_t partition_id = 21003;
+    constexpr int64_t tablet_id = 21004;
+    create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false);
+
+    auto commit_compaction = [&](TabletCompactionJobPB::CompactionType type,
+                                 const std::string& job_id, int64_t txn_id,
+                                 int64_t output_cumulative_point, int output_rows,
+                                 int expected_base_cnt, int expected_cumu_cnt,
+                                 int expected_full_cnt, int64_t expected_cumulative_point) {
+        TabletStatsPB before;
+        get_tablet_stats(meta_service.get(), tablet_id, before);
+
+        StartTabletJobResponse start_res;
+        start_compaction_job(meta_service.get(), tablet_id, job_id, "BE1",
+                             before.base_compaction_cnt(), before.cumulative_compaction_cnt(), type,
+                             start_res, {0, 1});
+        ASSERT_EQ(start_res.status().code(), MetaServiceCode::OK) << start_res.status().msg();
+
+        auto output_rowset = create_rowset(tablet_id, 0, 1, output_rows);
+        output_rowset.set_txn_id(txn_id);
+        CreateRowsetResponse rowset_res;
+        prepare_rowset(meta_service.get(), output_rowset, rowset_res, txn_id);
+        ASSERT_EQ(rowset_res.status().code(), MetaServiceCode::OK) << rowset_res.status().msg();
+        commit_rowset(meta_service.get(), output_rowset, rowset_res, txn_id);
+        ASSERT_EQ(rowset_res.status().code(), MetaServiceCode::OK) << rowset_res.status().msg();
+
+        FinishTabletJobRequest req;
+        req.set_action(FinishTabletJobRequest::COMMIT);
+        req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+        auto* compaction = req.mutable_job()->add_compaction();
+        compaction->set_id(job_id);
+        compaction->set_initiator("BE1");
+        compaction->set_type(type);
+        compaction->add_input_versions(0);
+        compaction->add_input_versions(1);
+        compaction->add_output_versions(1);
+        compaction->add_output_rowset_ids(output_rowset.rowset_id_v2());
+        compaction->add_txn_id(txn_id);
+        compaction->set_output_cumulative_point(output_cumulative_point);
+        compaction->set_num_input_rows(before.num_rows());
+        compaction->set_num_input_rowsets(before.num_rowsets());
+        compaction->set_num_input_segments(before.num_segments());
+        compaction->set_size_input_rowsets(before.data_size());
+        compaction->set_index_size_input_rowsets(before.index_size());
+        compaction->set_segment_size_input_rowsets(before.segment_size());
+        compaction->set_num_output_rows(output_rowset.num_rows());
+        compaction->set_num_output_rowsets(1);
+        compaction->set_num_output_segments(output_rowset.num_segments());
+        compaction->set_size_output_rowsets(output_rowset.total_disk_size());
+        compaction->set_index_size_output_rowsets(output_rowset.index_disk_size());
+        compaction->set_segment_size_output_rowsets(output_rowset.data_disk_size());
+
+        brpc::Controller cntl;
+        FinishTabletJobResponse res;
+        meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << res.status().msg();
+        ASSERT_TRUE(res.has_stats());
+        EXPECT_EQ(res.stats().base_compaction_cnt(), expected_base_cnt);
+        EXPECT_EQ(res.stats().cumulative_compaction_cnt(), expected_cumu_cnt);
+        EXPECT_EQ(res.stats().full_compaction_cnt(), expected_full_cnt);
+        EXPECT_EQ(res.stats().cumulative_point(), expected_cumulative_point);
+        EXPECT_EQ(res.stats().num_rows(), output_rowset.num_rows());
+        EXPECT_EQ(res.stats().data_size(), output_rowset.total_disk_size());
+        EXPECT_EQ(res.stats().num_rowsets(), 1);
+        EXPECT_EQ(res.stats().num_segments(), output_rowset.num_segments());
+        EXPECT_EQ(res.stats().index_size(), output_rowset.index_disk_size());
+        EXPECT_EQ(res.stats().segment_size(), output_rowset.data_disk_size());
+        if (type == TabletCompactionJobPB::FULL) {
+            EXPECT_GT(res.stats().last_full_compaction_time_ms(), 0);
+        } else {
+            EXPECT_GT(res.stats().last_cumu_compaction_time_ms(), 0);
+        }
+
+        TabletStatsPB persisted;
+        get_tablet_stats(meta_service.get(), tablet_id, persisted);
+        EXPECT_EQ(persisted.SerializeAsString(), res.stats().SerializeAsString());
+    };
+
+    // Cover FULL's first counter initialization and cumulative point advance.
+    commit_compaction(TabletCompactionJobPB::FULL, "full_job_1", 71001, 10, 100, 1, 0, 1, 10);
+    // Cover FULL's existing counter increment and cumulative point non-regression branch.
+    commit_compaction(TabletCompactionJobPB::FULL, "full_job_2", 71002, 5, 80, 2, 0, 2, 10);
+    // CUMULATIVE has an independent non-regression condition and must keep the newer point too.
+    commit_compaction(TabletCompactionJobPB::CUMULATIVE, "cumu_job", 71003, 8, 70, 2, 1, 2, 10);
+}
+
+TEST(MetaServiceJobTest, FinishCompactionAbortsOnAlterVersionMismatch) {
+    auto meta_service = get_meta_service();
+    MOCK_GET_INSTANCE_ID(instance_id);
+
+    constexpr int64_t table_id = 22001;
+    constexpr int64_t index_id = 22002;
+    constexpr int64_t partition_id = 22003;
+    constexpr int64_t tablet_id = 22004;
+    constexpr int64_t new_tablet_id = 22005;
+    create_tablet(meta_service.get(), table_id, index_id, partition_id, tablet_id, false);
+    create_tablet(meta_service.get(), table_id, index_id, partition_id, new_tablet_id, false, true);
+
+    StartTabletJobResponse schema_change_res;
+    start_schema_change_job(meta_service.get(), table_id, index_id, partition_id, tablet_id,
+                            new_tablet_id, "schema_change_job", "BE1", schema_change_res, 8);
+
+    StartTabletJobResponse compaction_res;
+    start_compaction_job(meta_service.get(), tablet_id, "base_job", "BE1", 0, 0,
+                         TabletCompactionJobPB::BASE, compaction_res, {0, 7});
+    ASSERT_EQ(compaction_res.status().code(), MetaServiceCode::OK) << compaction_res.status().msg();
+
+    FinishTabletJobRequest req;
+    req.set_action(FinishTabletJobRequest::COMMIT);
+    req.mutable_job()->mutable_idx()->set_tablet_id(tablet_id);
+    auto* compaction = req.mutable_job()->add_compaction();
+    compaction->set_id("base_job");
+    compaction->set_initiator("BE1");
+    compaction->set_type(TabletCompactionJobPB::BASE);
+    compaction->add_input_versions(0);
+    compaction->add_input_versions(10);
+
+    brpc::Controller cntl;
+    FinishTabletJobResponse res;
+    meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
+    ASSERT_EQ(res.status().code(), MetaServiceCode::JOB_CHECK_ALTER_VERSION) << res.status().msg();
+    EXPECT_EQ(res.alter_version(), 8);
+
+    auto job_key = job_tablet_key({instance_id, table_id, index_id, partition_id, tablet_id});
+    std::unique_ptr<Transaction> txn;
+    std::string job_val;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    ASSERT_EQ(txn->get(job_key, &job_val), TxnErrorCode::TXN_OK);
+    TabletJobInfoPB job;
+    ASSERT_TRUE(job.ParseFromString(job_val));
+    EXPECT_TRUE(job.compaction().empty());
+    ASSERT_TRUE(job.has_schema_change());
+    EXPECT_EQ(job.schema_change().alter_version(), 8);
+}
+
+// NOLINTEND(readability-function-cognitive-complexity)
 
 TEST(MetaServiceJobVersionedReadTest, CompactionJobTest) {
     auto meta_service = get_meta_service(false);
