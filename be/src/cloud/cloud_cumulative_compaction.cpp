@@ -249,27 +249,37 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     // calculate new cumulative point
     int64_t input_cumulative_point;
     std::vector<RowsetSharedPtr> preceding_rowsets;
+    std::vector<RowsetSharedPtr> following_conflict_rowsets;
     {
         std::shared_lock rlock(_tablet->get_header_lock());
         input_cumulative_point = cloud_tablet()->cumulative_layer_point();
-        if (input_cumulative_point < _output_rowset->start_version()) {
+        if (input_cumulative_point < _output_rowset->start_version() ||
+            _max_conflict_version > _output_rowset->end_version()) {
             cloud_tablet()->traverse_rowsets_unlocked(
-                    [&preceding_rowsets, input_cumulative_point,
-                     output_start_version = _output_rowset->start_version()](
-                            const RowsetSharedPtr& rowset) {
+                    [&preceding_rowsets, &following_conflict_rowsets, input_cumulative_point,
+                     output_start_version = _output_rowset->start_version(),
+                     output_end_version = _output_rowset->end_version(),
+                     max_conflict_version = _max_conflict_version](const RowsetSharedPtr& rowset) {
                         if (rowset->start_version() >= input_cumulative_point &&
                             rowset->end_version() < output_start_version) {
                             preceding_rowsets.push_back(rowset);
+                        } else if (rowset->start_version() >= input_cumulative_point &&
+                                   rowset->start_version() > output_end_version &&
+                                   rowset->end_version() <= max_conflict_version) {
+                            following_conflict_rowsets.push_back(rowset);
                         }
                     });
         }
     }
     std::sort(preceding_rowsets.begin(), preceding_rowsets.end(), Rowset::comparator);
+    std::sort(following_conflict_rowsets.begin(), following_conflict_rowsets.end(),
+              Rowset::comparator);
     auto compaction_policy = cloud_tablet()->tablet_meta()->compaction_policy();
     int64_t new_cumulative_point =
             _engine.cumu_compaction_policy(compaction_policy)
                     ->calculate_cumulative_point(cloud_tablet(), preceding_rowsets, _output_rowset,
-                                                 _last_delete_version, input_cumulative_point);
+                                                 following_conflict_rowsets, _last_delete_version,
+                                                 input_cumulative_point);
     LOG_INFO("calculate cumulative point for CloudCumulativeCompaction")
             .tag("job_id", _uuid)
             .tag("tablet_id", _tablet->tablet_id())
@@ -277,7 +287,9 @@ Status CloudCumulativeCompaction::modify_rowsets() {
             .tag("new_cumulative_point", new_cumulative_point)
             .tag("output_rowset_start_version", _output_rowset->start_version())
             .tag("output_rowset_end_version", _output_rowset->end_version())
-            .tag("preceding_rowsets", preceding_rowsets.size());
+            .tag("preceding_rowsets", preceding_rowsets.size())
+            .tag("following_conflict_rowsets", following_conflict_rowsets.size())
+            .tag("max_conflict_version", _max_conflict_version);
     // commit compaction job
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();

@@ -39,10 +39,13 @@ public:
     virtual ~CloudCumulativeCompactionPolicy() = default;
 
     // preceding_rowsets must be ordered and continuous from input_cumulative_point. Only calculate
-    // the output rowset when every preceding rowset can be promoted to the base layer.
+    // the output rowset when every preceding rowset can be promoted to the base layer. The
+    // following_rowsets are visible rowsets up to the highest compaction conflict seen when this
+    // compaction was prepared, and must be continuous after output_rowset.
     int64_t calculate_cumulative_point(CloudTablet* tablet,
                                        const std::vector<RowsetSharedPtr>& preceding_rowsets,
                                        const RowsetSharedPtr& output_rowset,
+                                       const std::vector<RowsetSharedPtr>& following_rowsets,
                                        Version& last_delete_version,
                                        int64_t input_cumulative_point);
 

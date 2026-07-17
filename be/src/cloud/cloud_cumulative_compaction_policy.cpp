@@ -37,32 +37,50 @@ namespace doris {
 
 int64_t CloudCumulativeCompactionPolicy::calculate_cumulative_point(
         CloudTablet* tablet, const std::vector<RowsetSharedPtr>& preceding_rowsets,
-        const RowsetSharedPtr& output_rowset, Version& last_delete_version,
+        const RowsetSharedPtr& output_rowset,
+        const std::vector<RowsetSharedPtr>& following_rowsets, Version& last_delete_version,
         int64_t input_cumulative_point) {
-    if (input_cumulative_point > output_rowset->start_version()) {
-        DORIS_CHECK_GT(input_cumulative_point, output_rowset->end_version());
-        return input_cumulative_point;
-    }
-
     int64_t cumulative_point = input_cumulative_point;
     Version no_delete_version {-1, -1};
-    for (const auto& rowset : preceding_rowsets) {
-        DORIS_CHECK_EQ(rowset->start_version(), cumulative_point);
-        if (!rowset->rowset_meta()->is_segments_overlapping()) {
-            return cumulative_point;
-        }
+    auto advance_cumulative_point = [&](const RowsetSharedPtr& rowset,
+                                        Version& delete_version) {
         int64_t candidate_cumulative_point =
-                new_cumulative_point(tablet, rowset, no_delete_version, cumulative_point);
+                new_cumulative_point(tablet, rowset, delete_version, cumulative_point);
         if (candidate_cumulative_point != rowset->end_version() + 1) {
-            return cumulative_point;
+            return false;
         }
         cumulative_point = candidate_cumulative_point;
+        return true;
+    };
+
+    if (cumulative_point > output_rowset->start_version()) {
+        DORIS_CHECK_GT(cumulative_point, output_rowset->end_version());
+    } else {
+        for (const auto& rowset : preceding_rowsets) {
+            DORIS_CHECK_EQ(rowset->start_version(), cumulative_point);
+            if (!rowset->rowset_meta()->is_segments_overlapping()) {
+                return cumulative_point;
+            }
+            if (!advance_cumulative_point(rowset, no_delete_version)) {
+                return cumulative_point;
+            }
+        }
+
+        DORIS_CHECK_EQ(cumulative_point, output_rowset->start_version());
+        if (!advance_cumulative_point(output_rowset, last_delete_version)) {
+            return cumulative_point;
+        }
     }
 
-    DORIS_CHECK_EQ(cumulative_point, output_rowset->start_version());
-    return std::max(cumulative_point,
-                    new_cumulative_point(tablet, output_rowset, last_delete_version,
-                                         cumulative_point));
+    for (const auto& rowset : following_rowsets) {
+        DORIS_CHECK_EQ(rowset->start_version(), cumulative_point);
+        // A completed parallel compaction output is NONOVERLAPPING, so it must be evaluated by the
+        // policy instead of applying the preceding-rowset overlap check.
+        if (!advance_cumulative_point(rowset, no_delete_version)) {
+            return cumulative_point;
+        }
+    }
+    return cumulative_point;
 }
 
 CloudSizeBasedCumulativeCompactionPolicy::CloudSizeBasedCumulativeCompactionPolicy(
