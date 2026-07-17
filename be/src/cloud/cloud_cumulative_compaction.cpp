@@ -270,6 +270,14 @@ Status CloudCumulativeCompaction::modify_rowsets() {
             _engine.cumu_compaction_policy(compaction_policy)
                     ->calculate_cumulative_point(cloud_tablet(), preceding_rowsets, _output_rowset,
                                                  _last_delete_version, input_cumulative_point);
+    LOG_INFO("calculate cumulative point for CloudCumulativeCompaction")
+            .tag("job_id", _uuid)
+            .tag("tablet_id", _tablet->tablet_id())
+            .tag("input_cumulative_point", input_cumulative_point)
+            .tag("new_cumulative_point", new_cumulative_point)
+            .tag("output_rowset_start_version", _output_rowset->start_version())
+            .tag("output_rowset_end_version", _output_rowset->end_version())
+            .tag("preceding_rowsets", preceding_rowsets.size());
     // commit compaction job
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();
