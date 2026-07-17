@@ -743,8 +743,11 @@ TEST(MetaServiceJobTest, ProcessCompactionArguments) {
             << res.status().msg();
 
     compaction->set_type(TabletCompactionJobPB::EMPTY_CUMULATIVE);
+    compaction->set_output_cumulative_point(0);
     meta_service->finish_tablet_job(&cntl, &req, &res, nullptr);
     ASSERT_EQ(res.status().code(), MetaServiceCode::OK) << res.status().msg();
+    ASSERT_TRUE(res.has_stats());
+    EXPECT_EQ(res.stats().cumulative_point(), 2);
 }
 
 TEST(MetaServiceJobTest, ProcessSchemaChangeArguments) {

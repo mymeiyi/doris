@@ -869,7 +869,10 @@ int compaction_update_tablet_stats(const TabletCompactionJobPB& compaction, Tabl
                                    MetaServiceCode& code, std::string& msg, int64_t now) {
     if (compaction.type() == TabletCompactionJobPB::EMPTY_CUMULATIVE) {
         stats->set_cumulative_compaction_cnt(stats->cumulative_compaction_cnt() + 1);
-        stats->set_cumulative_point(compaction.output_cumulative_point());
+        // An older empty cumulative job may finish after another compaction has advanced the point.
+        if (compaction.output_cumulative_point() > stats->cumulative_point()) {
+            stats->set_cumulative_point(compaction.output_cumulative_point());
+        }
         stats->set_last_cumu_compaction_time_ms(now * 1000);
     } else if (compaction.type() == TabletCompactionJobPB::CUMULATIVE) {
         // clang-format off
