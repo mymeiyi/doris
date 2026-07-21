@@ -34,6 +34,9 @@
 #include <tuple>
 #include <unordered_map>
 
+#include "cloud/cloud_cumulative_compaction.h"
+#include "cloud/cloud_storage_engine.h"
+#include "cloud/cloud_tablet.h"
 #include "common/status.h"
 #include "core/block/block.h"
 #include "core/block/column_with_type_and_name.h"
@@ -545,6 +548,113 @@ TEST_F(TestRowIdConversion, Basic) {
     RowLocation dst4;
     res = rowid_conversion.get(src4, &dst4);
     EXPECT_EQ(res, -1);
+}
+
+TEST_F(TestRowIdConversion, SingleRowsetGroupedCompactionRowIdConversionIsComplete) {
+    constexpr int64_t num_segments = 4;
+    constexpr int64_t rows_per_segment = 10;
+    constexpr int64_t segment_group_size = 2;
+
+    std::vector<std::vector<std::tuple<int64_t, int64_t>>> input_data;
+    for (int64_t segment_id = 0; segment_id < num_segments; ++segment_id) {
+        std::vector<std::tuple<int64_t, int64_t>> segment_data;
+        for (int64_t row_id = 0; row_id < rows_per_segment; ++row_id) {
+            int64_t key = segment_id * rows_per_segment + row_id;
+            segment_data.emplace_back(key, key + 1);
+        }
+        input_data.push_back(std::move(segment_data));
+    }
+
+    CloudStorageEngine cloud_engine(EngineOptions {});
+    for (bool is_vertical : {false, true}) {
+        SCOPED_TRACE(is_vertical ? "vertical merge" : "horizontal merge");
+
+        TabletSchemaSPtr tablet_schema = create_schema(UNIQUE_KEYS);
+        RowsetSharedPtr input_rowset =
+                create_rowset(tablet_schema, OVERLAPPING, input_data, 2);
+        ASSERT_TRUE(input_rowset != nullptr);
+
+        auto writer_context = create_rowset_writer_context(
+                tablet_schema, NONOVERLAPPING, rows_per_segment, input_rowset->version());
+        auto writer_result =
+                RowsetFactory::create_rowset_writer(*engine_ref, writer_context, is_vertical);
+        ASSERT_TRUE(writer_result.has_value()) << writer_result.error();
+
+        TabletSharedPtr local_tablet = create_tablet(*tablet_schema, true);
+        auto cloud_tablet = std::make_shared<CloudTablet>(
+                cloud_engine, std::make_shared<TabletMeta>(*local_tablet->tablet_meta()));
+        CloudCumulativeCompaction compaction(cloud_engine, cloud_tablet);
+        compaction._input_rowsets = {input_rowset};
+        compaction._cur_tablet_schema = tablet_schema;
+        compaction._output_rs_writer = std::move(writer_result).value();
+        compaction._is_vertical = is_vertical;
+        compaction._input_row_num = input_rowset->num_rows();
+        compaction._input_rowsets_data_size = input_rowset->data_disk_size();
+        compaction._stats.rowid_conversion = compaction._rowid_conversion.get();
+
+        Compaction::MergeInputRowsetsResult merge_result;
+        merge_result.is_segment_grouped = true;
+        merge_result.segment_group_size = segment_group_size;
+        ASSERT_TRUE(compaction.do_merge_input_rowsets({}, &merge_result).ok());
+        EXPECT_EQ(merge_result.output_segment_group_count, num_segments / segment_group_size);
+
+        RowsetSharedPtr output_rowset;
+        ASSERT_EQ(Status::OK(), compaction._output_rs_writer->build(output_rowset));
+        ASSERT_TRUE(output_rowset != nullptr);
+        EXPECT_EQ(compaction._stats.output_rows, input_rowset->num_rows());
+
+        RowsetReaderContext reader_context;
+        reader_context.tablet_schema = tablet_schema;
+        reader_context.need_ordered_result = false;
+        std::vector<uint32_t> return_columns = {0, 1};
+        reader_context.return_columns = &return_columns;
+        RowsetReaderSharedPtr output_reader;
+        create_and_init_rowset_reader(output_rowset.get(), reader_context, &output_reader);
+
+        std::vector<std::tuple<int64_t, int64_t>> output_data;
+        Status read_status;
+        do {
+            Block output_block = tablet_schema->create_block(return_columns);
+            read_status = output_reader->next_batch(&output_block);
+            const auto& columns = output_block.get_columns_with_type_and_name();
+            ASSERT_EQ(columns.size(), return_columns.size());
+            for (size_t row_id = 0; row_id < output_block.rows(); ++row_id) {
+                output_data.emplace_back(columns[0].column->get_int(row_id),
+                                         columns[1].column->get_int(row_id));
+            }
+        } while (read_status.ok());
+        ASSERT_TRUE(read_status.is<END_OF_FILE>()) << read_status;
+        ASSERT_EQ(output_data.size(), input_rowset->num_rows());
+
+        auto beta_rowset = std::dynamic_pointer_cast<BetaRowset>(output_rowset);
+        ASSERT_TRUE(beta_rowset != nullptr);
+        std::vector<uint32_t> output_segment_num_rows;
+        OlapReaderStatistics reader_stats;
+        ASSERT_TRUE(beta_rowset
+                            ->get_segment_num_rows(&output_segment_num_rows, false, &reader_stats)
+                            .ok());
+
+        RowIdConversion& rowid_conversion = *compaction._stats.rowid_conversion;
+        EXPECT_EQ(rowid_conversion.get_src_segment_to_id_map().size(), num_segments);
+        for (int64_t segment_id = 0; segment_id < num_segments; ++segment_id) {
+            for (int64_t row_id = 0; row_id < rows_per_segment; ++row_id) {
+                RowLocation src(input_rowset->rowset_id(), segment_id, row_id);
+                RowLocation dst;
+                ASSERT_EQ(rowid_conversion.get(src, &dst), 0)
+                        << "segment_id=" << segment_id << ", row_id=" << row_id;
+                ASSERT_LT(dst.segment_id, output_segment_num_rows.size());
+                ASSERT_LT(dst.row_id, output_segment_num_rows[dst.segment_id]);
+
+                size_t output_row_id = dst.row_id;
+                for (uint32_t output_segment_id = 0; output_segment_id < dst.segment_id;
+                     ++output_segment_id) {
+                    output_row_id += output_segment_num_rows[output_segment_id];
+                }
+                ASSERT_LT(output_row_id, output_data.size());
+                EXPECT_EQ(output_data[output_row_id], input_data[segment_id][row_id]);
+            }
+        }
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -656,8 +656,6 @@ void CloudCumulativeCompaction::update_output_rowset_after_build(
     }
     if (result.output_segment_group_count > 1) {
         _output_rowset->rowset_meta()->set_segments_overlap(OVERLAPPING);
-        LOG(INFO) << "sout: set rowset_id=" << _output_rowset->rowset_meta()->rowset_id()
-                  << " segments overlap, output_groups=" << result.output_segment_group_count;
     }
 
     const auto& input_rowset = _input_rowsets.front();
