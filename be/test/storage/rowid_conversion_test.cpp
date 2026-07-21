@@ -636,6 +636,9 @@ TEST_F(TestRowIdConversion, SingleRowsetGroupedCompactionRowIdConversionIsComple
 
         RowIdConversion& rowid_conversion = *compaction._stats.rowid_conversion;
         EXPECT_EQ(rowid_conversion.get_src_segment_to_id_map().size(), num_segments);
+        EXPECT_EQ(rowid_conversion.get_rowid_conversion_map().size(), num_segments);
+        EXPECT_EQ(rowid_conversion.get_rowid_conversion_map().size(),
+                  rowid_conversion.get_src_segment_to_id_map().size());
         for (int64_t segment_id = 0; segment_id < num_segments; ++segment_id) {
             for (int64_t row_id = 0; row_id < rows_per_segment; ++row_id) {
                 RowLocation src(input_rowset->rowset_id(), segment_id, row_id);
