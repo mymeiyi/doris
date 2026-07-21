@@ -44,6 +44,7 @@ public:
             auto src_segment =
                     std::pair<RowsetId, uint32_t> {src_rowset_id, cast_set<uint32_t>(i)};
             auto iter = _segment_to_id_map.find(src_segment);
+            // Each segment-group reader initializes all source segments, so reuse existing maps.
             if (iter != _segment_to_id_map.end()) {
                 DORIS_CHECK_LT(iter->second, _segments_rowid_map.size());
                 DORIS_CHECK_EQ(_segments_rowid_map[iter->second].size(), num_rows[i]);
