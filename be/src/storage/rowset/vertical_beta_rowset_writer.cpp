@@ -205,6 +205,7 @@ template <class T>
     requires std::is_base_of_v<BaseBetaRowsetWriter, T>
 Status VerticalBetaRowsetWriter<T>::final_flush() {
     for (auto& segment_writer : _segment_writers) {
+        DCHECK(segment_writer);
         uint64_t segment_size = 0;
         //uint64_t footer_position = 0;
         segment_v2::SegmentIndexFileCacheInfo index_file_cache_info;
@@ -220,6 +221,8 @@ Status VerticalBetaRowsetWriter<T>::final_flush() {
         segment_writer.reset();
         _record_segment_index_file_cache_preload(segment_id, index_file_cache_info);
     }
+    _segment_writers.clear();
+    _cur_writer_idx = 0;
     return Status::OK();
 }
 
