@@ -522,13 +522,26 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     EXPECT_FALSE(cloud::should_use_single_rowset_grouped_compaction(
             {too_few_segments}, tablet_schema, CUMULATIVE_SIZE_BASED_POLICY));
 
-    RowsetSharedPtr no_key_columns = create_rowset(Version(5, 5), 4, true, 1024, 0);
+    RowsetSharedPtr grouped_candidate = create_rowset(Version(5, 5), 8, true, 1024);
+    ASSERT_TRUE(grouped_candidate != nullptr);
+    grouped_candidate->rowset_meta()->set_segments_overlap(NONOVERLAPPING_WITHIN_GROUP);
+    grouped_candidate->rowset_meta()->set_segment_group_sizes({2, 2, 2, 2});
+    EXPECT_TRUE(cloud::is_single_rowset_compaction_candidate(grouped_candidate));
+
+    RowsetSharedPtr grouped_with_too_few_groups = create_rowset(Version(6, 6), 8, true, 1024);
+    ASSERT_TRUE(grouped_with_too_few_groups != nullptr);
+    grouped_with_too_few_groups->rowset_meta()->set_segments_overlap(
+            NONOVERLAPPING_WITHIN_GROUP);
+    grouped_with_too_few_groups->rowset_meta()->set_segment_group_sizes({3, 3, 2});
+    EXPECT_FALSE(cloud::is_single_rowset_compaction_candidate(grouped_with_too_few_groups));
+
+    RowsetSharedPtr no_key_columns = create_rowset(Version(7, 7), 4, true, 1024, 0);
     ASSERT_TRUE(no_key_columns != nullptr);
     EXPECT_TRUE(cloud::is_single_rowset_compaction_candidate(no_key_columns));
     EXPECT_FALSE(cloud::should_use_single_rowset_grouped_compaction(
             {no_key_columns}, *no_key_columns->tablet_schema(), CUMULATIVE_SIZE_BASED_POLICY));
 
-    RowsetSharedPtr with_delete_predicate = create_rowset(Version(6, 6), 4, true, 1024);
+    RowsetSharedPtr with_delete_predicate = create_rowset(Version(8, 8), 4, true, 1024);
     ASSERT_TRUE(with_delete_predicate != nullptr);
     DeletePredicatePB delete_predicate;
     auto* in_predicate = delete_predicate.add_in_predicates();
@@ -539,7 +552,7 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     EXPECT_FALSE(cloud::should_use_single_rowset_grouped_compaction(
             {with_delete_predicate}, tablet_schema, CUMULATIVE_SIZE_BASED_POLICY));
 
-    RowsetSharedPtr another_candidate = create_rowset(Version(7, 7), 4, true, 1024);
+    RowsetSharedPtr another_candidate = create_rowset(Version(9, 9), 4, true, 1024);
     ASSERT_TRUE(another_candidate != nullptr);
     EXPECT_FALSE(cloud::should_use_single_rowset_grouped_compaction(
             {candidate, another_candidate}, tablet_schema, CUMULATIVE_SIZE_BASED_POLICY));

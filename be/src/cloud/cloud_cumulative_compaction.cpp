@@ -46,9 +46,13 @@ using namespace ErrorCode;
 namespace cloud {
 
 bool is_single_rowset_compaction_candidate(const RowsetSharedPtr& rowset) {
-    return !rowset->rowset_meta()->has_delete_predicate() &&
-           rowset->rowset_meta()->is_segments_overlapping() &&
-           rowset->num_segments() >= config::cloud_single_rowset_compaction_min_segments;
+    const auto& rowset_meta = rowset->rowset_meta();
+    const int64_t overlap_unit_count =
+            rowset_meta->segments_overlap() == NONOVERLAPPING_WITHIN_GROUP
+                    ? static_cast<int64_t>(rowset_meta->segment_group_sizes().size())
+                    : rowset->num_segments();
+    return !rowset_meta->has_delete_predicate() && rowset_meta->is_segments_overlapping() &&
+           overlap_unit_count >= config::cloud_single_rowset_compaction_min_segments;
 }
 
 bool should_use_single_rowset_grouped_compaction(const std::vector<RowsetSharedPtr>& input_rowsets,
