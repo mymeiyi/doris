@@ -73,6 +73,15 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                     "tablet=${tabletId}, timeoutMs=${timeoutMs}, last=${lastStatus}")
         }
 
+        def runCumulativeCompaction = { beHost, bePort, tabletId ->
+            def (code, out, err) = be_run_cumulative_compaction(beHost, bePort, tabletId)
+            logger.info("Run compaction: code=${code}, out=${out}, err=${err}")
+            assertEquals(0, code)
+            def compactJson = parseJson(out.trim())
+            assertEquals("success", compactJson.status.toLowerCase())
+            waitForCompaction(beHost, bePort, tabletId, compactionTimeoutMs)
+        }
+
         def readPointRows = { String tableName ->
             def pointResult = sql "SELECT k, v FROM ${tableName} WHERE k = 100 ORDER BY v"
             return pointResult.collect { row -> row.collect { column -> column.toString() } }
@@ -144,20 +153,16 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             def inputRowset = rowsetByVersion(before, 2)
             def inputInfo = parseRowsetInfo(inputRowset)
             assertEquals("OVERLAPPING", inputInfo.overlap)
-            assertTrue(inputInfo.segments >= 3, inputRowset)
+            assertTrue(inputInfo.segments > segmentGroupSize, inputRowset)
 
-            def (code, out, err) =
-                    be_run_cumulative_compaction(backend.Host, backend.HttpPort, tabletId)
-            logger.info("Run compaction: code=${code}, out=${out}, err=${err}")
-            assertEquals(0, code)
-            def compactJson = parseJson(out.trim())
-            assertEquals("success", compactJson.status.toLowerCase())
-            waitForCompaction(backend.Host, backend.HttpPort, tabletId, compactionTimeoutMs)
+            set_be_param("cloud_single_rowset_compaction_segment_group_size",
+                    segmentGroupSize.toString())
+            runCumulativeCompaction(backend.Host, backend.HttpPort, tabletId)
 
             def after = showTablet(tableName, backend.Host, backend.HttpPort, tabletId)
             def outputRowset = rowsetByVersion(after, 2)
             def outputInfo = parseRowsetInfo(outputRowset)
-            assertEquals("OVERLAPPING", outputInfo.overlap)
+            assertEquals("NONOVERLAPPING_WITHIN_GROUP", outputInfo.overlap)
             def expectedOutputSegments =
                     (inputInfo.segments + segmentGroupSize - 1).intdiv(segmentGroupSize)
             if (expectMultipleOutputSegmentsPerGroup) {
@@ -167,15 +172,30 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             }
             def countResult = sql "SELECT COUNT(*) FROM ${tableName}"
             assertEquals(expectedRows, countResult[0][0])
-            if (expectedPointRows != null) {
-                checkPointRows(tableName, expectedPointRows)
-            } else {
-                def pointRowsAfterCompaction = checkPointRows(tableName, null)
-                if (pointRowsAfterCompaction != pointRowsBeforeCompaction) {
-                    logger.warn("Point query result changed after single rowset grouped compaction" +
-                            ", table=${tableName}, before=${pointRowsBeforeCompaction}" +
-                            ", after=${pointRowsAfterCompaction}")
-                }
+            def pointRowsAfterCompaction = checkPointRows(tableName, expectedPointRows)
+            if (expectedPointRows == null && pointRowsAfterCompaction != pointRowsBeforeCompaction) {
+                logger.warn("Point query result changed after single rowset grouped compaction" +
+                        ", table=${tableName}, before=${pointRowsBeforeCompaction}" +
+                        ", after=${pointRowsAfterCompaction}")
+            }
+
+            // Compact the grouped rowset as one range. This exercises VerticalBlockReader's
+            // NONOVERLAPPING_WITHIN_GROUP iterator initialization and must produce a fully
+            // non-overlapping rowset.
+            set_be_param("cloud_single_rowset_compaction_segment_group_size",
+                    outputInfo.segments.toString())
+            runCumulativeCompaction(backend.Host, backend.HttpPort, tabletId)
+
+            def afterSecondCompaction =
+                    showTablet(tableName, backend.Host, backend.HttpPort, tabletId)
+            def finalRowset = rowsetByVersion(afterSecondCompaction, 2)
+            def finalInfo = parseRowsetInfo(finalRowset)
+            assertEquals("NONOVERLAPPING", finalInfo.overlap)
+            def finalCountResult = sql "SELECT COUNT(*) FROM ${tableName}"
+            assertEquals(expectedRows, finalCountResult[0][0])
+            def finalPointRows = checkPointRows(tableName, expectedPointRows)
+            if (expectedPointRows == null) {
+                assertEquals(pointRowsAfterCompaction, finalPointRows)
             }
         }
 
@@ -185,9 +205,6 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
 
             [2, 4].each { int segmentGroupSize ->
-                set_be_param("cloud_single_rowset_compaction_segment_group_size",
-                        segmentGroupSize.toString())
-
                 checkSingleRowsetGroupedCompaction(
                         "test_cloud_single_rowset_grouped_compaction_g${segmentGroupSize}_dup",
                         "DUPLICATE KEY", "v INT", "", segmentGroupSize, 8192, 8192 * 2,
