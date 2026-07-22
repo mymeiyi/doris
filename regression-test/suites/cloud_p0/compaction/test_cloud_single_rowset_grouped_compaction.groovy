@@ -235,6 +235,97 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                     "test_cloud_single_rowset_grouped_compact_multi_seg_dup",
                     "DUPLICATE KEY", "v INT", "", initialInputSegmentsPerGroup, 32768, 32768 * 2,
                     [["100", "100"], ["100", "101"]], true)
+
+            sql "DROP TABLE IF EXISTS test_cloud_grouped_compaction_schema_change"
+            sql """
+                CREATE TABLE test_cloud_grouped_compaction_schema_change (
+                    k INT,
+                    v INT
+                )
+                DUPLICATE KEY(k)
+                DISTRIBUTED BY HASH(k) BUCKETS 1
+                PROPERTIES (
+                    "replication_num" = "1",
+                    "disable_auto_compaction" = "true"
+                )
+            """
+
+            StringBuilder schemaChangeContent = new StringBuilder()
+            for (int i = 0; i < 2; i++) {
+                (1..8192).each {
+                    schemaChangeContent.append("${it},${it + i}\n")
+                }
+            }
+            streamLoad {
+                table "test_cloud_grouped_compaction_schema_change"
+                set "column_separator", ","
+                inputStream new ByteArrayInputStream(schemaChangeContent.toString().getBytes())
+                time 30000
+                check { result, exception, startTime, endTime ->
+                    if (exception != null) {
+                        throw exception
+                    }
+                    def json = parseJson(result)
+                    assertEquals("success", json.Status.toLowerCase())
+                    assertEquals(8192 * 2, json.NumberTotalRows)
+                    assertEquals(0, json.NumberFilteredRows)
+                }
+            }
+            sql "sync"
+
+            def schemaChangeTablets =
+                    sql_return_maparray "SHOW TABLETS FROM test_cloud_grouped_compaction_schema_change"
+            assertEquals(1, schemaChangeTablets.size())
+            def oldTabletId = schemaChangeTablets[0].TabletId
+            def oldBackendId = schemaChangeTablets[0].BackendId
+            def schemaChangeBackends = sql_return_maparray "SHOW BACKENDS"
+            def oldBackend = schemaChangeBackends.find { it.BackendId == oldBackendId }
+            assertNotNull(oldBackend)
+
+            set_be_param("cloud_single_rowset_compaction_segment_group_size",
+                    initialInputSegmentsPerGroup.toString())
+            runCumulativeCompaction(oldBackend.Host, oldBackend.HttpPort, oldTabletId)
+
+            def groupedTablet = showTablet("test_cloud_grouped_compaction_schema_change",
+                    oldBackend.Host, oldBackend.HttpPort, oldTabletId)
+            def groupedRowset = rowsetByVersion(groupedTablet, 2)
+            def groupedInfo = parseRowsetInfo(groupedRowset)
+            assertEquals("NONOVERLAPPING_WITHIN_GROUP", groupedInfo.overlap)
+
+            sql """
+                CREATE INDEX idx_v ON test_cloud_grouped_compaction_schema_change(v)
+                USING INVERTED
+            """
+            waitForSchemaChangeDone {
+                sql """
+                    SHOW ALTER TABLE COLUMN
+                    WHERE TableName='test_cloud_grouped_compaction_schema_change'
+                    ORDER BY CreateTime DESC LIMIT 1
+                """
+                time 90
+            }
+
+            schemaChangeTablets =
+                    sql_return_maparray "SHOW TABLETS FROM test_cloud_grouped_compaction_schema_change"
+            assertEquals(1, schemaChangeTablets.size())
+            def newTabletId = schemaChangeTablets[0].TabletId
+            assertNotEquals(oldTabletId, newTabletId)
+            def newBackendId = schemaChangeTablets[0].BackendId
+            schemaChangeBackends = sql_return_maparray "SHOW BACKENDS"
+            def newBackend = schemaChangeBackends.find { it.BackendId == newBackendId }
+            assertNotNull(newBackend)
+
+            def rewrittenTablet = showTablet("test_cloud_grouped_compaction_schema_change",
+                    newBackend.Host, newBackend.HttpPort, newTabletId)
+            def rewrittenRowset = rowsetByVersion(rewrittenTablet, 2)
+            def rewrittenInfo = parseRowsetInfo(rewrittenRowset)
+            assertEquals("OVERLAPPING", rewrittenInfo.overlap)
+            def rewrittenCount =
+                    sql "SELECT COUNT(*) FROM test_cloud_grouped_compaction_schema_change"
+            assertEquals(8192 * 2, rewrittenCount[0][0])
+            def rewrittenPointRows =
+                    readPointRows("test_cloud_grouped_compaction_schema_change")
+            assertEquals([["100", "100"], ["100", "101"]], rewrittenPointRows)
         } finally {
             GetDebugPoint().clearDebugPointsForAllBEs()
         }
