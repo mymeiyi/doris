@@ -307,7 +307,8 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                 )
             """
 
-            def loadMowRows = { int startKey, int endKey, int valueBase ->
+            def loadMowRows = {
+                    int startKey, int endKey, int valueBase, int duplicateRounds ->
                 StringBuilder content = new StringBuilder()
                 (startKey..endKey).each { int key ->
                     content.append("${key},${valueBase + key}\n")
@@ -316,8 +317,10 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                 // offsets deterministic so a failure can be reproduced exactly.
                 int duplicateStartKey = startKey + 2048
                 int duplicateEndKey = endKey - 3072
-                (duplicateStartKey..duplicateEndKey).each { int key ->
-                    content.append("${key},${valueBase + key + 1}\n")
+                for (int round = 0; round < duplicateRounds; ++round) {
+                    (duplicateStartKey..duplicateEndKey).each { int key ->
+                        content.append("${key},${valueBase + key + 1}\n")
+                    }
                 }
                 streamLoad {
                     table "test_cloud_single_rowset_compaction_mow_delete_bitmap"
@@ -332,16 +335,17 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                         assertEquals("success", json.Status.toLowerCase())
                         int originalRows = endKey - startKey + 1
                         int duplicateRows = duplicateEndKey - duplicateStartKey + 1
-                        assertEquals(originalRows + duplicateRows, json.NumberTotalRows)
+                        assertEquals(originalRows + duplicateRows * duplicateRounds,
+                                json.NumberTotalRows)
                         assertEquals(0, json.NumberFilteredRows)
                     }
                 }
                 sql "sync"
             }
 
-            loadMowRows(1, 16384, 100000)
-            loadMowRows(8193, 24576, 200000)
-            loadMowRows(12289, 28672, 300000)
+            loadMowRows(1, 16384, 100000, 1)
+            loadMowRows(8193, 24576, 200000, 2)
+            loadMowRows(12289, 28672, 300000, 3)
 
             def readMowRows = {
                 def rows = sql """
@@ -386,6 +390,8 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             }
 
             def mowRowsetVersions = [2, 3, 4]
+            def mowMaxSegmentSizeByVersion = [2: 32768, 3: 8192, 4: 2048]
+            def finalMowSegmentCounts = [:]
             def compactMowRowsetTwice = { int targetVersion ->
                 logger.info("Compact MOW rowset version ${targetVersion} twice")
                 def beforeFirstCompaction = showTablet(
@@ -400,6 +406,8 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                     [(version): rowsetByVersion(beforeFirstCompaction, version)]
                 }
 
+                set_be_param("vertical_compaction_max_segment_size",
+                        mowMaxSegmentSizeByVersion[targetVersion].toString())
                 set_be_param("cloud_single_rowset_compaction_segment_group_size",
                         initialInputSegmentsPerGroup.toString())
                 runCumulativeCompaction(mowBackend.Host, mowBackend.HttpPort, mowTabletId)
@@ -424,9 +432,10 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                         "test_cloud_single_rowset_compaction_mow_delete_bitmap",
                         mowBackend.Host, mowBackend.HttpPort, mowTabletId)
                 def nonoverlappingRowset = rowsetByVersion(afterSecondCompaction, targetVersion)
-                assertEquals("NONOVERLAPPING",
-                        parseRowsetInfo(nonoverlappingRowset).overlap)
+                def nonoverlappingInfo = parseRowsetInfo(nonoverlappingRowset)
+                assertEquals("NONOVERLAPPING", nonoverlappingInfo.overlap)
                 assertNotEquals(groupedRowset, nonoverlappingRowset)
+                finalMowSegmentCounts[targetVersion] = nonoverlappingInfo.segments
                 untouchedRowsets.each { int version, String rowset ->
                     assertEquals(rowset, rowsetByVersion(afterSecondCompaction, version))
                 }
@@ -434,7 +443,10 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             }
 
             set_be_param("enable_rowid_conversion_correctness_check", "true")
+            set_be_param("compaction_batch_size", "512")
             mowRowsetVersions.each { int version -> compactMowRowsetTwice(version) }
+            assertEquals(mowRowsetVersions.size(), finalMowSegmentCounts.values().toSet().size(),
+                    "expected different final segment counts: ${finalMowSegmentCounts}")
 
             // ====================================================
             logCaseSection("Multi-segment case: verify disjoint key ranges after the second " +
