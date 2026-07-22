@@ -271,7 +271,7 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     int64_t input_cumulative_point = cloud_tablet()->cumulative_layer_point();
     auto compaction_policy = cloud_tablet()->tablet_meta()->compaction_policy();
     int64_t new_cumulative_point = input_cumulative_point;
-    if (!_is_single_rowset_grouped_compaction) {
+    if (!_single_rowset_compaction_segment_group_size.has_value()) {
         new_cumulative_point =
                 _engine.cumu_compaction_policy(compaction_policy)
                         ->new_cumulative_point(cloud_tablet(), _output_rowset, _last_delete_version,
@@ -520,6 +520,7 @@ Status CloudCumulativeCompaction::garbage_collection() {
 
 Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
     _input_rowsets.clear();
+    _single_rowset_compaction_segment_group_size.reset();
 
     std::vector<RowsetSharedPtr> candidate_rowsets;
     {
@@ -572,6 +573,8 @@ Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
                         {rowset}, *cloud_tablet()->tablet_schema(), compaction_policy)) {
                 auto grouped_input_rowset = rowset;
                 _input_rowsets = {std::move(grouped_input_rowset)};
+                _single_rowset_compaction_segment_group_size =
+                        config::cloud_single_rowset_compaction_segment_group_size;
                 return Status::OK();
             }
         }
@@ -593,19 +596,16 @@ Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
 }
 
 Status CloudCumulativeCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult* result) {
-    if (!cloud::should_use_single_rowset_grouped_compaction(
-                _input_rowsets, *_cur_tablet_schema,
-                cloud_tablet()->tablet_meta()->compaction_policy())) {
+    if (!_single_rowset_compaction_segment_group_size.has_value()) {
         return Status::OK();
     }
 
-    const int64_t segment_group_size = config::cloud_single_rowset_compaction_segment_group_size;
+    const int64_t segment_group_size = *_single_rowset_compaction_segment_group_size;
     if (segment_group_size <= 0) {
         return Status::InvalidArgument(
                 "cloud_single_rowset_compaction_segment_group_size must be positive, value={}",
                 segment_group_size);
     }
-    _is_single_rowset_grouped_compaction = true;
     result->is_segment_grouped = true;
     result->segment_group_size = segment_group_size;
     return Status::OK();

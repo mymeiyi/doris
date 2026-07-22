@@ -550,9 +550,11 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     CloudCumulativeCompaction compaction(_engine, tablet);
     compaction._input_rowsets = {candidate};
     compaction._cur_tablet_schema = candidate->tablet_schema();
+    compaction._single_rowset_compaction_segment_group_size =
+            config::cloud_single_rowset_compaction_segment_group_size;
     Compaction::MergeInputRowsetsResult result;
     ASSERT_TRUE(compaction.prepare_merge_input_rowsets(&result).ok());
-    EXPECT_TRUE(compaction._is_single_rowset_grouped_compaction);
+    EXPECT_TRUE(compaction._single_rowset_compaction_segment_group_size.has_value());
     EXPECT_TRUE(result.is_segment_grouped);
     EXPECT_EQ(result.segment_group_size, config::cloud_single_rowset_compaction_segment_group_size);
 
@@ -562,7 +564,7 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     time_series_compaction._cur_tablet_schema = candidate->tablet_schema();
     Compaction::MergeInputRowsetsResult time_series_result;
     ASSERT_TRUE(time_series_compaction.prepare_merge_input_rowsets(&time_series_result).ok());
-    EXPECT_FALSE(time_series_compaction._is_single_rowset_grouped_compaction);
+    EXPECT_FALSE(time_series_compaction._single_rowset_compaction_segment_group_size.has_value());
     EXPECT_FALSE(time_series_result.is_segment_grouped);
 }
 
@@ -586,6 +588,8 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_rejects_invalid_gro
     CloudCumulativeCompaction compaction(_engine, tablet);
     compaction._input_rowsets = {candidate};
     compaction._cur_tablet_schema = candidate->tablet_schema();
+    compaction._single_rowset_compaction_segment_group_size =
+            config::cloud_single_rowset_compaction_segment_group_size;
 
     Compaction::MergeInputRowsetsResult result;
     Status st = compaction.prepare_merge_input_rowsets(&result);
@@ -594,6 +598,57 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_rejects_invalid_gro
                         "cloud_single_rowset_compaction_segment_group_size must be positive") !=
                 std::string::npos)
             << st;
+}
+
+TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_uses_selection_snapshot) {
+    auto old_enable = config::enable_cloud_single_rowset_compaction;
+    auto old_min_segments = config::cloud_single_rowset_compaction_min_segments;
+    auto old_group_size = config::cloud_single_rowset_compaction_segment_group_size;
+    Defer restore_config {[&] {
+        config::enable_cloud_single_rowset_compaction = old_enable;
+        config::cloud_single_rowset_compaction_min_segments = old_min_segments;
+        config::cloud_single_rowset_compaction_segment_group_size = old_group_size;
+    }};
+    config::enable_cloud_single_rowset_compaction = true;
+    config::cloud_single_rowset_compaction_min_segments = 4;
+    config::cloud_single_rowset_compaction_segment_group_size = 2;
+
+    std::vector<RowsetSharedPtr> rowsets;
+    auto grouped_rowset = create_rowset(Version(2, 2), 4, true, 1024);
+    ASSERT_TRUE(grouped_rowset != nullptr);
+    rowsets.push_back(grouped_rowset);
+    for (int64_t version = 3; version <= 13; ++version) {
+        auto rowset = create_rowset(Version(version, version), 1, false, 1024);
+        ASSERT_TRUE(rowset != nullptr);
+        rowsets.push_back(std::move(rowset));
+    }
+
+    TabletSchemaPB tablet_schema_pb;
+    grouped_rowset->tablet_schema()->to_schema_pb(&tablet_schema_pb);
+    _tablet_meta->mutable_tablet_schema()->init_from_pb(tablet_schema_pb);
+    _tablet_meta->set_compaction_policy(std::string(CUMULATIVE_SIZE_BASED_POLICY));
+    CloudTabletSPtr tablet = std::make_shared<CloudTablet>(_engine, _tablet_meta);
+    {
+        std::unique_lock wlock(tablet->get_header_lock());
+        tablet->add_rowsets(std::move(rowsets), false, wlock, false);
+    }
+
+    CloudCumulativeCompaction compaction(_engine, tablet);
+    ASSERT_TRUE(compaction.pick_rowsets_to_compact().ok());
+    ASSERT_EQ(compaction._input_rowsets.size(), 1);
+    EXPECT_EQ(compaction._input_rowsets.front(), grouped_rowset);
+    ASSERT_TRUE(compaction._single_rowset_compaction_segment_group_size.has_value());
+    EXPECT_EQ(*compaction._single_rowset_compaction_segment_group_size, 2);
+
+    config::enable_cloud_single_rowset_compaction = false;
+    config::cloud_single_rowset_compaction_min_segments = 5;
+    config::cloud_single_rowset_compaction_segment_group_size = 3;
+
+    Compaction::MergeInputRowsetsResult result;
+    ASSERT_TRUE(compaction.prepare_merge_input_rowsets(&result).ok());
+    EXPECT_TRUE(compaction._single_rowset_compaction_segment_group_size.has_value());
+    EXPECT_TRUE(result.is_segment_grouped);
+    EXPECT_EQ(result.segment_group_size, 2);
 }
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_honors_notready_policy_filter) {

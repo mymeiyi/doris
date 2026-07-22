@@ -86,7 +86,7 @@ private:
     int64_t _base_compaction_cnt = 0;
     int64_t _cumulative_compaction_cnt = 0;
     Version _last_delete_version {-1, -1};
-    bool _is_single_rowset_grouped_compaction = false;
+    std::optional<int64_t> _single_rowset_compaction_segment_group_size;
 };
 
 } // namespace doris
