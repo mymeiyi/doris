@@ -66,6 +66,12 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             return left.length <=> right.length
         }
 
+        def logCaseSection = { String description ->
+            logger.info("========================================================================")
+            logger.info(description)
+            logger.info("========================================================================")
+        }
+
         def showTablet = { tableName, beHost, bePort, tabletId ->
             sql "SELECT COUNT(*) FROM ${tableName}"
             def (code, out, err) = be_show_tablet_status(beHost, bePort, tabletId)
@@ -259,6 +265,8 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
         try {
             GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
 
+            logCaseSection("Standard cases: compact DUP, AGG, MOW, and MOR rowsets twice " +
+                    "with 2 or 4 input segments per group")
             [2, 4].each { int inputSegmentsPerGroup ->
                 checkSingleRowsetGroupedCompaction(
                         "test_cloud_single_rowset_grouped_compaction_g${inputSegmentsPerGroup}_dup",
@@ -280,6 +288,8 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                         inputSegmentsPerGroup, 8192, 8192, null, false)
             }
 
+            logCaseSection("Multi-segment case: verify disjoint key ranges after the second " +
+                    "cumulative compaction")
             set_be_param("cloud_single_rowset_compaction_segment_group_size",
                     initialInputSegmentsPerGroup.toString())
             set_be_param("vertical_compaction_max_segment_size", "2048")
@@ -289,6 +299,8 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                     "DUPLICATE KEY", "v INT", "", initialInputSegmentsPerGroup, 32768, 32768 * 2,
                     [["100", "100"], ["100", "101"]], true)
 
+            logCaseSection("Schema-change case: verify CREATE INDEX clears the grouped rowset " +
+                    "layout")
             sql "DROP TABLE IF EXISTS test_cloud_grouped_compaction_schema_change"
             sql """
                 CREATE TABLE test_cloud_grouped_compaction_schema_change (
