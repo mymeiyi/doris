@@ -17,6 +17,8 @@
 
 #include "cloud/cloud_cumulative_compaction.h"
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <gen_cpp/cloud.pb.h>
 
 #include "cloud/cloud_meta_mgr.h"
@@ -652,7 +654,7 @@ Status CloudCumulativeCompaction::do_merge_input_rowsets(
         const int32_t output_segment_end = _output_rs_writer->get_allocated_segment_id();
         const int32_t output_group_size = output_segment_end - output_segment_start;
         if (output_group_size > 0) {
-            ++result->output_segment_group_count;
+            result->output_segment_group_sizes.push_back(output_group_size);
         }
     }
     return Status::OK();
@@ -663,8 +665,10 @@ void CloudCumulativeCompaction::update_output_rowset_after_build(
     if (!result.is_segment_grouped) {
         return;
     }
-    if (result.output_segment_group_count > 1) {
-        _output_rowset->rowset_meta()->set_segments_overlap(OVERLAPPING);
+    if (result.output_segment_group_sizes.size() > 1) {
+        _output_rowset->rowset_meta()->set_segments_overlap(NONOVERLAPPING_WITHIN_GROUP);
+        _output_rowset->rowset_meta()->set_segment_group_sizes(
+                result.output_segment_group_sizes);
     }
 
     const auto& input_rowset = _input_rowsets.front();
@@ -674,7 +678,9 @@ void CloudCumulativeCompaction::update_output_rowset_after_build(
             .tag("input_segments", input_rowset->num_segments())
             .tag("segment_group_size", result.segment_group_size)
             .tag("output_segments", _output_rowset->num_segments())
-            .tag("output_groups", result.output_segment_group_count);
+            .tag("output_groups", result.output_segment_group_sizes.size())
+            .tag("output_segment_group_sizes",
+                 fmt::format("[{}]", fmt::join(result.output_segment_group_sizes, ", ")));
 }
 
 void CloudCumulativeCompaction::update_cumulative_point() {

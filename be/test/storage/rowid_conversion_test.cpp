@@ -651,7 +651,11 @@ TEST_F(TestRowIdConversion, SingleRowsetGroupedCompactionRowIdConversionIsComple
         ASSERT_TRUE(compaction.do_merge_input_rowsets({}, &merge_result).ok());
         const int64_t segment_group_count =
                 (num_segments + segment_group_size - 1) / segment_group_size;
-        EXPECT_EQ(merge_result.output_segment_group_count, segment_group_count);
+        ASSERT_EQ(merge_result.output_segment_group_sizes.size(),
+                  static_cast<size_t>(segment_group_count));
+        for (const auto output_group_size : merge_result.output_segment_group_sizes) {
+            EXPECT_GT(output_group_size, 0);
+        }
         if (is_vertical) {
             constexpr int32_t default_num_columns_per_group = 5;
             const int32_t num_columns_per_group =
@@ -684,10 +688,24 @@ TEST_F(TestRowIdConversion, SingleRowsetGroupedCompactionRowIdConversionIsComple
         compaction.update_output_rowset_after_build(merge_result);
         EXPECT_EQ(compaction._stats.output_rows, input_rowset->num_rows());
         if (is_vertical) {
-            EXPECT_GT(output_rowset->num_segments(), merge_result.output_segment_group_count);
+            EXPECT_GT(output_rowset->num_segments(),
+                      static_cast<int64_t>(merge_result.output_segment_group_sizes.size()));
         }
         EXPECT_EQ(output_rowset->rowset_meta()->get_num_segment_rows().size(),
                   output_rowset->num_segments());
+
+        EXPECT_EQ(output_rowset->rowset_meta()->segments_overlap(),
+                  NONOVERLAPPING_WITHIN_GROUP);
+        const auto output_rowset_pb = output_rowset->rowset_meta()->get_rowset_pb();
+        ASSERT_EQ(output_rowset_pb.segment_group_sizes_size(),
+                  merge_result.output_segment_group_sizes.size());
+        int64_t output_segment_count = 0;
+        for (int i = 0; i < output_rowset_pb.segment_group_sizes_size(); ++i) {
+            EXPECT_EQ(output_rowset_pb.segment_group_sizes(i),
+                      merge_result.output_segment_group_sizes[static_cast<size_t>(i)]);
+            output_segment_count += output_rowset_pb.segment_group_sizes(i);
+        }
+        EXPECT_EQ(output_segment_count, output_rowset->num_segments());
 
         RowsetReaderContext reader_context;
         reader_context.tablet_schema = tablet_schema;
@@ -727,7 +745,7 @@ TEST_F(TestRowIdConversion, SingleRowsetGroupedCompactionRowIdConversionIsComple
         EXPECT_EQ(rowset_meta->version(), input_rowset->version());
         EXPECT_FALSE(rowset_meta->empty());
         EXPECT_EQ(rowset_meta->num_rows(), input_rowset->num_rows());
-        EXPECT_EQ(rowset_meta->segments_overlap(), OVERLAPPING);
+        EXPECT_EQ(rowset_meta->segments_overlap(), NONOVERLAPPING_WITHIN_GROUP);
         EXPECT_TRUE(rowset_meta->is_segments_overlapping());
 
         ASSERT_TRUE(rowset_meta->tablet_schema() != nullptr);
