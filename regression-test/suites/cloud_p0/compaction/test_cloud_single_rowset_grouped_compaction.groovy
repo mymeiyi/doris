@@ -312,6 +312,13 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                 (startKey..endKey).each { int key ->
                     content.append("${key},${valueBase + key}\n")
                 }
+                // Append an inner key range to create duplicates within this rowset. Keep the
+                // offsets deterministic so a failure can be reproduced exactly.
+                int duplicateStartKey = startKey + 2048
+                int duplicateEndKey = endKey - 3072
+                (duplicateStartKey..duplicateEndKey).each { int key ->
+                    content.append("${key},${valueBase + key + 1}\n")
+                }
                 streamLoad {
                     table "test_cloud_single_rowset_compaction_mow_delete_bitmap"
                     set "column_separator", ","
@@ -323,7 +330,9 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                         }
                         def json = parseJson(result)
                         assertEquals("success", json.Status.toLowerCase())
-                        assertEquals(endKey - startKey + 1, json.NumberTotalRows)
+                        int originalRows = endKey - startKey + 1
+                        int duplicateRows = duplicateEndKey - duplicateStartKey + 1
+                        assertEquals(originalRows + duplicateRows, json.NumberTotalRows)
                         assertEquals(0, json.NumberFilteredRows)
                     }
                 }
@@ -345,14 +354,14 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             }
             def expectedMowRows = [
                 ["1", "100001"],
-                ["8192", "108192"],
+                ["8192", "108193"],
                 ["8193", "208193"],
-                ["12288", "212288"],
+                ["12288", "212289"],
                 ["12289", "312289"],
-                ["16384", "316384"],
-                ["16385", "316385"],
-                ["24576", "324576"],
-                ["24577", "324577"],
+                ["16384", "316385"],
+                ["16385", "316386"],
+                ["24576", "324577"],
+                ["24577", "324578"],
                 ["28672", "328672"]
             ]
             assertEquals(expectedMowRows, readMowRows())
