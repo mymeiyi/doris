@@ -290,8 +290,8 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             }
 
             // ====================================================
-            logCaseSection("MOW delete-bitmap case: compact only the oldest of three overlapping " +
-                    "rowsets and verify cross-rowset delete bitmap conversion")
+            logCaseSection("MOW delete-bitmap case: compact each of three overlapping rowsets " +
+                    "twice and verify cross-rowset delete bitmap conversion")
             sql "DROP TABLE IF EXISTS test_cloud_single_rowset_compaction_mow_delete_bitmap"
             sql """
                 CREATE TABLE test_cloud_single_rowset_compaction_mow_delete_bitmap (
@@ -378,36 +378,63 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             def mowBackend = mowBackends.find { it.BackendId == mowBackendId }
             assertNotNull(mowBackend)
 
-            def mowBeforeCompaction = showTablet(
-                    "test_cloud_single_rowset_compaction_mow_delete_bitmap",
-                    mowBackend.Host, mowBackend.HttpPort, mowTabletId)
-            def mowRowset1BeforeCompaction = rowsetByVersion(mowBeforeCompaction, 2)
-            def mowRowset2BeforeCompaction = rowsetByVersion(mowBeforeCompaction, 3)
-            def mowRowset3BeforeCompaction = rowsetByVersion(mowBeforeCompaction, 4)
-            def mowRowset1Info = parseRowsetInfo(mowRowset1BeforeCompaction)
-            assertEquals("OVERLAPPING", mowRowset1Info.overlap)
-            assertTrue(mowRowset1Info.segments > initialInputSegmentsPerGroup,
-                    mowRowset1BeforeCompaction)
+            def checkMowQueryResult = {
+                def countResult =
+                        sql "SELECT COUNT(*) FROM test_cloud_single_rowset_compaction_mow_delete_bitmap"
+                assertEquals(mowCountBeforeCompaction, countResult)
+                assertEquals(expectedMowRows, readMowRows())
+            }
+
+            def mowRowsetVersions = [2, 3, 4]
+            def compactMowRowsetTwice = { int targetVersion ->
+                logger.info("Compact MOW rowset version ${targetVersion} twice")
+                def beforeFirstCompaction = showTablet(
+                        "test_cloud_single_rowset_compaction_mow_delete_bitmap",
+                        mowBackend.Host, mowBackend.HttpPort, mowTabletId)
+                def inputRowset = rowsetByVersion(beforeFirstCompaction, targetVersion)
+                def inputInfo = parseRowsetInfo(inputRowset)
+                assertEquals("OVERLAPPING", inputInfo.overlap)
+                assertTrue(inputInfo.segments > initialInputSegmentsPerGroup, inputRowset)
+                def untouchedVersions = mowRowsetVersions.findAll { it != targetVersion }
+                def untouchedRowsets = untouchedVersions.collectEntries { int version ->
+                    [(version): rowsetByVersion(beforeFirstCompaction, version)]
+                }
+
+                set_be_param("cloud_single_rowset_compaction_segment_group_size",
+                        initialInputSegmentsPerGroup.toString())
+                runCumulativeCompaction(mowBackend.Host, mowBackend.HttpPort, mowTabletId)
+
+                def afterFirstCompaction = showTablet(
+                        "test_cloud_single_rowset_compaction_mow_delete_bitmap",
+                        mowBackend.Host, mowBackend.HttpPort, mowTabletId)
+                def groupedRowset = rowsetByVersion(afterFirstCompaction, targetVersion)
+                def groupedInfo = parseRowsetInfo(groupedRowset)
+                assertEquals("NONOVERLAPPING_WITHIN_GROUP", groupedInfo.overlap)
+                assertNotEquals(inputRowset, groupedRowset)
+                untouchedRowsets.each { int version, String rowset ->
+                    assertEquals(rowset, rowsetByVersion(afterFirstCompaction, version))
+                }
+                checkMowQueryResult()
+
+                set_be_param("cloud_single_rowset_compaction_segment_group_size",
+                        groupedInfo.segments.toString())
+                runCumulativeCompaction(mowBackend.Host, mowBackend.HttpPort, mowTabletId)
+
+                def afterSecondCompaction = showTablet(
+                        "test_cloud_single_rowset_compaction_mow_delete_bitmap",
+                        mowBackend.Host, mowBackend.HttpPort, mowTabletId)
+                def nonoverlappingRowset = rowsetByVersion(afterSecondCompaction, targetVersion)
+                assertEquals("NONOVERLAPPING",
+                        parseRowsetInfo(nonoverlappingRowset).overlap)
+                assertNotEquals(groupedRowset, nonoverlappingRowset)
+                untouchedRowsets.each { int version, String rowset ->
+                    assertEquals(rowset, rowsetByVersion(afterSecondCompaction, version))
+                }
+                checkMowQueryResult()
+            }
 
             set_be_param("enable_rowid_conversion_correctness_check", "true")
-            set_be_param("cloud_single_rowset_compaction_segment_group_size",
-                    initialInputSegmentsPerGroup.toString())
-            runCumulativeCompaction(mowBackend.Host, mowBackend.HttpPort, mowTabletId)
-
-            def mowAfterCompaction = showTablet(
-                    "test_cloud_single_rowset_compaction_mow_delete_bitmap",
-                    mowBackend.Host, mowBackend.HttpPort, mowTabletId)
-            def compactedMowRowset1 = rowsetByVersion(mowAfterCompaction, 2)
-            assertEquals("NONOVERLAPPING_WITHIN_GROUP",
-                    parseRowsetInfo(compactedMowRowset1).overlap)
-            assertNotEquals(mowRowset1BeforeCompaction, compactedMowRowset1)
-            assertEquals(mowRowset2BeforeCompaction, rowsetByVersion(mowAfterCompaction, 3))
-            assertEquals(mowRowset3BeforeCompaction, rowsetByVersion(mowAfterCompaction, 4))
-
-            def mowCountAfterCompaction =
-                    sql "SELECT COUNT(*) FROM test_cloud_single_rowset_compaction_mow_delete_bitmap"
-            assertEquals(mowCountBeforeCompaction, mowCountAfterCompaction)
-            assertEquals(expectedMowRows, readMowRows())
+            mowRowsetVersions.each { int version -> compactMowRowsetTwice(version) }
 
             // ====================================================
             logCaseSection("Multi-segment case: verify disjoint key ranges after the second " +
