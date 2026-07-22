@@ -17,6 +17,8 @@
 
 import org.apache.doris.regression.suite.ClusterOptions
 
+import java.util.Base64
+
 suite("test_cloud_single_rowset_grouped_compaction", "docker") {
     def options = new ClusterOptions()
     options.cloudMode = true
@@ -31,11 +33,39 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
         "cloud_single_rowset_compaction_min_segments=2",
         "cloud_single_rowset_compaction_segment_group_size=${initialInputSegmentsPerGroup}",
         "cumulative_compaction_min_deltas=2",
+        "enable_aggregate_non_mow_key_bounds=false",
         "disable_auto_compaction=true",
         "enable_java_support=false"
     ]
 
     docker(options) {
+        def metaService = cluster.getAllMetaservices().get(0)
+        def metaServiceEndpoint = "${metaService.host}:${metaService.httpPort}"
+
+        def getRowsetMeta = { tabletId, int version ->
+            def rowsetMeta = null
+            getSegmentFilesFromMs(metaServiceEndpoint, tabletId, version) { responseCode, body ->
+                assertEquals(200, responseCode)
+                rowsetMeta = parseJson(body)
+            }
+            assertNotNull(rowsetMeta)
+            return rowsetMeta
+        }
+
+        def compareEncodedKeys = { String leftBase64, String rightBase64 ->
+            byte[] left = Base64.getDecoder().decode(leftBase64)
+            byte[] right = Base64.getDecoder().decode(rightBase64)
+            int commonLength = Math.min(left.length, right.length)
+            for (int i = 0; i < commonLength; ++i) {
+                int leftByte = Byte.toUnsignedInt(left[i])
+                int rightByte = Byte.toUnsignedInt(right[i])
+                if (leftByte != rightByte) {
+                    return leftByte <=> rightByte
+                }
+            }
+            return left.length <=> right.length
+        }
+
         def showTablet = { tableName, beHost, bePort, tabletId ->
             sql "SELECT COUNT(*) FROM ${tableName}"
             def (code, out, err) = be_show_tablet_status(beHost, bePort, tabletId)
@@ -194,6 +224,26 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             def finalRowset = rowsetByVersion(afterSecondCompaction, 2)
             def finalInfo = parseRowsetInfo(finalRowset)
             assertEquals("NONOVERLAPPING", finalInfo.overlap)
+            if (expectMultipleOutputSegmentsPerGroup) {
+                assertTrue(finalInfo.segments > 1, finalRowset)
+                def finalRowsetMeta = getRowsetMeta(tabletId, 2)
+                assertEquals(finalInfo.segments, finalRowsetMeta.num_segments)
+                assertFalse(finalRowsetMeta.segments_key_bounds_aggregated ?: false)
+                assertFalse(finalRowsetMeta.segments_key_bounds_truncated ?: false)
+                def segmentKeyBounds = finalRowsetMeta.segments_key_bounds
+                assertEquals(finalInfo.segments, segmentKeyBounds.size())
+                segmentKeyBounds.eachWithIndex { keyBounds, int segmentId ->
+                    assertTrue(compareEncodedKeys(keyBounds.min_key, keyBounds.max_key) <= 0,
+                            "invalid key range at segment ${segmentId}")
+                    if (segmentId > 0) {
+                        def previousKeyBounds = segmentKeyBounds[segmentId - 1]
+                        assertTrue(compareEncodedKeys(
+                                        previousKeyBounds.max_key, keyBounds.min_key) < 0,
+                                "overlapping key ranges at segments ${segmentId - 1} and " +
+                                        "${segmentId}")
+                    }
+                }
+            }
             def finalCountResult = sql "SELECT COUNT(*) FROM ${tableName}"
             assertEquals(expectedRows, finalCountResult[0][0])
             def finalPointRows = checkPointRows(tableName, expectedPointRows)
@@ -322,7 +372,9 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                     newBackend.Host, newBackend.HttpPort, newTabletId)
             def rewrittenRowset = rowsetByVersion(rewrittenTablet, 2)
             def rewrittenInfo = parseRowsetInfo(rewrittenRowset)
-            assertEquals("OVERLAPPING", rewrittenInfo.overlap)
+            assertNotEquals("NONOVERLAPPING_WITHIN_GROUP", rewrittenInfo.overlap)
+            def rewrittenRowsetMeta = getRowsetMeta(newTabletId, 2)
+            assertTrue((rewrittenRowsetMeta.segment_group_sizes ?: []).isEmpty())
             def rewrittenCount =
                     sql "SELECT COUNT(*) FROM test_cloud_grouped_compaction_schema_change"
             assertEquals(8192 * 2, rewrittenCount[0][0])
