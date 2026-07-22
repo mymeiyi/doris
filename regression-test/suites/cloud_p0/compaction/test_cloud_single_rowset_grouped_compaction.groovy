@@ -30,6 +30,7 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
         "enable_cloud_single_rowset_compaction=true",
         "cloud_single_rowset_compaction_min_segments=2",
         "cloud_single_rowset_compaction_segment_group_size=${initialInputSegmentsPerGroup}",
+        "cumulative_compaction_min_deltas=2",
         "disable_auto_compaction=true",
         "enable_java_support=false"
     ]
