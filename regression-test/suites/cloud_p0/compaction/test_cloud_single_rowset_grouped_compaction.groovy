@@ -233,7 +233,7 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             if (expectMultipleOutputSegmentsPerGroup) {
                 assertTrue(finalInfo.segments > 1, finalRowset)
                 def finalRowsetMeta = getRowsetMeta(tabletId, 2)
-                assertEquals(finalInfo.segments, finalRowsetMeta.num_segments)
+                assertEquals(finalInfo.segments, finalRowsetMeta.num_segments.toString().toInteger())
                 assertFalse(finalRowsetMeta.segments_key_bounds_aggregated ?: false)
                 assertFalse(finalRowsetMeta.segments_key_bounds_truncated ?: false)
                 def segmentKeyBounds = finalRowsetMeta.segments_key_bounds
