@@ -892,6 +892,23 @@ TEST_F(TestRowIdConversion, SingleRowsetGroupedCompactionRowIdConversionIsComple
             EXPECT_EQ(second_output_rowset->num_rows(), output_rowset->num_rows());
             EXPECT_GT(second_output_rowset->num_segments(), 1);
 
+            auto second_beta_rowset =
+                    std::dynamic_pointer_cast<BetaRowset>(second_output_rowset);
+            ASSERT_TRUE(second_beta_rowset != nullptr);
+            std::vector<segment_v2::SegmentSharedPtr> second_output_segments;
+            ASSERT_TRUE(second_beta_rowset->load_segments(&second_output_segments).ok());
+            ASSERT_EQ(second_output_segments.size(), second_output_rowset->num_segments());
+            for (size_t segment_id = 0; segment_id < second_output_segments.size(); ++segment_id) {
+                const auto& segment = second_output_segments[segment_id];
+                EXPECT_LE(segment->min_key(), segment->max_key()) << "segment_id=" << segment_id;
+                if (segment_id > 0) {
+                    EXPECT_LT(second_output_segments[segment_id - 1]->max_key(),
+                              segment->min_key())
+                            << "previous_segment_id=" << segment_id - 1
+                            << ", segment_id=" << segment_id;
+                }
+            }
+
             RowsetReaderContext second_reader_context;
             second_reader_context.tablet_schema = tablet_schema;
             second_reader_context.need_ordered_result = false;
