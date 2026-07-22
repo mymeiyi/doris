@@ -265,6 +265,7 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
         try {
             GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
 
+            // ====================================================
             logCaseSection("Standard cases: compact DUP, AGG, MOW, and MOR rowsets twice " +
                     "with 2 or 4 input segments per group")
             [2, 4].each { int inputSegmentsPerGroup ->
@@ -288,6 +289,118 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                         inputSegmentsPerGroup, 8192, 8192, null, false)
             }
 
+            // ====================================================
+            logCaseSection("MOW delete-bitmap case: compact only the oldest of three overlapping " +
+                    "rowsets and verify cross-rowset delete bitmap conversion")
+            sql "DROP TABLE IF EXISTS test_cloud_single_rowset_compaction_mow_delete_bitmap"
+            sql """
+                CREATE TABLE test_cloud_single_rowset_compaction_mow_delete_bitmap (
+                    k INT,
+                    v INT
+                )
+                UNIQUE KEY(k)
+                DISTRIBUTED BY HASH(k) BUCKETS 1
+                PROPERTIES (
+                    "replication_num" = "1",
+                    "disable_auto_compaction" = "true",
+                    "enable_unique_key_merge_on_write" = "true"
+                )
+            """
+
+            def loadMowRows = { int startKey, int endKey, int valueBase ->
+                StringBuilder content = new StringBuilder()
+                (startKey..endKey).each { int key ->
+                    content.append("${key},${valueBase + key}\n")
+                }
+                streamLoad {
+                    table "test_cloud_single_rowset_compaction_mow_delete_bitmap"
+                    set "column_separator", ","
+                    inputStream new ByteArrayInputStream(content.toString().getBytes())
+                    time 30000
+                    check { result, exception, startTime, endTime ->
+                        if (exception != null) {
+                            throw exception
+                        }
+                        def json = parseJson(result)
+                        assertEquals("success", json.Status.toLowerCase())
+                        assertEquals(endKey - startKey + 1, json.NumberTotalRows)
+                        assertEquals(0, json.NumberFilteredRows)
+                    }
+                }
+                sql "sync"
+            }
+
+            loadMowRows(1, 16384, 100000)
+            loadMowRows(8193, 24576, 200000)
+            loadMowRows(12289, 28672, 300000)
+
+            def readMowRows = {
+                def rows = sql """
+                    SELECT k, v
+                    FROM test_cloud_single_rowset_compaction_mow_delete_bitmap
+                    WHERE k IN (1, 8192, 8193, 12288, 12289, 16384, 16385, 24576, 24577, 28672)
+                    ORDER BY k
+                """
+                return rows.collect { row -> row.collect { column -> column.toString() } }
+            }
+            def expectedMowRows = [
+                ["1", "100001"],
+                ["8192", "108192"],
+                ["8193", "208193"],
+                ["12288", "212288"],
+                ["12289", "312289"],
+                ["16384", "316384"],
+                ["16385", "316385"],
+                ["24576", "324576"],
+                ["24577", "324577"],
+                ["28672", "328672"]
+            ]
+            assertEquals(expectedMowRows, readMowRows())
+            def mowCountBeforeCompaction =
+                    sql "SELECT COUNT(*) FROM test_cloud_single_rowset_compaction_mow_delete_bitmap"
+            assertEquals(28672, mowCountBeforeCompaction[0][0])
+
+            def mowTablets = sql_return_maparray(
+                    "SHOW TABLETS FROM test_cloud_single_rowset_compaction_mow_delete_bitmap")
+            assertEquals(1, mowTablets.size())
+            def mowTabletId = mowTablets[0].TabletId
+            def mowBackendId = mowTablets[0].BackendId
+            def mowBackends = sql_return_maparray "SHOW BACKENDS"
+            def mowBackend = mowBackends.find { it.BackendId == mowBackendId }
+            assertNotNull(mowBackend)
+
+            def mowBeforeCompaction = showTablet(
+                    "test_cloud_single_rowset_compaction_mow_delete_bitmap",
+                    mowBackend.Host, mowBackend.HttpPort, mowTabletId)
+            def mowRowset1BeforeCompaction = rowsetByVersion(mowBeforeCompaction, 2)
+            def mowRowset2BeforeCompaction = rowsetByVersion(mowBeforeCompaction, 3)
+            def mowRowset3BeforeCompaction = rowsetByVersion(mowBeforeCompaction, 4)
+            def mowRowset1Info = parseRowsetInfo(mowRowset1BeforeCompaction)
+            assertEquals("OVERLAPPING", mowRowset1Info.overlap)
+            assertTrue(mowRowset1Info.segments > initialInputSegmentsPerGroup,
+                    mowRowset1BeforeCompaction)
+
+            set_be_param("enable_rowid_conversion_correctness_check", "true")
+            set_be_param("cloud_single_rowset_compaction_segment_group_size",
+                    initialInputSegmentsPerGroup.toString())
+            runCumulativeCompaction(mowBackend.Host, mowBackend.HttpPort, mowTabletId)
+
+            def mowAfterCompaction = showTablet(
+                    "test_cloud_single_rowset_compaction_mow_delete_bitmap",
+                    mowBackend.Host, mowBackend.HttpPort, mowTabletId)
+            def compactedMowRowset1 = rowsetByVersion(mowAfterCompaction, 2)
+            assertEquals("NONOVERLAPPING_WITHIN_GROUP",
+                    parseRowsetInfo(compactedMowRowset1).overlap)
+            assertNotEquals(mowRowset1BeforeCompaction, compactedMowRowset1)
+            assertEquals(mowRowset2BeforeCompaction, rowsetByVersion(mowAfterCompaction, 3))
+            assertEquals(mowRowset3BeforeCompaction, rowsetByVersion(mowAfterCompaction, 4))
+
+            def mowCountAfterCompaction =
+                    sql "SELECT COUNT(*) FROM test_cloud_single_rowset_compaction_mow_delete_bitmap"
+            assertEquals(mowCountBeforeCompaction, mowCountAfterCompaction)
+            assertEquals(expectedMowRows, readMowRows())
+
+            // ====================================================
             logCaseSection("Multi-segment case: verify disjoint key ranges after the second " +
                     "cumulative compaction")
             set_be_param("cloud_single_rowset_compaction_segment_group_size",
@@ -299,6 +412,7 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                     "DUPLICATE KEY", "v INT", "", initialInputSegmentsPerGroup, 32768, 32768 * 2,
                     [["100", "100"], ["100", "101"]], true)
 
+            // ====================================================
             logCaseSection("Schema-change case: verify CREATE INDEX clears the grouped rowset " +
                     "layout")
             sql "DROP TABLE IF EXISTS test_cloud_grouped_compaction_schema_change"
