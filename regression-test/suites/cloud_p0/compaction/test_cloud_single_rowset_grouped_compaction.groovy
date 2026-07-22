@@ -23,13 +23,13 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
     options.setFeNum(1)
     options.setBeNum(1)
     options.enableDebugPoints()
-    int initialSegmentGroupSize = 2
+    int initialInputSegmentsPerGroup = 2
     long compactionTimeoutMs = 90000L
     options.beConfigs += [
         "doris_scanner_row_bytes=1",
         "enable_cloud_single_rowset_compaction=true",
         "cloud_single_rowset_compaction_min_segments=2",
-        "cloud_single_rowset_compaction_segment_group_size=${initialSegmentGroupSize}",
+        "cloud_single_rowset_compaction_segment_group_size=${initialInputSegmentsPerGroup}",
         "disable_auto_compaction=true",
         "enable_java_support=false"
     ]
@@ -97,8 +97,9 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
 
         def checkSingleRowsetGroupedCompaction = {
                 String tableName, String keyType, String valueColumn, String extraProperties,
-                int segmentGroupSize, int rowsPerLoadRound, int expectedRows,
-                List<List<String>> expectedPointRows, boolean expectMultipleOutputSegmentsPerGroup ->
+                int inputSegmentsPerGroup, int rowsPerLoadRound, int expectedRows,
+                List<List<String>> expectedPointRows,
+                boolean expectMultipleOutputSegmentsPerGroup ->
             sql "DROP TABLE IF EXISTS ${tableName}"
             sql """
                 CREATE TABLE ${tableName} (
@@ -153,10 +154,10 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             def inputRowset = rowsetByVersion(before, 2)
             def inputInfo = parseRowsetInfo(inputRowset)
             assertEquals("OVERLAPPING", inputInfo.overlap)
-            assertTrue(inputInfo.segments > segmentGroupSize, inputRowset)
+            assertTrue(inputInfo.segments > inputSegmentsPerGroup, inputRowset)
 
             set_be_param("cloud_single_rowset_compaction_segment_group_size",
-                    segmentGroupSize.toString())
+                    inputSegmentsPerGroup.toString())
             runCumulativeCompaction(backend.Host, backend.HttpPort, tabletId)
 
             def after = showTablet(tableName, backend.Host, backend.HttpPort, tabletId)
@@ -164,7 +165,8 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             def outputInfo = parseRowsetInfo(outputRowset)
             assertEquals("NONOVERLAPPING_WITHIN_GROUP", outputInfo.overlap)
             def expectedOutputSegments =
-                    (inputInfo.segments + segmentGroupSize - 1).intdiv(segmentGroupSize)
+                    (inputInfo.segments + inputSegmentsPerGroup - 1)
+                            .intdiv(inputSegmentsPerGroup)
             if (expectMultipleOutputSegmentsPerGroup) {
                 assertTrue(outputInfo.segments > expectedOutputSegments, outputRowset)
             } else {
@@ -204,34 +206,34 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
         try {
             GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
 
-            [2, 4].each { int segmentGroupSize ->
+            [2, 4].each { int inputSegmentsPerGroup ->
                 checkSingleRowsetGroupedCompaction(
-                        "test_cloud_single_rowset_grouped_compaction_g${segmentGroupSize}_dup",
-                        "DUPLICATE KEY", "v INT", "", segmentGroupSize, 8192, 8192 * 2,
+                        "test_cloud_single_rowset_grouped_compaction_g${inputSegmentsPerGroup}_dup",
+                        "DUPLICATE KEY", "v INT", "", inputSegmentsPerGroup, 8192, 8192 * 2,
                         [["100", "100"], ["100", "101"]], false)
                 checkSingleRowsetGroupedCompaction(
-                        "test_cloud_single_rowset_grouped_compaction_g${segmentGroupSize}_agg",
-                        "AGGREGATE KEY", "v INT SUM", "", segmentGroupSize, 8192, 8192,
+                        "test_cloud_single_rowset_grouped_compaction_g${inputSegmentsPerGroup}_agg",
+                        "AGGREGATE KEY", "v INT SUM", "", inputSegmentsPerGroup, 8192, 8192,
                         [["100", "201"]], false)
                 checkSingleRowsetGroupedCompaction(
-                        "test_cloud_single_rowset_grouped_compaction_g${segmentGroupSize}_mow",
+                        "test_cloud_single_rowset_grouped_compaction_g${inputSegmentsPerGroup}_mow",
                         "UNIQUE KEY", "v INT",
-                        ", \"enable_unique_key_merge_on_write\" = \"true\"", segmentGroupSize, 8192,
-                        8192, [["100", "101"]], false)
+                        ", \"enable_unique_key_merge_on_write\" = \"true\"",
+                        inputSegmentsPerGroup, 8192, 8192, [["100", "101"]], false)
                 checkSingleRowsetGroupedCompaction(
-                        "test_cloud_single_rowset_grouped_compaction_g${segmentGroupSize}_mor",
+                        "test_cloud_single_rowset_grouped_compaction_g${inputSegmentsPerGroup}_mor",
                         "UNIQUE KEY", "v INT",
-                        ", \"enable_unique_key_merge_on_write\" = \"false\"", segmentGroupSize,
-                        8192, 8192, null, false)
+                        ", \"enable_unique_key_merge_on_write\" = \"false\"",
+                        inputSegmentsPerGroup, 8192, 8192, null, false)
             }
 
             set_be_param("cloud_single_rowset_compaction_segment_group_size",
-                    initialSegmentGroupSize.toString())
+                    initialInputSegmentsPerGroup.toString())
             set_be_param("vertical_compaction_max_segment_size", "2048")
             set_be_param("compaction_batch_size", "512")
             checkSingleRowsetGroupedCompaction(
                     "test_cloud_single_rowset_grouped_compact_multi_seg_dup",
-                    "DUPLICATE KEY", "v INT", "", initialSegmentGroupSize, 32768, 32768 * 2,
+                    "DUPLICATE KEY", "v INT", "", initialInputSegmentsPerGroup, 32768, 32768 * 2,
                     [["100", "100"], ["100", "101"]], true)
         } finally {
             GetDebugPoint().clearDebugPointsForAllBEs()
