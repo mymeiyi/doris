@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -51,6 +52,7 @@
 #include "storage/data_dir.h"
 #include "storage/olap_common.h"
 #include "storage/options.h"
+#include "storage/rowset/beta_rowset_writer.h"
 #include "storage/rowset/rowset.h"
 #include "storage/rowset/rowset_meta.h"
 #include "storage/rowset/rowset_reader.h"
@@ -59,6 +61,7 @@
 #include "storage/storage_engine.h"
 #include "storage/storage_policy.h"
 #include "storage/tablet/tablet_schema.h"
+#include "storage/utils.h"
 #include "util/s3_util.h"
 
 namespace Aws {
@@ -230,6 +233,36 @@ protected:
 
 private:
     std::unique_ptr<DataDir> _data_dir;
+};
+
+class TestBaseBetaRowsetWriter : public BaseBetaRowsetWriter {
+public:
+    TestBaseBetaRowsetWriter() { _already_built = true; }
+
+    void set_remote_rowset_for_test() { _context.storage_resource.emplace(); }
+
+    Status build(RowsetSharedPtr& rowset) override {
+        rowset = nullptr;
+        return Status::OK();
+    }
+
+    int64_t num_seg_for_test() const { return _num_seg(); }
+
+    std::vector<int32_t> segment_ids_by_position_for_test() const {
+        return _segment_ids_by_position();
+    }
+};
+
+class EnableCloudSegmentIdListGuard {
+public:
+    EnableCloudSegmentIdListGuard() : _old_value(config::enable_cloud_segment_id_list) {
+        config::enable_cloud_segment_id_list = true;
+    }
+
+    ~EnableCloudSegmentIdListGuard() { config::enable_cloud_segment_id_list = _old_value; }
+
+private:
+    bool _old_value;
 };
 
 class S3ClientMock : public Aws::S3::S3Client {
@@ -412,6 +445,105 @@ TEST_F(BetaRowsetTest, GetIndexFileNames) {
         ASSERT_EQ(file_names[0], "540085_0.idx");
         ASSERT_EQ(file_names[1], "540085_1.idx");
     }
+}
+
+TEST_F(BetaRowsetTest, SegmentViewUsesRealSegmentId) {
+    TabletSchemaPB schema_pb;
+    schema_pb.set_keys_type(KeysType::DUP_KEYS);
+    schema_pb.set_inverted_index_storage_format(InvertedIndexStorageFormatPB::V1);
+    construct_column(schema_pb.add_column(), schema_pb.add_index(), 10000, "key_index", 0, "INT",
+                     "key");
+    auto tablet_schema = std::make_shared<TabletSchema>();
+    tablet_schema->init_from_pb(schema_pb);
+
+    auto rowset_meta = std::make_shared<RowsetMeta>();
+    init_rs_meta(rowset_meta, 1, 1);
+    rowset_meta->set_segment_ids({0, 2, 5});
+
+    BetaRowset rowset(tablet_schema, rowset_meta, kTestDir);
+    auto seg = rowset.segment(1);
+    EXPECT_EQ(seg.pos(), 1);
+    EXPECT_EQ(seg.id(), 2);
+    EXPECT_EQ(seg.file_name(), "540085_2.dat");
+
+    auto seg_path = seg.path();
+    ASSERT_TRUE(seg_path.has_value()) << seg_path.error();
+    EXPECT_EQ(seg_path.value(), kTestDir + "/540085_2.dat");
+    EXPECT_EQ(seg.file_cache_key(), segment_v2::Segment::file_cache_key("540085", 2));
+
+    auto delete_bitmap_key = seg.delete_bitmap_key(7);
+    EXPECT_EQ(std::get<0>(delete_bitmap_key), rowset.rowset_id());
+    EXPECT_EQ(std::get<1>(delete_bitmap_key), 2);
+    EXPECT_EQ(std::get<2>(delete_bitmap_key), 7);
+
+    auto row_location = seg.row_location(10);
+    EXPECT_EQ(row_location.rowset_id, rowset.rowset_id());
+    EXPECT_EQ(row_location.segment_id, 2);
+    EXPECT_EQ(row_location.row_id, 10);
+
+    auto index_file_names = seg.index_file_names();
+    ASSERT_EQ(index_file_names.size(), 1);
+    EXPECT_EQ(index_file_names[0], "540085_2_10000.idx");
+
+    auto index_file_cache_key = seg.index_file_cache_key(*tablet_schema->inverted_indexes()[0]);
+    ASSERT_TRUE(index_file_cache_key.has_value()) << index_file_cache_key.error();
+    EXPECT_EQ(index_file_cache_key.value(), kTestDir + "/540085_2_10000");
+}
+
+TEST_F(BetaRowsetTest, RowsetWriterKeepsSparseSegmentIdsByPosition) {
+    EnableCloudSegmentIdListGuard enable_cloud_segment_id_list;
+    TestBaseBetaRowsetWriter writer;
+    writer.set_remote_rowset_for_test();
+    std::vector<uint32_t> segment_num_rows;
+
+    auto add_segment = [&](uint32_t segment_id) {
+        SegmentStatistics segstat;
+        segstat.row_num = segment_id + 1;
+        segstat.data_size = segment_id + 10;
+        segstat.index_size = segment_id + 100;
+        segstat.key_bounds.set_min_key(std::to_string(segment_id));
+        segstat.key_bounds.set_max_key(std::to_string(segment_id));
+        ASSERT_TRUE(writer.add_segment(segment_id, segstat).ok());
+    };
+
+    add_segment(0);
+    add_segment(1);
+    add_segment(2);
+    add_segment(100);
+    add_segment(101);
+    add_segment(200);
+    add_segment(201);
+
+    EXPECT_EQ(writer.num_seg_for_test(), 7);
+    EXPECT_EQ(writer.segment_ids_by_position_for_test(),
+              std::vector<int32_t>({0, 1, 2, 100, 101, 200, 201}));
+
+    ASSERT_TRUE(writer.get_segment_num_rows(&segment_num_rows).ok());
+    EXPECT_EQ(segment_num_rows, std::vector<uint32_t>({1, 2, 3, 101, 102, 201, 202}));
+}
+
+TEST_F(BetaRowsetTest, RowsetWriterSortsOutOfOrderSegmentIds) {
+    EnableCloudSegmentIdListGuard enable_cloud_segment_id_list;
+    TestBaseBetaRowsetWriter writer;
+    writer.set_remote_rowset_for_test();
+
+    auto make_segstat = [](uint32_t segment_id) {
+        SegmentStatistics segstat;
+        segstat.row_num = 1;
+        segstat.data_size = segment_id + 10;
+        segstat.index_size = segment_id + 100;
+        segstat.key_bounds.set_min_key(std::to_string(segment_id));
+        segstat.key_bounds.set_max_key(std::to_string(segment_id));
+        return segstat;
+    };
+
+    auto segstat_100 = make_segstat(100);
+    ASSERT_TRUE(writer.add_segment(100, segstat_100).ok());
+    auto segstat_0 = make_segstat(0);
+    ASSERT_TRUE(writer.add_segment(0, segstat_0).ok());
+
+    EXPECT_EQ(writer.num_seg_for_test(), 2);
+    EXPECT_EQ(writer.segment_ids_by_position_for_test(), std::vector<int32_t>({0, 100}));
 }
 
 TEST_F(BetaRowsetTest, GetSegmentNumRowsFromMeta) {

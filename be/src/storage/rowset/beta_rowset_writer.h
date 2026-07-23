@@ -65,10 +65,8 @@ public:
     // Close all file writers
     Status close();
 
-    // Get segments file size in segment id order.
-    // `seg_id_offset` is the offset of the segment id relative to the subscript of `_file_writers`,
-    // for more details, see `Tablet::create_transient_rowset_writer`.
-    Result<std::vector<size_t>> segments_file_size(int seg_id_offset);
+    // Get segment file sizes in rowset position order.
+    Result<std::vector<size_t>> segments_file_size(const std::vector<int32_t>& segment_ids);
 
     const std::unordered_map<int, io::FileWriterPtr>& get_file_writers() const {
         return _file_writers;
@@ -94,10 +92,9 @@ public:
     // Wait for all inverted index file writers to be closed
     Status finish_close();
 
-    // Get inverted index file info in segment id order.
-    // `seg_id_offset` is the offset of the segment id relative to the subscript of `_inverted_index_file_writers`,
-    // for more details, see `Tablet::create_transient_rowset_writer`.
-    Result<std::vector<const InvertedIndexFileInfo*>> inverted_index_file_info(int seg_id_offset);
+    // Get inverted index file info in rowset position order.
+    Result<std::vector<const InvertedIndexFileInfo*>> inverted_index_file_info(
+            const std::vector<int32_t>& segment_ids);
 
     // return all inverted index file writers
     std::unordered_map<int, IndexFileWriterPtr>& get_file_writers() {
@@ -216,6 +213,7 @@ protected:
     virtual Status _close_file_writers();
     virtual Status _check_segment_number_limit(size_t segnum);
     virtual int64_t _num_seg() const;
+    std::vector<int32_t> _segment_ids_by_position() const;
     // build a tmp rowset for load segment to calc delete_bitmap for this segment
     Status _build_tmp(RowsetSharedPtr& rowset_ptr);
 
@@ -235,17 +233,19 @@ protected:
         return Status::OK();
     }
 
-    std::atomic<int32_t> _num_segment; // number of consecutive flushed segments
-    roaring::Roaring _segment_set;     // bitmap set to record flushed segment id
-    std::mutex _segment_set_mutex;     // mutex for _segment_set
-    int32_t _segment_start_id;         // basic write start from 0, partial update may be different
+    // Local rowsets use this as the number of consecutive flushed segments for segcompaction.
+    // Cloud rowsets do not do segcompaction and use it as the completed segment count.
+    std::atomic<int32_t> _num_segment;
+    roaring::Roaring _segment_set; // bitmap set to record flushed segment id
+    std::mutex _segment_set_mutex; // mutex for _segment_set
+    int32_t _segment_start_id;     // basic write start from 0, partial update may be different
 
     SegmentFileCollection _seg_files;
     InvertedIndexFileCollection _idx_files;
 
-    // record rows number of every segment already written, using for rowid
-    // conversion when compaction in unique key with MoW model
+    // Record segment ids and row counts in rowset position order.
     std::vector<uint32_t> _segment_num_rows;
+    std::vector<int32_t> _segment_ids;
 
     // for unique key table with merge-on-write
     std::vector<KeyBoundsPB> _segments_encoded_key_bounds;
@@ -311,7 +311,7 @@ private:
     Status _rename_compacted_segments(int64_t begin, int64_t end);
     Status _rename_compacted_segment_plain(uint32_t seg_id);
     Status _rename_compacted_indices(int64_t begin, int64_t end, uint64_t seg_id);
-    Status _remove_segment_footer_cache(const uint32_t seg_id, const std::string& segment_path);
+    Status _remove_segment_footer_cache(uint32_t seg_pos, const std::string& segment_path);
     void _clear_statistics_for_deleting_segments_unsafe(uint32_t begin, uint32_t end);
 
     StorageEngine& _engine;

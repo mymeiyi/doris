@@ -1763,6 +1763,9 @@ DEFINE_mBool(random_segments_key_bounds_truncation, "false");
 // If true, non-MOW rowsets store a single aggregated [rowset_min, rowset_max]
 // key-bounds entry instead of per-segment bounds, to reduce meta size on cloud FDB.
 DEFINE_mBool(enable_aggregate_non_mow_key_bounds, "true");
+// If true, newly written cloud rowsets persist real segment ids in rowset metadata. This supports
+// non-contiguous segment file ids. Readers always honor persisted segment_ids when present.
+DEFINE_mBool(enable_cloud_segment_id_list, "false");
 // p0, daily, rqg, external
 DEFINE_String(fuzzy_test_type, "");
 
