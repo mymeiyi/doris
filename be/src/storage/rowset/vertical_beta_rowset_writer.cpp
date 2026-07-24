@@ -195,7 +195,11 @@ Status VerticalBetaRowsetWriter<T>::_create_segment_writer(
         std::unique_ptr<segment_v2::SegmentWriter>* writer) {
     auto& context = this->_context;
 
-    int32_t seg_id = DORIS_TRY(_allocate_segment_id());
+    auto seg_id_result = _allocate_segment_id();
+    if (!seg_id_result.has_value()) [[unlikely]] {
+        return std::move(seg_id_result).error();
+    }
+    int32_t seg_id = std::move(seg_id_result).value();
 
     io::FileWriterPtr segment_file_writer;
     RETURN_IF_ERROR(BaseBetaRowsetWriter::create_file_writer(seg_id, segment_file_writer));
