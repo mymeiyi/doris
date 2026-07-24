@@ -358,13 +358,16 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
             // version 5 rowset. Verify publish calculates new delete bitmaps against both.
             loadRows(tableName, 32769, 65536, 500000)
 
+            // Read version 6 first so the query path synchronizes the newly visible rowset from MS
+            // into the BE tablet cache used by the compaction status endpoint.
+            def countAfterUpdate = sql "SELECT COUNT(*) FROM ${tableName}"
+            assertEquals(countBefore, countAfterUpdate)
+
             def afterUpdate = waitForRowset(backend, tabletId, 6, 6)
             assertEquals(outputRowset, findRowset(afterUpdate, 2, 4))
             assertEquals(untouchedRowset, findRowset(afterUpdate, 5, 5))
             findRowset(afterUpdate, 6, 6)
 
-            def countAfterUpdate = sql "SELECT COUNT(*) FROM ${tableName}"
-            assertEquals(countBefore, countAfterUpdate)
             def expectedRowsAfterUpdate = rowsBefore.collect { row ->
                 int key = (row[0] as Number).intValue()
                 if (key >= 32769 && key <= 65536) {
