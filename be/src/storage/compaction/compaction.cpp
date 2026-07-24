@@ -1440,8 +1440,8 @@ Status CompactionMixin::modify_rowsets() {
         // TODO(LiaoXin): check if there are duplicate keys
         std::size_t missed_rows_size = 0;
         tablet()->calc_compaction_output_rowset_delete_bitmap(
-                _input_rowsets, *_rowid_conversion, 0, version.second + 1, missed_rows.get(),
-                location_map.get(), _tablet->tablet_meta()->delete_bitmap(),
+                _input_rowsets, _output_rowset, *_rowid_conversion, 0, version.second + 1,
+                missed_rows.get(), location_map.get(), _tablet->tablet_meta()->delete_bitmap(),
                 &output_rowset_delete_bitmap);
         if (missed_rows) {
             missed_rows_size = missed_rows->size();
@@ -1540,8 +1540,9 @@ Status CompactionMixin::modify_rowsets() {
                 }
                 DeleteBitmap txn_output_delete_bitmap(_tablet->tablet_id());
                 tablet()->calc_compaction_output_rowset_delete_bitmap(
-                        _input_rowsets, *_rowid_conversion, 0, UINT64_MAX, missed_rows.get(),
-                        location_map.get(), *it.delete_bitmap.get(), &txn_output_delete_bitmap);
+                        _input_rowsets, _output_rowset, *_rowid_conversion, 0, UINT64_MAX,
+                        missed_rows.get(), location_map.get(), *it.delete_bitmap.get(),
+                        &txn_output_delete_bitmap);
                 if (config::enable_merge_on_write_correctness_check) {
                     RowsetIdUnorderedSet rowsetids;
                     rowsetids.insert(_output_rowset->rowset_id());
@@ -1560,7 +1561,7 @@ Status CompactionMixin::modify_rowsets() {
             // Convert the delete bitmap of the input rowsets to output rowset for
             // incremental data.
             tablet()->calc_compaction_output_rowset_delete_bitmap(
-                    _input_rowsets, *_rowid_conversion, version.second, UINT64_MAX,
+                    _input_rowsets, _output_rowset, *_rowid_conversion, version.second, UINT64_MAX,
                     missed_rows.get(), location_map.get(), _tablet->tablet_meta()->delete_bitmap(),
                     &output_rowset_delete_bitmap);
 

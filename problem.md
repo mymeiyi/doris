@@ -8,7 +8,7 @@
 transient append 只处理当前待发布的 load rowset，不会向已经 visible 的 compaction
 输出 rowset 追加 segment，因此需要单独判断其触发条件。
 
-## 1. [P1] RowIdConversion 把输出 segment position 当成物理 segment id
+## 1. [P1][已修复] RowIdConversion 把输出 segment position 当成物理 segment id
 
 位置：
 
@@ -31,6 +31,14 @@ output_rowset_delete_bitmap->add({dst.rowset_id, dst.segment_id, cur_version}, d
 如果 vertical compaction 输出物理 segment id 为 `[10, 11]`，这里生成的 delete bitmap key 仍然是 `0` 和 `1`。读取真实 segment `10` 和 `11` 时会漏掉对应删除记录，属于数据正确性问题。
 
 内部 inverted index compaction 的 conversion vector 可以继续使用 position，但转换为 `RowLocation` 或 delete bitmap key 时必须映射成输出物理 segment id。
+
+修复后，`RowIdConversion::get()` 返回显式的 destination segment position 和 row id，不再
+使用 `RowLocation` 承载 position。生成 delete bitmap 和 correctness check 的
+`location_map` 时，通过 output rowset 的 segment view 将 position 转换成物理 segment
+id。inverted index compaction 继续使用内部 position-based conversion vector。
+
+新增单测使用输入物理 segment id `10` 和输出物理 segment id `100`，验证 delete bitmap
+key 和 `location_map` 均使用真实物理 id。
 
 ## 2. [当前生产路径不可达] Cloud partial update 尚不能合并 segment list
 
@@ -169,7 +177,7 @@ V2 inverted index 路径应统一使用已经解析出的 `segment_id`。
 `rowset_segment_id()` 解析出的物理 segment id 构造 V2 inverted index 路径。新增单测
 使用 `segment_ids=[10, 12]` 覆盖两条路径，验证真实 `.dat` 和 `.idx` 文件均被删除。
 
-## 6. [P2] Rowid conversion correctness check 用物理 id 索引 position vector
+## 6. [P2][已修复] Rowid conversion correctness check 用物理 id 索引 position vector
 
 位置：
 
@@ -189,6 +197,11 @@ dst_segments[dst.segment_id]->read_key_by_rowid(...);
 
 访问 vector 前应使用对应 rowset metadata 的 `position_of(segment_id)` 将物理 id 转换成 position。
 
+修复后，source 和 destination `RowLocation` 都保持物理 segment id 语义；读取
+`load_segments()` 返回的 vector 前，分别通过 source 和 destination rowset metadata 的
+`position_of()` 转换为 position。`test_mow_compact_multi_segments` 同时开启随机非零输出
+segment id 和 `enable_rowid_conversion_correctness_check`，覆盖真实 compaction 检查路径。
+
 ## 7. Production Cloud compaction 尚未设置 segment id range
 
 位置：
@@ -202,9 +215,9 @@ dst_segments[dst.segment_id]->read_key_by_rowid(...);
 _output_rs_writer = DORIS_TRY(_tablet->create_rowset_writer(ctx, _is_vertical));
 ```
 
-因此目前非零 vertical compaction segment id 还没有真正接入生产路径。接入之前，需要
-先修复依赖 compaction 输出 segment id 从 0 开始的问题，例如问题 1 和问题 6。问题 2
-不会因为 compaction 接入非零起点而单独触发。
+因此目前非零 vertical compaction segment id 还没有作为正常配置接入生产路径。问题 1
+和问题 6 已修复，并通过 debug point 在回归测试中注入随机非零起点。问题 2 不会因为
+compaction 接入非零起点而单独触发。
 
 ## 已确认安全的 position 循环
 
@@ -225,10 +238,8 @@ _output_rs_writer = DORIS_TRY(_tablet->create_rowset_writer(ctx, _is_vertical));
 
 当前测试主要覆盖 segment id accessor、rowset reader 和 writer metadata，没有覆盖以下非零 segment id 场景：
 
-- Cloud compaction 的 output delete bitmap；
 - inverted index compaction 输出 writer；
 - Cloud Recycler 的 V2 inverted index；
-- rowid conversion correctness check；
 - Cloud compaction 对 `set_segment_id_range()` 的生产接入。
 
 建议补充至少一个使用非零且非连续 segment id 的 Cloud 端到端或组件级测试，避免后续再次混用 position 和物理 id。

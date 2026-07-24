@@ -1335,8 +1335,9 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     Version version = max_version();
     std::size_t missed_rows_size = 0;
     calc_compaction_output_rowset_delete_bitmap(
-            input_rowsets, rowid_conversion, 0, version.second + 1, missed_rows.get(),
-            location_map.get(), tablet_meta()->delete_bitmap(), output_rowset_delete_bitmap.get());
+            input_rowsets, output_rowset, rowid_conversion, 0, version.second + 1,
+            missed_rows.get(), location_map.get(), tablet_meta()->delete_bitmap(),
+            output_rowset_delete_bitmap.get());
     if (missed_rows) {
         missed_rows_size = missed_rows->size();
         if (!allow_delete_in_cumu_compaction) {
@@ -1382,8 +1383,9 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     int64_t t3 = MonotonicMicros();
 
     calc_compaction_output_rowset_delete_bitmap(
-            input_rowsets, rowid_conversion, version.second, UINT64_MAX, missed_rows.get(),
-            location_map.get(), tablet_meta()->delete_bitmap(), output_rowset_delete_bitmap.get());
+            input_rowsets, output_rowset, rowid_conversion, version.second, UINT64_MAX,
+            missed_rows.get(), location_map.get(), tablet_meta()->delete_bitmap(),
+            output_rowset_delete_bitmap.get());
     int64_t t4 = MonotonicMicros();
     if (location_map) {
         RETURN_IF_ERROR(check_rowid_conversion(output_rowset, *location_map));

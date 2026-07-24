@@ -136,6 +136,7 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
         GetDebugPoint().clearDebugPointsForAllBEs()
         reset_be_param("doris_scanner_row_bytes")
         reset_be_param("tablet_rowset_stale_sweep_time_sec")
+        reset_be_param("enable_rowid_conversion_correctness_check")
     }
     GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
     GetDebugPoint().enableDebugPointForAllBEs("VerticalBetaRowsetWriter.init.random_start_segment_id")
@@ -145,6 +146,8 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
     set_be_param("doris_scanner_row_bytes", "1")
     get_be_param("tablet_rowset_stale_sweep_time_sec")
     set_be_param("tablet_rowset_stale_sweep_time_sec", "0")
+    get_be_param("enable_rowid_conversion_correctness_check")
+    set_be_param("enable_rowid_conversion_correctness_check", "true")
 
     tableName = "test_compact_multi_segments_"
     sql """ DROP TABLE IF EXISTS ${tableName} """
