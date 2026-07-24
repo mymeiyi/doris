@@ -779,7 +779,7 @@ TEST_F(IndexCompactionTest, tes_write_index_normally) {
                                                   output_segment_start_id);
     EXPECT_TRUE(st.ok()) << st.to_string();
 
-    const auto& seg_path = output_rowset_index->segment_path(0);
+    const auto& seg_path = output_rowset_index->segment(0).path();
     EXPECT_TRUE(seg_path.has_value()) << seg_path.error();
     auto inverted_index_file_reader_index = IndexCompactionUtils::init_index_file_reader(
             output_rowset_index, seg_path.value(),
