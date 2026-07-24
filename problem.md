@@ -1,0 +1,200 @@
+# Cloud Segment List Rowset Layout 审查问题
+
+参考提交 `[feature](cloud) Support segment list rowset layout` 对当前存算分离代码进行静态审查后，仍发现多处把 rowset 内的 segment position（`0, 1, ..., num_segments - 1`）当作物理 segment id 使用的问题。
+
+部分问题目前尚未在生产路径触发，因为 `set_segment_id_range()` 还没有接入 Cloud compaction；一旦接入非零输出 segment id，这些问题可能造成 delete bitmap 错误、compaction 失败或对象存储文件泄漏。
+
+## 1. [P1] RowIdConversion 把输出 segment position 当成物理 segment id
+
+位置：
+
+- `be/src/storage/rowid_conversion.h:92`
+- `be/src/storage/tablet/base_tablet.cpp:1834`
+
+`RowIdConversion::add()` 保存的 `_cur_dst_segment_id` 是输出 segment 的 position：
+
+```cpp
+_segments_rowid_map[id][item.row_id] =
+        std::pair<uint32_t, uint32_t> {_cur_dst_segment_id, _cur_dst_segment_rowid++};
+```
+
+`RowIdConversion::get()` 随后直接把这个 position 填入 `RowLocation.segment_id`，而 `calc_compaction_output_rowset_delete_bitmap()` 又直接使用它生成 delete bitmap key：
+
+```cpp
+output_rowset_delete_bitmap->add({dst.rowset_id, dst.segment_id, cur_version}, dst.row_id);
+```
+
+如果 vertical compaction 输出物理 segment id 为 `[10, 11]`，这里生成的 delete bitmap key 仍然是 `0` 和 `1`。读取真实 segment `10` 和 `11` 时会漏掉对应删除记录，属于数据正确性问题。
+
+内部 inverted index compaction 的 conversion vector 可以继续使用 position，但转换为 `RowLocation` 或 delete bitmap key 时必须映射成输出物理 segment id。
+
+## 2. [P1] Cloud partial update append 仍从 `num_segments` 开始
+
+位置：
+
+- `be/src/cloud/cloud_tablet.cpp:902`
+- `be/src/storage/rowset/rowset_meta.cpp:375`
+
+`CloudTablet::create_transient_rowset_writer()` 仍然使用：
+
+```cpp
+writer->set_segment_start_id(cast_set<int32_t>(rowset.num_segments()));
+```
+
+对于 `segment_ids=[10, 11]`，下一个物理 id 应该是 `12`，这里却从 `2` 开始。对于 `segment_ids=[0, 2]`，还会重复分配已经存在的 segment 2。
+
+同时，`RowsetMeta::merge_rowset_meta()` 只增加 `num_segments`，没有合并 `segment_ids`。append 后可能得到不一致的 metadata：
+
+```text
+num_segments = 3
+segment_ids = [10, 11]
+```
+
+需要从已有 segment list 的最后一个物理 id 之后开始分配，并在合并 transient rowset metadata 时同步合并 segment list。
+
+## 3. [P1] Delete bitmap store v2/v3 聚合路径仍遍历连续 segment id
+
+位置：
+
+- `be/src/cloud/cloud_tablet.cpp:1399`
+- `be/src/storage/tablet/tablet_meta.cpp:1750`
+
+`CloudTablet::calc_delete_bitmap_for_compaction()` 只向 delete bitmap API 传递 `(rowset_id, num_segments)`：
+
+```cpp
+std::vector<std::pair<RowsetId, int64_t>> retained_rowsets_to_seg_num;
+```
+
+`DeleteBitmap::subset_and_agg()` 随后固定遍历：
+
+```cpp
+for (int64_t seg_id = 0; seg_id < segment_num; ++seg_id) {
+    BitmapKey end {rowset_id, seg_id, end_version};
+    auto bm = get_agg_without_cache(end, start_version);
+    // ...
+}
+```
+
+当 retained rowset 使用 `segment_ids=[10, 11]` 时，真实 delete bitmap 不会被聚合。
+
+触发条件：
+
+- `delete_bitmap_store_write_version` 为 2 或 3；
+- `enable_agg_delta_delete_bitmap_for_store_v2=true`，该配置默认值为 true。
+
+非聚合的 `DeleteBitmap::subset()` 使用整个 rowset key range 扫描，是安全的。问题只存在于 `subset_and_agg()`。
+
+该接口需要接收每个 rowset 的真实 segment id 列表，而不能只接收 segment 数量。
+
+## 4. [P1] Inverted index compaction 按 position 查找输出 writer
+
+位置：
+
+- `be/src/storage/compaction/compaction.cpp:868`
+- `be/src/storage/compaction/compaction.cpp:1047`
+
+`Compaction::do_inverted_index_compaction()` 使用 `0..dest_segment_num-1` 访问输出 index writer：
+
+```cpp
+for (int dest_segment_id = 0; dest_segment_id < dest_segment_num; dest_segment_id++) {
+    auto res = inverted_index_file_writers[dest_segment_id]->open(index_meta);
+    // ...
+}
+```
+
+`inverted_index_file_writers` 的 key 是真实物理 segment id。输出从 10 开始时，map 中的 key 是 `10`、`11`，这里却访问 `0`、`1`。`operator[]` 会插入空指针，随后解引用，可能直接崩溃。
+
+同一函数生成 debug 文件名时也仍然使用 `0..dest_segment_num-1`，无法表示真实的输出 segment 文件名。
+
+需要显式区分 destination position 和物理 segment id，并使用实际 writer key 访问输出 index writer。
+
+## 5. [P2] Cloud Recycler 删除 V2 inverted index 时使用循环 position
+
+位置：
+
+- `cloud/src/recycler/recycler.cpp:3205`
+- `cloud/src/recycler/recycler.cpp:3962`
+
+两个 Recycler 路径中，data 文件和 V1 inverted index 已经使用真实 `segment_id`，但 V2 inverted index 仍然传入循环 position `i`：
+
+```cpp
+auto segment_id = rowset_segment_id(rs, i);
+
+// Data file uses the real id.
+segment_path(tablet_id, rowset_id, segment_id);
+
+// V2 index still uses the position.
+inverted_index_path_v2(tablet_id, rowset_id, i);
+```
+
+例如 `segment_ids=[10, 11]` 时，Recycler 会尝试删除 `_0.idx` 和 `_1.idx`，真实的 `_10.idx` 和 `_11.idx` 会被遗留，造成对象存储泄漏。
+
+V2 inverted index 路径应统一使用已经解析出的 `segment_id`。
+
+## 6. [P2] Rowid conversion correctness check 用物理 id 索引 position vector
+
+位置：
+
+- `be/src/storage/tablet/base_tablet.cpp:1867`
+- `be/src/storage/tablet/base_tablet.cpp:1880`
+
+`BaseTablet::check_rowid_conversion()` 使用：
+
+```cpp
+segments[src.segment_id]->read_key_by_rowid(...);
+dst_segments[dst.segment_id]->read_key_by_rowid(...);
+```
+
+`load_segments()` 返回的是按 rowset position 排列的 vector，而 `RowLocation.segment_id` 表示物理 segment id。输入 rowset 为 `segment_ids=[10, 11]` 时，这里会发生越界访问。
+
+该路径只在 `enable_rowid_conversion_correctness_check` 开启时触发，但 Cloud compaction 会调用它。
+
+访问 vector 前应使用对应 rowset metadata 的 `position_of(segment_id)` 将物理 id 转换成 position。
+
+## 7. Production Cloud compaction 尚未设置 segment id range
+
+位置：
+
+- `be/src/storage/compaction/compaction.cpp:1967`
+- `be/test/storage/compaction/vertical_compaction_test.cpp:418`
+
+当前 `set_segment_id_range()` 只在单元测试中调用。实际 Cloud compaction 在创建输出 writer 后，没有设置 segment id 分配范围：
+
+```cpp
+_output_rs_writer = DORIS_TRY(_tablet->create_rowset_writer(ctx, _is_vertical));
+```
+
+因此目前非零 vertical compaction segment id 还没有真正接入生产路径。接入之前，需要先修复上述依赖输出 segment id 从 0 开始的问题。
+
+## 已确认安全的 position 循环
+
+以下 `0..num_segments-1` 循环表示 rowset position，不应替换成物理 segment id：
+
+- 访问 rowset repeated metadata，例如 `segments_file_size[pos]`、`num_segment_rows[pos]` 和 `segments_key_bounds[pos]`；
+- scanner 使用的 `segment_offsets`；
+- `BetaRowsetReader` 先通过 position 获取 `segment(pos).ref()`；
+- iterator flag、rowset id 数组等与 segment iterator vector 一一对应的数据结构。
+
+以下路径仍使用连续物理 id，但不属于 Cloud segment-list rowset 的处理范围：
+
+- local-only binlog；
+- local snapshot/link/copy；
+- local-mode `RemoteRowsetGcPB`。
+
+## 测试覆盖缺口
+
+当前测试主要覆盖 segment id accessor、rowset reader 和 writer metadata，没有覆盖以下非零 segment id 场景：
+
+- Cloud compaction 的 output delete bitmap；
+- delete bitmap store v2/v3 聚合；
+- Cloud partial update transient append；
+- inverted index compaction 输出 writer；
+- Cloud Recycler 的 V2 inverted index；
+- rowid conversion correctness check；
+- Cloud compaction 对 `set_segment_id_range()` 的生产接入。
+
+建议补充至少一个使用非零且非连续 segment id 的 Cloud 端到端或组件级测试，避免后续再次混用 position 和物理 id。
+
+## 审查说明
+
+本次仅进行静态代码审查，未编译、未运行测试。
