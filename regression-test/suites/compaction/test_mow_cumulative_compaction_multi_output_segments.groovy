@@ -21,7 +21,6 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
         return
     }
 
-    def tableName = "test_mow_cumulative_compaction_multi_output_segments"
     def backendIdToHost = [:]
     def backendIdToHttpPort = [:]
     getBackendIpHttpPort(backendIdToHost, backendIdToHttpPort)
@@ -31,6 +30,7 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
             "doris_scanner_row_bytes",
             "enable_rowid_conversion_correctness_check",
             "enable_vertical_compaction",
+            "inverted_index_compaction_enable",
             "vertical_compaction_max_segment_size"
     ]
     def originalConfigs = [:]
@@ -132,11 +132,20 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
                 "compaction timeout: tablet=${tabletId}, timeoutMs=${timeoutMs}, last=${lastStatus}")
     }
 
-    def loadRows = { int startKey, int endKey, int valueBase ->
+    def loadRows = { String tableName, int startKey, int endKey, int valueBase ->
+        def batchTags = [
+                100000: "batchone",
+                200000: "batchtwo",
+                300000: "batchthree",
+                400000: "batchfour"
+        ]
+        def batchTag = batchTags[valueBase]
+        assertNotNull(batchTag)
         StringBuilder content = new StringBuilder()
         (startKey..endKey).each { int key ->
             String suffix = key.toString().padLeft(32, "0")
-            String payload = "payload_${suffix}_${(key * 17L).toString().padLeft(32, "0")}"
+            String payload =
+                    "${batchTag} payload ${suffix} ${(key * 17L).toString().padLeft(32, "0")}"
             content.append("${key},${valueBase + key},${payload}\n")
         }
         streamLoad {
@@ -157,13 +166,24 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
         sql "sync"
     }
 
-    def readRows = {
+    def readRows = { String tableName ->
         return sql("""
             SELECT k, v
             FROM ${tableName}
             WHERE k IN (1, 16384, 16385, 32768, 32769, 49152, 49153, 65536, 65537, 81920)
             ORDER BY k
         """)
+    }
+
+    def readRowsByIndex = { String tableName ->
+        return ["batchone", "batchtwo", "batchthree", "batchfour"].collect { String batchTag ->
+            def result = sql """
+                SELECT /*+ SET_VAR(enable_match_without_inverted_index = false) */ COUNT(*)
+                FROM ${tableName}
+                WHERE payload MATCH '${batchTag}'
+            """
+            return result[0][0]
+        }
     }
 
     def getLocalDeleteBitmap = { def backend, String tabletId ->
@@ -182,95 +202,115 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
         updateBeConfig("doris_scanner_row_bytes", "1")
         updateBeConfig("enable_rowid_conversion_correctness_check", "true")
         updateBeConfig("enable_vertical_compaction", "true")
+        updateBeConfig("inverted_index_compaction_enable", "true")
         updateBeConfig("vertical_compaction_max_segment_size", "8192")
 
         GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
         GetDebugPoint().enableDebugPointForAllBEs(
                 "VerticalBetaRowsetWriter.init.random_start_segment_id")
 
-        sql "DROP TABLE IF EXISTS ${tableName}"
-        sql """
-            CREATE TABLE ${tableName} (
-                k INT NOT NULL,
-                v BIGINT NOT NULL,
-                payload VARCHAR(128) NOT NULL
-            )
-            UNIQUE KEY(k)
-            DISTRIBUTED BY HASH(k) BUCKETS 1
-            PROPERTIES (
-                "replication_num" = "1",
-                "disable_auto_compaction" = "true",
-                "enable_unique_key_merge_on_write" = "true"
-            )
-        """
+        def runCompaction = { String tableName, boolean withInvertedIndex ->
+            def indexDefinition = withInvertedIndex
+                    ? """,
+                        INDEX idx_payload (payload) USING INVERTED
+                        PROPERTIES("parser" = "english")
+                    """
+                    : ""
+            sql "DROP TABLE IF EXISTS ${tableName}"
+            sql """
+                CREATE TABLE ${tableName} (
+                    k INT NOT NULL,
+                    v BIGINT NOT NULL,
+                    payload VARCHAR(128) NOT NULL
+                    ${indexDefinition}
+                )
+                UNIQUE KEY(k)
+                DISTRIBUTED BY HASH(k) BUCKETS 1
+                PROPERTIES (
+                    "replication_num" = "1",
+                    "disable_auto_compaction" = "true",
+                    "enable_unique_key_merge_on_write" = "true",
+                    "inverted_index_storage_format" = "V2"
+                )
+            """
 
-        loadRows(1, 32768, 100000)
-        loadRows(16385, 49152, 200000)
-        loadRows(32769, 65536, 300000)
-        // Keep this rowset outside the compaction range. Its updates create delete bitmap entries
-        // on the [2-4] output rowset, exercising row-id conversion to physical segment ids.
-        loadRows(49153, 81920, 400000)
+            loadRows(tableName, 1, 32768, 100000)
+            loadRows(tableName, 16385, 49152, 200000)
+            loadRows(tableName, 32769, 65536, 300000)
+            // Keep this rowset outside the compaction range. Its updates create delete bitmap
+            // entries on the [2-4] output rowset, exercising row-id conversion to physical
+            // segment ids.
+            loadRows(tableName, 49153, 81920, 400000)
 
-        def countBefore = sql "SELECT COUNT(*) FROM ${tableName}"
-        assertEquals(81920, countBefore[0][0])
-        def rowsBefore = readRows()
+            def countBefore = sql "SELECT COUNT(*) FROM ${tableName}"
+            assertEquals(81920, countBefore[0][0])
+            def rowsBefore = readRows(tableName)
+            def indexRowsBefore = withInvertedIndex ? readRowsByIndex(tableName) : null
 
-        def tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
-        assertEquals(1, tablets.size())
-        def tabletId = tablets[0].TabletId.toString()
-        def backendId = tablets[0].BackendId.toString()
-        def backends = sql_return_maparray "SHOW BACKENDS"
-        def backend = backends.find { it.BackendId.toString() == backendId }
-        assertNotNull(backend)
+            def tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
+            assertEquals(1, tablets.size())
+            def tabletId = tablets[0].TabletId.toString()
+            def backendId = tablets[0].BackendId.toString()
+            def backends = sql_return_maparray "SHOW BACKENDS"
+            def backend = backends.find { it.BackendId.toString() == backendId }
+            assertNotNull(backend)
 
-        def before = showTablet(backend, tabletId)
-        [2, 3, 4].each { int version ->
-            def inputRowset = findRowset(before, version, version)
-            def inputInfo = parseRowset(inputRowset)
-            assertTrue(inputInfo.segmentNum > 1, inputRowset)
+            def before = showTablet(backend, tabletId)
+            [2, 3, 4].each { int version ->
+                def inputRowset = findRowset(before, version, version)
+                def inputInfo = parseRowset(inputRowset)
+                assertTrue(inputInfo.segmentNum > 1, inputRowset)
+            }
+            def untouchedRowset = findRowset(before, 5, 5)
+
+            GetDebugPoint().enableDebugPointForAllBEs(
+                    "CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
+                    [tablet_id: tabletId, start_version: "2", end_version: "4"])
+            def (code, out, err) =
+                    be_run_cumulative_compaction(backend.Host, backend.HttpPort, tabletId)
+            logger.info("Run compaction: code=${code}, out=${out}, err=${err}")
+            assertEquals(0, code)
+            def compactResult = parseJson(out.trim())
+            assertEquals("success", compactResult.status.toLowerCase())
+            waitForCompaction(backend, tabletId)
+
+            def after = showTablet(backend, tabletId)
+            def outputRowset = findRowset(after, 2, 4)
+            def outputInfo = parseRowset(outputRowset)
+            assertEquals("NONOVERLAPPING", outputInfo.overlap)
+            assertTrue(outputInfo.segmentNum > 1, outputRowset)
+            assertEquals(outputInfo.segmentNum, outputInfo.segmentIds.size())
+            assertTrue(outputInfo.segmentIds[0] > 0, outputRowset)
+            for (int i = 1; i < outputInfo.segmentIds.size(); ++i) {
+                assertEquals(outputInfo.segmentIds[i - 1] + 1, outputInfo.segmentIds[i])
+            }
+            assertEquals(untouchedRowset, findRowset(after, 5, 5))
+
+            def countAfter = sql "SELECT COUNT(*) FROM ${tableName}"
+            assertEquals(countBefore, countAfter)
+            assertEquals(rowsBefore, readRows(tableName))
+            if (withInvertedIndex) {
+                assertEquals(indexRowsBefore, readRowsByIndex(tableName))
+            }
+
+            def deleteBitmap = getLocalDeleteBitmap(backend, tabletId)
+            assertNotNull(deleteBitmap.delete_bitmap)
+            def outputDeleteBitmapKeys = deleteBitmap.delete_bitmap.keySet().findAll {
+                it.contains("rowset: ${outputInfo.rowsetId},")
+            }
+            assertFalse(outputDeleteBitmapKeys.isEmpty(),
+                    "missing delete bitmap for output rowset ${outputInfo.rowsetId}: ${deleteBitmap}")
+            outputDeleteBitmapKeys.each { String key ->
+                def matcher = key =~ /segment:\s+([0-9]+)/
+                assertTrue(matcher.find(), "unexpected delete bitmap key: ${key}")
+                assertTrue(outputInfo.segmentIds.contains(matcher.group(1).toInteger()),
+                        "delete bitmap references a segment outside " +
+                                "${outputInfo.segmentIds}: ${key}")
+            }
         }
-        def untouchedRowset = findRowset(before, 5, 5)
 
-        GetDebugPoint().enableDebugPointForAllBEs(
-                "CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
-                [tablet_id: tabletId, start_version: "2", end_version: "4"])
-        def (code, out, err) =
-                be_run_cumulative_compaction(backend.Host, backend.HttpPort, tabletId)
-        logger.info("Run compaction: code=${code}, out=${out}, err=${err}")
-        assertEquals(0, code)
-        def compactResult = parseJson(out.trim())
-        assertEquals("success", compactResult.status.toLowerCase())
-        waitForCompaction(backend, tabletId)
-
-        def after = showTablet(backend, tabletId)
-        def outputRowset = findRowset(after, 2, 4)
-        def outputInfo = parseRowset(outputRowset)
-        assertEquals("NONOVERLAPPING", outputInfo.overlap)
-        assertTrue(outputInfo.segmentNum > 1, outputRowset)
-        assertEquals(outputInfo.segmentNum, outputInfo.segmentIds.size())
-        assertTrue(outputInfo.segmentIds[0] > 0, outputRowset)
-        for (int i = 1; i < outputInfo.segmentIds.size(); ++i) {
-            assertEquals(outputInfo.segmentIds[i - 1] + 1, outputInfo.segmentIds[i])
-        }
-        assertEquals(untouchedRowset, findRowset(after, 5, 5))
-
-        def countAfter = sql "SELECT COUNT(*) FROM ${tableName}"
-        assertEquals(countBefore, countAfter)
-        assertEquals(rowsBefore, readRows())
-
-        def deleteBitmap = getLocalDeleteBitmap(backend, tabletId)
-        assertNotNull(deleteBitmap.delete_bitmap)
-        def outputDeleteBitmapKeys = deleteBitmap.delete_bitmap.keySet().findAll {
-            it.contains("rowset: ${outputInfo.rowsetId},")
-        }
-        assertFalse(outputDeleteBitmapKeys.isEmpty(),
-                "missing delete bitmap for output rowset ${outputInfo.rowsetId}: ${deleteBitmap}")
-        outputDeleteBitmapKeys.each { String key ->
-            def matcher = key =~ /segment:\s+([0-9]+)/
-            assertTrue(matcher.find(), "unexpected delete bitmap key: ${key}")
-            assertTrue(outputInfo.segmentIds.contains(matcher.group(1).toInteger()),
-                    "delete bitmap references a segment outside ${outputInfo.segmentIds}: ${key}")
-        }
+        runCompaction("test_mow_cumulative_compaction_multi_output_segments", false)
+        runCompaction("test_mow_cumulative_compaction_multi_output_segments_index", true)
     } finally {
         GetDebugPoint().clearDebugPointsForAllBEs()
         resetBeConfigs()
