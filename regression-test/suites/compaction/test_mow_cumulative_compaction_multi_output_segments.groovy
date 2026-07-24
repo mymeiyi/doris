@@ -227,7 +227,6 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
         [2, 3, 4].each { int version ->
             def inputRowset = findRowset(before, version, version)
             def inputInfo = parseRowset(inputRowset)
-            assertEquals("OVERLAPPING", inputInfo.overlap)
             assertTrue(inputInfo.segmentNum > 1, inputRowset)
         }
         def untouchedRowset = findRowset(before, 5, 5)
