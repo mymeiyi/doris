@@ -413,10 +413,15 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
             }
         }
 
-        // Cover both compaction writers. The non-vertical run also exercises inverted index
-        // compaction with destination row-id conversion to non-zero physical segment ids.
+        // Cover the full cross-product of compaction writer and inverted index modes.
         runCompaction("test_mow_cumulative_compaction_multi_output_segments", false, true)
-        runCompaction("test_mow_cumulative_compaction_multi_output_segments_index", true, false)
+        runCompaction(
+                "test_mow_cumulative_compaction_multi_output_segments_non_vertical", false, false)
+        runCompaction("test_mow_cumulative_compaction_multi_output_segments_index", true, true)
+        runCompaction(
+                "test_mow_cumulative_compaction_multi_output_segments_index_non_vertical",
+                true,
+                false)
     } finally {
         GetDebugPoint().clearDebugPointsForAllBEs()
         resetBeConfigs()
