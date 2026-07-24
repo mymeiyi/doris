@@ -1396,24 +1396,28 @@ Status CloudTablet::calc_delete_bitmap_for_compaction(
     auto store_version = config::delete_bitmap_store_write_version;
     if (store_version == 2 || store_version == 3) {
         delete_bitmap_v2 = std::make_shared<DeleteBitmap>(*output_rowset_delete_bitmap);
-        std::vector<std::pair<RowsetId, int64_t>> retained_rowsets_to_seg_num;
+        std::vector<DeleteBitmap::RowsetIdWithSegmentIds> retained_rowsets;
         {
             std::shared_lock rlock(get_header_lock());
             for (const auto& [rowset_version, rowset_ptr] : rowset_map()) {
                 if (rowset_version.second < output_rowset->start_version()) {
-                    retained_rowsets_to_seg_num.emplace_back(
-                            std::make_pair(rowset_ptr->rowset_id(), rowset_ptr->num_segments()));
+                    std::vector<DeleteBitmap::SegmentId> segment_ids;
+                    segment_ids.reserve(rowset_ptr->num_segments());
+                    for (auto segment : rowset_ptr->segments()) {
+                        segment_ids.push_back(cast_set<DeleteBitmap::SegmentId>(segment.id()));
+                    }
+                    retained_rowsets.emplace_back(rowset_ptr->rowset_id(), std::move(segment_ids));
                 }
             }
         }
         if (config::enable_agg_delta_delete_bitmap_for_store_v2) {
             tablet_meta()->delete_bitmap().subset_and_agg(
-                    retained_rowsets_to_seg_num, output_rowset->start_version(),
-                    output_rowset->end_version(), delete_bitmap_v2.get());
+                    retained_rowsets, output_rowset->start_version(), output_rowset->end_version(),
+                    delete_bitmap_v2.get());
         } else {
             tablet_meta()->delete_bitmap().subset(
-                    retained_rowsets_to_seg_num, output_rowset->start_version(),
-                    output_rowset->end_version(), delete_bitmap_v2.get());
+                    retained_rowsets, output_rowset->start_version(), output_rowset->end_version(),
+                    delete_bitmap_v2.get());
         }
     }
     std::optional<StorageResource> storage_resource;

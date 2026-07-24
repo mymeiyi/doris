@@ -52,7 +52,7 @@ segment_ids = [10, 11]
 
 需要从已有 segment list 的最后一个物理 id 之后开始分配，并在合并 transient rowset metadata 时同步合并 segment list。
 
-## 3. [P1] Delete bitmap store v2/v3 聚合路径仍遍历连续 segment id
+## 3. [P1][已修复] Delete bitmap store v2/v3 聚合路径仍遍历连续 segment id
 
 位置：
 
@@ -84,7 +84,9 @@ for (int64_t seg_id = 0; seg_id < segment_num; ++seg_id) {
 
 非聚合的 `DeleteBitmap::subset()` 使用整个 rowset key range 扫描，是安全的。问题只存在于 `subset_and_agg()`。
 
-该接口需要接收每个 rowset 的真实 segment id 列表，而不能只接收 segment 数量。
+修复后，该接口接收每个 rowset 的真实 segment id 列表，Cloud 调用方通过
+`rowset->segments()` 构造列表，聚合路径不再根据 segment 数量推导物理 id。新增单测使用
+`segment_ids=[10, 12]` 验证只聚合列表中的真实 segment。
 
 ## 4. [P1] Inverted index compaction 按 position 查找输出 writer
 
@@ -186,7 +188,6 @@ _output_rs_writer = DORIS_TRY(_tablet->create_rowset_writer(ctx, _is_vertical));
 当前测试主要覆盖 segment id accessor、rowset reader 和 writer metadata，没有覆盖以下非零 segment id 场景：
 
 - Cloud compaction 的 output delete bitmap；
-- delete bitmap store v2/v3 聚合；
 - Cloud partial update transient append；
 - inverted index compaction 输出 writer；
 - Cloud Recycler 的 V2 inverted index；
