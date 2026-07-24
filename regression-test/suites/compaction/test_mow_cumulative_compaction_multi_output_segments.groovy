@@ -158,12 +158,12 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
     }
 
     def readRows = {
-        return sql """
+        return sql("""
             SELECT k, v
             FROM ${tableName}
             WHERE k IN (1, 16384, 16385, 32768, 32769, 49152, 49153, 65536, 65537, 81920)
             ORDER BY k
-        """
+        """)
     }
 
     def getLocalDeleteBitmap = { def backend, String tabletId ->
