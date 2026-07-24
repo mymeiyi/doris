@@ -3204,7 +3204,8 @@ int InstanceRecycler::delete_rowset_data(const RowsetMetaCloudPB& rs_meta_pb) {
             }
         } else if (!index_ids.empty()) {
             add_file_to_delete_if_not_packed(
-                    rs_meta_pb, inverted_index_path_v2(tablet_id, rowset_id, i), &file_paths);
+                    rs_meta_pb, inverted_index_path_v2(tablet_id, rowset_id, segment_id),
+                    &file_paths);
         }
     }
 
@@ -3967,10 +3968,10 @@ int InstanceRecycler::delete_rowset_data(
                     LOG_INFO("delete rowset data schema kv not found, try to delete index file")
                             .tag("instance_id", instance_id_)
                             .tag("inverted index v2 path",
-                                 inverted_index_path_v2(tablet_id, rowset_id, i));
+                                 inverted_index_path_v2(tablet_id, rowset_id, segment_id));
                 }
                 add_file_to_delete_if_not_packed(
-                        rs, inverted_index_path_v2(tablet_id, rowset_id, i), &file_paths);
+                        rs, inverted_index_path_v2(tablet_id, rowset_id, segment_id), &file_paths);
             }
         }
     }

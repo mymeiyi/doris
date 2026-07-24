@@ -116,7 +116,7 @@ destination position 组织；访问 writer 和生成 debug 文件名时，通�
 物理 segment id。index compaction 单测将输出起始 segment id 设置为 10，覆盖非零
 segment id 的 writer 查找和输出 rowset metadata。
 
-## 5. [P2] Cloud Recycler 删除 V2 inverted index 时使用循环 position
+## 5. [P2][已修复] Cloud Recycler 删除 V2 inverted index 时使用循环 position
 
 位置：
 
@@ -138,6 +138,10 @@ inverted_index_path_v2(tablet_id, rowset_id, i);
 例如 `segment_ids=[10, 11]` 时，Recycler 会尝试删除 `_0.idx` 和 `_1.idx`，真实的 `_10.idx` 和 `_11.idx` 会被遗留，造成对象存储泄漏。
 
 V2 inverted index 路径应统一使用已经解析出的 `segment_id`。
+
+修复后，单 rowset 和批量 rowset 两条 Recycler 删除路径都使用
+`rowset_segment_id()` 解析出的物理 segment id 构造 V2 inverted index 路径。新增单测
+使用 `segment_ids=[10, 12]` 覆盖两条路径，验证真实 `.dat` 和 `.idx` 文件均被删除。
 
 ## 6. [P2] Rowid conversion correctness check 用物理 id 索引 position vector
 
