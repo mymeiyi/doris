@@ -138,6 +138,7 @@ suite("test_mow_compact_multi_segments", "nonConcurrent") {
         reset_be_param("tablet_rowset_stale_sweep_time_sec")
     }
     GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
+    GetDebugPoint().enableDebugPointForAllBEs("VerticalBetaRowsetWriter.init.random_start_segment_id")
     GetDebugPoint().enableDebugPointForAllBEs("CumulativeCompaction.modify_rowsets.delete_expired_stale_rowset")
     GetDebugPoint().enableDebugPointForAllBEs("Tablet.delete_expired_stale_rowset.start_delete_unused_rowset")
     get_be_param("doris_scanner_row_bytes")
