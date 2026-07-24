@@ -173,19 +173,20 @@ void VerticalBetaRowsetWriter<T>::set_segment_id_range(int32_t next_segment_id,
 
 template <class T>
     requires std::is_base_of_v<BaseBetaRowsetWriter, T>
-Result<int32_t> VerticalBetaRowsetWriter<T>::_allocate_segment_id() {
+Status VerticalBetaRowsetWriter<T>::_allocate_segment_id(int32_t* segment_id) {
+    DORIS_CHECK(segment_id != nullptr);
     const int32_t allocated_segment_num =
             this->_num_segment.fetch_add(1, std::memory_order_relaxed);
     if (UNLIKELY(allocated_segment_num >= _max_segment_num)) {
         this->_num_segment.fetch_sub(1, std::memory_order_relaxed);
-        return ResultError(Status::Error<TOO_MANY_SEGMENTS>(
+        return Status::Error<TOO_MANY_SEGMENTS>(
                 "too many segments in vertical rowset writer. tablet_id:{}, rowset_id:{}, "
                 "max_segment_num:{}",
-                this->_context.tablet_id, this->_context.rowset_id.to_string(), _max_segment_num));
+                this->_context.tablet_id, this->_context.rowset_id.to_string(), _max_segment_num);
     }
-    const int32_t segment_id = _next_segment_id.fetch_add(1, std::memory_order_relaxed);
-    DORIS_CHECK_EQ(this->_segment_creator.allocate_segment_id(), segment_id);
-    return segment_id;
+    *segment_id = _next_segment_id.fetch_add(1, std::memory_order_relaxed);
+    DORIS_CHECK_EQ(this->_segment_creator.allocate_segment_id(), *segment_id);
+    return Status::OK();
 }
 
 template <class T>
@@ -195,11 +196,8 @@ Status VerticalBetaRowsetWriter<T>::_create_segment_writer(
         std::unique_ptr<segment_v2::SegmentWriter>* writer) {
     auto& context = this->_context;
 
-    auto seg_id_result = _allocate_segment_id();
-    if (!seg_id_result.has_value()) [[unlikely]] {
-        return std::move(seg_id_result).error();
-    }
-    int32_t seg_id = std::move(seg_id_result).value();
+    int32_t seg_id = 0;
+    RETURN_IF_ERROR(_allocate_segment_id(&seg_id));
 
     io::FileWriterPtr segment_file_writer;
     RETURN_IF_ERROR(BaseBetaRowsetWriter::create_file_writer(seg_id, segment_file_writer));

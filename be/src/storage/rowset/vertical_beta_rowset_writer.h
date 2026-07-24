@@ -69,7 +69,7 @@ public:
 
 private:
     Status _flush_columns(segment_v2::SegmentWriter* segment_writer, bool is_key = false);
-    Result<int32_t> _allocate_segment_id();
+    Status _allocate_segment_id(int32_t* segment_id);
     Status _create_segment_writer(const std::vector<uint32_t>& column_ids, bool is_key,
                                   std::unique_ptr<segment_v2::SegmentWriter>* writer);
     void _record_segment_index_file_cache_preload(
