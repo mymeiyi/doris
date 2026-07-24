@@ -32,6 +32,7 @@
 #include <nlohmann/json.hpp>
 #include <numeric>
 #include <ostream>
+#include <random>
 #include <set>
 #include <shared_mutex>
 #include <utility>
@@ -83,6 +84,7 @@
 #include "storage/task/engine_checksum_task.h"
 #include "storage/txn/txn_manager.h"
 #include "storage/utils.h"
+#include "util/debug_points.h"
 #include "util/pretty_printer.h"
 #include "util/time.h"
 #include "util/trace.h"
@@ -1976,6 +1978,18 @@ Status CloudCompactionMixin::construct_output_rowset_writer(RowsetWriterContext&
     ctx.job_id = _uuid;
 
     _output_rs_writer = DORIS_TRY(_tablet->create_rowset_writer(ctx, _is_vertical));
+    if (!_is_vertical) {
+        DBUG_EXECUTE_IF(
+                "CloudCompactionMixin.construct_output_rowset_writer.random_start_segment_id", {
+                    constexpr int32_t kDefaultMaxStartSegmentId = 1000;
+                    const int32_t max_start_segment_id = dp->param<int32_t>(
+                            "max_start_segment_id", kDefaultMaxStartSegmentId);
+                    DORIS_CHECK_GT(max_start_segment_id, 0);
+                    static thread_local std::mt19937 generator(std::random_device {}());
+                    std::uniform_int_distribution<int32_t> distribution(1, max_start_segment_id);
+                    _output_rs_writer->set_segment_start_id(distribution(generator));
+                });
+    }
     RETURN_IF_ERROR(_engine.meta_mgr().prepare_rowset(*_output_rs_writer->rowset_meta().get(),
                                                       _uuid, _tablet->table_id()));
     return Status::OK();
