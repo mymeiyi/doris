@@ -41,6 +41,8 @@ public:
 
     ~VerticalBetaRowsetWriter() override = default;
 
+    Status init(const RowsetWriterContext& rowset_writer_context) override;
+
     Status add_columns(const Block* block, const std::vector<uint32_t>& col_ids, bool is_key,
                        uint32_t max_rows_per_segment, bool has_cluster_key) override;
 

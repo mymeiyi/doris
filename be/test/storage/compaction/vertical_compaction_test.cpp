@@ -68,6 +68,8 @@
 #include "storage/tablet/tablet_meta.h"
 #include "storage/tablet/tablet_schema.h"
 #include "storage/utils.h"
+#include "util/debug_points.h"
+#include "util/defer_op.h"
 #include "util/uid_util.h"
 
 namespace doris {
@@ -457,6 +459,24 @@ TEST_F(VerticalCompactionTest, TestSegmentIdAllocationRange) {
     auto status = limited_writer->add_columns(&rejected_block, key_column_ids, true, 4, false);
     EXPECT_TRUE(status.is<ErrorCode::TOO_MANY_SEGMENTS>()) << status;
     EXPECT_EQ(limited_writer->get_allocated_segment_id(), 20);
+}
+
+TEST_F(VerticalCompactionTest, TestRandomSegmentStartIdDebugPoint) {
+    constexpr auto* debug_point = "VerticalBetaRowsetWriter.init.random_start_segment_id";
+    const bool original_enable_debug_points = config::enable_debug_points;
+    config::enable_debug_points = true;
+    DebugPoints::instance()->add_with_params(debug_point, {{"max_start_segment_id", "1"}});
+    Defer cleanup {[&]() {
+        DebugPoints::instance()->remove(debug_point);
+        config::enable_debug_points = original_enable_debug_points;
+    }};
+
+    auto tablet_schema = create_schema();
+    auto writer_context = create_rowset_writer_context(tablet_schema, NONOVERLAPPING, UINT32_MAX,
+                                                       {0, 0});
+    auto writer_result = RowsetFactory::create_rowset_writer(*engine_ref, writer_context, true);
+    ASSERT_TRUE(writer_result.has_value()) << writer_result.error();
+    EXPECT_EQ(writer_result.value()->get_allocated_segment_id(), 1);
 }
 
 TEST_F(VerticalCompactionTest, TestRowSourcesBuffer) {

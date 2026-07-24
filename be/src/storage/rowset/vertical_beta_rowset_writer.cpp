@@ -25,6 +25,7 @@
 #include <memory>
 #include <mutex>
 #include <ostream>
+#include <random>
 #include <string>
 #include <utility>
 
@@ -39,6 +40,7 @@
 #include "storage/rowset/rowset_meta.h"
 #include "storage/rowset/rowset_writer_context.h"
 #include "storage/segment/segment_index_file_cache_loader.h"
+#include "util/debug_points.h"
 #include "util/slice.h"
 
 namespace doris {
@@ -47,6 +49,22 @@ using namespace ErrorCode;
 template class VerticalBetaRowsetWriter<BetaRowsetWriter>;
 template class VerticalBetaRowsetWriter<CloudRowsetWriter>;
 template class VerticalBetaRowsetWriter<RowBinlogRowsetWriter>;
+
+template <class T>
+    requires std::is_base_of_v<BaseBetaRowsetWriter, T>
+Status VerticalBetaRowsetWriter<T>::init(const RowsetWriterContext& rowset_writer_context) {
+    RETURN_IF_ERROR(T::init(rowset_writer_context));
+    DBUG_EXECUTE_IF("VerticalBetaRowsetWriter.init.random_start_segment_id", {
+        constexpr int32_t kDefaultMaxStartSegmentId = 1000;
+        const int32_t max_start_segment_id =
+                dp->param<int32_t>("max_start_segment_id", kDefaultMaxStartSegmentId);
+        DORIS_CHECK_GT(max_start_segment_id, 0);
+        static thread_local std::mt19937 generator(std::random_device {}());
+        std::uniform_int_distribution<int32_t> distribution(1, max_start_segment_id);
+        set_segment_start_id(distribution(generator));
+    });
+    return Status::OK();
+}
 
 template <class T>
     requires std::is_base_of_v<BaseBetaRowsetWriter, T>
