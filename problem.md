@@ -2,7 +2,11 @@
 
 参考提交 `[feature](cloud) Support segment list rowset layout` 对当前存算分离代码进行静态审查后，仍发现多处把 rowset 内的 segment position（`0, 1, ..., num_segments - 1`）当作物理 segment id 使用的问题。
 
-部分问题目前尚未在生产路径触发，因为 `set_segment_id_range()` 还没有接入 Cloud compaction；一旦接入非零输出 segment id，这些问题可能造成 delete bitmap 错误、compaction 失败或对象存储文件泄漏。
+部分 compaction 输出相关问题目前尚未在生产路径触发，因为
+`set_segment_id_range()` 还没有接入 Cloud compaction；一旦接入非零输出 segment id，
+这些问题可能造成 delete bitmap 错误或 compaction 失败。Cloud partial update 的
+transient append 只处理当前待发布的 load rowset，不会向已经 visible 的 compaction
+输出 rowset 追加 segment，因此需要单独判断其触发条件。
 
 ## 1. [P1] RowIdConversion 把输出 segment position 当成物理 segment id
 
@@ -28,7 +32,7 @@ output_rowset_delete_bitmap->add({dst.rowset_id, dst.segment_id, cur_version}, d
 
 内部 inverted index compaction 的 conversion vector 可以继续使用 position，但转换为 `RowLocation` 或 delete bitmap key 时必须映射成输出物理 segment id。
 
-## 2. [P1] Cloud partial update append 仍从 `num_segments` 开始
+## 2. [当前生产路径不可达] Cloud partial update 尚不能合并 segment list
 
 位置：
 
@@ -41,16 +45,38 @@ output_rowset_delete_bitmap->add({dst.rowset_id, dst.segment_id, cur_version}, d
 writer->set_segment_start_id(cast_set<int32_t>(rowset.num_segments()));
 ```
 
-对于 `segment_ids=[10, 11]`，下一个物理 id 应该是 `12`，这里却从 `2` 开始。对于 `segment_ids=[0, 2]`，还会重复分配已经存在的 segment 2。
+这段代码并不是只在 compaction 中设置非零起点。partial update 为 legacy rowset 追加
+segment 时也会设置非零起点；由于 legacy rowset 的物理 id 是
+`0, 1, ..., num_segments - 1`，从 `num_segments` 开始分配是正确的。
 
-同时，`RowsetMeta::merge_rowset_meta()` 只增加 `num_segments`，没有合并 `segment_ids`。append 后可能得到不一致的 metadata：
+当前生产路径不会把带 `segment_ids` 的 rowset 传入这里：
+
+- `set_segment_id_range()` 没有生产调用方，只在单元测试中设置；
+- 当前代码只有非零起点的 vertical writer 会主动生成 `segment_ids`，因此生产流程尚不会
+  生成这类 rowset；
+- transient append 处理的是当前待发布的 `BEGIN_PARTIAL_UPDATE` rowset，重试时可能为
+  `COMMITTED`，而不是已经 `VISIBLE` 的 compaction 输出 rowset；
+- 当前 load/partial-update writer 不会为原始待发布 rowset 持久化 segment list。
+
+因此，仅将非零 segment start 接入 Cloud compaction，不会触发本问题。
+
+代码仍然没有兼容“待发布的 partial-update rowset 自身已经带 `segment_ids`”的情况。
+如果将来 load/partial-update writer 也支持 segment list，或者滚动升级期间其他版本 BE
+可能提交这种 rowset，那么对于 `segment_ids=[10, 11]`，下一个物理 id 应该是 `12`，
+当前代码却会从 `2` 开始；对于 `segment_ids=[0, 2]`，还会重复分配已经存在的 segment
+2。
+
+同时，`RowsetMeta::merge_rowset_meta()` 只增加 `num_segments`，没有合并
+`segment_ids`。在上述未来场景中，append 后可能得到不一致的 metadata：
 
 ```text
 num_segments = 3
 segment_ids = [10, 11]
 ```
 
-需要从已有 segment list 的最后一个物理 id 之后开始分配，并在合并 transient rowset metadata 时同步合并 segment list。
+如果扩展上述生产能力，需要从已有 segment list 的最后一个物理 id 之后开始分配，并在
+合并 transient rowset metadata 时同步合并 segment list。在此之前，该项作为兼容性风险
+保留，不属于当前可触发的 P1 缺陷。
 
 ## 3. [P1][已修复] Delete bitmap store v2/v3 聚合路径仍遍历连续 segment id
 
@@ -176,7 +202,9 @@ dst_segments[dst.segment_id]->read_key_by_rowid(...);
 _output_rs_writer = DORIS_TRY(_tablet->create_rowset_writer(ctx, _is_vertical));
 ```
 
-因此目前非零 vertical compaction segment id 还没有真正接入生产路径。接入之前，需要先修复上述依赖输出 segment id 从 0 开始的问题。
+因此目前非零 vertical compaction segment id 还没有真正接入生产路径。接入之前，需要
+先修复依赖 compaction 输出 segment id 从 0 开始的问题，例如问题 1 和问题 6。问题 2
+不会因为 compaction 接入非零起点而单独触发。
 
 ## 已确认安全的 position 循环
 
@@ -198,13 +226,15 @@ _output_rs_writer = DORIS_TRY(_tablet->create_rowset_writer(ctx, _is_vertical));
 当前测试主要覆盖 segment id accessor、rowset reader 和 writer metadata，没有覆盖以下非零 segment id 场景：
 
 - Cloud compaction 的 output delete bitmap；
-- Cloud partial update transient append；
 - inverted index compaction 输出 writer；
 - Cloud Recycler 的 V2 inverted index；
 - rowid conversion correctness check；
 - Cloud compaction 对 `set_segment_id_range()` 的生产接入。
 
 建议补充至少一个使用非零且非连续 segment id 的 Cloud 端到端或组件级测试，避免后续再次混用 position 和物理 id。
+
+如果将来允许 load/partial-update rowset 自身携带 segment list，还需要补充对应的
+transient append 和 metadata merge 测试；当前生产能力不要求该测试。
 
 ## 审查说明
 
