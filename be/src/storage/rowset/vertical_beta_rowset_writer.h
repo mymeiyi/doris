@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <type_traits>
@@ -49,12 +51,25 @@ public:
     // flush when all column finished, flush column footer
     Status final_flush() override;
 
+    Status build(RowsetSharedPtr& rowset) override;
+
+    int32_t get_allocated_segment_id() override {
+        return _next_segment_id.load(std::memory_order_relaxed);
+    }
+
+    void set_segment_start_id(int32_t start_id) override {
+        set_segment_id_range(start_id, std::numeric_limits<int32_t>::max());
+    }
+
+    void set_segment_id_range(int32_t next_segment_id, int32_t max_segment_num) override;
+
     int64_t num_rows() const override { return _total_key_group_rows; }
 
     Status _close_file_writers() override;
 
 private:
     Status _flush_columns(segment_v2::SegmentWriter* segment_writer, bool is_key = false);
+    Result<int32_t> _allocate_segment_id();
     Status _create_segment_writer(const std::vector<uint32_t>& column_ids, bool is_key,
                                   std::unique_ptr<segment_v2::SegmentWriter>* writer);
     void _record_segment_index_file_cache_preload(
@@ -62,6 +77,8 @@ private:
     Status _preload_segment_indexes_to_file_cache();
 
     std::vector<std::unique_ptr<segment_v2::SegmentWriter>> _segment_writers;
+    std::atomic<int32_t> _next_segment_id = 0;
+    int32_t _max_segment_num = std::numeric_limits<int32_t>::max();
     size_t _cur_writer_idx = 0;
     size_t _total_key_group_rows = 0;
     std::mutex _segment_index_file_cache_preloads_lock;

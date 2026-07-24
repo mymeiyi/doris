@@ -161,12 +161,41 @@ Status VerticalBetaRowsetWriter<T>::flush_columns(bool is_key) {
 
 template <class T>
     requires std::is_base_of_v<BaseBetaRowsetWriter, T>
+void VerticalBetaRowsetWriter<T>::set_segment_id_range(int32_t next_segment_id,
+                                                       int32_t max_segment_num) {
+    DORIS_CHECK_GE(next_segment_id, 0);
+    DORIS_CHECK_GE(max_segment_num, 0);
+    DORIS_CHECK_EQ(this->_num_segment.load(std::memory_order_relaxed), 0);
+    T::set_segment_start_id(next_segment_id);
+    _next_segment_id.store(next_segment_id, std::memory_order_relaxed);
+    _max_segment_num = max_segment_num;
+}
+
+template <class T>
+    requires std::is_base_of_v<BaseBetaRowsetWriter, T>
+Result<int32_t> VerticalBetaRowsetWriter<T>::_allocate_segment_id() {
+    const int32_t allocated_segment_num =
+            this->_num_segment.fetch_add(1, std::memory_order_relaxed);
+    if (UNLIKELY(allocated_segment_num >= _max_segment_num)) {
+        this->_num_segment.fetch_sub(1, std::memory_order_relaxed);
+        return ResultError(Status::Error<TOO_MANY_SEGMENTS>(
+                "too many segments in vertical rowset writer. tablet_id:{}, rowset_id:{}, "
+                "max_segment_num:{}",
+                this->_context.tablet_id, this->_context.rowset_id.to_string(), _max_segment_num));
+    }
+    const int32_t segment_id = _next_segment_id.fetch_add(1, std::memory_order_relaxed);
+    DORIS_CHECK_EQ(this->_segment_creator.allocate_segment_id(), segment_id);
+    return segment_id;
+}
+
+template <class T>
+    requires std::is_base_of_v<BaseBetaRowsetWriter, T>
 Status VerticalBetaRowsetWriter<T>::_create_segment_writer(
         const std::vector<uint32_t>& column_ids, bool is_key,
         std::unique_ptr<segment_v2::SegmentWriter>* writer) {
     auto& context = this->_context;
 
-    int seg_id = this->_num_segment.fetch_add(1, std::memory_order_relaxed);
+    int32_t seg_id = DORIS_TRY(_allocate_segment_id());
 
     io::FileWriterPtr segment_file_writer;
     RETURN_IF_ERROR(BaseBetaRowsetWriter::create_file_writer(seg_id, segment_file_writer));
@@ -199,6 +228,24 @@ Status VerticalBetaRowsetWriter<T>::_create_segment_writer(
         return s;
     }
     return Status::OK();
+}
+
+template <class T>
+    requires std::is_base_of_v<BaseBetaRowsetWriter, T>
+Status VerticalBetaRowsetWriter<T>::build(RowsetSharedPtr& rowset) {
+    const int32_t next_segment_id = _next_segment_id.load(std::memory_order_relaxed);
+    const int32_t segment_num = this->_num_segment.load(std::memory_order_relaxed);
+    DORIS_CHECK_EQ(next_segment_id - this->_segment_start_id, segment_num);
+    if (this->_segment_start_id != 0) {
+        std::vector<int64_t> segment_ids;
+        segment_ids.reserve(segment_num);
+        for (int32_t segment_id = this->_segment_start_id;
+             segment_id < next_segment_id; ++segment_id) {
+            segment_ids.push_back(segment_id);
+        }
+        this->_rowset_meta->set_segment_ids(segment_ids);
+    }
+    return T::build(rowset);
 }
 
 template <class T>

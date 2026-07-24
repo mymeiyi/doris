@@ -186,6 +186,12 @@ public:
         throw Exception(Status::FatalError("not supported!"));
     }
 
+    // Set the next physical segment id and the maximum number of segment ids that may be
+    // allocated. This must be called before allocating any segment.
+    virtual void set_segment_id_range(int next_segment_id, int max_segment_num) {
+        throw Exception(Status::FatalError("not supported!"));
+    }
+
     virtual Status force_rollback() {
         return Status::NotSupported("RowsetWriter::force_rollback not supported");
     }
