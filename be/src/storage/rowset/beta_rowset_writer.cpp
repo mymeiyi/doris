@@ -1050,14 +1050,23 @@ Status BaseBetaRowsetWriter::_build_rowset_meta(
     int64_t total_index_size = 0;
     std::vector<KeyBoundsPB> segments_encoded_key_bounds;
     std::vector<uint32_t> segment_rows;
+    std::vector<int64_t> segment_ids;
     std::optional<bool> segments_key_bounds_truncated;
+    const bool record_segment_ids =
+            _context.write_type == DataWriteType::TYPE_COMPACTION && _segment_start_id != 0;
     {
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
+        if (record_segment_ids) {
+            segment_ids.reserve(_segid_statistics_map.size());
+        }
         if (completed_segment_ids != nullptr) {
             completed_segment_ids->clear();
             completed_segment_ids->reserve(_segid_statistics_map.size());
         }
         for (const auto& itr : _segid_statistics_map) {
+            if (record_segment_ids) {
+                segment_ids.push_back(itr.first);
+            }
             if (completed_segment_ids != nullptr) {
                 completed_segment_ids->push_back(itr.first);
             }
@@ -1113,6 +1122,10 @@ Status BaseBetaRowsetWriter::_build_rowset_meta(
     }
 
     rowset_meta->set_num_segments(segment_num);
+    if (!segment_ids.empty()) {
+        DORIS_CHECK_EQ(segment_ids.size(), segment_num);
+        rowset_meta->set_segment_ids(segment_ids);
+    }
     rowset_meta->set_num_rows(num_rows_written + _num_rows_written);
     rowset_meta->set_total_disk_size(total_data_size + _total_data_size + total_index_size +
                                      _total_index_size);
@@ -1282,8 +1295,8 @@ Status BaseBetaRowsetWriter::add_segment(uint32_t segment_id, const SegmentStati
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
         CHECK_EQ(_segid_statistics_map.find(segment_id) == _segid_statistics_map.end(), true);
         _segid_statistics_map.emplace(segment_id, std::move(stored_segstat));
-        if (segment_id >= _segment_num_rows.size()) {
-            _segment_num_rows.resize(segment_id + 1);
+        if (segid_offset >= _segment_num_rows.size()) {
+            _segment_num_rows.resize(segid_offset + 1);
         }
         _segment_num_rows[segid_offset] = cast_set<uint32_t>(segstat.row_num);
         if (key_bounds_truncated) {

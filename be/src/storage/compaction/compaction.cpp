@@ -1977,6 +1977,14 @@ Status CloudCompactionMixin::construct_output_rowset_writer(RowsetWriterContext&
     ctx.tablet = _tablet;
     ctx.job_id = _uuid;
 
+    if (!_is_vertical) {
+        DBUG_EXECUTE_IF(
+                "CloudCompactionMixin.construct_output_rowset_writer.max_rows_per_segment", {
+                    ctx.max_rows_per_segment = dp->param<uint32_t>(
+                            "max_rows_per_segment", ctx.max_rows_per_segment);
+                    DORIS_CHECK_GT(ctx.max_rows_per_segment, 0);
+                });
+    }
     _output_rs_writer = DORIS_TRY(_tablet->create_rowset_writer(ctx, _is_vertical));
     if (!_is_vertical) {
         DBUG_EXECUTE_IF(

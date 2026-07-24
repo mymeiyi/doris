@@ -243,15 +243,21 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
         updateBeConfig("compaction_batch_size", "512")
         updateBeConfig("doris_scanner_row_bytes", "1")
         updateBeConfig("enable_rowid_conversion_correctness_check", "true")
-        updateBeConfig("enable_vertical_compaction", "true")
         updateBeConfig("inverted_index_compaction_enable", "true")
         updateBeConfig("vertical_compaction_max_segment_size", "8192")
 
         GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
         GetDebugPoint().enableDebugPointForAllBEs(
                 "VerticalBetaRowsetWriter.init.random_start_segment_id")
+        GetDebugPoint().enableDebugPointForAllBEs(
+                "CloudCompactionMixin.construct_output_rowset_writer.random_start_segment_id")
+        GetDebugPoint().enableDebugPointForAllBEs(
+                "CloudCompactionMixin.construct_output_rowset_writer.max_rows_per_segment",
+                [max_rows_per_segment: "1024"])
 
-        def runCompaction = { String tableName, boolean withInvertedIndex ->
+        def runCompaction = {
+                String tableName, boolean withInvertedIndex, boolean enableVerticalCompaction ->
+            updateBeConfig("enable_vertical_compaction", enableVerticalCompaction.toString())
             def indexDefinition = withInvertedIndex
                     ? """,
                         INDEX idx_payload (payload) USING INVERTED
@@ -407,8 +413,10 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
             }
         }
 
-        runCompaction("test_mow_cumulative_compaction_multi_output_segments", false)
-        runCompaction("test_mow_cumulative_compaction_multi_output_segments_index", true)
+        // Cover both compaction writers. The non-vertical run also exercises inverted index
+        // compaction with destination row-id conversion to non-zero physical segment ids.
+        runCompaction("test_mow_cumulative_compaction_multi_output_segments", false, true)
+        runCompaction("test_mow_cumulative_compaction_multi_output_segments_index", true, false)
     } finally {
         GetDebugPoint().clearDebugPointsForAllBEs()
         resetBeConfigs()
