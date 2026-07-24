@@ -137,7 +137,8 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
                 100000: "batchone",
                 200000: "batchtwo",
                 300000: "batchthree",
-                400000: "batchfour"
+                400000: "batchfour",
+                500000: "batchfive"
         ]
         def batchTag = batchTags[valueBase]
         assertNotNull(batchTag)
@@ -176,7 +177,8 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
     }
 
     def readRowsByIndex = { String tableName ->
-        return ["batchone", "batchtwo", "batchthree", "batchfour"].collect { String batchTag ->
+        def batchTags = ["batchone", "batchtwo", "batchthree", "batchfour", "batchfive"]
+        return batchTags.collect { String batchTag ->
             def result = sql """
                 SELECT /*+ SET_VAR(enable_match_without_inverted_index = false) */ COUNT(*)
                 FROM ${tableName}
@@ -194,6 +196,28 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
         logger.info("Get local delete bitmap: code=${code}, out=${out}, err=${err}")
         assertEquals(0, code)
         return parseJson(out.trim())
+    }
+
+    def getDeleteBitmapAtVersion = { def deleteBitmap, String rowsetId, int version ->
+        def segmentIds = []
+        long cardinality = 0
+        deleteBitmap.delete_bitmap.each { String key, bitmapVersions ->
+            if (!key.contains("rowset: ${rowsetId},")) {
+                return
+            }
+            def segmentMatcher = key =~ /segment:\s+([0-9]+)/
+            assertTrue(segmentMatcher.find(), "unexpected delete bitmap key: ${key}")
+            bitmapVersions.each { String bitmapVersion ->
+                def versionMatcher = bitmapVersion =~ /v:\s+([0-9]+),\s+c:\s+([0-9]+)/
+                assertTrue(versionMatcher.find(),
+                        "unexpected delete bitmap value: ${bitmapVersion}")
+                if (versionMatcher.group(1).toInteger() == version) {
+                    segmentIds.add(segmentMatcher.group(1).toInteger())
+                    cardinality += versionMatcher.group(2).toLong()
+                }
+            }
+        }
+        return [segmentIds: segmentIds.unique(), cardinality: cardinality]
     }
 
     GetDebugPoint().clearDebugPointsForAllBEs()
@@ -262,6 +286,10 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
                 assertTrue(inputInfo.segmentNum > 1, inputRowset)
             }
             def untouchedRowset = findRowset(before, 5, 5)
+            def untouchedInfo = parseRowset(untouchedRowset)
+            def untouchedSegmentIds = untouchedInfo.segmentIds.isEmpty()
+                    ? (0..<untouchedInfo.segmentNum).toList()
+                    : untouchedInfo.segmentIds
 
             GetDebugPoint().enableDebugPointForAllBEs(
                     "CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets",
@@ -306,6 +334,55 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
                 assertTrue(outputInfo.segmentIds.contains(matcher.group(1).toInteger()),
                         "delete bitmap references a segment outside " +
                                 "${outputInfo.segmentIds}: ${key}")
+            }
+
+            // Version 6 overlaps live rows in both the compacted [2-4] rowset and the untouched
+            // version 5 rowset. Verify publish calculates new delete bitmaps against both.
+            loadRows(tableName, 32769, 65536, 500000)
+
+            def afterUpdate = showTablet(backend, tabletId)
+            assertEquals(outputRowset, findRowset(afterUpdate, 2, 4))
+            assertEquals(untouchedRowset, findRowset(afterUpdate, 5, 5))
+            findRowset(afterUpdate, 6, 6)
+
+            def countAfterUpdate = sql "SELECT COUNT(*) FROM ${tableName}"
+            assertEquals(countBefore, countAfterUpdate)
+            def expectedRowsAfterUpdate = rowsBefore.collect { row ->
+                int key = (row[0] as Number).intValue()
+                if (key >= 32769 && key <= 65536) {
+                    return [row[0], 500000L + key]
+                }
+                return row
+            }
+            assertEquals(expectedRowsAfterUpdate, readRows(tableName))
+            if (withInvertedIndex) {
+                assertEquals([16384, 16384, 0, 16384, 32768],
+                        readRowsByIndex(tableName))
+            }
+
+            def deleteBitmapAfterUpdate = getLocalDeleteBitmap(backend, tabletId)
+            def outputBitmapAtVersion6 =
+                    getDeleteBitmapAtVersion(deleteBitmapAfterUpdate, outputInfo.rowsetId, 6)
+            assertEquals(16384L, outputBitmapAtVersion6.cardinality)
+            assertFalse(outputBitmapAtVersion6.segmentIds.isEmpty(),
+                    "missing version 6 delete bitmap for compacted rowset " +
+                            "${outputInfo.rowsetId}: ${deleteBitmapAfterUpdate}")
+            outputBitmapAtVersion6.segmentIds.each { int segmentId ->
+                assertTrue(outputInfo.segmentIds.contains(segmentId),
+                        "version 6 delete bitmap references a segment outside " +
+                                "${outputInfo.segmentIds}: ${segmentId}")
+            }
+
+            def untouchedBitmapAtVersion6 =
+                    getDeleteBitmapAtVersion(deleteBitmapAfterUpdate, untouchedInfo.rowsetId, 6)
+            assertEquals(16384L, untouchedBitmapAtVersion6.cardinality)
+            assertFalse(untouchedBitmapAtVersion6.segmentIds.isEmpty(),
+                    "missing version 6 delete bitmap for rowset " +
+                            "${untouchedInfo.rowsetId}: ${deleteBitmapAfterUpdate}")
+            untouchedBitmapAtVersion6.segmentIds.each { int segmentId ->
+                assertTrue(untouchedSegmentIds.contains(segmentId),
+                        "version 6 delete bitmap references a segment outside " +
+                                "${untouchedSegmentIds}: ${segmentId}")
             }
         }
 
