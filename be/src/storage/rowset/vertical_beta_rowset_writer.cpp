@@ -167,7 +167,6 @@ void VerticalBetaRowsetWriter<T>::set_segment_id_range(int32_t next_segment_id,
     DORIS_CHECK_GE(max_segment_num, 0);
     DORIS_CHECK_EQ(this->_num_segment.load(std::memory_order_relaxed), 0);
     T::set_segment_start_id(next_segment_id);
-    _next_segment_id.store(next_segment_id, std::memory_order_relaxed);
     _max_segment_num = max_segment_num;
 }
 
@@ -184,8 +183,7 @@ Status VerticalBetaRowsetWriter<T>::_allocate_segment_id(int32_t* segment_id) {
                 "max_segment_num:{}",
                 this->_context.tablet_id, this->_context.rowset_id.to_string(), _max_segment_num);
     }
-    *segment_id = _next_segment_id.fetch_add(1, std::memory_order_relaxed);
-    DORIS_CHECK_EQ(this->_segment_creator.allocate_segment_id(), *segment_id);
+    *segment_id = T::allocate_segment_id();
     return Status::OK();
 }
 
@@ -235,7 +233,7 @@ Status VerticalBetaRowsetWriter<T>::_create_segment_writer(
 template <class T>
     requires std::is_base_of_v<BaseBetaRowsetWriter, T>
 Status VerticalBetaRowsetWriter<T>::build(RowsetSharedPtr& rowset) {
-    const int32_t next_segment_id = _next_segment_id.load(std::memory_order_relaxed);
+    const int32_t next_segment_id = T::get_allocated_segment_id();
     const int32_t segment_num = this->_num_segment.load(std::memory_order_relaxed);
     DORIS_CHECK_EQ(next_segment_id - this->_segment_start_id, segment_num);
     if (this->_segment_start_id != 0) {

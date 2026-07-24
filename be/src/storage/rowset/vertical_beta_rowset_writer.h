@@ -17,7 +17,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -53,9 +52,7 @@ public:
 
     Status build(RowsetSharedPtr& rowset) override;
 
-    int32_t get_allocated_segment_id() override {
-        return _next_segment_id.load(std::memory_order_relaxed);
-    }
+    int32_t get_allocated_segment_id() override { return T::get_allocated_segment_id(); }
 
     void set_segment_start_id(int32_t start_id) override {
         set_segment_id_range(start_id, std::numeric_limits<int32_t>::max());
@@ -77,7 +74,6 @@ private:
     Status _preload_segment_indexes_to_file_cache();
 
     std::vector<std::unique_ptr<segment_v2::SegmentWriter>> _segment_writers;
-    std::atomic<int32_t> _next_segment_id = 0;
     int32_t _max_segment_num = std::numeric_limits<int32_t>::max();
     size_t _cur_writer_idx = 0;
     size_t _total_key_group_rows = 0;
