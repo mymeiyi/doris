@@ -20,6 +20,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -427,7 +428,7 @@ class IndexCompactionUtils {
             const TabletSharedPtr& tablet, bool is_index_compaction, RowsetSharedPtr& rowset_ptr,
             const std::function<void(const BaseCompaction&, const RowsetWriterContext&)>
                     custom_check = nullptr,
-            int64_t max_rows_per_segment = 100000) {
+            int64_t max_rows_per_segment = 100000, int32_t output_segment_start_id = 0) {
         config::inverted_index_compaction_enable = is_index_compaction;
         // control max rows in one block
         config::compaction_batch_size = max_rows_per_segment;
@@ -442,6 +443,11 @@ class IndexCompactionUtils {
         RowsetWriterContext ctx;
         ctx.max_rows_per_segment = max_rows_per_segment;
         RETURN_IF_ERROR(compaction.construct_output_rowset_writer(ctx));
+        if (output_segment_start_id != 0) {
+            compaction._output_rs_writer->set_segment_id_range(
+                    output_segment_start_id,
+                    std::numeric_limits<int32_t>::max() - output_segment_start_id);
+        }
 
         compaction._stats.rowid_conversion = compaction._rowid_conversion.get();
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(

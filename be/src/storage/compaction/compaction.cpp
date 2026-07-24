@@ -851,6 +851,32 @@ Status Compaction::do_inverted_index_compaction() {
         return Status::OK();
     }
 
+    auto& inverted_index_file_writers =
+            dynamic_cast<BaseBetaRowsetWriter*>(_output_rs_writer.get())->index_file_writers();
+    DBUG_EXECUTE_IF(
+            "Compaction::do_inverted_index_compaction_inverted_index_file_writers_size_error",
+            { inverted_index_file_writers.clear(); })
+    if (inverted_index_file_writers.size() != dest_segment_num) {
+        LOG(WARNING) << "failed to do index compaction, dest segment num not match. tablet_id="
+                     << _tablet->tablet_id() << " dest_segment_num=" << dest_segment_num
+                     << " inverted_index_file_writers.size()="
+                     << inverted_index_file_writers.size();
+        mark_skip_index_compaction(ctx, error_handler);
+        return Status::Error<INVERTED_INDEX_COMPACTION_ERROR>(
+                "dest segment num not match. tablet_id={} dest_segment_num={} "
+                "inverted_index_file_writers.size()={}",
+                _tablet->tablet_id(), dest_segment_num, inverted_index_file_writers.size());
+    }
+
+    // RowIdConversion and dest_segment_num_rows use destination segment positions, while the
+    // output writer map is keyed by physical segment ids.
+    std::vector<int> dest_segment_ids;
+    dest_segment_ids.reserve(dest_segment_num);
+    for (const auto& [segment_id, _] : inverted_index_file_writers) {
+        dest_segment_ids.push_back(segment_id);
+    }
+    std::sort(dest_segment_ids.begin(), dest_segment_ids.end());
+
     // Only write info files when debug index compaction is enabled.
     // The files are used to debug index compaction and works with index_tool.
     if (config::debug_inverted_index_compaction) {
@@ -865,9 +891,11 @@ Status Compaction::do_inverted_index_compaction() {
         // dest index files
         // format: rowsetId_segmentId
         std::vector<std::string> dest_index_files(dest_segment_num);
-        for (int i = 0; i < dest_segment_num; ++i) {
-            auto prefix = dest_rowset_id.to_string() + "_" + std::to_string(i);
-            dest_index_files[i] = prefix;
+        for (size_t dest_segment_pos = 0; dest_segment_pos < dest_segment_num;
+             ++dest_segment_pos) {
+            auto prefix = dest_rowset_id.to_string() + "_" +
+                          std::to_string(dest_segment_ids[dest_segment_pos]);
+            dest_index_files[dest_segment_pos] = prefix;
         }
 
         auto write_json_to_file = [&](const nlohmann::json& json_obj,
@@ -981,25 +1009,6 @@ Status Compaction::do_inverted_index_compaction() {
         index_file_readers[m.second] = std::move(index_file_reader);
     }
 
-    // dest index files
-    // format: rowsetId_segmentId
-    auto& inverted_index_file_writers =
-            dynamic_cast<BaseBetaRowsetWriter*>(_output_rs_writer.get())->index_file_writers();
-    DBUG_EXECUTE_IF(
-            "Compaction::do_inverted_index_compaction_inverted_index_file_writers_size_error",
-            { inverted_index_file_writers.clear(); })
-    if (inverted_index_file_writers.size() != dest_segment_num) {
-        LOG(WARNING) << "failed to do index compaction, dest segment num not match. tablet_id="
-                     << _tablet->tablet_id() << " dest_segment_num=" << dest_segment_num
-                     << " inverted_index_file_writers.size()="
-                     << inverted_index_file_writers.size();
-        mark_skip_index_compaction(ctx, error_handler);
-        return Status::Error<INVERTED_INDEX_COMPACTION_ERROR>(
-                "dest segment num not match. tablet_id={} dest_segment_num={} "
-                "inverted_index_file_writers.size()={}",
-                _tablet->tablet_id(), dest_segment_num, inverted_index_file_writers.size());
-    }
-
     // use tmp file dir to store index files
     auto tmp_file_dir = ExecEnv::GetInstance()->get_tmp_file_dirs()->get_tmp_file_dir();
     auto index_tmp_path = tmp_file_dir / dest_rowset_id.to_string();
@@ -1044,9 +1053,10 @@ Status Compaction::do_inverted_index_compaction() {
                     }
                     src_idx_dirs[src_segment_id] = std::move(res.value());
                 }
-                for (int dest_segment_id = 0; dest_segment_id < dest_segment_num;
-                     dest_segment_id++) {
-                    auto res = inverted_index_file_writers[dest_segment_id]->open(index_meta);
+                for (size_t dest_segment_pos = 0; dest_segment_pos < dest_segment_num;
+                     ++dest_segment_pos) {
+                    const auto dest_segment_id = dest_segment_ids[dest_segment_pos];
+                    auto res = inverted_index_file_writers.at(dest_segment_id)->open(index_meta);
                     DBUG_EXECUTE_IF("Compaction::open_inverted_index_file_writer", {
                         res = ResultError(Status::Error<ErrorCode::INVERTED_INDEX_CLUCENE_ERROR>(
                                 "debug point: Compaction::open_inverted_index_file_writer error"));
@@ -1062,7 +1072,7 @@ Status Compaction::do_inverted_index_compaction() {
                     }
                     // Destination directories in dest_index_dirs do not need to be deconstructed,
                     // but their lifecycle must be managed by inverted_index_file_writers.
-                    dest_index_dirs[dest_segment_id] = res.value().get();
+                    dest_index_dirs[dest_segment_pos] = res.value().get();
                 }
                 auto st = compact_column(index_meta->index_id(), src_idx_dirs, dest_index_dirs,
                                          index_tmp_path.native(), trans_vec, dest_segment_num_rows);

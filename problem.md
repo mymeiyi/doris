@@ -88,7 +88,7 @@ for (int64_t seg_id = 0; seg_id < segment_num; ++seg_id) {
 `rowset->segments()` 构造列表，聚合路径不再根据 segment 数量推导物理 id。新增单测使用
 `segment_ids=[10, 12]` 验证只聚合列表中的真实 segment。
 
-## 4. [P1] Inverted index compaction 按 position 查找输出 writer
+## 4. [P1][已修复] Inverted index compaction 按 position 查找输出 writer
 
 位置：
 
@@ -109,6 +109,12 @@ for (int dest_segment_id = 0; dest_segment_id < dest_segment_num; dest_segment_i
 同一函数生成 debug 文件名时也仍然使用 `0..dest_segment_num-1`，无法表示真实的输出 segment 文件名。
 
 需要显式区分 destination position 和物理 segment id，并使用实际 writer key 访问输出 index writer。
+
+修复后，从输出 index writer 的实际 key 构造按物理 segment id 排序的 destination
+segment id 列表。`RowIdConversion`、`dest_segment_num_rows` 和 `dest_index_dirs` 仍按
+destination position 组织；访问 writer 和生成 debug 文件名时，通过该列表映射到真实
+物理 segment id。index compaction 单测将输出起始 segment id 设置为 10，覆盖非零
+segment id 的 writer 查找和输出 rowset metadata。
 
 ## 5. [P2] Cloud Recycler 删除 V2 inverted index 时使用循环 position
 

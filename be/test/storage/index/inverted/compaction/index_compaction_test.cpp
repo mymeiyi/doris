@@ -759,17 +759,24 @@ TEST_F(IndexCompactionTest, tes_write_index_normally) {
             _data_dir, _tablet_schema, _tablet, _engine_ref, rowsets, data_files, _inc_id,
             custom_check_build_rowsets);
 
-    auto custom_check_index = [](const BaseCompaction& compaction, const RowsetWriterContext& ctx) {
+    constexpr int32_t output_segment_start_id = 10;
+    auto custom_check_index = [output_segment_start_id](const BaseCompaction& compaction,
+                                                        const RowsetWriterContext& ctx) {
         EXPECT_EQ(compaction._cur_tablet_schema->inverted_indexes().size(), 4);
         EXPECT_TRUE(ctx.columns_to_do_index_compaction.size() == 2);
         EXPECT_TRUE(ctx.columns_to_do_index_compaction.contains(1));
         EXPECT_TRUE(ctx.columns_to_do_index_compaction.contains(2));
         EXPECT_TRUE(compaction._output_rowset->num_segments() == 1);
+        ASSERT_TRUE(compaction._output_rowset->rowset_meta()->has_segment_ids());
+        ASSERT_EQ(compaction._output_rowset->rowset_meta()->segment_ids().size(), 1);
+        EXPECT_EQ(compaction._output_rowset->rowset_meta()->segment_id(0),
+                  output_segment_start_id);
     };
 
     RowsetSharedPtr output_rowset_index;
     auto st = IndexCompactionUtils::do_compaction(rowsets, _engine_ref, _tablet, true,
-                                                  output_rowset_index, custom_check_index);
+                                                  output_rowset_index, custom_check_index, 100000,
+                                                  output_segment_start_id);
     EXPECT_TRUE(st.ok()) << st.to_string();
 
     const auto& seg_path = output_rowset_index->segment_path(0);
