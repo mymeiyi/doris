@@ -131,6 +131,10 @@ void build_rowset_meta_with_spec_field(RowsetMeta& rowset_meta,
     rowset_meta.set_empty(spec_rowset_meta.num_rows() == 0);
     rowset_meta.set_creation_time(time(nullptr));
     rowset_meta.set_num_segments(spec_rowset_meta.num_segments());
+    if (spec_rowset_meta.has_segment_ids()) {
+        rowset_meta.set_segment_ids(std::vector<int64_t>(spec_rowset_meta.segment_ids().begin(),
+                                                         spec_rowset_meta.segment_ids().end()));
+    }
     rowset_meta.set_segments_overlap(spec_rowset_meta.segments_overlap());
     rowset_meta.set_rowset_state(spec_rowset_meta.rowset_state());
     rowset_meta.set_segments_key_bounds_truncated(
@@ -455,10 +459,12 @@ Status BaseBetaRowsetWriter::_generate_delete_bitmap(int32_t segment_id) {
         // Step 3: Load segments (needs file_writer to be closed and rowset to be built)
         auto* beta_rowset = reinterpret_cast<BetaRowset*>(rowset_ptr.get());
         std::vector<segment_v2::SegmentSharedPtr> segments;
-        st = beta_rowset->load_segments(segment_id, segment_id + 1, &segments);
+        segment_v2::SegmentSharedPtr segment;
+        st = beta_rowset->load_segment(segment_id, nullptr, &segment);
         if (!st.ok()) {
             return st;
         }
+        segments.emplace_back(std::move(segment));
 
         // Step 4: Calculate delete bitmap
         st = BaseTablet::calc_delete_bitmap(_context.tablet, rowset_ptr, segments,
@@ -671,7 +677,7 @@ Status BetaRowsetWriter::_rename_compacted_segment_plain(uint32_t seg_id) {
     return Status::OK();
 }
 
-Status BetaRowsetWriter::_remove_segment_footer_cache(const uint32_t seg_id,
+Status BetaRowsetWriter::_remove_segment_footer_cache(uint32_t seg_pos,
                                                       const std::string& segment_path) {
     auto* footer_page_cache = ExecEnv::GetInstance()->get_storage_page_cache();
     if (!footer_page_cache) {
@@ -688,7 +694,7 @@ Status BetaRowsetWriter::_remove_segment_footer_cache(const uint32_t seg_id,
                                                         : io::FileCachePolicy::NO_CACHE,
                 .is_doris_table = true,
                 .cache_base_path = "",
-                .file_size = _rowset_meta->segment_file_size(static_cast<int>(seg_id)),
+                .file_size = _rowset_meta->segment_file_size_by_pos(seg_pos),
                 .tablet_id = _rowset_meta->tablet_id(),
                 .storage_resource_id = _rowset_meta->resource_id(),
         };
@@ -1233,10 +1239,10 @@ Status BaseBetaRowsetWriter::_check_segment_number_limit(size_t segnum) {
     if (UNLIKELY(segnum > config::max_segment_num_per_rowset)) {
         return Status::Error<TOO_MANY_SEGMENTS>(
                 "too many segments in rowset. tablet_id:{}, rowset_id:{}, max:{}, "
-                "_num_segment:{}, rowset_num_rows:{}. Please check if the bucket number is too "
-                "small or if the data is skewed.",
+                "segment_num:{}, _num_segment:{}, rowset_num_rows:{}. Please check if the bucket "
+                "number is too small or if the data is skewed.",
                 _context.tablet_id, _context.rowset_id.to_string(),
-                config::max_segment_num_per_rowset, _num_segment, get_rowset_num_rows());
+                config::max_segment_num_per_rowset, segnum, _num_segment, get_rowset_num_rows());
     }
     return Status::OK();
 }
@@ -1246,11 +1252,11 @@ Status BetaRowsetWriter::_check_segment_number_limit(size_t segnum) {
                     { segnum = dp->param("segnum", 1024); });
     if (UNLIKELY(segnum > config::max_segment_num_per_rowset)) {
         return Status::Error<TOO_MANY_SEGMENTS>(
-                "too many segments in rowset. tablet_id:{}, rowset_id:{}, max:{}, _num_segment:{}, "
-                "_segcompacted_point:{}, _num_segcompacted:{}, rowset_num_rows:{}. Please check if "
-                "the bucket number is too small or if the data is skewed.",
+                "too many segments in rowset. tablet_id:{}, rowset_id:{}, max:{}, segment_num:{}, "
+                "_num_segment:{}, _segcompacted_point:{}, _num_segcompacted:{}, rowset_num_rows:{}."
+                " Please check if the bucket number is too small or if the data is skewed.",
                 _context.tablet_id, _context.rowset_id.to_string(),
-                config::max_segment_num_per_rowset, _num_segment, _segcompacted_point,
+                config::max_segment_num_per_rowset, segnum, _num_segment, _segcompacted_point,
                 _num_segcompacted, get_rowset_num_rows());
     }
     return Status::OK();
