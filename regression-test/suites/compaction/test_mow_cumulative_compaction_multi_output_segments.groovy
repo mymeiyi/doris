@@ -132,6 +132,24 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
                 "compaction timeout: tablet=${tabletId}, timeoutMs=${timeoutMs}, last=${lastStatus}")
     }
 
+    def waitForRowset = { backend, tabletId, startVersion, endVersion ->
+        long timeoutMs = 30000
+        long deadline = System.currentTimeMillis() + timeoutMs
+        def lastStatus = null
+        while (System.currentTimeMillis() < deadline) {
+            lastStatus = showTablet(backend, tabletId)
+            if (lastStatus.rowsets.any {
+                it.startsWith("[${startVersion}-${endVersion}] ")
+            }) {
+                return lastStatus
+            }
+            Thread.sleep(200)
+        }
+        assertTrue(false,
+                "rowset [${startVersion}-${endVersion}] is not visible: " +
+                        "tablet=${tabletId}, timeoutMs=${timeoutMs}, last=${lastStatus}")
+    }
+
     def loadRows = { String tableName, int startKey, int endKey, int valueBase ->
         def batchTags = [
                 100000: "batchone",
@@ -340,7 +358,7 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
             // version 5 rowset. Verify publish calculates new delete bitmaps against both.
             loadRows(tableName, 32769, 65536, 500000)
 
-            def afterUpdate = showTablet(backend, tabletId)
+            def afterUpdate = waitForRowset(backend, tabletId, 6, 6)
             assertEquals(outputRowset, findRowset(afterUpdate, 2, 4))
             assertEquals(untouchedRowset, findRowset(afterUpdate, 5, 5))
             findRowset(afterUpdate, 6, 6)
