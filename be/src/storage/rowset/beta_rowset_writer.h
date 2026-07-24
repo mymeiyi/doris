@@ -174,6 +174,7 @@ public:
     };
 
     void set_segment_start_id(int32_t start_id) override {
+        _context.set_first_segment_id(start_id);
         _segment_creator.set_segment_start_id(start_id);
         _segment_start_id = start_id;
     }
@@ -212,9 +213,8 @@ protected:
     Status _generate_delete_bitmap(int32_t segment_id);
     // `completed_segment_ids`, when requested, is populated from the same statistics snapshot
     // used to build the rowset meta.
-    virtual Status _build_rowset_meta(
-            RowsetMeta* rowset_meta, bool check_segment_num = false,
-            std::vector<int64_t>* completed_segment_ids = nullptr);
+    virtual Status _build_rowset_meta(RowsetMeta* rowset_meta, bool check_segment_num = false,
+                                      std::vector<int64_t>* completed_segment_ids = nullptr);
     Status _create_file_writer(const std::string& path, io::FileWriterPtr& file_writer,
                                FileType file_type = FileType::SEGMENT_FILE);
     virtual Status _close_file_writers();
