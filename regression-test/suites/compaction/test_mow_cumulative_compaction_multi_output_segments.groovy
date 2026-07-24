@@ -377,7 +377,7 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
             }
             assertEquals(expectedRowsAfterUpdate, readRows(tableName))
             if (withInvertedIndex) {
-                assertEquals([16384, 16384, 0, 16384, 32768],
+                assertEquals([16384L, 16384L, 0L, 16384L, 32768L],
                         readRowsByIndex(tableName))
             }
 
