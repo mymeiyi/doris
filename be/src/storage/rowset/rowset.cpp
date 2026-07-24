@@ -17,6 +17,7 @@
 
 #include "storage/rowset/rowset.h"
 
+#include <fmt/ranges.h>
 #include <gen_cpp/olap_file.pb.h>
 
 #include "common/cast_set.h"
@@ -109,10 +110,15 @@ bool Rowset::check_rowset_segment() {
 std::string Rowset::get_rowset_info_str() {
     std::string disk_size = PrettyPrinter::print(
             static_cast<uint64_t>(_rowset_meta->total_disk_size()), TUnit::BYTES);
-    return fmt::format("[{}-{}] {} {} {} {} {}", start_version(), end_version(), num_segments(),
-                       _rowset_meta->has_delete_predicate() ? "DELETE" : "DATA",
-                       SegmentsOverlapPB_Name(_rowset_meta->segments_overlap()),
-                       rowset_id().to_string(), disk_size);
+    std::string rowset_info =
+            fmt::format("[{}-{}] {} {} {} {} {}", start_version(), end_version(), num_segments(),
+                        _rowset_meta->has_delete_predicate() ? "DELETE" : "DATA",
+                        SegmentsOverlapPB_Name(_rowset_meta->segments_overlap()),
+                        rowset_id().to_string(), disk_size);
+    if (_rowset_meta->has_segment_ids()) {
+        rowset_info += fmt::format(" [{}]", fmt::join(_rowset_meta->segment_ids(), ","));
+    }
+    return rowset_info;
 }
 
 const TabletSchemaSPtr& Rowset::tablet_schema() const {

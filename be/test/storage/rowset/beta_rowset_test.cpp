@@ -460,6 +460,20 @@ TEST_F(BetaRowsetTest, SegmentViewUsesRealSegmentId) {
     EXPECT_EQ(index_file_cache_key.value(), kTestDir + "/540085_2_10000");
 }
 
+TEST_F(BetaRowsetTest, RowsetInfoShowsExplicitSegmentIds) {
+    auto rowset_meta = std::make_shared<RowsetMeta>();
+    init_rs_meta(rowset_meta, 1, 1);
+    rowset_meta->set_num_segments(3);
+    rowset_meta->set_segments_overlap(NONOVERLAPPING);
+
+    BetaRowset rowset(nullptr, rowset_meta, "");
+    std::string legacy_rowset_info = rowset.get_rowset_info_str();
+    EXPECT_EQ(legacy_rowset_info.find(" []"), std::string::npos);
+
+    rowset_meta->set_segment_ids({100, 101, 200});
+    EXPECT_EQ(rowset.get_rowset_info_str(), legacy_rowset_info + " [100,101,200]");
+}
+
 TEST_F(BetaRowsetTest, GetSegmentNumRowsFromMeta) {
     // Test getting segment rows from rowset meta (new version data)
     // This test verifies that when segment_rows is present in rowset meta,
