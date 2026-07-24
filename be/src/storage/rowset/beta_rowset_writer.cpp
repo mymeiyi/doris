@@ -1042,7 +1042,9 @@ int64_t BetaRowsetWriter::_num_seg() const {
     return is_segcompacted() ? _num_segcompacted : _num_segment;
 }
 
-Status BaseBetaRowsetWriter::_build_rowset_meta(RowsetMeta* rowset_meta, bool check_segment_num) {
+Status BaseBetaRowsetWriter::_build_rowset_meta(
+        RowsetMeta* rowset_meta, bool check_segment_num,
+        std::vector<int64_t>* completed_segment_ids) {
     int64_t num_rows_written = 0;
     int64_t total_data_size = 0;
     int64_t total_index_size = 0;
@@ -1051,7 +1053,14 @@ Status BaseBetaRowsetWriter::_build_rowset_meta(RowsetMeta* rowset_meta, bool ch
     std::optional<bool> segments_key_bounds_truncated;
     {
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
+        if (completed_segment_ids != nullptr) {
+            completed_segment_ids->clear();
+            completed_segment_ids->reserve(_segid_statistics_map.size());
+        }
         for (const auto& itr : _segid_statistics_map) {
+            if (completed_segment_ids != nullptr) {
+                completed_segment_ids->push_back(itr.first);
+            }
             num_rows_written += itr.second.row_num;
             total_data_size += itr.second.data_size;
             total_index_size += itr.second.index_size;
@@ -1123,11 +1132,13 @@ Status BaseBetaRowsetWriter::_build_tmp(RowsetSharedPtr& rowset_ptr) {
     std::shared_ptr<RowsetMeta> tmp_rs_meta = std::make_shared<RowsetMeta>();
     tmp_rs_meta->init(_rowset_meta.get());
 
-    status = _build_rowset_meta(tmp_rs_meta.get());
+    std::vector<int64_t> completed_segment_ids;
+    status = _build_rowset_meta(tmp_rs_meta.get(), false, &completed_segment_ids);
     if (!status.ok()) {
         LOG(WARNING) << "failed to build rowset meta, res=" << status;
         return status;
     }
+    tmp_rs_meta->set_segment_ids(completed_segment_ids);
 
     status = RowsetFactory::create_rowset(_context.tablet_schema, _context.tablet_path, tmp_rs_meta,
                                           &rowset_ptr);

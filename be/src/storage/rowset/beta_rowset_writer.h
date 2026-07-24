@@ -210,7 +210,11 @@ private:
     // for this segment
 protected:
     Status _generate_delete_bitmap(int32_t segment_id);
-    virtual Status _build_rowset_meta(RowsetMeta* rowset_meta, bool check_segment_num = false);
+    // `completed_segment_ids`, when requested, is populated from the same statistics snapshot
+    // used to build the rowset meta.
+    virtual Status _build_rowset_meta(
+            RowsetMeta* rowset_meta, bool check_segment_num = false,
+            std::vector<int64_t>* completed_segment_ids = nullptr);
     Status _create_file_writer(const std::string& path, io::FileWriterPtr& file_writer,
                                FileType file_type = FileType::SEGMENT_FILE);
     virtual Status _close_file_writers();

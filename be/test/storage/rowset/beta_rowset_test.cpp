@@ -235,6 +235,13 @@ private:
     std::unique_ptr<DataDir> _data_dir;
 };
 
+class BetaRowsetWriterForTest : public BetaRowsetWriter {
+public:
+    explicit BetaRowsetWriterForTest(StorageEngine& engine) : BetaRowsetWriter(engine) {}
+
+    Status build_tmp(RowsetSharedPtr& rowset) { return _build_tmp(rowset); }
+};
+
 class S3ClientMock : public Aws::S3::S3Client {
     S3ClientMock() {}
     S3ClientMock(const Aws::Auth::AWSCredentials& credentials,
@@ -472,6 +479,32 @@ TEST_F(BetaRowsetTest, RowsetInfoShowsExplicitSegmentIds) {
 
     rowset_meta->set_segment_ids({100, 101, 200});
     EXPECT_EQ(rowset.get_rowset_info_str(), legacy_rowset_info + " [100,101,200]");
+}
+
+TEST_F(BetaRowsetTest, TmpRowsetUsesCompletedSegmentIds) {
+    auto tablet_schema = std::make_shared<TabletSchema>();
+    create_tablet_schema(tablet_schema);
+    RowsetWriterContext writer_context;
+    create_rowset_writer_context(tablet_schema, &writer_context);
+
+    EngineOptions options;
+    StorageEngine engine(options);
+    BetaRowsetWriterForTest writer(engine);
+    ASSERT_TRUE(writer.init(writer_context).ok());
+
+    SegmentStatistics segment_statistics;
+    segment_statistics.row_num = 10;
+    ASSERT_TRUE(writer.add_segment(6, segment_statistics).ok());
+    ASSERT_TRUE(writer.add_segment(2, segment_statistics).ok());
+
+    RowsetSharedPtr tmp_rowset;
+    ASSERT_TRUE(writer.build_tmp(tmp_rowset).ok());
+    ASSERT_NE(tmp_rowset, nullptr);
+    EXPECT_EQ(tmp_rowset->num_segments(), 2);
+    EXPECT_EQ(tmp_rowset->rowset_meta()->position_of(2), 0);
+    EXPECT_EQ(tmp_rowset->rowset_meta()->position_of(6), 1);
+    EXPECT_EQ(tmp_rowset->rowset_meta()->segment_id(0), 2);
+    EXPECT_EQ(tmp_rowset->rowset_meta()->segment_id(1), 6);
 }
 
 TEST_F(BetaRowsetTest, GetSegmentNumRowsFromMeta) {
