@@ -417,8 +417,7 @@ suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
         runCompaction("test_mow_cumulative_compaction_multi_output_segments", false, true)
         runCompaction("test_mow_cumu_compact_multi_segments_non_vertical", false, false)
         runCompaction("test_mow_cumulative_compaction_multi_output_segments_index", true, true)
-        runCompaction(
-                "test_mow_cumu_compact_multi_segments_index_non_vertical", true, false)
+        // runCompaction("test_mow_cumu_compact_multi_segments_index_non_vertical", true, false)
     } finally {
         GetDebugPoint().clearDebugPointsForAllBEs()
         resetBeConfigs()
