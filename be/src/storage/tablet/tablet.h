@@ -453,6 +453,8 @@ public:
 
     Status remove_all_remote_rowsets();
 
+    // Local-mode only remote rowset GC. Segment-list rowsets are cloud-only and do not use this
+    // path, so GC entries record only contiguous segment indexes [0, num_segments).
     void record_unused_remote_rowset(const RowsetId& rowset_id, const std::string& resource,
                                      int64_t num_segments);
 
