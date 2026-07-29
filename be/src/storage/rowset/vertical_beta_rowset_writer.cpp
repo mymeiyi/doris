@@ -140,11 +140,7 @@ Status VerticalBetaRowsetWriter<T>::_flush_columns(segment_v2::SegmentWriter* se
         key_bounds.set_min_key(min_key.to_string());
         key_bounds.set_max_key(max_key.to_string());
         this->_segments_encoded_key_bounds.emplace_back(std::move(key_bounds));
-        const auto segment_id = segment_writer->get_segment_id();
-        if (segment_id >= this->_segment_num_rows.size()) {
-            this->_segment_num_rows.resize(segment_id + 1);
-        }
-        this->_segment_num_rows[segment_id] = segment_writer->row_count();
+        this->_segment_num_rows.push_back(segment_writer->row_count());
     }
     return Status::OK();
 }

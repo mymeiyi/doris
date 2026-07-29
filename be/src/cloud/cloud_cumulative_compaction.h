@@ -35,8 +35,8 @@ class RowsetMeta;
 namespace cloud {
 
 struct SegmentGroupMergeRange {
-    int64_t segment_start;
-    int64_t segment_end;
+    int64_t segment_pos_start;
+    int64_t segment_pos_end;
     int64_t merge_way_num;
 };
 
