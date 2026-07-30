@@ -29,6 +29,7 @@ import org.junit.Test;
 import org.junit.jupiter.api.Assertions;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
+import org.mockito.stubbing.Answer;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -122,14 +123,18 @@ public class CloudPartitionTest {
 
         // CHECKSTYLE ON
         try (MockedStatic<VersionHelper> mockedVersionHelper = Mockito.mockStatic(VersionHelper.class)) {
+            Answer<Cloud.GetVersionResponse> getVersionAnswer = invocation -> {
+                Cloud.GetVersionResponse.Builder builder = Cloud.GetVersionResponse.newBuilder();
+                builder.setVersion(singleVersions.get(callCount[0]));
+                builder.addAllVersions(batchVersions.get(callCount[0]));
+                ++callCount[0];
+                return builder.build();
+            };
             mockedVersionHelper.when(() -> VersionHelper.getVersionFromMeta(Mockito.any(Cloud.GetVersionRequest.class)))
-                    .thenAnswer(invocation -> {
-                        Cloud.GetVersionResponse.Builder builder = Cloud.GetVersionResponse.newBuilder();
-                        builder.setVersion(singleVersions.get(callCount[0]));
-                        builder.addAllVersions(batchVersions.get(callCount[0]));
-                        ++callCount[0];
-                        return builder.build();
-                    });
+                    .thenAnswer(getVersionAnswer);
+            mockedVersionHelper.when(() -> VersionHelper.getVersionFromMeta(
+                            Mockito.any(Cloud.GetVersionRequest.class), Mockito.anyInt()))
+                    .thenAnswer(getVersionAnswer);
 
             ctx.getSessionVariable().cloudPartitionVersionCacheTtlMs = -1; // disable cache
                 {
