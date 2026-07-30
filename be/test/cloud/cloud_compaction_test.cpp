@@ -21,6 +21,7 @@
 #include <gtest/gtest-test-part.h>
 #include <gtest/gtest.h>
 
+#include <ctime>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -689,6 +690,32 @@ TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_parses_distinct
     ASSERT_EQ(workers.size(), 2);
     EXPECT_EQ(workers[0], "be-a:8060");
     EXPECT_EQ(workers[1], "be-b:8060");
+}
+
+TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_removes_expired_workers) {
+    auto* manager = cloud::DistributedSingleRowsetCompactionWorkerManager::instance();
+    auto tablet = std::make_shared<CloudTablet>(_engine, _tablet_meta);
+    const int64_t current_time = ::time(nullptr);
+    bool created = false;
+    Defer cleanup_workers {[&] {
+        manager->erase("live-execution", 0, 0);
+        manager->erase("expired-execution", 0, 0);
+    }};
+
+    auto live_worker = manager->get_or_create("live-execution", 0, 0, current_time + 3600,
+                                              _engine, tablet, &created);
+    ASSERT_TRUE(created);
+    ASSERT_NE(live_worker, nullptr);
+
+    auto expired_worker = manager->get_or_create("expired-execution", 0, 0, current_time - 1,
+                                                 _engine, tablet, &created);
+    ASSERT_TRUE(created);
+    ASSERT_NE(expired_worker, nullptr);
+    expired_worker.reset();
+
+    EXPECT_EQ(manager->remove_expired_workers(current_time), 1);
+    EXPECT_EQ(manager->get("expired-execution", 0, 0), nullptr);
+    EXPECT_EQ(manager->get("live-execution", 0, 0), live_worker);
 }
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_group_range_boundaries) {

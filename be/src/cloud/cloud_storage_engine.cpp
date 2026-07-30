@@ -27,6 +27,7 @@
 #include <rapidjson/stringbuffer.h>
 
 #include <algorithm>
+#include <ctime>
 #include <memory>
 #include <variant>
 
@@ -34,6 +35,7 @@
 #include "cloud/cloud_compaction_stop_token.h"
 #include "cloud/cloud_cumulative_compaction.h"
 #include "cloud/cloud_cumulative_compaction_policy.h"
+#include "cloud/cloud_distributed_single_rowset_compaction.h"
 #include "cloud/cloud_full_compaction.h"
 #include "cloud/cloud_index_change_compaction.h"
 #include "cloud/cloud_meta_mgr.h"
@@ -468,6 +470,8 @@ void CloudStorageEngine::_refresh_storage_vault_info_thread_callback() {
 void CloudStorageEngine::_vacuum_stale_rowsets_thread_callback() {
     while (!_stop_background_threads_latch.wait_for(
             std::chrono::seconds(config::vacuum_stale_rowsets_interval_s))) {
+        cloud::DistributedSingleRowsetCompactionWorkerManager::instance()->remove_expired_workers(
+                ::time(nullptr));
         _tablet_mgr->vacuum_stale_rowsets(_stop_background_threads_latch);
     }
 }

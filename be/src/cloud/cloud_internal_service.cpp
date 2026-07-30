@@ -1381,7 +1381,8 @@ void CloudInternalServiceImpl::cloud_single_rowset_compaction(
         auto worker =
                 cloud::DistributedSingleRowsetCompactionWorkerManager::instance()->get_or_create(
                         request->execution_id(), request->group_index(), request->attempt_id(),
-                        _engine, tablet.value(), &created);
+                        request->output_rowset_meta().txn_expiration(), _engine, tablet.value(),
+                        &created);
         const Status status = worker->handle_compaction(request, response);
         if (!status.ok() && created) {
             PCloudSingleRowsetCompactionFinishRequest cleanup_request;

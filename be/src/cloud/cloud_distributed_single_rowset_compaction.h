@@ -118,20 +118,27 @@ public:
 
     std::shared_ptr<DistributedSingleRowsetCompactionWorker> get_or_create(
             const std::string& execution_id, int32_t group_index, int32_t attempt_id,
-            CloudStorageEngine& engine, CloudTabletSPtr tablet, bool* created);
+            int64_t expiration_time, CloudStorageEngine& engine, CloudTabletSPtr tablet,
+            bool* created);
 
     std::shared_ptr<DistributedSingleRowsetCompactionWorker> get(
             const std::string& execution_id, int32_t group_index, int32_t attempt_id);
 
     void erase(const std::string& execution_id, int32_t group_index, int32_t attempt_id);
 
+    size_t remove_expired_workers(int64_t current_time);
+
 private:
+    struct WorkerEntry {
+        std::shared_ptr<DistributedSingleRowsetCompactionWorker> worker;
+        int64_t expiration_time;
+    };
+
     static std::string key(const std::string& execution_id, int32_t group_index,
                            int32_t attempt_id);
 
     std::mutex _mutex;
-    std::unordered_map<std::string, std::shared_ptr<DistributedSingleRowsetCompactionWorker>>
-            _workers;
+    std::unordered_map<std::string, WorkerEntry> _workers;
 };
 
 } // namespace cloud

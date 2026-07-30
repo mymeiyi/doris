@@ -432,7 +432,11 @@ group。Worker 还会校验 request 中的 `cloud_unique_id` 与本机一致，�
 当前实现会在 commit 前失败时通知 worker 按已返回的物理 segment ID 精确删除远端
 文件；commit RPC 一旦发出，即使 RPC 返回失败也不再主动删除远端文件，因为此时无法
 排除 Meta Service 已经提交成功。Worker 析构只清理本地 staging 文件，不会以进程退出
-为由删除可能已经可见的远端 rowset 文件。
+为由删除可能已经可见的远端 rowset 文件。Worker 状态沿用 compaction rowset 的
+`txn_expiration`，后台 vacuum 线程会回收超过 expiration 但未收到 finish RPC 的状态和
+本地 staging 文件，避免 coordinator 退出或 finish RPC 失败后长期占用内存和本地磁盘。
+过期回收不会删除远端文件；未提交文件继续由 Meta Service 的 compaction job/recycler
+生命周期负责，避免误删已经可见的 rowset。
 
 ### 11.2 RPC 协议
 

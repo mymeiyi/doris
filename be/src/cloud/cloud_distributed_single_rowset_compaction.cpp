@@ -21,6 +21,7 @@
 #include <gen_cpp/internal_service.pb.h>
 
 #include <charconv>
+#include <ctime>
 #include <limits>
 #include <set>
 #include <system_error>
@@ -464,18 +465,21 @@ std::string DistributedSingleRowsetCompactionWorkerManager::key(
 std::shared_ptr<DistributedSingleRowsetCompactionWorker>
 DistributedSingleRowsetCompactionWorkerManager::get_or_create(
         const std::string& execution_id, int32_t group_index, int32_t attempt_id,
-        CloudStorageEngine& engine, CloudTabletSPtr tablet, bool* created) {
+        int64_t expiration_time, CloudStorageEngine& engine, CloudTabletSPtr tablet, bool* created) {
     DORIS_CHECK(created != nullptr);
+    remove_expired_workers(::time(nullptr));
     std::lock_guard<std::mutex> lock(_mutex);
     const std::string worker_key = key(execution_id, group_index, attempt_id);
     const auto iter = _workers.find(worker_key);
     if (iter != _workers.end()) {
+        DORIS_CHECK_EQ(iter->second.expiration_time, expiration_time);
         *created = false;
-        return iter->second;
+        return iter->second.worker;
     }
     auto worker =
             std::make_shared<DistributedSingleRowsetCompactionWorker>(engine, std::move(tablet));
-    _workers.emplace(worker_key, worker);
+    _workers.emplace(worker_key,
+                     WorkerEntry {.worker = worker, .expiration_time = expiration_time});
     *created = true;
     return worker;
 }
@@ -483,15 +487,62 @@ DistributedSingleRowsetCompactionWorkerManager::get_or_create(
 std::shared_ptr<DistributedSingleRowsetCompactionWorker>
 DistributedSingleRowsetCompactionWorkerManager::get(const std::string& execution_id,
                                                      int32_t group_index, int32_t attempt_id) {
-    std::lock_guard<std::mutex> lock(_mutex);
-    const auto iter = _workers.find(key(execution_id, group_index, attempt_id));
-    return iter == _workers.end() ? nullptr : iter->second;
+    std::shared_ptr<DistributedSingleRowsetCompactionWorker> worker;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        const auto iter = _workers.find(key(execution_id, group_index, attempt_id));
+        if (iter == _workers.end()) {
+            return nullptr;
+        }
+        if (iter->second.expiration_time <= ::time(nullptr)) {
+            worker = std::move(iter->second.worker);
+            _workers.erase(iter);
+        } else {
+            return iter->second.worker;
+        }
+    }
+    LOG_INFO("remove expired distributed single-rowset compaction worker")
+            .tag("execution_id", execution_id)
+            .tag("group_index", group_index)
+            .tag("attempt_id", attempt_id);
+    worker.reset();
+    return nullptr;
 }
 
 void DistributedSingleRowsetCompactionWorkerManager::erase(
         const std::string& execution_id, int32_t group_index, int32_t attempt_id) {
-    std::lock_guard<std::mutex> lock(_mutex);
-    _workers.erase(key(execution_id, group_index, attempt_id));
+    std::shared_ptr<DistributedSingleRowsetCompactionWorker> worker;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        const auto iter = _workers.find(key(execution_id, group_index, attempt_id));
+        if (iter == _workers.end()) {
+            return;
+        }
+        worker = std::move(iter->second.worker);
+        _workers.erase(iter);
+    }
+    worker.reset();
+}
+
+size_t DistributedSingleRowsetCompactionWorkerManager::remove_expired_workers(
+        int64_t current_time) {
+    std::vector<std::shared_ptr<DistributedSingleRowsetCompactionWorker>> expired_workers;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        for (auto iter = _workers.begin(); iter != _workers.end();) {
+            if (iter->second.expiration_time > current_time) {
+                ++iter;
+                continue;
+            }
+            expired_workers.push_back(std::move(iter->second.worker));
+            iter = _workers.erase(iter);
+        }
+    }
+    if (!expired_workers.empty()) {
+        LOG_INFO("remove expired distributed single-rowset compaction workers")
+                .tag("worker_count", expired_workers.size());
+    }
+    return expired_workers.size();
 }
 
 } // namespace doris::cloud

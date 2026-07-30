@@ -1166,8 +1166,17 @@ void CloudCumulativeCompaction::finish_distributed_workers(bool keep_output_file
                 request.set_group_index(task.group_index);
                 request.set_keep_output_files(keep_output_files);
                 PCloudSingleRowsetCompactionFinishResponse response;
-                const Status status =
-                        cloud::single_rowset_compaction_finish_rpc(endpoint, request, &response);
+                Status status;
+                constexpr int MAX_FINISH_ATTEMPTS = 3;
+                for (int attempt = 1; attempt <= MAX_FINISH_ATTEMPTS; ++attempt) {
+                    response.Clear();
+                    status =
+                            cloud::single_rowset_compaction_finish_rpc(endpoint, request, &response);
+                    if (status.ok() || !status.is<ErrorCode::TOO_MANY_TASKS>()) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100 * attempt));
+                }
                 if (!status.ok()) {
                     LOG_WARNING("failed to finish distributed single-rowset worker")
                             .tag("job_id", _uuid)
