@@ -192,7 +192,7 @@ Status single_rowset_compaction_finish_rpc(
 }
 
 DistributedSingleRowsetCompactionWorker::DistributedSingleRowsetCompactionWorker(
-        CloudStorageEngine& engine, CloudTabletSPtr tablet)
+        CloudStorageEngine& engine, std::shared_ptr<CloudTablet> tablet)
         : _engine(engine), _tablet(std::move(tablet)) {}
 
 DistributedSingleRowsetCompactionWorker::~DistributedSingleRowsetCompactionWorker() {
@@ -465,7 +465,8 @@ std::string DistributedSingleRowsetCompactionWorkerManager::key(
 std::shared_ptr<DistributedSingleRowsetCompactionWorker>
 DistributedSingleRowsetCompactionWorkerManager::get_or_create(
         const std::string& execution_id, int32_t group_index, int32_t attempt_id,
-        int64_t expiration_time, CloudStorageEngine& engine, CloudTabletSPtr tablet, bool* created) {
+        int64_t expiration_time, CloudStorageEngine& engine,
+        std::shared_ptr<CloudTablet> tablet, bool* created) {
     DORIS_CHECK(created != nullptr);
     remove_expired_workers(::time(nullptr));
     std::lock_guard<std::mutex> lock(_mutex);

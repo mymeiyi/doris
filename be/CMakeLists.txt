@@ -272,7 +272,7 @@ add_subdirectory(${CONTRIB_PATH}/clucene ${PROJECT_BINARY_DIR}/clucene EXCLUDE_F
 
 set(clucene_options -fno-omit-frame-pointer -w -Wall)
 if (COMPILER_CLANG)
-    set(clucene_options ${clucene_options} -Wno-c++11-narrowing)
+    set(clucene_options ${clucene_options} -Wno-c++11-narrowing -Wno-shorten-64-to-32)
 else ()
     set(clucene_options ${clucene_options} -Wno-narrowing)
 endif()

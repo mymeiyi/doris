@@ -88,7 +88,8 @@ Status single_rowset_compaction_finish_rpc(
 
 class DistributedSingleRowsetCompactionWorker {
 public:
-    DistributedSingleRowsetCompactionWorker(CloudStorageEngine& engine, CloudTabletSPtr tablet);
+    DistributedSingleRowsetCompactionWorker(CloudStorageEngine& engine,
+                                             std::shared_ptr<CloudTablet> tablet);
     ~DistributedSingleRowsetCompactionWorker();
 
     Status handle_compaction(const PCloudSingleRowsetCompactionRequest* request,
@@ -103,7 +104,7 @@ private:
     Status cleanup_output_files();
 
     CloudStorageEngine& _engine;
-    CloudTabletSPtr _tablet;
+    std::shared_ptr<CloudTablet> _tablet;
     std::mutex _mutex;
     bool _is_mow = false;
     RowsetSharedPtr _partial_rowset;
@@ -118,7 +119,8 @@ public:
 
     std::shared_ptr<DistributedSingleRowsetCompactionWorker> get_or_create(
             const std::string& execution_id, int32_t group_index, int32_t attempt_id,
-            int64_t expiration_time, CloudStorageEngine& engine, CloudTabletSPtr tablet,
+            int64_t expiration_time, CloudStorageEngine& engine,
+            std::shared_ptr<CloudTablet> tablet,
             bool* created);
 
     std::shared_ptr<DistributedSingleRowsetCompactionWorker> get(
