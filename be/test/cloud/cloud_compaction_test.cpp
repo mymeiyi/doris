@@ -21,6 +21,7 @@
 #include <gtest/gtest-test-part.h>
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -28,6 +29,7 @@
 #include "cloud/cloud_base_compaction.h"
 #include "cloud/cloud_cluster_info.h"
 #include "cloud/cloud_cumulative_compaction.h"
+#include "cloud/cloud_distributed_single_rowset_compaction.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/cloud_tablet_mgr.h"
@@ -658,6 +660,35 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_logical_grou
                                        {.segment_pos_start = 4,
                                         .segment_pos_end = 5,
                                         .merge_way_num = 1}});
+}
+
+TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_builds_segment_slots) {
+    std::vector<cloud::SingleRowsetSegmentIdSlot> slots;
+    ASSERT_TRUE(cloud::build_single_rowset_segment_id_slots(17, 100, 3, &slots).ok());
+    ASSERT_EQ(slots.size(), 3);
+    EXPECT_EQ(slots[0].start_id, 17);
+    EXPECT_EQ(slots[1].start_id, 117);
+    EXPECT_EQ(slots[2].start_id, 217);
+    for (const auto& slot : slots) {
+        EXPECT_EQ(slot.capacity, 100);
+    }
+
+    EXPECT_FALSE(cloud::build_single_rowset_segment_id_slots(-1, 100, 3, &slots).ok());
+    EXPECT_FALSE(cloud::build_single_rowset_segment_id_slots(0, 0, 3, &slots).ok());
+    EXPECT_FALSE(cloud::build_single_rowset_segment_id_slots(
+                         std::numeric_limits<int32_t>::max() - 10, 100, 2, &slots)
+                         .ok());
+}
+
+TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_parses_distinct_remote_workers) {
+    std::vector<std::string> workers;
+    ASSERT_TRUE(cloud::parse_single_rowset_compaction_workers(
+                        " be-a:8060,be-local:8060,be-a:8060, be-b:8060 ",
+                        "be-local:8060", &workers)
+                        .ok());
+    ASSERT_EQ(workers.size(), 2);
+    EXPECT_EQ(workers[0], "be-a:8060");
+    EXPECT_EQ(workers[1], "be-b:8060");
 }
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_group_range_boundaries) {

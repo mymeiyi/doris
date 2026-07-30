@@ -34,6 +34,8 @@ class RowsetMeta;
 
 namespace cloud {
 
+struct DistributedSingleRowsetCompactionState;
+
 struct SegmentGroupMergeRange {
     int64_t segment_pos_start;
     int64_t segment_pos_end;
@@ -79,6 +81,15 @@ private:
     Status do_merge_input_rowsets(const std::vector<RowsetReaderSharedPtr>& input_rs_readers,
                                   MergeInputRowsetsResult* result) override;
 
+    Status try_distributed_single_rowset_compaction(MergeInputRowsetsResult* result,
+                                                    bool* compacted);
+
+    Status finish_distributed_mow_delete_bitmap(int64_t initiator,
+                                                DeleteBitmapPtr* output_delete_bitmap,
+                                                int64_t* lock_start_time);
+
+    void finish_distributed_workers(bool keep_output_files);
+
     void update_output_rowset_after_build(const MergeInputRowsetsResult& result) override;
 
     bool should_calculate_new_cumulative_point(int64_t input_cumulative_point) const;
@@ -100,6 +111,8 @@ private:
     int64_t _cumulative_compaction_cnt = 0;
     Version _last_delete_version {-1, -1};
     std::optional<int64_t> _single_rowset_compaction_segment_group_size;
+    std::unique_ptr<cloud::DistributedSingleRowsetCompactionState> _distributed_single_rowset_state;
+    bool _distributed_commit_started = false;
 };
 
 } // namespace doris

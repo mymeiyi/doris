@@ -20,7 +20,13 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <gen_cpp/cloud.pb.h>
+#include <gen_cpp/internal_service.pb.h>
 
+#include <limits>
+#include <unordered_map>
+#include <unordered_set>
+
+#include "cloud/cloud_distributed_single_rowset_compaction.h"
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/cloud_tablet_mgr.h"
 #include "cloud/config.h"
@@ -37,6 +43,8 @@
 #include "storage/rowset/rowset_writer.h"
 #include "storage/tablet/tablet_schema.h"
 #include "util/debug_points.h"
+#include "util/network_util.h"
+#include "util/threadpool.h"
 #include "util/trace.h"
 #include "util/uuid_generator.h"
 
@@ -402,10 +410,17 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     int64_t get_delete_bitmap_lock_start_time = 0;
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
-        RETURN_IF_ERROR(cloud_tablet()->calc_delete_bitmap_for_compaction(
-                _input_rowsets, _output_rowset, *_rowid_conversion, compaction_type(),
-                _stats.merged_rows, _stats.filtered_rows, initiator, output_rowset_delete_bitmap,
-                _allow_delete_in_cumu_compaction, get_delete_bitmap_lock_start_time));
+        if (_distributed_single_rowset_state != nullptr) {
+            RETURN_IF_ERROR(finish_distributed_mow_delete_bitmap(
+                    initiator, &output_rowset_delete_bitmap,
+                    &get_delete_bitmap_lock_start_time));
+        } else {
+            RETURN_IF_ERROR(cloud_tablet()->calc_delete_bitmap_for_compaction(
+                    _input_rowsets, _output_rowset, *_rowid_conversion, compaction_type(),
+                    _stats.merged_rows, _stats.filtered_rows, initiator,
+                    output_rowset_delete_bitmap, _allow_delete_in_cumu_compaction,
+                    get_delete_bitmap_lock_start_time));
+        }
         LOG_INFO("update delete bitmap in CloudCumulativeCompaction, tablet_id={}, range=[{}-{}]",
                  _tablet->tablet_id(), _input_rowsets.front()->start_version(),
                  _input_rowsets.back()->end_version())
@@ -427,6 +442,7 @@ Status CloudCumulativeCompaction::modify_rowsets() {
                 cloud_tablet()->tablet_id());
     });
     cloud::FinishTabletJobResponse resp;
+    _distributed_commit_started = _distributed_single_rowset_state != nullptr;
     auto st = _engine.meta_mgr().commit_tablet_job(job, &resp);
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
@@ -454,6 +470,7 @@ Status CloudCumulativeCompaction::modify_rowsets() {
         }
         return st;
     }
+    finish_distributed_workers(true);
 
     auto& stats = resp.stats();
     LOG(INFO) << "tablet stats=" << stats.ShortDebugString();
@@ -548,6 +565,9 @@ Status CloudCumulativeCompaction::modify_rowsets() {
 }
 
 Status CloudCumulativeCompaction::garbage_collection() {
+    // Once commit has been sent, a transport error cannot prove that Meta Service did not commit.
+    // Keep the remote files in that case to avoid deleting a visible rowset.
+    finish_distributed_workers(_distributed_commit_started);
     RETURN_IF_ERROR(CloudCompactionMixin::garbage_collection());
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();
@@ -670,11 +690,541 @@ Status CloudCumulativeCompaction::prepare_merge_input_rowsets(MergeInputRowsetsR
     return Status::OK();
 }
 
+Status CloudCumulativeCompaction::try_distributed_single_rowset_compaction(
+        MergeInputRowsetsResult* result, bool* compacted) {
+    *compacted = false;
+    if (!config::enable_cloud_single_rowset_distributed_compaction) {
+        return Status::OK();
+    }
+
+    DORIS_CHECK(result->is_segment_grouped);
+    DORIS_CHECK_EQ(_input_rowsets.size(), 1);
+    const auto& input_rowset = _input_rowsets.front();
+    const auto segment_ranges = cloud::build_segment_group_merge_ranges(
+            *input_rowset->rowset_meta(), result->segment_group_size);
+    if (segment_ranges.size() < 2) {
+        return Status::OK();
+    }
+
+    std::vector<std::string> workers;
+    RETURN_IF_ERROR(cloud::parse_single_rowset_compaction_workers(
+            config::cloud_single_rowset_compaction_workers,
+            get_host_port(BackendOptions::get_localhost(), config::brpc_port), &workers));
+    if (workers.size() < 2) {
+        return Status::OK();
+    }
+    workers.resize(std::min(workers.size(), segment_ranges.size()));
+
+    std::vector<cloud::SingleRowsetSegmentIdSlot> segment_slots;
+    RETURN_IF_ERROR(cloud::build_single_rowset_segment_id_slots(
+            _output_rs_writer->get_allocated_segment_id(),
+            config::cloud_single_rowset_compaction_segment_slot_capacity, segment_ranges.size(),
+            &segment_slots));
+
+    const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                        _tablet->enable_unique_key_merge_on_write();
+    const bool check_missed_rows =
+            is_mow &&
+            (config::enable_missing_rows_correctness_check ||
+             config::enable_mow_compaction_correctness_check_core ||
+             config::enable_mow_compaction_correctness_check_fail) &&
+            !_allow_delete_in_cumu_compaction;
+    int64_t phase1_end_version = 0;
+    if (is_mow) {
+        RETURN_IF_ERROR(_engine.meta_mgr().sync_tablet_rowsets(cloud_tablet()));
+        phase1_end_version = cloud_tablet()->max_version().second;
+    }
+
+    _distributed_single_rowset_state =
+            std::make_unique<cloud::DistributedSingleRowsetCompactionState>();
+    auto& distributed_state = *_distributed_single_rowset_state;
+    distributed_state.execution_id = _uuid;
+    distributed_state.phase1_end_version = phase1_end_version;
+    distributed_state.output_delete_bitmap =
+            std::make_shared<DeleteBitmap>(_tablet->tablet_id());
+    distributed_state.tasks.reserve(segment_ranges.size());
+    for (size_t group_index = 0; group_index < segment_ranges.size(); ++group_index) {
+        distributed_state.tasks.push_back(
+                {.worker_endpoint = workers[group_index % workers.size()],
+                 .group_index = cast_set<int32_t>(group_index),
+                 .attempt_id = 0,
+                 .segment_id_slot = segment_slots[group_index]});
+    }
+
+    const auto input_meta_pb = input_rowset->rowset_meta()->get_rowset_pb();
+    const auto output_meta_pb = _output_rs_writer->rowset_meta()->get_rowset_pb();
+    const std::string output_rowset_id = _output_rs_writer->rowset_id().to_string();
+    std::vector<PCloudSingleRowsetCompactionRequest> requests(segment_ranges.size());
+    std::vector<PCloudSingleRowsetCompactionResponse> responses(segment_ranges.size());
+    for (size_t group_index = 0; group_index < segment_ranges.size(); ++group_index) {
+        const auto& range = segment_ranges[group_index];
+        const auto& task = distributed_state.tasks[group_index];
+        auto& request = requests[group_index];
+        request.set_tablet_id(_tablet->tablet_id());
+        request.set_execution_id(_uuid);
+        request.set_attempt_id(task.attempt_id);
+        request.set_group_index(task.group_index);
+        *request.mutable_input_rowset_meta() = input_meta_pb;
+        request.set_segment_pos_start(range.segment_pos_start);
+        request.set_segment_pos_end(range.segment_pos_end);
+        for (int64_t pos = range.segment_pos_start; pos < range.segment_pos_end; ++pos) {
+            request.add_input_segment_ids(
+                    input_rowset->segment(cast_set<size_t>(pos)).id());
+        }
+        *request.mutable_output_rowset_meta() = output_meta_pb;
+        request.set_output_rowset_id(output_rowset_id);
+        request.set_output_segment_start_id(task.segment_id_slot.start_id);
+        request.set_max_segment_num(task.segment_id_slot.capacity);
+        request.set_compaction_type(static_cast<int32_t>(compaction_type()));
+        request.set_is_vertical(_is_vertical);
+        request.set_avg_segment_rows(cast_set<uint32_t>(get_avg_segment_rows()));
+        request.set_merge_way_num(range.merge_way_num);
+        request.set_is_mow(is_mow);
+        request.set_delete_bitmap_start_version(0);
+        request.set_delete_bitmap_end_version(phase1_end_version + 1);
+        request.set_check_missed_rows(check_missed_rows);
+        request.set_cloud_unique_id(config::cloud_unique_id);
+    }
+
+    std::vector<std::vector<size_t>> groups_by_worker(workers.size());
+    for (size_t group_index = 0; group_index < segment_ranges.size(); ++group_index) {
+        groups_by_worker[group_index % workers.size()].push_back(group_index);
+    }
+    std::vector<Status> task_status(segment_ranges.size(), Status::OK());
+    std::unique_ptr<ThreadPool> thread_pool;
+    const Status pool_status =
+            ThreadPoolBuilder("DistributedSingleRowsetCompaction")
+                    .set_min_threads(1)
+                    .set_max_threads(cast_set<int>(workers.size()))
+                    .set_max_queue_size(cast_set<int>(workers.size()))
+                    .build(&thread_pool);
+    if (!pool_status.ok()) {
+        _distributed_single_rowset_state.reset();
+        return Status::OK();
+    }
+    auto token = thread_pool->new_token(ThreadPool::ExecutionMode::CONCURRENT,
+                                        cast_set<int>(workers.size()));
+    Status submit_status = Status::OK();
+    for (size_t worker_index = 0; worker_index < workers.size(); ++worker_index) {
+        submit_status = token->submit_func([&, worker_index]() {
+            for (const size_t group_index : groups_by_worker[worker_index]) {
+                auto& task = distributed_state.tasks[group_index];
+                task.started = true;
+                task_status[group_index] = cloud::single_rowset_compaction_rpc(
+                        task.worker_endpoint, requests[group_index], &responses[group_index]);
+                if (!task_status[group_index].ok()) {
+                    break;
+                }
+            }
+        });
+        if (!submit_status.ok()) {
+            break;
+        }
+    }
+    token->wait();
+    token->shutdown();
+    RETURN_IF_ERROR(submit_status);
+    for (const auto& status : task_status) {
+        RETURN_IF_ERROR(status);
+    }
+
+    int64_t output_num_rows = 0;
+    int64_t output_data_size = 0;
+    int64_t output_index_size = 0;
+    int64_t output_total_size = 0;
+    bool key_bounds_truncated = false;
+    bool segment_file_sizes_available = true;
+    int64_t missed_rows_count = 0;
+    std::unordered_set<int64_t> output_segment_id_set;
+    std::vector<int64_t> output_segment_ids;
+    std::vector<KeyBoundsPB> output_key_bounds;
+    std::vector<uint32_t> output_segment_rows;
+    std::vector<size_t> output_segment_file_sizes;
+    std::vector<InvertedIndexFileInfo> output_index_file_info;
+    _stats = Merger::Statistics {};
+
+    for (size_t group_index = 0; group_index < responses.size(); ++group_index) {
+        const auto& response = responses[group_index];
+        const auto& task = distributed_state.tasks[group_index];
+        if (response.execution_id() != _uuid || response.group_index() != task.group_index ||
+            response.attempt_id() != task.attempt_id || !response.has_partial_rowset_meta()) {
+            return Status::InvalidArgument(
+                    "mismatched distributed single-rowset compaction response for group {}",
+                    group_index);
+        }
+
+        RowsetMeta partial_meta;
+        if (!partial_meta.init_from_pb(response.partial_rowset_meta())) {
+            return Status::InvalidArgument(
+                    "failed to initialize partial rowset metadata for group {}", group_index);
+        }
+        if (partial_meta.rowset_id() != _output_rs_writer->rowset_id()) {
+            return Status::InvalidArgument("partial rowset id mismatch for group {}", group_index);
+        }
+        if (partial_meta.num_segments() > task.segment_id_slot.capacity) {
+            return Status::Error<ErrorCode::TOO_MANY_SEGMENTS>(
+                    "group {} produced {} segments, slot capacity is {}", group_index,
+                    partial_meta.num_segments(), task.segment_id_slot.capacity);
+        }
+        if (partial_meta.num_segments() > 0 &&
+            partial_meta.segment_ids().size() !=
+                    cast_set<size_t>(partial_meta.num_segments())) {
+            return Status::InvalidArgument(
+                    "partial rowset does not contain an explicit segment id list for group {}",
+                    group_index);
+        }
+
+        for (const auto segment : partial_meta.segments()) {
+            if (segment.id() < task.segment_id_slot.start_id ||
+                segment.id() >= cast_set<int64_t>(task.segment_id_slot.start_id) +
+                                        task.segment_id_slot.capacity) {
+                return Status::InvalidArgument(
+                        "output segment {} is outside slot [{}, {}) for group {}", segment.id(),
+                        task.segment_id_slot.start_id,
+                        cast_set<int64_t>(task.segment_id_slot.start_id) +
+                                task.segment_id_slot.capacity,
+                        group_index);
+            }
+            if (!output_segment_id_set.emplace(segment.id()).second) {
+                return Status::InvalidArgument("duplicate output segment id {}", segment.id());
+            }
+            output_segment_ids.push_back(segment.id());
+        }
+
+        std::vector<KeyBoundsPB> partial_key_bounds;
+        partial_meta.get_segments_key_bounds(&partial_key_bounds);
+        if (partial_meta.num_segments() > 0 &&
+            partial_key_bounds.size() != cast_set<size_t>(partial_meta.num_segments())) {
+            return Status::InvalidArgument(
+                    "partial key bounds are not position-aligned for group {}", group_index);
+        }
+        output_key_bounds.insert(output_key_bounds.end(), partial_key_bounds.begin(),
+                                 partial_key_bounds.end());
+
+        std::vector<uint32_t> partial_segment_rows;
+        partial_meta.get_num_segment_rows(&partial_segment_rows);
+        if (partial_meta.num_segments() > 0 &&
+            partial_segment_rows.size() != cast_set<size_t>(partial_meta.num_segments())) {
+            return Status::InvalidArgument(
+                    "partial segment row counts are not position-aligned for group {}",
+                    group_index);
+        }
+        output_segment_rows.insert(output_segment_rows.end(), partial_segment_rows.begin(),
+                                   partial_segment_rows.end());
+
+        if (partial_meta.num_segments() > 0) {
+            if (partial_meta.segments_file_size().size() !=
+                cast_set<size_t>(partial_meta.num_segments())) {
+                segment_file_sizes_available = false;
+            } else if (segment_file_sizes_available) {
+                for (const auto file_size : partial_meta.segments_file_size()) {
+                    output_segment_file_sizes.push_back(cast_set<size_t>(file_size));
+                }
+            }
+            result->output_segment_group_sizes.push_back(
+                    cast_set<int32_t>(partial_meta.num_segments()));
+        }
+        for (const auto& file_info : partial_meta.inverted_index_file_info()) {
+            output_index_file_info.push_back(file_info);
+        }
+        if ((_cur_tablet_schema->has_inverted_index() || _cur_tablet_schema->has_ann_index()) &&
+            partial_meta.num_segments() > 0 &&
+            partial_meta.inverted_index_file_info().size() !=
+                    cast_set<size_t>(partial_meta.num_segments())) {
+            return Status::InvalidArgument(
+                    "partial inverted-index metadata is not position-aligned for group {}",
+                    group_index);
+        }
+
+        output_num_rows += partial_meta.num_rows();
+        output_data_size += partial_meta.data_disk_size();
+        output_index_size += partial_meta.index_disk_size();
+        output_total_size += partial_meta.total_disk_size();
+        key_bounds_truncated |= partial_meta.is_segments_key_bounds_truncated();
+        missed_rows_count += response.missed_rows_count();
+        _stats.output_rows += response.output_rows();
+        _stats.merged_rows += response.merged_rows();
+        _stats.filtered_rows += response.filtered_rows();
+        _stats.bytes_read_from_local += response.bytes_read_from_local();
+        _stats.bytes_read_from_remote += response.bytes_read_from_remote();
+        _stats.cached_bytes_total += response.cached_bytes_total();
+        _stats.cloud_local_read_time += response.cloud_local_read_time();
+        _stats.cloud_remote_read_time += response.cloud_remote_read_time();
+        if (is_mow && response.has_output_delete_bitmap_shard()) {
+            distributed_state.output_delete_bitmap->merge(DeleteBitmap::from_pb(
+                    response.output_delete_bitmap_shard(), _tablet->tablet_id()));
+        }
+    }
+
+    if (!segment_file_sizes_available) {
+        output_segment_file_sizes.clear();
+    }
+    DORIS_CHECK_EQ(output_segment_ids.size(), output_segment_rows.size());
+    DORIS_CHECK_EQ(output_segment_ids.size(), output_key_bounds.size());
+    DORIS_CHECK(output_index_file_info.empty() ||
+                output_index_file_info.size() == output_segment_ids.size());
+    if (check_missed_rows && _tablet->tablet_state() == TABLET_RUNNING &&
+        _stats.merged_rows + _stats.filtered_rows >= 0 &&
+        _stats.merged_rows + _stats.filtered_rows != missed_rows_count) {
+        const Status status = Status::InternalError(
+                "distributed single-rowset compaction merged rows ({}) plus filtered rows ({}) "
+                "does not equal missed rows ({})",
+                _stats.merged_rows, _stats.filtered_rows, missed_rows_count);
+        if (config::enable_mow_compaction_correctness_check_core) {
+            CHECK(false) << status;
+        }
+        if (config::enable_mow_compaction_correctness_check_fail) {
+            return status;
+        }
+        DCHECK(false) << status;
+    }
+
+    auto final_meta = std::make_shared<RowsetMeta>();
+    final_meta->set_num_rows(output_num_rows);
+    final_meta->set_total_disk_size(output_total_size);
+    final_meta->set_data_disk_size(output_data_size);
+    final_meta->set_index_disk_size(output_index_size);
+    final_meta->set_empty(output_num_rows == 0);
+    final_meta->set_num_segments(cast_set<int64_t>(output_segment_ids.size()));
+    if (!output_segment_ids.empty()) {
+        final_meta->set_segment_ids(output_segment_ids);
+    }
+    final_meta->set_segments_overlap(NONOVERLAPPING);
+    final_meta->set_rowset_state(VISIBLE);
+    final_meta->set_segments_key_bounds_truncated(key_bounds_truncated);
+    final_meta->set_segments_key_bounds(output_key_bounds, false);
+    final_meta->set_num_segment_rows(output_segment_rows);
+
+    _output_rowset = _output_rs_writer->manual_build(final_meta);
+    if (_output_rowset == nullptr) {
+        return Status::InternalError(
+                "failed to build distributed single-rowset compaction output");
+    }
+    if (!output_segment_file_sizes.empty()) {
+        _output_rowset->rowset_meta()->add_segments_file_size(output_segment_file_sizes);
+    }
+    if (!output_index_file_info.empty()) {
+        std::vector<const InvertedIndexFileInfo*> output_index_file_info_ptrs;
+        output_index_file_info_ptrs.reserve(output_index_file_info.size());
+        for (const auto& file_info : output_index_file_info) {
+            output_index_file_info_ptrs.push_back(&file_info);
+        }
+        _output_rowset->rowset_meta()->add_inverted_index_files_info(
+                output_index_file_info_ptrs);
+    }
+
+    result->output_rowset_built = true;
+    *compacted = true;
+    LOG_INFO("finish distributed single-rowset compaction merge, tablet_id={}",
+             _tablet->tablet_id())
+            .tag("job_id", _uuid)
+            .tag("groups", segment_ranges.size())
+            .tag("workers", workers.size())
+            .tag("output_segments", output_segment_ids.size());
+    return Status::OK();
+}
+
+Status CloudCumulativeCompaction::finish_distributed_mow_delete_bitmap(
+        int64_t initiator, DeleteBitmapPtr* output_delete_bitmap, int64_t* lock_start_time) {
+    DORIS_CHECK(_distributed_single_rowset_state != nullptr);
+    auto& distributed_state = *_distributed_single_rowset_state;
+    DORIS_CHECK(distributed_state.output_delete_bitmap != nullptr);
+
+    RETURN_IF_ERROR(_engine.meta_mgr().get_delete_bitmap_update_lock(
+            *cloud_tablet(), COMPACTION_DELETE_BITMAP_LOCK_ID, initiator));
+    *lock_start_time = MonotonicMicros();
+
+    std::vector<std::string> worker_endpoints;
+    std::unordered_map<std::string, size_t> worker_to_index;
+    std::vector<std::vector<size_t>> groups_by_worker;
+    for (size_t task_index = 0; task_index < distributed_state.tasks.size(); ++task_index) {
+        const auto& endpoint = distributed_state.tasks[task_index].worker_endpoint;
+        const auto [iter, inserted] =
+                worker_to_index.emplace(endpoint, worker_endpoints.size());
+        if (inserted) {
+            worker_endpoints.push_back(endpoint);
+            groups_by_worker.emplace_back();
+        }
+        groups_by_worker[iter->second].push_back(task_index);
+    }
+
+    std::vector<Status> task_status(distributed_state.tasks.size(), Status::OK());
+    std::vector<PCloudSingleRowsetCompactionIncrementalResponse> responses(
+            distributed_state.tasks.size());
+    std::unique_ptr<ThreadPool> thread_pool;
+    RETURN_IF_ERROR(ThreadPoolBuilder("DistributedSingleRowsetDeleteBitmap")
+                            .set_min_threads(1)
+                            .set_max_threads(cast_set<int>(worker_endpoints.size()))
+                            .set_max_queue_size(cast_set<int>(worker_endpoints.size()))
+                            .build(&thread_pool));
+    auto token = thread_pool->new_token(ThreadPool::ExecutionMode::CONCURRENT,
+                                        cast_set<int>(worker_endpoints.size()));
+    Status submit_status = Status::OK();
+    for (size_t worker_index = 0; worker_index < worker_endpoints.size(); ++worker_index) {
+        submit_status = token->submit_func([&, worker_index]() {
+            for (const size_t task_index : groups_by_worker[worker_index]) {
+                const auto& task = distributed_state.tasks[task_index];
+                PCloudSingleRowsetCompactionIncrementalRequest request;
+                request.set_tablet_id(_tablet->tablet_id());
+                request.set_execution_id(distributed_state.execution_id);
+                request.set_attempt_id(task.attempt_id);
+                request.set_group_index(task.group_index);
+                request.set_delete_bitmap_start_version(distributed_state.phase1_end_version);
+                request.set_delete_bitmap_end_version(
+                        std::numeric_limits<uint64_t>::max());
+                task_status[task_index] = cloud::single_rowset_compaction_incremental_rpc(
+                        task.worker_endpoint, request, &responses[task_index]);
+                if (!task_status[task_index].ok()) {
+                    break;
+                }
+            }
+        });
+        if (!submit_status.ok()) {
+            break;
+        }
+    }
+    token->wait();
+    token->shutdown();
+    RETURN_IF_ERROR(submit_status);
+    for (const auto& status : task_status) {
+        RETURN_IF_ERROR(status);
+    }
+    for (const auto& response : responses) {
+        if (response.has_output_delete_bitmap_shard()) {
+            distributed_state.output_delete_bitmap->merge(
+                    DeleteBitmap::from_pb(response.output_delete_bitmap_shard(),
+                                          _tablet->tablet_id()));
+        }
+    }
+
+    DeleteBitmapPtr delete_bitmap_v2;
+    const int64_t store_version = config::delete_bitmap_store_write_version;
+    if (store_version == 2 || store_version == 3) {
+        delete_bitmap_v2 =
+                std::make_shared<DeleteBitmap>(*distributed_state.output_delete_bitmap);
+        std::vector<DeleteBitmap::RowsetIdWithSegmentIds> retained_rowsets;
+        {
+            std::shared_lock read_lock(_tablet->get_header_lock());
+            for (const auto& [rowset_version, rowset] : cloud_tablet()->rowset_map()) {
+                if (rowset_version.second >= _output_rowset->start_version()) {
+                    continue;
+                }
+                std::vector<DeleteBitmap::SegmentId> segment_ids;
+                segment_ids.reserve(cast_set<size_t>(rowset->num_segments()));
+                for (const auto segment : rowset->segments()) {
+                    segment_ids.push_back(
+                            cast_set<DeleteBitmap::SegmentId>(segment.id()));
+                }
+                retained_rowsets.emplace_back(rowset->rowset_id(), std::move(segment_ids));
+            }
+        }
+        if (config::enable_agg_delta_delete_bitmap_for_store_v2) {
+            cloud_tablet()->tablet_meta()->delete_bitmap().subset_and_agg(
+                    retained_rowsets, _output_rowset->start_version(),
+                    _output_rowset->end_version(), delete_bitmap_v2.get());
+        } else {
+            cloud_tablet()->tablet_meta()->delete_bitmap().subset(
+                    retained_rowsets, _output_rowset->start_version(),
+                    _output_rowset->end_version(), delete_bitmap_v2.get());
+        }
+    }
+
+    std::optional<StorageResource> storage_resource;
+    auto output_storage_resource = _output_rowset->rowset_meta()->remote_storage_resource();
+    if (output_storage_resource) {
+        storage_resource = *output_storage_resource.value();
+    }
+    RETURN_IF_ERROR(_engine.meta_mgr().update_delete_bitmap(
+            *cloud_tablet(), -1, initiator, distributed_state.output_delete_bitmap.get(),
+            delete_bitmap_v2.get(), _output_rowset->rowset_id().to_string(), storage_resource,
+            store_version, _tablet->table_id()));
+    *output_delete_bitmap = distributed_state.output_delete_bitmap;
+    return Status::OK();
+}
+
+void CloudCumulativeCompaction::finish_distributed_workers(bool keep_output_files) {
+    if (_distributed_single_rowset_state == nullptr) {
+        return;
+    }
+    auto& distributed_state = *_distributed_single_rowset_state;
+    std::unordered_map<std::string, std::vector<size_t>> groups_by_worker;
+    for (size_t task_index = 0; task_index < distributed_state.tasks.size(); ++task_index) {
+        if (distributed_state.tasks[task_index].started) {
+            groups_by_worker[distributed_state.tasks[task_index].worker_endpoint].push_back(
+                    task_index);
+        }
+    }
+
+    if (!groups_by_worker.empty()) {
+        const auto finish_endpoint = [&](const std::string& endpoint,
+                                         const std::vector<size_t>& task_indices) {
+            for (const size_t task_index : task_indices) {
+                const auto& task = distributed_state.tasks[task_index];
+                PCloudSingleRowsetCompactionFinishRequest request;
+                request.set_execution_id(distributed_state.execution_id);
+                request.set_attempt_id(task.attempt_id);
+                request.set_group_index(task.group_index);
+                request.set_keep_output_files(keep_output_files);
+                PCloudSingleRowsetCompactionFinishResponse response;
+                const Status status =
+                        cloud::single_rowset_compaction_finish_rpc(endpoint, request, &response);
+                if (!status.ok()) {
+                    LOG_WARNING("failed to finish distributed single-rowset worker")
+                            .tag("job_id", _uuid)
+                            .tag("endpoint", endpoint)
+                            .tag("group_index", task.group_index)
+                            .tag("keep_output_files", keep_output_files)
+                            .error(status);
+                }
+            }
+        };
+        std::unique_ptr<ThreadPool> thread_pool;
+        Status pool_status =
+                ThreadPoolBuilder("DistributedSingleRowsetFinish")
+                        .set_min_threads(1)
+                        .set_max_threads(cast_set<int>(groups_by_worker.size()))
+                        .set_max_queue_size(cast_set<int>(groups_by_worker.size()))
+                        .build(&thread_pool);
+        if (!pool_status.ok()) {
+            LOG_WARNING("failed to create distributed single-rowset finish pool")
+                    .tag("job_id", _uuid)
+                    .error(pool_status);
+            for (const auto& [endpoint, task_indices] : groups_by_worker) {
+                finish_endpoint(endpoint, task_indices);
+            }
+        } else {
+            auto token = thread_pool->new_token(ThreadPool::ExecutionMode::CONCURRENT,
+                                                cast_set<int>(groups_by_worker.size()));
+            for (const auto& [endpoint, task_indices] : groups_by_worker) {
+                const Status submit_status = token->submit_func([&, endpoint, task_indices]() {
+                    finish_endpoint(endpoint, task_indices);
+                });
+                if (!submit_status.ok()) {
+                    LOG_WARNING("failed to submit distributed single-rowset finish task")
+                            .tag("job_id", _uuid)
+                            .tag("endpoint", endpoint)
+                            .error(submit_status);
+                    finish_endpoint(endpoint, task_indices);
+                }
+            }
+            token->wait();
+            token->shutdown();
+        }
+    }
+    _distributed_single_rowset_state.reset();
+}
+
 Status CloudCumulativeCompaction::do_merge_input_rowsets(
         const std::vector<RowsetReaderSharedPtr>& input_rs_readers,
         MergeInputRowsetsResult* result) {
     if (!result->is_segment_grouped) {
         return Compaction::do_merge_input_rowsets(input_rs_readers, result);
+    }
+
+    bool compacted_distributed = false;
+    RETURN_IF_ERROR(try_distributed_single_rowset_compaction(result, &compacted_distributed));
+    if (compacted_distributed) {
+        return Status::OK();
     }
 
     const int64_t segment_group_size = result->segment_group_size;

@@ -1843,6 +1843,45 @@ void BaseTablet::calc_compaction_output_rowset_delete_bitmap(
     }
 }
 
+void BaseTablet::calc_compaction_output_rowset_delete_bitmap_by_ranges(
+        const RowIdConversion& rowid_conversion, const RowsetId& output_rowset_id,
+        const std::vector<int64_t>& output_segment_ids, uint64_t start_version,
+        uint64_t end_version, const DeleteBitmap& input_delete_bitmap,
+        DeleteBitmap* output_rowset_delete_bitmap, std::set<RowLocation>* missed_rows) {
+    DORIS_CHECK(rowid_conversion.mode() == RowIdConversion::Mode::RANGED);
+    rowid_conversion.for_each_source_range([&](const SegmentRowIdRange& range) {
+        RowLocation src;
+        src.rowset_id = range.rowset_id;
+        src.segment_id = range.segment_id;
+        DeleteBitmap subset_map(tablet_id());
+        input_delete_bitmap.subset({range.rowset_id, range.segment_id, start_version},
+                                   {range.rowset_id, range.segment_id, end_version}, &subset_map);
+        for (const auto& [key, bitmap] : subset_map.delete_bitmap) {
+            const auto version = std::get<2>(key);
+            for (const auto row_id : bitmap) {
+                if (row_id < range.begin || row_id >= range.end) {
+                    continue;
+                }
+                src.row_id = row_id;
+                RowIdConversion::DestinationRowId converted_dst;
+                if (rowid_conversion.get(src, &converted_dst) != 0) {
+                    if (missed_rows != nullptr) {
+                        missed_rows->insert(src);
+                    }
+                    continue;
+                }
+                DORIS_CHECK_LT(converted_dst.segment_pos, output_segment_ids.size());
+                const RowLocation dst(
+                        output_rowset_id,
+                        cast_set<uint32_t>(output_segment_ids[converted_dst.segment_pos]),
+                        converted_dst.row_id);
+                output_rowset_delete_bitmap->add(
+                        {dst.rowset_id, dst.segment_id, version}, dst.row_id);
+            }
+        }
+    });
+}
+
 Status BaseTablet::check_rowid_conversion(
         RowsetSharedPtr dst_rowset,
         const std::map<RowsetSharedPtr, std::list<std::pair<RowLocation, RowLocation>>>&

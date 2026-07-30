@@ -535,12 +535,24 @@ Status BetaRowset::copy_files_to(const std::string& dir, const RowsetId& new_row
 }
 
 Status BetaRowset::upload_to(const StorageResource& dest_fs, const RowsetId& new_rowset_id) {
+    std::vector<int64_t> destination_segment_ids;
+    destination_segment_ids.reserve(cast_set<size_t>(num_segments()));
+    for (int64_t pos = 0; pos < num_segments(); ++pos) {
+        destination_segment_ids.push_back(pos);
+    }
+    return upload_files_to(dest_fs, new_rowset_id, destination_segment_ids);
+}
+
+Status BetaRowset::upload_files_to(const StorageResource& dest_fs,
+                                   const RowsetId& new_rowset_id,
+                                   const std::vector<int64_t>& destination_segment_ids) {
     if (!is_local()) {
         DCHECK(false) << _rowset_meta->tablet_id() << ' ' << rowset_id();
         return Status::InternalError("should be local rowset. tablet_id={} rowset_id={}",
                                      _rowset_meta->tablet_id(), rowset_id().to_string());
     }
 
+    DORIS_CHECK_EQ(destination_segment_ids.size(), cast_set<size_t>(num_segments()));
     if (num_segments() < 1) {
         return Status::OK();
     }
@@ -548,11 +560,15 @@ Status BetaRowset::upload_to(const StorageResource& dest_fs, const RowsetId& new
     local_paths.reserve(num_segments());
     std::vector<io::Path> dest_paths;
     dest_paths.reserve(num_segments());
-    for (int i = 0; i < num_segments(); ++i) {
+    for (size_t pos = 0; pos < destination_segment_ids.size(); ++pos) {
+        const auto source_segment_id = segment(pos).id();
+        const auto destination_segment_id = destination_segment_ids[pos];
         // Note: Here we use relative path for remote.
-        auto remote_seg_path = dest_fs.remote_segment_path(_rowset_meta->tablet_id(),
-                                                           new_rowset_id.to_string(), i);
-        auto local_seg_path = local_segment_path(_tablet_path, rowset_id().to_string(), i);
+        auto remote_seg_path =
+                dest_fs.remote_segment_path(_rowset_meta->tablet_id(),
+                                            new_rowset_id.to_string(), destination_segment_id);
+        auto local_seg_path = local_segment_path(_tablet_path, rowset_id().to_string(),
+                                                 source_segment_id);
         dest_paths.emplace_back(remote_seg_path);
         local_paths.emplace_back(local_seg_path);
         if (_schema->get_inverted_index_storage_format() == InvertedIndexStorageFormatPB::V1) {
@@ -595,6 +611,8 @@ Status BetaRowset::upload_to(const StorageResource& dest_fs, const RowsetId& new
         DorisMetrics::instance()->upload_total_byte->increment(total_disk_size());
     } else {
         DorisMetrics::instance()->upload_fail_count->increment(1);
+        WARN_IF_ERROR(dest_fs.fs->batch_delete(dest_paths),
+                      "failed to roll back partially uploaded rowset files");
     }
     return st;
 }

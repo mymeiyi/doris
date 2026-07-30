@@ -279,7 +279,8 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
         seg_start = 0;
         seg_end = segment_count;
     }
-    if (_read_context->record_rowids && _read_context->rowid_conversion) {
+    if (_read_context->record_rowids && _read_context->rowid_conversion &&
+        _read_context->rowid_conversion->mode() == RowIdConversion::Mode::FULL) {
         // init segment rowid map for rowid conversion
         std::vector<uint32_t> segment_rows;
         RETURN_IF_ERROR(_rowset->get_segment_num_rows(&segment_rows, should_use_cache, _stats));

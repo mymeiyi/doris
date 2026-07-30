@@ -32,6 +32,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "cloud/cloud_distributed_single_rowset_compaction.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/cloud_tablet_mgr.h"
@@ -1357,6 +1358,99 @@ void CloudInternalServiceImpl::recycle_cache(google::protobuf::RpcController* co
             file_cache->remove_if_cached_async(file_key);
             g_file_cache_recycle_cache_finished_index_num << 1;
         }
+    }
+}
+
+void CloudInternalServiceImpl::cloud_single_rowset_compaction(
+        google::protobuf::RpcController* controller [[maybe_unused]],
+        const PCloudSingleRowsetCompactionRequest* request,
+        PCloudSingleRowsetCompactionResponse* response, google::protobuf::Closure* done) {
+    const bool offered = _heavy_work_pool.try_offer([this, request, response, done]() {
+        brpc::ClosureGuard closure_guard(done);
+        if (request->cloud_unique_id() != config::cloud_unique_id) {
+            Status::InvalidArgument("cloud unique id does not match worker")
+                    .to_protobuf(response->mutable_status());
+            return;
+        }
+        auto tablet = _engine.tablet_mgr().get_tablet(request->tablet_id());
+        if (!tablet) {
+            tablet.error().to_protobuf(response->mutable_status());
+            return;
+        }
+        bool created = false;
+        auto worker =
+                cloud::DistributedSingleRowsetCompactionWorkerManager::instance()->get_or_create(
+                        request->execution_id(), request->group_index(), request->attempt_id(),
+                        _engine, tablet.value(), &created);
+        const Status status = worker->handle_compaction(request, response);
+        if (!status.ok() && created) {
+            PCloudSingleRowsetCompactionFinishRequest cleanup_request;
+            cleanup_request.set_keep_output_files(false);
+            const Status cleanup_status = worker->handle_finish(&cleanup_request);
+            WARN_IF_ERROR(cleanup_status,
+                          "failed to clean failed distributed single-rowset compaction task");
+            if (cleanup_status.ok()) {
+                cloud::DistributedSingleRowsetCompactionWorkerManager::instance()->erase(
+                        request->execution_id(), request->group_index(), request->attempt_id());
+            }
+        }
+        status.to_protobuf(response->mutable_status());
+    });
+    if (!offered) {
+        brpc::ClosureGuard closure_guard(done);
+        Status::TooManyTasks("failed to offer distributed single-rowset compaction task")
+                .to_protobuf(response->mutable_status());
+    }
+}
+
+void CloudInternalServiceImpl::cloud_single_rowset_compaction_incremental(
+        google::protobuf::RpcController* controller [[maybe_unused]],
+        const PCloudSingleRowsetCompactionIncrementalRequest* request,
+        PCloudSingleRowsetCompactionIncrementalResponse* response,
+        google::protobuf::Closure* done) {
+    const bool offered = _heavy_work_pool.try_offer([request, response, done]() {
+        brpc::ClosureGuard closure_guard(done);
+        auto worker = cloud::DistributedSingleRowsetCompactionWorkerManager::instance()->get(
+                request->execution_id(), request->group_index(), request->attempt_id());
+        if (worker == nullptr) {
+            Status::NotFound("distributed single-rowset compaction worker state not found")
+                    .to_protobuf(response->mutable_status());
+            return;
+        }
+        worker->handle_incremental(request, response).to_protobuf(response->mutable_status());
+    });
+    if (!offered) {
+        brpc::ClosureGuard closure_guard(done);
+        Status::TooManyTasks(
+                "failed to offer distributed single-rowset incremental bitmap task")
+                .to_protobuf(response->mutable_status());
+    }
+}
+
+void CloudInternalServiceImpl::cloud_single_rowset_compaction_finish(
+        google::protobuf::RpcController* controller [[maybe_unused]],
+        const PCloudSingleRowsetCompactionFinishRequest* request,
+        PCloudSingleRowsetCompactionFinishResponse* response, google::protobuf::Closure* done) {
+    const bool offered = _heavy_work_pool.try_offer([request, response, done]() {
+        brpc::ClosureGuard closure_guard(done);
+        auto* manager = cloud::DistributedSingleRowsetCompactionWorkerManager::instance();
+        auto worker = manager->get(request->execution_id(), request->group_index(),
+                                   request->attempt_id());
+        if (worker != nullptr) {
+            const Status status = worker->handle_finish(request);
+            if (status.ok() || request->keep_output_files()) {
+                manager->erase(request->execution_id(), request->group_index(),
+                               request->attempt_id());
+            }
+            status.to_protobuf(response->mutable_status());
+            return;
+        }
+        Status::OK().to_protobuf(response->mutable_status());
+    });
+    if (!offered) {
+        brpc::ClosureGuard closure_guard(done);
+        Status::TooManyTasks("failed to offer distributed single-rowset finish task")
+                .to_protobuf(response->mutable_status());
     }
 }
 

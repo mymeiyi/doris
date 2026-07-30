@@ -414,6 +414,26 @@ Worker BE 负责：
 - 返回 partial metadata。
 - 不提交 rowset，也不修改 tablet compaction 状态。
 
+当前跨 BE 实现使用以下配置，且默认关闭：
+
+```text
+enable_cloud_single_rowset_distributed_compaction = false
+cloud_single_rowset_compaction_workers = "be1:8060,be2:8060"
+cloud_single_rowset_compaction_segment_slot_capacity = 100
+cloud_single_rowset_compaction_rpc_timeout_ms = 3600000
+```
+
+`cloud_single_rowset_compaction_workers` 配置的是 worker 的 BRPC endpoint。Coordinator
+会排除自身和重复 endpoint；同一个 endpoint 上的 group 串行执行，不同 endpoint 并发
+执行。因此该模式不会在单个 BE 内为同一个 single-rowset compaction 并发执行多个
+group。Worker 还会校验 request 中的 `cloud_unique_id` 与本机一致，避免把任务发送到
+其他 cloud instance。
+
+当前实现会在 commit 前失败时通知 worker 按已返回的物理 segment ID 精确删除远端
+文件；commit RPC 一旦发出，即使 RPC 返回失败也不再主动删除远端文件，因为此时无法
+排除 Meta Service 已经提交成功。Worker 析构只清理本地 staging 文件，不会以进程退出
+为由删除可能已经可见的远端 rowset 文件。
+
 ### 11.2 RPC 协议
 
 分布式实现可以扩展提交 `f4ca355e` 引入的 RPC 框架，但 request 必须明确表达 segment

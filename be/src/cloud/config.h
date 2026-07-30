@@ -98,6 +98,14 @@ DECLARE_mInt64(compaction_txn_max_size_bytes);
 DECLARE_mBool(enable_cloud_single_rowset_compaction);
 DECLARE_mInt32(cloud_single_rowset_compaction_min_segments);
 DECLARE_mInt32(cloud_single_rowset_compaction_segment_group_size);
+// Enable cross-BE grouped single-rowset compaction.
+DECLARE_mBool(enable_cloud_single_rowset_distributed_compaction);
+// Comma-separated worker brpc endpoints.
+DECLARE_mString(cloud_single_rowset_compaction_workers);
+// Physical segment-id capacity assigned to each group.
+DECLARE_mInt32(cloud_single_rowset_compaction_segment_slot_capacity);
+// Per-RPC timeout in milliseconds.
+DECLARE_mInt32(cloud_single_rowset_compaction_rpc_timeout_ms);
 
 // CloudStorageEngine config
 DECLARE_mInt32(refresh_s3_info_interval_s);

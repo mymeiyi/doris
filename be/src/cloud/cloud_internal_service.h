@@ -67,6 +67,24 @@ public:
                          const PFetchPeerDataRequest* request, PFetchPeerDataResponse* response,
                          google::protobuf::Closure* done) override;
 
+    void cloud_single_rowset_compaction(
+            google::protobuf::RpcController* controller,
+            const PCloudSingleRowsetCompactionRequest* request,
+            PCloudSingleRowsetCompactionResponse* response,
+            google::protobuf::Closure* done) override;
+
+    void cloud_single_rowset_compaction_incremental(
+            google::protobuf::RpcController* controller,
+            const PCloudSingleRowsetCompactionIncrementalRequest* request,
+            PCloudSingleRowsetCompactionIncrementalResponse* response,
+            google::protobuf::Closure* done) override;
+
+    void cloud_single_rowset_compaction_finish(
+            google::protobuf::RpcController* controller,
+            const PCloudSingleRowsetCompactionFinishRequest* request,
+            PCloudSingleRowsetCompactionFinishResponse* response,
+            google::protobuf::Closure* done) override;
+
 private:
     CloudStorageEngine& _engine;
 };

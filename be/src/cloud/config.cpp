@@ -57,6 +57,15 @@ DEFINE_mInt64(compaction_txn_max_size_bytes, "7340032"); // 7MB
 DEFINE_mBool(enable_cloud_single_rowset_compaction, "false");
 DEFINE_mInt32(cloud_single_rowset_compaction_min_segments, "512");
 DEFINE_mInt32(cloud_single_rowset_compaction_segment_group_size, "64");
+// Run grouped single-rowset compaction on multiple remote BEs. The feature remains disabled
+// unless grouped single-rowset compaction is also enabled.
+DEFINE_mBool(enable_cloud_single_rowset_distributed_compaction, "false");
+// Comma-separated worker brpc endpoints. The coordinator endpoint is ignored.
+DEFINE_mString(cloud_single_rowset_compaction_workers, "");
+// Number of physical segment ids reserved for each remote group task.
+DEFINE_mInt32(cloud_single_rowset_compaction_segment_slot_capacity, "100");
+// Timeout for each coordinator-to-worker compaction RPC.
+DEFINE_mInt32(cloud_single_rowset_compaction_rpc_timeout_ms, "3600000");
 
 DEFINE_mInt32(refresh_s3_info_interval_s, "60");
 DEFINE_mInt32(vacuum_stale_rowsets_interval_s, "300");

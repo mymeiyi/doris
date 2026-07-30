@@ -17,7 +17,9 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
+#include <utility>
 #include <vector>
 
 #include "common/cast_set.h"
@@ -28,6 +30,13 @@
 
 namespace doris {
 
+struct SegmentRowIdRange {
+    RowsetId rowset_id;
+    uint32_t segment_id = 0;
+    uint32_t begin = 0;
+    uint32_t end = 0;
+};
+
 // For unique key merge on write table, we should update delete bitmap
 // of destination rowset when compaction finished.
 // Through the row id correspondence between the source rowset and the
@@ -35,6 +44,8 @@ namespace doris {
 // destination rowset.
 class RowIdConversion {
 public:
+    enum class Mode { FULL, RANGED };
+
     struct DestinationRowId {
         uint32_t segment_pos;
         uint32_t row_id;
@@ -43,8 +54,41 @@ public:
     RowIdConversion() = default;
     ~RowIdConversion() { RELEASE_THREAD_MEM_TRACKER(_seg_rowid_map_mem_used); }
 
+    Mode mode() const { return _mode; }
+
+    Status init_segment_ranges(const std::vector<SegmentRowIdRange>& ranges) {
+        DORIS_CHECK(_mode == Mode::FULL);
+        DORIS_CHECK(_segments_rowid_map.empty());
+        _mode = Mode::RANGED;
+        for (const auto& range : ranges) {
+            DORIS_CHECK_LE(range.begin, range.end);
+            constexpr size_t RESERVED_MEMORY = 10 * 1024 * 1024;
+            if (doris::GlobalMemoryArbitrator::is_exceed_hard_mem_limit(RESERVED_MEMORY)) {
+                return Status::MemoryLimitExceeded(
+                        "RowIdConversion init_segment_ranges failed");
+            }
+            const uint32_t range_id = cast_set<uint32_t>(_range_maps.size());
+            RangeMap range_map;
+            range_map.range = range;
+            range_map.map.assign(range.end - range.begin,
+                                 DestinationRowId {UINT32_MAX, UINT32_MAX});
+            track_mem_usage(range_map.map.capacity());
+            _range_maps.emplace_back(std::move(range_map));
+            _segment_to_range_ids[{range.rowset_id, range.segment_id}].push_back(range_id);
+        }
+        return Status::OK();
+    }
+
+    void for_each_source_range(const std::function<void(const SegmentRowIdRange&)>& fn) const {
+        DORIS_CHECK(_mode == Mode::RANGED);
+        for (const auto& range_map : _range_maps) {
+            fn(range_map.range);
+        }
+    }
+
     Status init_segment_map(const RowsetId& src_rowset_id, const std::vector<uint32_t>& segment_ids,
                             const std::vector<uint32_t>& num_rows) {
+        DORIS_CHECK(_mode == Mode::FULL);
         DCHECK_EQ(segment_ids.size(), num_rows.size());
         for (size_t i = 0; i < num_rows.size(); i++) {
             auto src_segment = std::pair<RowsetId, uint32_t> {src_rowset_id, segment_ids[i]};
@@ -102,15 +146,24 @@ public:
             if (item.row_id == -1) {
                 continue;
             }
-            uint32_t id = _segment_to_id_map.at(
-                    std::pair<RowsetId, uint32_t> {item.rowset_id, item.segment_id});
             if (_cur_dst_segment_pos < dst_segments_num_row.size() &&
                 _cur_dst_segment_rowid >= dst_segments_num_row[_cur_dst_segment_pos]) {
                 _cur_dst_segment_pos++;
                 _cur_dst_segment_rowid = 0;
             }
-            _segments_rowid_map[id][item.row_id] =
-                    std::pair<uint32_t, uint32_t> {_cur_dst_segment_pos, _cur_dst_segment_rowid++};
+            const uint32_t destination_row_id = _cur_dst_segment_rowid++;
+            if (_mode == Mode::FULL) {
+                uint32_t id = _segment_to_id_map.at(
+                        std::pair<RowsetId, uint32_t> {item.rowset_id, item.segment_id});
+                _segments_rowid_map[id][item.row_id] =
+                        std::pair<uint32_t, uint32_t> {_cur_dst_segment_pos, destination_row_id};
+            } else {
+                RangeMap* range_map =
+                        find_range(item.rowset_id, item.segment_id, item.row_id);
+                DORIS_CHECK(range_map != nullptr);
+                range_map->map[item.row_id - range_map->range.begin] =
+                        DestinationRowId {_cur_dst_segment_pos, destination_row_id};
+            }
         }
     }
 
@@ -118,6 +171,18 @@ public:
     // resolved only after the output rowset is built.
     // return non-zero if the src RowLocation does not exist
     int get(const RowLocation& src, DestinationRowId* dst) const {
+        if (_mode == Mode::RANGED) {
+            const RangeMap* range_map =
+                    find_range(src.rowset_id, src.segment_id, src.row_id);
+            if (range_map == nullptr) {
+                return -1;
+            }
+            *dst = range_map->map[src.row_id - range_map->range.begin];
+            if (dst->segment_pos == UINT32_MAX && dst->row_id == UINT32_MAX) {
+                return -1;
+            }
+            return 0;
+        }
         auto iter = _segment_to_id_map.find({src.rowset_id, src.segment_id});
         if (iter == _segment_to_id_map.end()) {
             return -1;
@@ -138,6 +203,7 @@ public:
 
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>& get_rowid_conversion_map()
             const {
+        DORIS_CHECK(_mode == Mode::FULL);
         return _segments_rowid_map;
     }
 
@@ -155,6 +221,31 @@ public:
     }
 
 private:
+    struct RangeMap {
+        SegmentRowIdRange range;
+        std::vector<DestinationRowId> map;
+    };
+
+    RangeMap* find_range(const RowsetId& rowset_id, uint32_t segment_id, uint32_t row_id) {
+        return const_cast<RangeMap*>(
+                std::as_const(*this).find_range(rowset_id, segment_id, row_id));
+    }
+
+    const RangeMap* find_range(const RowsetId& rowset_id, uint32_t segment_id,
+                               uint32_t row_id) const {
+        const auto iter = _segment_to_range_ids.find({rowset_id, segment_id});
+        if (iter == _segment_to_range_ids.end()) {
+            return nullptr;
+        }
+        for (const uint32_t range_id : iter->second) {
+            const auto& range_map = _range_maps[range_id];
+            if (row_id >= range_map.range.begin && row_id < range_map.range.end) {
+                return &range_map;
+            }
+        }
+        return nullptr;
+    }
+
     void track_mem_usage(size_t delta_std_pair_cap) {
         _std_pair_cap += delta_std_pair_cap;
 
@@ -188,6 +279,10 @@ private:
 
     // current rowid of dst segment
     std::uint32_t _cur_dst_segment_rowid = 0;
+
+    Mode _mode = Mode::FULL;
+    std::vector<RangeMap> _range_maps;
+    std::map<std::pair<RowsetId, uint32_t>, std::vector<uint32_t>> _segment_to_range_ids;
 };
 
 } // namespace doris

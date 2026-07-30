@@ -301,17 +301,25 @@ Status Compaction::merge_input_rowsets() {
         SCOPED_TIMER(_merge_rowsets_latency_timer);
         // 1. Merge segment files and write bkd inverted index
         RETURN_IF_ERROR(do_merge_input_rowsets(input_rs_readers, &result));
-        // 2. Merge the remaining inverted index files of the string type
-        RETURN_IF_ERROR(do_inverted_index_compaction());
+        if (!result.output_rowset_built) {
+            // 2. Merge the remaining inverted index files of the string type
+            RETURN_IF_ERROR(do_inverted_index_compaction());
+        }
     }
 
     COUNTER_UPDATE(_merged_rows_counter, _stats.merged_rows);
     COUNTER_UPDATE(_filtered_rows_counter, _stats.filtered_rows);
 
-    // 3. In the `build`, `_close_file_writers` is called to close the inverted index file writer and write the final compound index file.
-    RETURN_NOT_OK_STATUS_WITH_WARN(_output_rs_writer->build(_output_rowset),
-                                   fmt::format("rowset writer build failed. output_version: {}",
-                                               _output_version.to_string()));
+    if (!result.output_rowset_built) {
+        // 3. In the `build`, `_close_file_writers` is called to close the inverted index file
+        // writer and write the final compound index file.
+        RETURN_NOT_OK_STATUS_WITH_WARN(
+                _output_rs_writer->build(_output_rowset),
+                fmt::format("rowset writer build failed. output_version: {}",
+                            _output_version.to_string()));
+    } else {
+        DORIS_CHECK(_output_rowset != nullptr);
+    }
     _output_rowset->rowset_meta()->set_commit_tso(commit_tso_range(_input_rowsets));
 
     // When true, writers should remove variant extracted subcolumns from the

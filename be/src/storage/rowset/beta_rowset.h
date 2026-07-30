@@ -66,6 +66,9 @@ public:
 
     Status upload_to(const StorageResource& dest_fs, const RowsetId& new_rowset_id) override;
 
+    Status upload_files_to(const StorageResource& dest_fs, const RowsetId& new_rowset_id,
+                           const std::vector<int64_t>& destination_segment_ids);
+
     // only applicable to alpha rowset, no op here
     Status remove_old_files(std::vector<std::string>* files_to_remove) override {
         return Status::OK();
