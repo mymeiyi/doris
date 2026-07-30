@@ -566,7 +566,8 @@ public class OlapTableTest {
             mockedConfig.when(Config::isNotCloudMode).thenReturn(false);
             mockedConfig.when(Config::isCloudMode).thenReturn(true);
 
-            mockedVH.when(() -> VersionHelper.getVersionFromMeta(Mockito.any())).thenAnswer(invocation -> {
+            mockedVH.when(() -> VersionHelper.getVersionFromMeta(
+                    Mockito.any(Cloud.GetVersionRequest.class), Mockito.anyInt())).thenAnswer(invocation -> {
                 Cloud.GetVersionResponse.Builder builder = Cloud.GetVersionResponse.newBuilder();
                 builder.setStatus(Cloud.MetaServiceResponseStatus.newBuilder()
                         .setCode(Cloud.MetaServiceCode.OK).build());
