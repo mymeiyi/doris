@@ -39,6 +39,7 @@
 #include "common/logging.h"
 #include "common/status.h"
 #include "core/block/block.h"
+#include "runtime/runtime_state.h"
 #include "storage/iterator/block_reader.h"
 #include "storage/iterator/vertical_block_reader.h"
 #include "storage/iterator/vertical_merge_iterator.h"
@@ -68,7 +69,8 @@ Status Merger::vmerge_rowsets(BaseTabletSPtr tablet, ReaderType reader_type,
                               const TabletSchema& cur_tablet_schema,
                               const std::vector<RowsetReaderSharedPtr>& src_rowset_readers,
                               RowsetWriter* dst_rowset_writer, Statistics* stats_output,
-                              std::optional<std::pair<int64_t, int64_t>> segment_range) {
+                              std::optional<std::pair<int64_t, int64_t>> segment_range,
+                              RuntimeState* runtime_state) {
     if (!cur_tablet_schema.cluster_key_uids().empty()) {
         return Status::InternalError(
                 "mow table with cluster keys does not support non vertical compaction");
@@ -77,6 +79,7 @@ Status Merger::vmerge_rowsets(BaseTabletSPtr tablet, ReaderType reader_type,
     TabletReader::ReaderParams reader_params;
     reader_params.tablet = tablet;
     reader_params.reader_type = reader_type;
+    reader_params.runtime_state = runtime_state;
 
     TabletReadSource read_source;
     read_source.rs_splits.reserve(src_rowset_readers.size());
@@ -122,6 +125,9 @@ Status Merger::vmerge_rowsets(BaseTabletSPtr tablet, ReaderType reader_type,
     size_t output_rows = 0;
     bool eof = false;
     while (!eof && !ExecEnv::GetInstance()->storage_engine().stopped()) {
+        if (runtime_state != nullptr) {
+            RETURN_IF_CANCELLED(runtime_state);
+        }
         auto tablet_state = tablet->tablet_state();
         if (tablet_state != TABLET_RUNNING && tablet_state != TABLET_NOTREADY) {
             tablet->clear_cache();
@@ -259,7 +265,8 @@ Status Merger::vertical_compact_one_group(
         RowsetWriter* dst_rowset_writer, uint32_t max_rows_per_segment, Statistics* stats_output,
         std::vector<uint32_t> key_group_cluster_key_idxes, int64_t batch_size,
         CompactionSampleInfo* sample_info, VerticalCompactionContextStats* context_stats,
-        bool enable_sparse_optimization, std::optional<std::pair<int64_t, int64_t>> segment_range) {
+        bool enable_sparse_optimization,
+        std::optional<std::pair<int64_t, int64_t>> segment_range, RuntimeState* runtime_state) {
     // build tablet reader
     VLOG_NOTICE << "vertical compact one group, max_rows_per_segment=" << max_rows_per_segment;
     VerticalBlockReader reader(row_source_buf, context_stats);
@@ -268,6 +275,7 @@ Status Merger::vertical_compact_one_group(
     reader_params.key_group_cluster_key_idxes = key_group_cluster_key_idxes;
     reader_params.tablet = tablet;
     reader_params.reader_type = reader_type;
+    reader_params.runtime_state = runtime_state;
     reader_params.enable_sparse_optimization = enable_sparse_optimization;
 
     TabletReadSource read_source;
@@ -316,6 +324,9 @@ Status Merger::vertical_compact_one_group(
     size_t output_rows = 0;
     bool eof = false;
     while (!eof && !ExecEnv::GetInstance()->storage_engine().stopped()) {
+        if (runtime_state != nullptr) {
+            RETURN_IF_CANCELLED(runtime_state);
+        }
         auto tablet_state = tablet->tablet_state();
         if (tablet_state != TABLET_RUNNING && tablet_state != TABLET_NOTREADY) {
             tablet->clear_cache();
@@ -502,14 +513,12 @@ int64_t estimate_batch_size(int group_index, BaseTabletSPtr tablet, int64_t way_
 // 2. compact groups one by one, generate a row_source_buf when compact key group
 // and use this row_source_buf to compact value column groups
 // 3. build output rowset
-Status Merger::vertical_merge_rowsets(BaseTabletSPtr tablet, ReaderType reader_type,
-                                      const TabletSchema& tablet_schema,
-                                      const std::vector<RowsetReaderSharedPtr>& src_rowset_readers,
-                                      RowsetWriter* dst_rowset_writer,
-                                      uint32_t max_rows_per_segment, int64_t merge_way_num,
-                                      Statistics* stats_output,
-                                      VerticalCompactionProgressCallback progress_cb,
-                                      std::optional<std::pair<int64_t, int64_t>> segment_range) {
+Status Merger::vertical_merge_rowsets(
+        BaseTabletSPtr tablet, ReaderType reader_type, const TabletSchema& tablet_schema,
+        const std::vector<RowsetReaderSharedPtr>& src_rowset_readers,
+        RowsetWriter* dst_rowset_writer, uint32_t max_rows_per_segment, int64_t merge_way_num,
+        Statistics* stats_output, VerticalCompactionProgressCallback progress_cb,
+        std::optional<std::pair<int64_t, int64_t>> segment_range, RuntimeState* runtime_state) {
     LOG(INFO) << "Start to do vertical compaction, tablet_id: " << tablet->tablet_id();
     VerticalCompactionContextStats context_stats;
     Defer log_context_stats {[&] {
@@ -713,6 +722,9 @@ Status Merger::vertical_merge_rowsets(BaseTabletSPtr tablet, ReaderType reader_t
 
     // compact group one by one
     for (auto i = 0; i < column_groups.size(); ++i) {
+        if (runtime_state != nullptr) {
+            RETURN_IF_CANCELLED(runtime_state);
+        }
         VLOG_NOTICE << "row source size: " << row_sources_buf.total_size();
         bool is_key = (i == 0);
         int64_t batch_size = config::compaction_batch_size != -1
@@ -728,7 +740,7 @@ Status Merger::vertical_merge_rowsets(BaseTabletSPtr tablet, ReaderType reader_t
                 tablet, reader_type, tablet_schema, is_key, column_groups[i], &row_sources_buf,
                 src_rowset_readers, dst_rowset_writer, max_rows_per_segment, group_stats_ptr,
                 key_group_cluster_key_idxes, batch_size, &sample_info, &context_stats,
-                enable_sparse_optimization, segment_range);
+                enable_sparse_optimization, segment_range, runtime_state);
         {
             std::unique_lock<std::mutex> lock(sample_info_lock);
             sample_infos[i] = sample_info;

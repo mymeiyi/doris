@@ -955,9 +955,11 @@ Status BaseBetaRowsetWriter::_close_file_writers() {
 
 Status BetaRowsetWriter::_close_file_writers() {
     RETURN_IF_ERROR(BaseBetaRowsetWriter::_close_file_writers());
-    // if _segment_start_id is not zero, that means it's a transient rowset writer for
-    // MoW partial update, don't need to do segment compaction.
-    if (_segment_start_id == 0) {
+    // Skip writer-local segment compaction for:
+    // 1. A distributed partial output writer, whose physical segment IDs are constrained to a
+    //    coordinator-assigned slot that may start at zero.
+    // 2. A transient MoW partial-update writer, which appends segments from a nonzero segment ID.
+    if (!_context.is_partial_output_writer && _segment_start_id == 0) {
         if (_segcompaction_worker->cancel()) {
             std::lock_guard lk(_is_doing_segcompaction_lock);
             _is_doing_segcompaction = false;
@@ -1051,8 +1053,8 @@ Status BaseBetaRowsetWriter::_build_rowset_meta(RowsetMeta* rowset_meta, bool ch
     std::vector<uint32_t> segment_rows;
     std::vector<int64_t> segment_ids;
     std::optional<bool> segments_key_bounds_truncated;
-    const bool record_segment_ids =
-            _context.write_type == DataWriteType::TYPE_COMPACTION && _segment_start_id != 0;
+    const bool record_segment_ids = _context.write_type == DataWriteType::TYPE_COMPACTION &&
+                                    (_context.is_partial_output_writer || _segment_start_id != 0);
     {
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
         if (record_segment_ids) {
@@ -1131,7 +1133,8 @@ Status BaseBetaRowsetWriter::_build_rowset_meta(RowsetMeta* rowset_meta, bool ch
     rowset_meta->set_data_disk_size(total_data_size + _total_data_size);
     rowset_meta->set_index_disk_size(total_index_size + _total_index_size);
     bool aggregate_key_bounds = config::enable_aggregate_non_mow_key_bounds &&
-                                !_context.enable_unique_key_merge_on_write;
+                                !_context.enable_unique_key_merge_on_write &&
+                                !_context.is_partial_output_writer;
     rowset_meta->set_segments_key_bounds(segments_encoded_key_bounds, aggregate_key_bounds);
     // TODO write zonemap to meta
     rowset_meta->set_empty((num_rows_written + _num_rows_written) == 0);

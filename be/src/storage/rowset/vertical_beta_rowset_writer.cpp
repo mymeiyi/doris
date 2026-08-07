@@ -140,7 +140,7 @@ Status VerticalBetaRowsetWriter<T>::_flush_columns(segment_v2::SegmentWriter* se
         key_bounds.set_min_key(min_key.to_string());
         key_bounds.set_max_key(max_key.to_string());
         this->_segments_encoded_key_bounds.emplace_back(std::move(key_bounds));
-        this->_segment_num_rows.emplace_back(segment_writer->row_count());
+        this->_segment_num_rows.push_back(segment_writer->row_count());
     }
     return Status::OK();
 }
@@ -207,7 +207,7 @@ Status VerticalBetaRowsetWriter<T>::build(RowsetSharedPtr& rowset) {
     const int32_t next_segment_id = T::get_allocated_segment_id();
     const int32_t segment_num = this->_num_segment.load(std::memory_order_relaxed);
     DORIS_CHECK_EQ(next_segment_id - this->_segment_start_id, segment_num);
-    if (this->_segment_start_id != 0) {
+    if (this->_context.is_partial_output_writer || this->_segment_start_id != 0) {
         std::vector<int64_t> segment_ids;
         segment_ids.reserve(segment_num);
         for (int32_t segment_id = this->_segment_start_id; segment_id < next_segment_id;

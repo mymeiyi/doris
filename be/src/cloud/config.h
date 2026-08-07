@@ -98,6 +98,26 @@ DECLARE_mInt64(compaction_txn_max_size_bytes);
 DECLARE_mBool(enable_cloud_single_rowset_compaction);
 DECLARE_mInt32(cloud_single_rowset_compaction_min_segments);
 DECLARE_mInt32(cloud_single_rowset_compaction_segment_group_size);
+// Enable cross-BE grouped single-rowset compaction.
+DECLARE_mBool(enable_cloud_single_rowset_distributed_compaction);
+// TTL for the live same-compute-group BE snapshot fetched from FE.
+DECLARE_mInt32(cloud_distributed_compaction_worker_cache_ttl_ms);
+// Physical segment-id capacity assigned to each group.
+DECLARE_mInt32(cloud_distributed_compaction_segment_slot_capacity);
+// Timeout for incremental DeleteBitmap RPCs, in milliseconds.
+DECLARE_mInt32(cloud_distributed_compaction_incremental_bitmap_rpc_timeout_ms);
+// Timeout for distributed compaction submit and status RPCs, in milliseconds.
+DECLARE_mInt32(cloud_distributed_compaction_control_rpc_timeout_ms);
+// Interval between distributed compaction status polls, in milliseconds.
+DECLARE_mInt32(cloud_distributed_compaction_status_poll_interval_ms);
+// Maximum number of threads used by distributed compaction coordinator RPC tasks on this BE.
+DECLARE_Int32(cloud_distributed_compaction_thread_num);
+// Maximum number of distributed compaction coordinator RPC tasks queued on this BE.
+DECLARE_Int32(cloud_distributed_compaction_queue_size);
+// Maximum number of distributed compaction requests executed concurrently on a worker BE.
+DECLARE_Int32(cloud_distributed_compaction_worker_thread_num);
+// Maximum number of distributed compaction requests queued on a worker BE.
+DECLARE_Int32(cloud_distributed_compaction_worker_queue_size);
 
 // CloudStorageEngine config
 DECLARE_mInt32(refresh_s3_info_interval_s);
