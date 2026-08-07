@@ -931,6 +931,115 @@ message PGetFileCacheMetaResponse {
     repeated FileCacheBlockMeta file_cache_block_metas = 1;
 }
 
+// ---- Cross-BE distributed compaction (cloud) ----
+message PCloudDistributedCompactionTask {
+    optional int32 attempt_id = 1;
+    optional int32 group_index = 2;
+    optional int64 segment_pos_start = 3;
+    optional int64 segment_pos_end = 4;
+    optional int32 output_segment_start_id = 6;
+    optional int32 max_segment_num = 7;
+    optional int64 merge_way_num = 8;
+}
+
+message PCloudDistributedCompactionSubmitRequest {
+    optional int64 tablet_id = 1;
+    optional string execution_id = 2;
+    optional RowsetMetaPB input_rowset_meta = 3;
+    optional RowsetMetaPB output_rowset_meta = 4;
+    optional string output_rowset_id = 5;
+    optional int32 compaction_type = 6; // ReaderType
+    optional bool is_vertical = 7;
+    optional uint32 avg_segment_rows = 8;
+    optional bool is_mow = 9;
+    optional uint64 delete_bitmap_start_version = 10;
+    optional uint64 delete_bitmap_end_version = 11;
+    optional bool check_missed_rows = 12;
+    optional int64 target_backend_id = 13;
+    optional string target_cloud_unique_id = 14;
+    optional string target_compute_group_id = 15;
+    repeated PCloudDistributedCompactionTask tasks = 16;
+}
+
+message PCloudDistributedCompactionSubmitResponse {
+    optional PStatus status = 1;
+}
+
+message PCloudDistributedCompactionTaskKey {
+    optional int32 attempt_id = 1;
+    optional int32 group_index = 2;
+}
+
+message PCloudDistributedCompactionGetStatusRequest {
+    optional string execution_id = 1;
+    repeated PCloudDistributedCompactionTaskKey tasks = 2;
+}
+
+enum PCloudDistributedCompactionTaskState {
+    CLOUD_DISTRIBUTED_COMPACTION_TASK_PENDING = 0;
+    CLOUD_DISTRIBUTED_COMPACTION_TASK_RUNNING = 1;
+    CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED = 2;
+    CLOUD_DISTRIBUTED_COMPACTION_TASK_FAILED = 3;
+}
+
+message PCloudDistributedCompactionTaskResult {
+    optional PStatus status = 1;
+    optional int32 attempt_id = 2;
+    optional int32 group_index = 3;
+    optional bool requires_finalize = 4;
+    optional RowsetMetaPB partial_rowset_meta = 5;
+    optional int64 output_rows = 6;
+    optional int64 merged_rows = 7;
+    optional int64 filtered_rows = 8;
+    optional int64 bytes_read_from_local = 9;
+    optional int64 bytes_read_from_remote = 10;
+    optional int64 cached_bytes_total = 11;
+    optional int64 cloud_local_read_time = 12;
+    optional int64 cloud_remote_read_time = 13;
+    optional DeleteBitmapPB output_delete_bitmap_shard = 14;
+    optional int64 missed_rows_count = 15;
+}
+
+message PCloudDistributedCompactionTaskStatus {
+    optional int32 attempt_id = 1;
+    optional int32 group_index = 2;
+    optional PCloudDistributedCompactionTaskState state = 3;
+    optional PCloudDistributedCompactionTaskResult result = 4;
+}
+
+message PCloudDistributedCompactionGetStatusResponse {
+    optional PStatus status = 1;
+    repeated PCloudDistributedCompactionTaskStatus task_statuses = 2;
+}
+
+message PCloudDistributedCompactionCalcIncrementalDeleteBitmapRequest {
+    optional int64 tablet_id = 1;
+    optional string execution_id = 2;
+    optional uint64 delete_bitmap_start_version = 3;
+    optional uint64 delete_bitmap_end_version = 4;
+    repeated PCloudDistributedCompactionTaskKey tasks = 5;
+}
+
+message PCloudDistributedCompactionCalcIncrementalDeleteBitmapResponse {
+    optional PStatus status = 1;
+    optional DeleteBitmapPB output_delete_bitmap_shard = 2;
+}
+
+enum PCloudDistributedCompactionFinalizeMode {
+    CLOUD_DISTRIBUTED_COMPACTION_PRESERVE_OUTPUT_FILES = 0;
+    CLOUD_DISTRIBUTED_COMPACTION_ABORT_AND_DISCARD_OUTPUT_FILES = 1;
+}
+
+message PCloudDistributedCompactionFinalizeRequest {
+    optional string execution_id = 1;
+    repeated PCloudDistributedCompactionTaskKey tasks = 2;
+    optional PCloudDistributedCompactionFinalizeMode mode = 3;
+}
+
+message PCloudDistributedCompactionFinalizeResponse {
+    optional PStatus status = 1;
+}
+
 message PWarmUpRowsetRequest {
     repeated RowsetMetaPB rowset_metas = 1;
     optional int64 unix_ts_us = 2;
@@ -1288,4 +1397,13 @@ service PBackendService {
     rpc get_tablet_rowsets(PGetTabletRowsetsRequest) returns (PGetTabletRowsetsResponse);
     rpc fetch_peer_data(PFetchPeerDataRequest) returns (PFetchPeerDataResponse);
     rpc request_cdc_client(PRequestCdcClientRequest) returns (PRequestCdcClientResult);
+    rpc cloud_distributed_compaction_submit(PCloudDistributedCompactionSubmitRequest)
+            returns (PCloudDistributedCompactionSubmitResponse);
+    rpc cloud_distributed_compaction_get_status(PCloudDistributedCompactionGetStatusRequest)
+            returns (PCloudDistributedCompactionGetStatusResponse);
+    rpc cloud_distributed_compaction_calc_incremental_delete_bitmap(
+            PCloudDistributedCompactionCalcIncrementalDeleteBitmapRequest)
+            returns (PCloudDistributedCompactionCalcIncrementalDeleteBitmapResponse);
+    rpc cloud_distributed_compaction_finalize(PCloudDistributedCompactionFinalizeRequest)
+            returns (PCloudDistributedCompactionFinalizeResponse);
 };

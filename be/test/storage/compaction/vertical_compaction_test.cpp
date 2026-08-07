@@ -51,6 +51,7 @@
 #include "io/io_common.h"
 #include "json2pb/json_to_pb.h"
 #include "runtime/exec_env.h"
+#include "runtime/runtime_state.h"
 #include "runtime/thread_context.h"
 #include "storage/delete/delete_handler.h"
 #include "storage/iterator/vertical_merge_iterator.h"
@@ -678,6 +679,43 @@ TEST_F(VerticalCompactionTest, TestDupKeyVerticalMerge) {
                 dst_id += 2;
             }
         }
+    }
+}
+
+TEST_F(VerticalCompactionTest, MergeHonorsRuntimeStateCancellation) {
+    constexpr int num_segments = 1;
+    std::vector<std::vector<std::vector<std::tuple<int64_t, int64_t>>>> input_data;
+    generate_input_data(1, num_segments, 10, NONOVERLAPPING, input_data);
+    auto tablet_schema = create_schema();
+    auto input_rowset = create_rowset(tablet_schema, NONOVERLAPPING, input_data.front(), 0);
+    auto tablet = create_tablet(*tablet_schema, false);
+
+    for (const bool is_vertical : {false, true}) {
+        RowsetReaderSharedPtr input_reader;
+        ASSERT_TRUE(input_rowset->create_reader(&input_reader).ok());
+        std::vector<RowsetReaderSharedPtr> input_readers = {std::move(input_reader)};
+        auto writer_context =
+                create_rowset_writer_context(tablet_schema, NONOVERLAPPING, 3456, {0, 0});
+        auto writer_result =
+                RowsetFactory::create_rowset_writer(*engine_ref, writer_context, is_vertical);
+        ASSERT_TRUE(writer_result.has_value()) << writer_result.error();
+        auto output_writer = std::move(writer_result).value();
+
+        RuntimeState runtime_state;
+        runtime_state.cancel(Status::Cancelled("injected compaction cancellation"));
+        Merger::Statistics stats;
+        Status status;
+        if (is_vertical) {
+            status = Merger::vertical_merge_rowsets(tablet, ReaderType::READER_BASE_COMPACTION,
+                                                    *tablet_schema, input_readers,
+                                                    output_writer.get(), 100, num_segments, &stats,
+                                                    nullptr, std::nullopt, &runtime_state);
+        } else {
+            status = Merger::vmerge_rowsets(tablet, ReaderType::READER_BASE_COMPACTION,
+                                            *tablet_schema, input_readers, output_writer.get(),
+                                            &stats, std::nullopt, &runtime_state);
+        }
+        EXPECT_TRUE(status.is<ErrorCode::CANCELLED>()) << status;
     }
 }
 
