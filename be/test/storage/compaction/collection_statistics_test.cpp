@@ -127,9 +127,7 @@ private:
 class MockRowset : public Rowset {
 public:
     MockRowset(TabletSchemaSPtr schema, RowsetMetaSharedPtr rowset_meta)
-            : Rowset(schema, rowset_meta, "/mock/tablet/path") {
-        _num_segments = 0;
-    }
+            : Rowset(schema, rowset_meta, "/mock/tablet/path") {}
 
     Status create_reader(std::shared_ptr<RowsetReader>* result) override {
         return Status::NotSupported("MockRowset::create_reader not implemented");
@@ -169,8 +167,6 @@ public:
 
     Status check_current_rowset_segment() override { return Status::OK(); }
 
-    int64_t num_segments() const override { return _num_segments; }
-
     Result<std::string> segment_path(int64_t seg_id) override {
         if (_segment_paths.find(seg_id) != _segment_paths.end()) {
             return _segment_paths.at(seg_id);
@@ -182,10 +178,9 @@ public:
         _segment_paths[seg_id] = path;
     }
 
-    void set_num_segments(int64_t num) { _num_segments = num; }
+    void set_num_segments(int64_t num) { rowset_meta()->set_num_segments(num); }
 
 private:
-    int64_t _num_segments;
     std::map<int64_t, std::string> _segment_paths;
 };
 

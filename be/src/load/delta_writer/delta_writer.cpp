@@ -340,7 +340,8 @@ void DeltaWriter::_request_slave_tablet_pull_rowset(const PNodeInfo& node_info) 
     request->set_token(ExecEnv::GetInstance()->token());
     request->set_brpc_port(config::brpc_port);
     request->set_node_id(static_cast<int32_t>(node_info.id()));
-    for (int segment_id = 0; segment_id < cur_rowset->rowset_meta()->num_segments(); segment_id++) {
+    for (auto seg : cur_rowset->segments()) {
+        auto segment_id = seg.id();
         auto seg_path =
                 local_segment_path(tablet_path, cur_rowset->rowset_id().to_string(), segment_id);
         int64_t segment_size = std::filesystem::file_size(seg_path);

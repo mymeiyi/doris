@@ -54,6 +54,8 @@ public:
         return this->_num_segment.load(std::memory_order_relaxed);
     }
 
+    Status build(RowsetSharedPtr& rowset) override;
+
     int64_t num_rows() const override { return _total_key_group_rows; }
 
     Status _close_file_writers() override;
