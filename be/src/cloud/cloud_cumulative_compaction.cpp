@@ -21,8 +21,12 @@
 #include <fmt/ranges.h>
 #include <gen_cpp/cloud.pb.h>
 
+#include <chrono>
+#include <ctime>
 #include <random>
+#include <thread>
 
+#include "cloud/cloud_distributed_compaction.h"
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/cloud_tablet_mgr.h"
 #include "cloud/config.h"
@@ -40,6 +44,7 @@
 #include "storage/rowset/rowset_writer.h"
 #include "storage/tablet/tablet_schema.h"
 #include "util/debug_points.h"
+#include "util/time.h"
 #include "util/trace.h"
 #include "util/uuid_generator.h"
 
@@ -65,51 +70,6 @@ bool should_use_single_rowset_grouped_compaction(const std::vector<RowsetSharedP
            tablet_schema.num_key_columns() > 0 && tablet_schema.cluster_key_uids().empty() &&
            config::enable_cloud_single_rowset_compaction && input_rowsets.size() == 1 &&
            is_single_rowset_compaction_candidate(input_rowsets.front());
-}
-
-std::vector<SegmentGroupMergeRange> build_segment_group_merge_ranges(const RowsetMeta& rowset_meta,
-                                                                     int64_t segment_group_size) {
-    DORIS_CHECK_GT(segment_group_size, 1);
-    DORIS_CHECK_GT(rowset_meta.num_segments(), 0);
-
-    std::vector<SegmentGroupMergeRange> ranges;
-    if (rowset_meta.segments_overlap() == NONOVERLAPPING_WITHIN_GROUP) {
-        const auto& input_segment_group_sizes = rowset_meta.segment_group_sizes();
-        const int64_t input_group_count = cast_set<int64_t>(input_segment_group_sizes.size());
-        DORIS_CHECK_GT(input_group_count, 0);
-        ranges.reserve(cast_set<size_t>((input_group_count + segment_group_size - 1) /
-                                        segment_group_size));
-
-        int64_t segment_end = 0;
-        for (int64_t group_start = 0; group_start < input_group_count;
-             group_start += segment_group_size) {
-            const int64_t group_end = std::min(group_start + segment_group_size, input_group_count);
-            const int64_t segment_start = segment_end;
-            for (int64_t group_index = group_start; group_index < group_end; ++group_index) {
-                const int32_t input_group_size =
-                        input_segment_group_sizes.Get(cast_set<int>(group_index));
-                DORIS_CHECK_GT(input_group_size, 0);
-                segment_end += input_group_size;
-            }
-
-            ranges.push_back({.segment_start = segment_start,
-                              .segment_end = segment_end,
-                              .merge_way_num = group_end - group_start});
-        }
-        DORIS_CHECK_EQ(segment_end, rowset_meta.num_segments());
-    } else {
-        ranges.reserve(cast_set<size_t>((rowset_meta.num_segments() + segment_group_size - 1) /
-                                        segment_group_size));
-        for (int64_t segment_start = 0; segment_start < rowset_meta.num_segments();
-             segment_start += segment_group_size) {
-            const int64_t segment_end =
-                    std::min(segment_start + segment_group_size, rowset_meta.num_segments());
-            ranges.push_back({.segment_start = segment_start,
-                              .segment_end = segment_end,
-                              .merge_way_num = segment_end - segment_start});
-        }
-    }
-    return ranges;
 }
 
 } // namespace cloud
@@ -271,26 +231,19 @@ Status CloudCumulativeCompaction::execute_compact() {
 
     SCOPED_ATTACH_TASK(_mem_tracker);
 
-    using namespace std::chrono;
-    auto start = steady_clock::now();
-    Status st;
-    Defer defer_set_st([&] {
-        cloud_tablet()->set_last_cumu_compaction_status(st.to_string());
-        if (!st.ok()) {
-            cloud_tablet()->set_last_cumu_compaction_failure_time(UnixMillis());
-        } else {
-            cloud_tablet()->set_last_cumu_compaction_success_time(UnixMillis());
-        }
-    });
-    st = CloudCompactionMixin::execute_compact();
-    if (!st.ok()) {
-        LOG(WARNING) << "fail to do " << compaction_name() << ". res=" << st
-                     << ", tablet=" << _tablet->tablet_id()
-                     << ", output_version=" << _output_version;
-        return st;
+    const int64_t execution_start_time_us = MonotonicMicros();
+    Status status = CloudCompactionMixin::execute_compact();
+    if (!status.ok()) {
+        return finish_compaction_failure(std::move(status));
     }
+    finish_compaction_success(execution_start_time_us);
+    return Status::OK();
+}
+
+void CloudCumulativeCompaction::finish_compaction_success(int64_t execution_start_time_us) {
+    DORIS_CHECK_GT(execution_start_time_us, 0);
     LOG_INFO("finish CloudCumulativeCompaction, tablet_id={}, cost={}ms, range=[{}-{}]",
-             _tablet->tablet_id(), duration_cast<milliseconds>(steady_clock::now() - start).count(),
+             _tablet->tablet_id(), (MonotonicMicros() - execution_start_time_us) / 1000,
              _input_rowsets.front()->start_version(), _input_rowsets.back()->end_version())
             .tag("job_id", _uuid)
             .tag("input_rowsets", _input_rowsets.size())
@@ -319,9 +272,20 @@ Status CloudCumulativeCompaction::execute_compact() {
     DorisMetrics::instance()->cumulative_compaction_bytes_total->increment(
             _input_rowsets_total_size);
     cumu_output_size << _output_rowset->total_disk_size();
+    cloud_tablet()->set_last_cumu_compaction_status(Status::OK().to_string());
+    cloud_tablet()->set_last_cumu_compaction_success_time(UnixMillis());
+}
 
-    st = Status::OK();
-    return st;
+Status CloudCumulativeCompaction::finish_compaction_failure(Status status) {
+    cloud_tablet()->set_last_cumu_compaction_status(status.to_string());
+    cloud_tablet()->set_last_cumu_compaction_failure_time(UnixMillis());
+    LOG_WARNING("fail to do CloudCumulativeCompaction")
+            .tag("job_id", _uuid)
+            .tag("tablet_id", _tablet->tablet_id())
+            .tag("output_version",
+                 fmt::format("[{}-{}]", _output_version.first, _output_version.second))
+            .error(status);
+    return status;
 }
 
 bool CloudCumulativeCompaction::should_calculate_new_cumulative_point(
@@ -463,10 +427,18 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     int64_t get_delete_bitmap_lock_start_time = 0;
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
-        RETURN_IF_ERROR(cloud_tablet()->calc_delete_bitmap_for_compaction(
-                _input_rowsets, _output_rowset, *_rowid_conversion, compaction_type(),
-                _stats.merged_rows, _stats.filtered_rows, initiator, output_rowset_delete_bitmap,
-                _allow_delete_in_cumu_compaction, get_delete_bitmap_lock_start_time));
+        if (_distributed_compaction != nullptr) {
+            // Step 5 (incremental): under the delete-bitmap lock, ask workers to calculate changes
+            // since their first-phase snapshot and persist the merged bitmap before committing.
+            RETURN_IF_ERROR(_distributed_compaction->finish_mow_delete_bitmap(
+                    initiator, &output_rowset_delete_bitmap, &get_delete_bitmap_lock_start_time));
+        } else {
+            RETURN_IF_ERROR(cloud_tablet()->calc_delete_bitmap_for_compaction(
+                    _input_rowsets, _output_rowset, *_rowid_conversion, compaction_type(),
+                    _stats.merged_rows, _stats.filtered_rows, initiator,
+                    output_rowset_delete_bitmap, _allow_delete_in_cumu_compaction,
+                    get_delete_bitmap_lock_start_time));
+        }
         LOG_INFO("update delete bitmap in CloudCumulativeCompaction, tablet_id={}, range=[{}-{}]",
                  _tablet->tablet_id(), _input_rowsets.front()->start_version(),
                  _input_rowsets.back()->end_version())
@@ -488,6 +460,7 @@ Status CloudCumulativeCompaction::modify_rowsets() {
                 cloud_tablet()->tablet_id());
     });
     cloud::FinishTabletJobResponse resp;
+    _distributed_commit_started = _distributed_compaction != nullptr;
     auto st = _engine.meta_mgr().commit_tablet_job(job, &resp);
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
@@ -514,6 +487,12 @@ Status CloudCumulativeCompaction::modify_rowsets() {
             return Status::InternalError(msg);
         }
         return st;
+    }
+    // Step 6 (finalize): the Meta Service commit succeeded, so workers may detach their tasks while
+    // preserving the now-visible output files.
+    if (_distributed_compaction != nullptr) {
+        _distributed_compaction->finalize(true);
+        _distributed_compaction.reset();
     }
 
     auto& stats = resp.stats();
@@ -599,6 +578,14 @@ Status CloudCumulativeCompaction::modify_rowsets() {
 }
 
 Status CloudCumulativeCompaction::garbage_collection() {
+    // Step 6 (finalize on failure): stop unfinished worker tasks and release their state. Output
+    // files belong to the rowset prepared by the coordinator and are reclaimed by Recycler if the
+    // compaction job is aborted. Once commit has been sent, use preserve mode because a transport
+    // error cannot prove that Meta Service did not commit.
+    if (_distributed_compaction != nullptr) {
+        _distributed_compaction->finalize(_distributed_commit_started);
+        _distributed_compaction.reset();
+    }
     RETURN_IF_ERROR(CloudCompactionMixin::garbage_collection());
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();
@@ -830,13 +817,20 @@ Status CloudCumulativeCompaction::do_merge_input_rowsets(
         return Compaction::do_merge_input_rowsets(input_rs_readers, result);
     }
 
+    return do_local_single_rowset_grouped_compaction(result);
+}
+
+Status CloudCumulativeCompaction::do_local_single_rowset_grouped_compaction(
+        MergeInputRowsetsResult* result) {
+    DORIS_CHECK_EQ(_input_rowsets.size(), 1);
+
     const int64_t segment_group_size = result->segment_group_size;
     const auto& input_rowset = _input_rowsets.front();
     const auto segment_ranges = cloud::build_segment_group_merge_ranges(
             *input_rowset->rowset_meta(), segment_group_size);
+    int32_t output_segment_count = 0;
     for (size_t range_index = 0; range_index < segment_ranges.size(); ++range_index) {
         const auto& range = segment_ranges[range_index];
-        const int32_t output_segment_start = _output_rs_writer->get_allocated_segment_id();
 
         RowsetReaderSharedPtr rs_reader;
         RETURN_IF_ERROR(input_rowset->create_reader(&rs_reader));
@@ -845,10 +839,11 @@ Status CloudCumulativeCompaction::do_merge_input_rowsets(
 
         Merger::Statistics group_stats;
         group_stats.rowid_conversion = _stats.rowid_conversion;
-        RETURN_IF_ERROR(execute_merge(group_readers, range.merge_way_num, &group_stats,
-                                      std::make_pair(range.segment_start, range.segment_end),
-                                      {.total_ranges = cast_set<int64_t>(segment_ranges.size()),
-                                       .range_index = cast_set<int64_t>(range_index)}));
+        RETURN_IF_ERROR(
+                execute_merge(group_readers, range.merge_way_num, &group_stats,
+                              std::make_pair(range.segment_pos_start, range.segment_pos_end),
+                              {.total_ranges = cast_set<int64_t>(segment_ranges.size()),
+                               .range_index = cast_set<int64_t>(range_index)}));
 
         _stats.output_rows += group_stats.output_rows;
         _stats.merged_rows += group_stats.merged_rows;
@@ -859,11 +854,15 @@ Status CloudCumulativeCompaction::do_merge_input_rowsets(
         _stats.cloud_local_read_time += group_stats.cloud_local_read_time;
         _stats.cloud_remote_read_time += group_stats.cloud_remote_read_time;
 
-        const int32_t output_segment_end = _output_rs_writer->get_allocated_segment_id();
-        const int32_t output_group_size = output_segment_end - output_segment_start;
+        std::vector<uint32_t> output_segment_num_rows;
+        RETURN_IF_ERROR(_output_rs_writer->get_segment_num_rows(&output_segment_num_rows));
+        DORIS_CHECK_GE(output_segment_num_rows.size(), cast_set<size_t>(output_segment_count));
+        const int32_t new_output_segment_count = cast_set<int32_t>(output_segment_num_rows.size());
+        const int32_t output_group_size = new_output_segment_count - output_segment_count;
         if (output_group_size > 0) {
             result->output_segment_group_sizes.push_back(output_group_size);
         }
+        output_segment_count = new_output_segment_count;
     }
     return Status::OK();
 }

@@ -18,6 +18,7 @@
 #pragma once
 
 #include <map>
+#include <utility>
 #include <vector>
 
 #include "common/cast_set.h"
@@ -49,7 +50,7 @@ public:
         for (size_t i = 0; i < num_rows.size(); i++) {
             auto src_segment = std::pair<RowsetId, uint32_t> {src_rowset_id, segment_ids[i]};
             auto iter = _segment_to_id_map.find(src_segment);
-            // Each segment-group reader initializes all source segments, so reuse existing maps.
+            // A segment-group reader can be reopened, so reuse existing source-segment maps.
             if (iter != _segment_to_id_map.end()) {
                 DORIS_CHECK_LT(iter->second, _segments_rowid_map.size());
                 DORIS_CHECK_EQ(_segments_rowid_map[iter->second].size(), num_rows[i]);
@@ -102,15 +103,16 @@ public:
             if (item.row_id == -1) {
                 continue;
             }
-            uint32_t id = _segment_to_id_map.at(
-                    std::pair<RowsetId, uint32_t> {item.rowset_id, item.segment_id});
             if (_cur_dst_segment_pos < dst_segments_num_row.size() &&
                 _cur_dst_segment_rowid >= dst_segments_num_row[_cur_dst_segment_pos]) {
                 _cur_dst_segment_pos++;
                 _cur_dst_segment_rowid = 0;
             }
+            const uint32_t destination_row_id = _cur_dst_segment_rowid++;
+            uint32_t id = _segment_to_id_map.at(
+                    std::pair<RowsetId, uint32_t> {item.rowset_id, item.segment_id});
             _segments_rowid_map[id][item.row_id] =
-                    std::pair<uint32_t, uint32_t> {_cur_dst_segment_pos, _cur_dst_segment_rowid++};
+                    std::pair<uint32_t, uint32_t> {_cur_dst_segment_pos, destination_row_id};
         }
     }
 
@@ -141,7 +143,7 @@ public:
         return _segments_rowid_map;
     }
 
-    const std::map<std::pair<RowsetId, uint32_t>, uint32_t>& get_src_segment_to_id_map() {
+    const std::map<std::pair<RowsetId, uint32_t>, uint32_t>& get_src_segment_to_id_map() const {
         return _segment_to_id_map;
     }
 
