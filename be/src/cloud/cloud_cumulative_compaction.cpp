@@ -42,6 +42,7 @@
 #include "storage/rowset/rowset_writer.h"
 #include "storage/tablet/tablet_schema.h"
 #include "util/debug_points.h"
+#include "util/time.h"
 #include "util/trace.h"
 #include "util/uuid_generator.h"
 
@@ -224,26 +225,19 @@ Status CloudCumulativeCompaction::execute_compact() {
 
     SCOPED_ATTACH_TASK(_mem_tracker);
 
-    using namespace std::chrono;
-    auto start = steady_clock::now();
-    Status st;
-    Defer defer_set_st([&] {
-        cloud_tablet()->set_last_cumu_compaction_status(st.to_string());
-        if (!st.ok()) {
-            cloud_tablet()->set_last_cumu_compaction_failure_time(UnixMillis());
-        } else {
-            cloud_tablet()->set_last_cumu_compaction_success_time(UnixMillis());
-        }
-    });
-    st = CloudCompactionMixin::execute_compact();
-    if (!st.ok()) {
-        LOG(WARNING) << "fail to do " << compaction_name() << ". res=" << st
-                     << ", tablet=" << _tablet->tablet_id()
-                     << ", output_version=" << _output_version;
-        return st;
+    const int64_t execution_start_time_us = MonotonicMicros();
+    Status status = CloudCompactionMixin::execute_compact();
+    if (!status.ok()) {
+        return finish_compaction_failure(std::move(status));
     }
+    finish_compaction_success(execution_start_time_us);
+    return Status::OK();
+}
+
+void CloudCumulativeCompaction::finish_compaction_success(int64_t execution_start_time_us) {
+    DORIS_CHECK_GT(execution_start_time_us, 0);
     LOG_INFO("finish CloudCumulativeCompaction, tablet_id={}, cost={}ms, range=[{}-{}]",
-             _tablet->tablet_id(), duration_cast<milliseconds>(steady_clock::now() - start).count(),
+             _tablet->tablet_id(), (MonotonicMicros() - execution_start_time_us) / 1000,
              _input_rowsets.front()->start_version(), _input_rowsets.back()->end_version())
             .tag("job_id", _uuid)
             .tag("input_rowsets", _input_rowsets.size())
@@ -272,9 +266,20 @@ Status CloudCumulativeCompaction::execute_compact() {
     DorisMetrics::instance()->cumulative_compaction_bytes_total->increment(
             _input_rowsets_total_size);
     cumu_output_size << _output_rowset->total_disk_size();
+    cloud_tablet()->set_last_cumu_compaction_status(Status::OK().to_string());
+    cloud_tablet()->set_last_cumu_compaction_success_time(UnixMillis());
+}
 
-    st = Status::OK();
-    return st;
+Status CloudCumulativeCompaction::finish_compaction_failure(Status status) {
+    cloud_tablet()->set_last_cumu_compaction_status(status.to_string());
+    cloud_tablet()->set_last_cumu_compaction_failure_time(UnixMillis());
+    LOG_WARNING("fail to do CloudCumulativeCompaction")
+            .tag("job_id", _uuid)
+            .tag("tablet_id", _tablet->tablet_id())
+            .tag("output_version",
+                 fmt::format("[{}-{}]", _output_version.first, _output_version.second))
+            .error(status);
+    return status;
 }
 
 bool CloudCumulativeCompaction::should_calculate_new_cumulative_point(

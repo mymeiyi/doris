@@ -81,6 +81,8 @@ private:
 
     Status finish_async_compaction();
     Status fail_async_compaction(Status status);
+    void finish_compaction_success(int64_t execution_start_time_us);
+    Status finish_compaction_failure(Status status);
 
     void update_output_rowset_after_build(const MergeInputRowsetsResult& result) override;
 
