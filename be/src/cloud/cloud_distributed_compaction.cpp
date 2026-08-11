@@ -308,7 +308,7 @@ Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& r
 Status validate_compaction_task(const PCloudDistributedCompactionTask& task) {
     if (task.segment_pos_start() < 0 || task.segment_pos_start() >= task.segment_pos_end() ||
         task.max_segment_num() <= 0 || task.output_segment_start_id() < 0 ||
-        task.group_index() < 0 || task.attempt_id() < 0 ||
+        task.group_index() < 0 ||
         cast_set<int64_t>(task.output_segment_start_id()) + task.max_segment_num() >
                 std::numeric_limits<int32_t>::max()) {
         return Status::InvalidArgument("invalid distributed compaction request");
@@ -633,7 +633,6 @@ void DistributedCompactionCoordinator::dispatch_poll() {
             round->polled_groups_by_worker[worker_index].push_back(group_index);
             const auto& distributed_task = _state->tasks[group_index];
             auto* status_task = status_request.add_tasks();
-            status_task->set_attempt_id(distributed_task.attempt_id);
             status_task->set_group_index(distributed_task.group_index);
         }
         DORIS_CHECK(!round->polled_groups_by_worker[worker_index].empty());
@@ -707,8 +706,7 @@ void DistributedCompactionCoordinator::finish_poll_round(std::shared_ptr<PollRou
             const auto& distributed_task = _state->tasks[group_index];
             const auto& worker_status = status_response.task_statuses(cast_set<int>(task_index));
             if (!worker_status.has_state() ||
-                worker_status.group_index() != distributed_task.group_index ||
-                worker_status.attempt_id() != distributed_task.attempt_id) {
+                worker_status.group_index() != distributed_task.group_index) {
                 complete_polling(Status::InvalidArgument(
                         "mismatched distributed single-rowset compaction status for group {}",
                         group_index));
@@ -735,8 +733,7 @@ void DistributedCompactionCoordinator::finish_poll_round(std::shared_ptr<PollRou
             }
             const auto& task_result = worker_status.result();
             if (!task_result.has_status() ||
-                task_result.group_index() != distributed_task.group_index ||
-                task_result.attempt_id() != distributed_task.attempt_id) {
+                task_result.group_index() != distributed_task.group_index) {
                 complete_polling(Status::InvalidArgument(
                         "mismatched distributed single-rowset compaction result for group {}",
                         group_index));
@@ -797,8 +794,7 @@ Status DistributedCompactionCoordinator::validate_partial_rowset(
         size_t group_index, const PCloudDistributedCompactionTaskResult& response,
         const DistributedCompactionTask& task, const TabletSchema& tablet_schema,
         const RowsetId& output_rowset_id, ValidatedPartialRowset* partial_rowset) const {
-    if (response.group_index() != task.group_index || response.attempt_id() != task.attempt_id ||
-        !response.has_partial_rowset_meta()) {
+    if (response.group_index() != task.group_index || !response.has_partial_rowset_meta()) {
         return Status::InvalidArgument(
                 "mismatched distributed single-rowset compaction response for group {}",
                 group_index);
@@ -928,7 +924,6 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
                                  .worker_cloud_unique_id = worker.cloud_unique_id,
                                  .worker_compute_group_id = worker.compute_group_id,
                                  .group_index = cast_set<int32_t>(group_index),
-                                 .attempt_id = 0,
                                  .segment_id_slot = segment_slots[group_index]});
         groups_by_worker[worker_index].push_back(group_index);
     }
@@ -957,7 +952,6 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
             const auto& range = segment_ranges[group_index];
             const auto& distributed_task = _state->tasks[group_index];
             auto* request_task = request.add_tasks();
-            request_task->set_attempt_id(distributed_task.attempt_id);
             request_task->set_group_index(distributed_task.group_index);
             request_task->set_segment_pos_start(range.segment_pos_start);
             request_task->set_segment_pos_end(range.segment_pos_end);
@@ -1175,7 +1169,6 @@ Status DistributedCompactionCoordinator::fetch_incremental_delete_bitmap(
         for (const size_t task_index : groups_by_worker[worker_index]) {
             const auto& task = _state->tasks[task_index];
             auto* request_task = request.add_tasks();
-            request_task->set_attempt_id(task.attempt_id);
             request_task->set_group_index(task.group_index);
         }
     }
@@ -1303,7 +1296,6 @@ void DistributedCompactionCoordinator::finalize(bool preserve_output_files) {
             for (const size_t task_index : task_indices) {
                 const auto& task = _state->tasks[task_index];
                 auto* request_task = request.add_tasks();
-                request_task->set_attempt_id(task.attempt_id);
                 request_task->set_group_index(task.group_index);
             }
             PCloudDistributedCompactionFinalizeResponse response;
@@ -1376,7 +1368,6 @@ Status DistributedCompactionWorker::execute_compaction(
 
     PCloudDistributedCompactionTaskResult result;
     const Status status = handle_compaction(request, task, &result);
-    result.set_attempt_id(task->attempt_id());
     result.set_group_index(task->group_index());
     status.to_protobuf(result.mutable_status());
     {
@@ -1391,12 +1382,10 @@ Status DistributedCompactionWorker::execute_compaction(
     return status;
 }
 
-void DistributedCompactionWorker::cancel_compaction(int32_t group_index, int32_t attempt_id,
-                                                    const Status& status) {
+void DistributedCompactionWorker::cancel_compaction(int32_t group_index, const Status& status) {
     SCOPED_ATTACH_TASK(_mem_tracker);
     DORIS_CHECK(!status.ok());
     PCloudDistributedCompactionTaskResult result;
-    result.set_attempt_id(attempt_id);
     result.set_group_index(group_index);
     status.to_protobuf(result.mutable_status());
     {
@@ -1487,9 +1476,8 @@ Status DistributedCompactionWorker::handle_compaction(
     std::lock_guard<std::mutex> lock(_mutex);
     if (_output_rowset != nullptr) {
         return Status::InvalidArgument(
-                "duplicate distributed compaction task: execution={}, group={}, "
-                "attempt={}",
-                request->execution_id(), task->group_index(), task->attempt_id());
+                "duplicate distributed compaction task: execution={}, group={}",
+                request->execution_id(), task->group_index());
     }
 
     auto input_meta = std::make_shared<RowsetMeta>();
@@ -1579,7 +1567,6 @@ Status DistributedCompactionWorker::handle_compaction(
     }
     DORIS_CHECK_EQ(_output_segment_ids.size(), cast_set<size_t>(_output_rowset->num_segments()));
 
-    result->set_attempt_id(task->attempt_id());
     result->set_group_index(task->group_index());
     *result->mutable_partial_rowset_meta() = _output_rowset->rowset_meta()->get_rowset_pb();
     result->set_output_rows(stats.output_rows);
@@ -1653,7 +1640,6 @@ Status DistributedCompactionWorkerManager::submit(
     struct CreatedWorker {
         std::string key;
         int32_t group_index;
-        int32_t attempt_id;
     };
 
     if (request.tasks().empty()) {
@@ -1665,13 +1651,11 @@ Status DistributedCompactionWorkerManager::submit(
     request_keys.reserve(cast_set<size_t>(request.tasks_size()));
     for (const auto& task : request.tasks()) {
         RETURN_IF_ERROR(validate_compaction_task(task));
-        const std::string worker_key =
-                key(request.execution_id(), task.group_index(), task.attempt_id());
+        const std::string worker_key = key(request.execution_id(), task.group_index());
         if (!request_keys.emplace(worker_key).second) {
             return Status::InvalidArgument(
-                    "duplicate distributed compaction task: execution={}, "
-                    "group={}, attempt={}",
-                    request.execution_id(), task.group_index(), task.attempt_id());
+                    "duplicate distributed compaction task: execution={}, group={}",
+                    request.execution_id(), task.group_index());
         }
     }
 
@@ -1686,8 +1670,7 @@ Status DistributedCompactionWorkerManager::submit(
     {
         std::lock_guard lock(_mutex);
         for (const auto& task : request.tasks()) {
-            const std::string worker_key =
-                    key(request.execution_id(), task.group_index(), task.attempt_id());
+            const std::string worker_key = key(request.execution_id(), task.group_index());
             const auto iter = _workers.find(worker_key);
             if (iter != _workers.end()) {
                 DORIS_CHECK_EQ(iter->second.expiration_time,
@@ -1700,9 +1683,7 @@ Status DistributedCompactionWorkerManager::submit(
                     WorkerEntry {.worker = worker,
                                  .expiration_time = request.output_rowset_meta().txn_expiration()});
             jobs.push_back({.worker = std::move(worker), .task = task});
-            created_workers.push_back({.key = worker_key,
-                                       .group_index = task.group_index(),
-                                       .attempt_id = task.attempt_id()});
+            created_workers.push_back({.key = worker_key, .group_index = task.group_index()});
         }
         if (jobs.empty()) {
             return Status::OK();
@@ -1713,7 +1694,7 @@ Status DistributedCompactionWorkerManager::submit(
                     for (const auto& job : jobs) {
                         if (batch_failed) {
                             job.worker->cancel_compaction(
-                                    job.task.group_index(), job.task.attempt_id(),
+                                    job.task.group_index(),
                                     Status::Cancelled(
                                             "skipped after a previous task in the batch failed"));
                             continue;
@@ -1721,7 +1702,7 @@ Status DistributedCompactionWorkerManager::submit(
                         if (request_copy->output_rowset_meta().txn_expiration() <=
                             ::time(nullptr)) {
                             job.worker->cancel_compaction(
-                                    job.task.group_index(), job.task.attempt_id(),
+                                    job.task.group_index(),
                                     Status::TimedOut("distributed compaction task expired before "
                                                      "execution"));
                             batch_failed = true;
@@ -1738,8 +1719,7 @@ Status DistributedCompactionWorkerManager::submit(
             for (const auto& created_worker : created_workers) {
                 auto iter = _workers.find(created_worker.key);
                 DORIS_CHECK(iter != _workers.end());
-                iter->second.worker->cancel_compaction(created_worker.group_index,
-                                                       created_worker.attempt_id, cancel_status);
+                iter->second.worker->cancel_compaction(created_worker.group_index, cancel_status);
                 workers_to_release.push_back(std::move(iter->second.worker));
                 _workers.erase(iter);
             }
@@ -1768,31 +1748,30 @@ Status DistributedCompactionWorkerManager::calc_incremental_delete_bitmap(
     std::shared_ptr<CloudTablet> tablet;
     CloudStorageEngine* engine = nullptr;
     for (const auto& task : request.tasks()) {
-        if (task.group_index() < 0 || task.attempt_id() < 0) {
+        if (task.group_index() < 0) {
             return Status::InvalidArgument(
                     "invalid distributed compaction incremental delete bitmap task");
         }
-        const std::string worker_key =
-                key(request.execution_id(), task.group_index(), task.attempt_id());
+        const std::string worker_key = key(request.execution_id(), task.group_index());
         if (!request_keys.emplace(worker_key).second) {
             return Status::InvalidArgument(
                     "duplicate distributed compaction incremental delete bitmap task: "
-                    "execution={}, group={}, attempt={}",
-                    request.execution_id(), task.group_index(), task.attempt_id());
+                    "execution={}, group={}",
+                    request.execution_id(), task.group_index());
         }
-        auto worker = get(request.execution_id(), task.group_index(), task.attempt_id());
+        auto worker = get(request.execution_id(), task.group_index());
         if (worker == nullptr) {
             return Status::NotFound(
                     "distributed compaction worker state not found: "
-                    "execution={}, group={}, attempt={}",
-                    request.execution_id(), task.group_index(), task.attempt_id());
+                    "execution={}, group={}",
+                    request.execution_id(), task.group_index());
         }
         if (worker->_tablet->tablet_id() != request.tablet_id()) {
             return Status::InvalidArgument(
                     "distributed compaction incremental delete bitmap tablet mismatch: "
-                    "execution={}, group={}, attempt={}, requested_tablet={}, worker_tablet={}",
-                    request.execution_id(), task.group_index(), task.attempt_id(),
-                    request.tablet_id(), worker->_tablet->tablet_id());
+                    "execution={}, group={}, requested_tablet={}, worker_tablet={}",
+                    request.execution_id(), task.group_index(), request.tablet_id(),
+                    worker->_tablet->tablet_id());
         }
         if (tablet == nullptr) {
             tablet = worker->_tablet;
@@ -1825,20 +1804,18 @@ Status DistributedCompactionWorkerManager::finalize(
 
     struct WorkerTask {
         int32_t group_index;
-        int32_t attempt_id;
         std::shared_ptr<DistributedCompactionWorker> worker;
     };
     std::vector<WorkerTask> worker_tasks;
     worker_tasks.reserve(cast_set<size_t>(request.tasks_size()));
     for (const auto& task : request.tasks()) {
-        if (task.group_index() < 0 || task.attempt_id() < 0) {
+        if (task.group_index() < 0) {
             return Status::InvalidArgument("invalid distributed compaction finalize task");
         }
-        auto worker = get(request.execution_id(), task.group_index(), task.attempt_id());
+        auto worker = get(request.execution_id(), task.group_index());
         if (worker != nullptr) {
-            worker_tasks.push_back({.group_index = task.group_index(),
-                                    .attempt_id = task.attempt_id(),
-                                    .worker = std::move(worker)});
+            worker_tasks.push_back(
+                    {.group_index = task.group_index(), .worker = std::move(worker)});
         }
     }
     if (worker_tasks.empty()) {
@@ -1851,7 +1828,7 @@ Status DistributedCompactionWorkerManager::finalize(
         const Status cancel_status =
                 Status::Cancelled("distributed compaction batch was cancelled by coordinator");
         for (const auto& task : worker_tasks) {
-            task.worker->cancel_compaction(task.group_index, task.attempt_id, cancel_status);
+            task.worker->cancel_compaction(task.group_index, cancel_status);
         }
     }
 
@@ -1861,8 +1838,7 @@ Status DistributedCompactionWorkerManager::finalize(
     {
         std::lock_guard lock(_mutex);
         for (const auto& task : worker_tasks) {
-            const auto iter =
-                    _workers.find(key(request.execution_id(), task.group_index, task.attempt_id));
+            const auto iter = _workers.find(key(request.execution_id(), task.group_index));
             if (iter == _workers.end()) {
                 continue;
             }
@@ -1874,16 +1850,16 @@ Status DistributedCompactionWorkerManager::finalize(
 }
 
 std::string DistributedCompactionWorkerManager::key(const std::string& execution_id,
-                                                    int32_t group_index, int32_t attempt_id) {
-    return execution_id + ":" + std::to_string(group_index) + ":" + std::to_string(attempt_id);
+                                                    int32_t group_index) {
+    return execution_id + ":" + std::to_string(group_index);
 }
 
 std::shared_ptr<DistributedCompactionWorker> DistributedCompactionWorkerManager::get(
-        const std::string& execution_id, int32_t group_index, int32_t attempt_id) {
+        const std::string& execution_id, int32_t group_index) {
     std::shared_ptr<DistributedCompactionWorker> worker;
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        const auto iter = _workers.find(key(execution_id, group_index, attempt_id));
+        const auto iter = _workers.find(key(execution_id, group_index));
         if (iter == _workers.end()) {
             return nullptr;
         }
@@ -1896,8 +1872,7 @@ std::shared_ptr<DistributedCompactionWorker> DistributedCompactionWorkerManager:
     }
     LOG_INFO("remove expired distributed compaction worker")
             .tag("execution_id", execution_id)
-            .tag("group_index", group_index)
-            .tag("attempt_id", attempt_id);
+            .tag("group_index", group_index);
     worker.reset();
     return nullptr;
 }

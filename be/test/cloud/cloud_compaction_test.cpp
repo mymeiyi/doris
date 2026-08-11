@@ -837,9 +837,7 @@ TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_tracks_async_ta
 
     PCloudDistributedCompactionTask task;
     task.set_group_index(3);
-    task.set_attempt_id(2);
-    worker->cancel_compaction(task.group_index(), task.attempt_id(),
-                              Status::Cancelled("injected cancellation"));
+    worker->cancel_compaction(task.group_index(), Status::Cancelled("injected cancellation"));
     PCloudDistributedCompactionSubmitRequest request;
     EXPECT_FALSE(worker->execute_compaction(&request, &task).ok());
 
@@ -848,7 +846,6 @@ TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_tracks_async_ta
     ASSERT_EQ(task_status.state(), CLOUD_DISTRIBUTED_COMPACTION_TASK_FAILED);
     ASSERT_TRUE(task_status.has_result());
     EXPECT_EQ(task_status.result().group_index(), 3);
-    EXPECT_EQ(task_status.result().attempt_id(), 2);
     EXPECT_FALSE(Status::create(task_status.result().status()).ok());
 }
 

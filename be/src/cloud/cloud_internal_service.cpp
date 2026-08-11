@@ -1391,18 +1391,16 @@ void CloudInternalServiceImpl::cloud_distributed_compaction_get_status(
         }
         auto* manager = cloud::DistributedCompactionWorkerManager::instance();
         for (const auto& task : request->tasks()) {
-            auto worker =
-                    manager->get(request->execution_id(), task.group_index(), task.attempt_id());
+            auto worker = manager->get(request->execution_id(), task.group_index());
             if (worker == nullptr) {
                 Status::NotFound(
                         "distributed compaction worker state not found: "
-                        "execution={}, group={}, attempt={}",
-                        request->execution_id(), task.group_index(), task.attempt_id())
+                        "execution={}, group={}",
+                        request->execution_id(), task.group_index())
                         .to_protobuf(response->mutable_status());
                 return;
             }
             auto* task_status = response->add_task_statuses();
-            task_status->set_attempt_id(task.attempt_id());
             task_status->set_group_index(task.group_index());
             worker->get_compaction_status(task_status);
         }

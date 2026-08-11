@@ -933,7 +933,6 @@ message PGetFileCacheMetaResponse {
 
 // ---- Cross-BE distributed compaction (cloud) ----
 message PCloudDistributedCompactionTask {
-    optional int32 attempt_id = 1;
     optional int32 group_index = 2;
     optional int64 segment_pos_start = 3;
     optional int64 segment_pos_end = 4;
@@ -963,7 +962,6 @@ message PCloudDistributedCompactionSubmitResponse {
 }
 
 message PCloudDistributedCompactionTaskKey {
-    optional int32 attempt_id = 1;
     optional int32 group_index = 2;
 }
 
@@ -981,7 +979,6 @@ enum PCloudDistributedCompactionTaskState {
 
 message PCloudDistributedCompactionTaskResult {
     optional PStatus status = 1;
-    optional int32 attempt_id = 2;
     optional int32 group_index = 3;
     optional RowsetMetaPB partial_rowset_meta = 5;
     optional int64 output_rows = 6;
@@ -997,7 +994,6 @@ message PCloudDistributedCompactionTaskResult {
 }
 
 message PCloudDistributedCompactionTaskStatus {
-    optional int32 attempt_id = 1;
     optional int32 group_index = 2;
     optional PCloudDistributedCompactionTaskState state = 3;
     optional PCloudDistributedCompactionTaskResult result = 4;

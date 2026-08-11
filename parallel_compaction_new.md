@@ -267,7 +267,7 @@ shard。Coordinator 合并全部 shards、更新 Meta Service，然后提交 com
 - 至少需要两个可调度 Worker；Coordinator 可作为其中之一，并通过本机 BRPC 执行任务。
 - Worker 数量不超过 group 数，group 采用 round-robin 分配。
 - 同一 Worker 收到的 groups 在一个 batch 内串行执行。
-- 当前 merge task 不自动重试，`attempt_id` 固定为 0；控制 RPC 仅做有限重试。
+- 当前 merge task 不自动重试；控制 RPC 仅做有限重试。
 - segment ID slot capacity 是硬上限，group 输出不能越过自己的 slot。
 - 当前不恢复 Coordinator 退出前尚未完成的分布式 compaction。
 

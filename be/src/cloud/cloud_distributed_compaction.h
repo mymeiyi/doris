@@ -84,7 +84,6 @@ struct DistributedCompactionTask {
     std::string worker_cloud_unique_id;
     std::string worker_compute_group_id;
     int32_t group_index;
-    int32_t attempt_id;
     OutputRowsetSegmentIdSlot segment_id_slot;
     bool started = false;
 };
@@ -239,7 +238,7 @@ public:
     Status execute_compaction(const PCloudDistributedCompactionSubmitRequest* request,
                               const PCloudDistributedCompactionTask* task);
 
-    void cancel_compaction(int32_t group_index, int32_t attempt_id, const Status& status);
+    void cancel_compaction(int32_t group_index, const Status& status);
 
     void get_compaction_status(PCloudDistributedCompactionTaskStatus* status) const;
 
@@ -289,7 +288,7 @@ public:
     Status finalize(const PCloudDistributedCompactionFinalizeRequest& request);
 
     std::shared_ptr<DistributedCompactionWorker> get(const std::string& execution_id,
-                                                     int32_t group_index, int32_t attempt_id);
+                                                     int32_t group_index);
 
     void remove_expired_workers(int64_t current_time);
 
@@ -299,8 +298,7 @@ private:
         int64_t expiration_time;
     };
 
-    static std::string key(const std::string& execution_id, int32_t group_index,
-                           int32_t attempt_id);
+    static std::string key(const std::string& execution_id, int32_t group_index);
 
     std::mutex _mutex;
     std::unordered_map<std::string, WorkerEntry> _workers;
