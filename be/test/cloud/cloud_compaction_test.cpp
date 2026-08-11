@@ -479,6 +479,11 @@ public:
         return apply_txn_size_truncation_and_log(compaction_name);
     }
 
+    bool test_should_apply_cumulative_compaction_result(
+            int64_t response_cumulative_compaction_cnt) {
+        return should_apply_cumulative_compaction_result(response_cumulative_compaction_cnt);
+    }
+
     Status prepare_compact() override { return Status::OK(); }
 
     ReaderType compaction_type() const override { return ReaderType::READER_CUMULATIVE_COMPACTION; }
@@ -542,6 +547,21 @@ static std::shared_ptr<TestableCloudCumulativeCompaction> create_inflight_cumu_c
     auto compaction = std::make_shared<TestableCloudCumulativeCompaction>(engine, tablet);
     compaction->set_input_rowsets(input_rowsets);
     return compaction;
+}
+
+TEST_F(CloudCompactionTest, cumulative_result_requires_next_counter) {
+    auto tablet_meta = create_cloud_compaction_test_tablet_meta(10000);
+    auto tablet = create_cloud_tablet_with_rowsets(_engine, tablet_meta, 2, {2});
+    tablet->set_cumulative_compaction_cnt(1);
+    TestableCloudCompaction compaction(_engine, tablet);
+
+    std::unique_lock wlock(tablet->get_header_lock());
+    EXPECT_FALSE(compaction.test_should_apply_cumulative_compaction_result(1));
+    EXPECT_EQ(1, tablet->last_sync_time_s);
+    EXPECT_TRUE(compaction.test_should_apply_cumulative_compaction_result(2));
+    EXPECT_EQ(1, tablet->last_sync_time_s);
+    EXPECT_FALSE(compaction.test_should_apply_cumulative_compaction_result(3));
+    EXPECT_EQ(0, tablet->last_sync_time_s);
 }
 
 TEST_F(CloudCompactionTest, cumulative_pick_uses_local_conflict_window) {

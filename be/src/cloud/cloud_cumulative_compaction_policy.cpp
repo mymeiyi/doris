@@ -43,6 +43,11 @@ int64_t CloudCumulativeCompactionPolicy::calculate_cumulative_point(
     int64_t cumulative_point = input_cumulative_point;
     Version no_delete_version {-1, -1};
     for (const auto& rowset : rowsets) {
+        if (rowset == output_rowset && cumulative_point > rowset->start_version() &&
+            cumulative_point <= rowset->end_version()) {
+            cumulative_point = rowset->end_version() + 1;
+            continue;
+        }
         DORIS_CHECK_EQ(rowset->start_version(), cumulative_point);
         if (rowset->rowset_meta()->has_delete_predicate()) {
             cumulative_point = rowset->end_version() + 1;

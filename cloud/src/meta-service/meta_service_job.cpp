@@ -816,11 +816,17 @@ int compaction_update_tablet_stats(const TabletCompactionJobPB& compaction, Tabl
     } else if (compaction.type() == TabletCompactionJobPB::CUMULATIVE) {
         // clang-format off
         stats->set_cumulative_compaction_cnt(stats->cumulative_compaction_cnt() + 1);
-        if (compaction.output_cumulative_point() > stats->cumulative_point()) {
-            // After supporting parallel cumu compaction, compaction with older cumu point may be committed after
-            // new cumu point has been set, MUST NOT set cumu point back to old value
-            stats->set_cumulative_point(compaction.output_cumulative_point());
+        int64_t output_cumulative_point =
+                std::max(compaction.output_cumulative_point(), stats->cumulative_point());
+        // 1. Older BEs may omit `input_versions`.
+        // 2. A parallel compaction may advance the cumulative point into this output range.
+        // 3. When the range is known, atomically move the point past it because it cannot move backward.
+        if (compaction.input_versions_size() == 2 &&
+            output_cumulative_point > compaction.input_versions(0) &&
+            output_cumulative_point <= compaction.input_versions(1)) {
+            output_cumulative_point = compaction.input_versions(1) + 1;
         }
+        stats->set_cumulative_point(output_cumulative_point);
         stats->set_num_rows(stats->num_rows() + (compaction.num_output_rows() - compaction.num_input_rows()));
         stats->set_data_size(stats->data_size() + (compaction.size_output_rowsets() - compaction.size_input_rowsets()));
         stats->set_num_rowsets(stats->num_rowsets() + (compaction.num_output_rowsets() - compaction.num_input_rowsets()));
