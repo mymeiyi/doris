@@ -285,9 +285,7 @@ bool is_retryable_control_rpc_error(const Status& status) {
 
 Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& request) {
     if (!request.has_input_rowset_meta() || !request.has_output_rowset_meta() ||
-        request.execution_id().empty() || request.output_rowset_id().empty() ||
-        request.compaction_type() !=
-                static_cast<int32_t>(ReaderType::READER_CUMULATIVE_COMPACTION)) {
+        request.execution_id().empty()) {
         return Status::InvalidArgument("invalid distributed compaction request");
     }
     const auto* cluster_info =
@@ -736,7 +734,7 @@ void DistributedCompactionCoordinator::finish_poll_round(std::shared_ptr<PollRou
                 return;
             }
             const auto& task_result = worker_status.result();
-            if (!task_result.has_status() || !task_result.has_requires_finalize() ||
+            if (!task_result.has_status() ||
                 task_result.group_index() != distributed_task.group_index ||
                 task_result.attempt_id() != distributed_task.attempt_id) {
                 complete_polling(Status::InvalidArgument(
@@ -746,7 +744,6 @@ void DistributedCompactionCoordinator::finish_poll_round(std::shared_ptr<PollRou
             }
             _execution_plan->responses[group_index] = task_result;
             _execution_plan->task_completed[group_index] = true;
-            _state->tasks[group_index].started = task_result.requires_finalize();
             _execution_plan->task_status[group_index] = Status::create(task_result.status());
             if ((worker_status.state() == CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED) !=
                 _execution_plan->task_status[group_index].ok()) {
@@ -938,7 +935,6 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
 
     const auto input_meta_pb = input_rowset->rowset_meta()->get_rowset_pb();
     const auto output_meta_pb = output_rowset_writer.rowset_meta()->get_rowset_pb();
-    const std::string output_rowset_id = output_rowset_writer.rowset_id().to_string();
     // Step 2 (submit): build one request per worker so common rowset metadata is sent once while
     // worker-specific segment groups remain independent tasks in the batch.
     std::vector<PCloudDistributedCompactionSubmitRequest> requests(workers.size());
@@ -949,11 +945,8 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
         request.set_execution_id(_execution_id);
         *request.mutable_input_rowset_meta() = input_meta_pb;
         *request.mutable_output_rowset_meta() = output_meta_pb;
-        request.set_output_rowset_id(output_rowset_id);
-        request.set_compaction_type(static_cast<int32_t>(ReaderType::READER_CUMULATIVE_COMPACTION));
         request.set_is_vertical(is_vertical);
         request.set_avg_segment_rows(avg_segment_rows);
-        request.set_is_mow(is_mow);
         request.set_delete_bitmap_start_version(0);
         request.set_delete_bitmap_end_version(phase1_end_version + 1);
         request.set_check_missed_rows(check_missed_rows);
@@ -1383,7 +1376,6 @@ Status DistributedCompactionWorker::execute_compaction(
 
     PCloudDistributedCompactionTaskResult result;
     const Status status = handle_compaction(request, task, &result);
-    result.set_requires_finalize(true);
     result.set_attempt_id(task->attempt_id());
     result.set_group_index(task->group_index());
     status.to_protobuf(result.mutable_status());
@@ -1404,7 +1396,6 @@ void DistributedCompactionWorker::cancel_compaction(int32_t group_index, int32_t
     SCOPED_ATTACH_TASK(_mem_tracker);
     DORIS_CHECK(!status.ok());
     PCloudDistributedCompactionTaskResult result;
-    result.set_requires_finalize(true);
     result.set_attempt_id(attempt_id);
     result.set_group_index(group_index);
     status.to_protobuf(result.mutable_status());
@@ -1470,7 +1461,7 @@ Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_out
     context.newest_write_timestamp = output_meta.newest_write_timestamp();
     context.enable_unique_key_merge_on_write = _tablet->enable_unique_key_merge_on_write();
     context.write_type = DataWriteType::TYPE_COMPACTION;
-    context.compaction_type = static_cast<ReaderType>(request.compaction_type());
+    context.compaction_type = ReaderType::READER_CUMULATIVE_COMPACTION;
     context.tablet = _tablet;
     context.encrypt_algorithm = _tablet->tablet_meta()->encryption_algorithm();
     context.job_id = request.execution_id();
@@ -1527,16 +1518,6 @@ Status DistributedCompactionWorker::handle_compaction(
     if (output_meta.tablet_id() != request->tablet_id()) {
         return Status::InvalidArgument("output rowset tablet id does not match request");
     }
-    const bool tablet_is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
-                               _tablet->enable_unique_key_merge_on_write();
-    if (request->is_mow() != tablet_is_mow) {
-        return Status::InvalidArgument("request MoW mode does not match tablet");
-    }
-    RowsetId output_rowset_id;
-    output_rowset_id.init(request->output_rowset_id());
-    if (output_meta.rowset_id() != output_rowset_id) {
-        return Status::InvalidArgument("output rowset id does not match prepared metadata");
-    }
     auto storage_resource = output_meta.remote_storage_resource();
     if (!storage_resource) {
         return Status::InvalidArgument("output rowset has no remote storage resource: {}",
@@ -1546,7 +1527,8 @@ Status DistributedCompactionWorker::handle_compaction(
     auto writer = DORIS_TRY(construct_output_rowset_writer(*request, *task, output_meta,
                                                            *storage_resource.value()));
 
-    _is_mow = request->is_mow();
+    _is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+              _tablet->enable_unique_key_merge_on_write();
     Merger::Statistics stats;
     if (_is_mow) {
         std::vector<uint32_t> segment_rows;
@@ -1574,12 +1556,11 @@ Status DistributedCompactionWorker::handle_compaction(
     const auto segment_range = std::make_pair(segment_pos_start, segment_pos_end);
     if (request->is_vertical()) {
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(
-                _tablet, static_cast<ReaderType>(request->compaction_type()),
-                *output_meta.tablet_schema(), readers, writer.get(), request->avg_segment_rows(),
-                task->merge_way_num(), &stats, nullptr, segment_range, _runtime_state.get()));
+                _tablet, ReaderType::READER_CUMULATIVE_COMPACTION, *output_meta.tablet_schema(),
+                readers, writer.get(), request->avg_segment_rows(), task->merge_way_num(), &stats,
+                nullptr, segment_range, _runtime_state.get()));
     } else {
-        RETURN_IF_ERROR(Merger::vmerge_rowsets(_tablet,
-                                               static_cast<ReaderType>(request->compaction_type()),
+        RETURN_IF_ERROR(Merger::vmerge_rowsets(_tablet, ReaderType::READER_CUMULATIVE_COMPACTION,
                                                *output_meta.tablet_schema(), readers, writer.get(),
                                                &stats, segment_range, _runtime_state.get()));
     }
@@ -1619,7 +1600,7 @@ Status DistributedCompactionWorker::handle_compaction(
             missed_rows = std::make_unique<std::set<RowLocation>>();
         }
         _tablet->calc_compaction_output_rowset_delete_bitmap_by_ranges(
-                *_rowid_conversion, output_rowset_id, _output_segment_ids,
+                *_rowid_conversion, _output_rowset->rowset_id(), _output_segment_ids,
                 request->delete_bitmap_start_version(), request->delete_bitmap_end_version(),
                 _tablet->tablet_meta()->delete_bitmap(), &shard, missed_rows.get());
         RETURN_IF_CANCELLED(_runtime_state.get());

@@ -849,7 +849,6 @@ TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_tracks_async_ta
     ASSERT_TRUE(task_status.has_result());
     EXPECT_EQ(task_status.result().group_index(), 3);
     EXPECT_EQ(task_status.result().attempt_id(), 2);
-    EXPECT_TRUE(task_status.result().requires_finalize());
     EXPECT_FALSE(Status::create(task_status.result().status()).ok());
 }
 

@@ -947,11 +947,8 @@ message PCloudDistributedCompactionSubmitRequest {
     optional string execution_id = 2;
     optional RowsetMetaPB input_rowset_meta = 3;
     optional RowsetMetaPB output_rowset_meta = 4;
-    optional string output_rowset_id = 5;
-    optional int32 compaction_type = 6; // ReaderType
     optional bool is_vertical = 7;
     optional uint32 avg_segment_rows = 8;
-    optional bool is_mow = 9;
     optional uint64 delete_bitmap_start_version = 10;
     optional uint64 delete_bitmap_end_version = 11;
     optional bool check_missed_rows = 12;
@@ -986,7 +983,6 @@ message PCloudDistributedCompactionTaskResult {
     optional PStatus status = 1;
     optional int32 attempt_id = 2;
     optional int32 group_index = 3;
-    optional bool requires_finalize = 4;
     optional RowsetMetaPB partial_rowset_meta = 5;
     optional int64 output_rows = 6;
     optional int64 merged_rows = 7;
