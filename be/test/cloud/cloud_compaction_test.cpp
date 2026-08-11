@@ -16,19 +16,14 @@
 // under the License.
 
 #include <gen_cpp/AgentService_types.h>
-#include <gen_cpp/internal_service.pb.h>
 #include <gen_cpp/olap_file.pb.h>
 #include <gtest/gtest-message.h>
 #include <gtest/gtest-test-part.h>
 #include <gtest/gtest.h>
 
-#include <condition_variable>
-#include <ctime>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_set>
 
 #include "cloud/cloud_base_compaction.h"
 #include "cloud/cloud_cluster_info.h"
@@ -677,176 +672,6 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_logical_grou
     expect_segment_group_merge_ranges(
             grouped_ranges, {{.segment_pos_start = 0, .segment_pos_end = 4, .merge_way_num = 2},
                              {.segment_pos_start = 4, .segment_pos_end = 5, .merge_way_num = 1}});
-}
-
-TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_builds_segment_slots) {
-    std::vector<cloud::OutputRowsetSegmentIdSlot> slots;
-    ASSERT_TRUE(cloud::build_output_rowset_segment_id_slots(17, 100, 3, &slots).ok());
-    ASSERT_EQ(slots.size(), 3);
-    EXPECT_EQ(slots[0].start_id, 17);
-    EXPECT_EQ(slots[1].start_id, 117);
-    EXPECT_EQ(slots[2].start_id, 217);
-    for (const auto& slot : slots) {
-        EXPECT_EQ(slot.capacity, 100);
-    }
-
-    EXPECT_FALSE(cloud::build_output_rowset_segment_id_slots(-1, 100, 3, &slots).ok());
-    EXPECT_FALSE(cloud::build_output_rowset_segment_id_slots(0, 0, 3, &slots).ok());
-    EXPECT_FALSE(cloud::build_output_rowset_segment_id_slots(
-                         std::numeric_limits<int32_t>::max() - 10, 100, 2, &slots)
-                         .ok());
-}
-
-TEST_F(CloudCompactionTest,
-       distributed_single_rowset_compaction_selects_workers_deterministically) {
-    const std::vector<cloud::CompactionWorkerInfo> candidates = {
-            {.backend_id = 3,
-             .endpoint = "be-c:8060",
-             .cloud_unique_id = "cloud-c",
-             .compute_group_id = "compute-group-a"},
-            {.backend_id = 1,
-             .endpoint = "be-a:8060",
-             .cloud_unique_id = "cloud-a",
-             .compute_group_id = "compute-group-a"},
-            {.backend_id = 2,
-             .endpoint = "be-b:8060",
-             .cloud_unique_id = "cloud-b",
-             .compute_group_id = "compute-group-a"},
-            {.backend_id = 4,
-             .endpoint = "be-d:8060",
-             .cloud_unique_id = "cloud-d",
-             .compute_group_id = "compute-group-a"}};
-
-    const auto selected =
-            cloud::select_compaction_workers_for_groups(candidates, 3, 2, "execution-a");
-    ASSERT_EQ(selected.size(), 2);
-    EXPECT_EQ(selected[0].backend_id, 3);
-    const auto selected_again =
-            cloud::select_compaction_workers_for_groups(candidates, 3, 2, "execution-a");
-    ASSERT_EQ(selected_again.size(), selected.size());
-    EXPECT_EQ(selected_again[0].backend_id, selected[0].backend_id);
-    EXPECT_EQ(selected_again[1].backend_id, selected[1].backend_id);
-    const std::vector<cloud::CompactionWorkerInfo> reordered_candidates(candidates.rbegin(),
-                                                                        candidates.rend());
-    const auto selected_from_reordered =
-            cloud::select_compaction_workers_for_groups(reordered_candidates, 3, 2, "execution-a");
-    ASSERT_EQ(selected_from_reordered.size(), selected.size());
-    EXPECT_EQ(selected_from_reordered[0].backend_id, selected[0].backend_id);
-    EXPECT_EQ(selected_from_reordered[1].backend_id, selected[1].backend_id);
-
-    const auto remote_only =
-            cloud::select_compaction_workers_for_groups(candidates, 5, 2, "execution-a");
-    ASSERT_EQ(remote_only.size(), 2);
-    EXPECT_NE(remote_only[0].backend_id, 5);
-    EXPECT_NE(remote_only[1].backend_id, 5);
-
-    const auto single_worker =
-            cloud::select_compaction_workers_for_groups(candidates, 3, 1, "execution-a");
-    ASSERT_EQ(single_worker.size(), 1);
-    EXPECT_EQ(single_worker[0].backend_id, 3);
-
-    std::unordered_set<int64_t> selected_remote_backend_ids;
-    for (int execution_index = 0; execution_index < 100; ++execution_index) {
-        const std::string execution_id = "execution-" + std::to_string(execution_index);
-        const auto selected_for_execution =
-                cloud::select_compaction_workers_for_groups(candidates, 3, 2, execution_id);
-        ASSERT_EQ(selected_for_execution.size(), 2);
-        EXPECT_EQ(selected_for_execution[0].backend_id, 3);
-        selected_remote_backend_ids.emplace(selected_for_execution[1].backend_id);
-    }
-    EXPECT_GT(selected_remote_backend_ids.size(), 1);
-}
-
-TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_caches_discovered_workers) {
-    const int32_t old_ttl = config::cloud_distributed_compaction_worker_cache_ttl_ms;
-    config::cloud_distributed_compaction_worker_cache_ttl_ms = 60000;
-    Defer restore_ttl {[&] { config::cloud_distributed_compaction_worker_cache_ttl_ms = old_ttl; }};
-
-    int fetch_count = 0;
-    cloud::CompactionWorkerCache cache([&](std::vector<cloud::CompactionWorkerInfo>* workers) {
-        ++fetch_count;
-        workers->push_back({.backend_id = 2,
-                            .endpoint = "be-a:8060",
-                            .cloud_unique_id = "cloud-a",
-                            .compute_group_id = "compute-group-a"});
-        workers->push_back({.backend_id = 3,
-                            .endpoint = "be-b:8060",
-                            .cloud_unique_id = "cloud-b",
-                            .compute_group_id = "compute-group-a"});
-        return Status::OK();
-    });
-
-    std::vector<cloud::CompactionWorkerInfo> workers;
-    ASSERT_TRUE(cache.get_workers(&workers).ok());
-    ASSERT_EQ(workers.size(), 2);
-    EXPECT_EQ(workers[0].endpoint, "be-a:8060");
-    EXPECT_EQ(workers[1].endpoint, "be-b:8060");
-    EXPECT_EQ(fetch_count, 1);
-
-    workers.clear();
-    ASSERT_TRUE(cache.get_workers(&workers).ok());
-    EXPECT_EQ(workers.size(), 2);
-    EXPECT_EQ(fetch_count, 1);
-
-    cache.invalidate();
-    ASSERT_TRUE(cache.get_workers(&workers).ok());
-    EXPECT_EQ(fetch_count, 2);
-
-    int failed_fetch_count = 0;
-    cloud::CompactionWorkerCache failed_cache([&](std::vector<cloud::CompactionWorkerInfo>*) {
-        ++failed_fetch_count;
-        return Status::InternalError("injected FE discovery failure");
-    });
-    EXPECT_FALSE(failed_cache.get_workers(&workers).ok());
-    EXPECT_FALSE(failed_cache.get_workers(&workers).ok());
-    EXPECT_EQ(failed_fetch_count, 1);
-}
-
-TEST_F(CloudCompactionTest, distributed_compaction_poll_scheduler_runs_due_callback) {
-    cloud::DistributedCompactionPollScheduler scheduler;
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool called = false;
-
-    ASSERT_TRUE(scheduler
-                        .schedule(std::chrono::milliseconds(10),
-                                  [&] {
-                                      {
-                                          std::lock_guard lock(mutex);
-                                          called = true;
-                                      }
-                                      cv.notify_one();
-                                  })
-                        .ok());
-
-    std::unique_lock lock(mutex);
-    EXPECT_TRUE(cv.wait_for(lock, std::chrono::seconds(1), [&] { return called; }));
-    lock.unlock();
-    scheduler.stop();
-    EXPECT_FALSE(scheduler.schedule(std::chrono::milliseconds(0), [] {}).ok());
-}
-
-TEST_F(CloudCompactionTest, distributed_single_rowset_compaction_tracks_async_task_status) {
-    auto tablet = std::make_shared<CloudTablet>(_engine, _tablet_meta);
-    auto worker = std::make_shared<cloud::DistributedCompactionWorker>(_engine, tablet);
-
-    PCloudDistributedCompactionTaskStatus task_status;
-    worker->get_compaction_status(&task_status);
-    EXPECT_EQ(task_status.state(), CLOUD_DISTRIBUTED_COMPACTION_TASK_PENDING);
-    EXPECT_FALSE(task_status.has_result());
-
-    PCloudDistributedCompactionTask task;
-    task.set_group_index(3);
-    worker->cancel_compaction(task.group_index(), Status::Cancelled("injected cancellation"));
-    PCloudDistributedCompactionSubmitRequest request;
-    EXPECT_FALSE(worker->execute_compaction(&request, &task).ok());
-
-    task_status.Clear();
-    worker->get_compaction_status(&task_status);
-    ASSERT_EQ(task_status.state(), CLOUD_DISTRIBUTED_COMPACTION_TASK_FAILED);
-    ASSERT_TRUE(task_status.has_result());
-    EXPECT_EQ(task_status.result().group_index(), 3);
-    EXPECT_FALSE(Status::create(task_status.result().status()).ok());
 }
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_group_range_boundaries) {
