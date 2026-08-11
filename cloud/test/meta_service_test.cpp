@@ -40,6 +40,7 @@
 #include "cpp/sync_point.h"
 #include "meta-service/meta_service_helper.h"
 #include "meta-store/blob_message.h"
+#include "meta-store/codec.h"
 #include "meta-store/document_message.h"
 #include "meta-store/keys.h"
 #include "meta-store/mem_txn_kv.h"
@@ -6928,9 +6929,25 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithException) {
     }
 }
 
+static void put_delete_bitmap_test_rowset(MetaServiceProxy* meta_service,
+                                          const std::string& instance_id, int64_t tablet_id,
+                                          int64_t version, const std::string& rowset_id) {
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    std::string rowset_key = meta_rowset_key({instance_id, tablet_id, version});
+    doris::RowsetMetaCloudPB rowset_meta;
+    rowset_meta.set_rowset_id(0);
+    rowset_meta.set_rowset_id_v2(rowset_id);
+    std::string rowset_value;
+    ASSERT_TRUE(rowset_meta.SerializeToString(&rowset_value));
+    txn->put(rowset_key, rowset_value);
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+}
+
 void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_t table_id,
                                           int64_t tablet_id, bool inject = false,
-                                          bool rowset_non_exist = false) {
+                                          bool rowset_non_exist = false,
+                                          bool use_delete_bitmap_stats = true) {
     // create rowset, if `rowset_non_exist` enabled, only r4 exists
     {
         std::unique_ptr<Transaction> txn;
@@ -7058,6 +7075,21 @@ void update_delete_bitmap_with_remove_pre(MetaServiceProxy* meta_service, int64_
         update_delete_bitmap_req.add_segment_delete_bitmaps(new_large_value);
         update_delete_bitmap_req.add_pre_rowset_versions(rowset_version);
     }
+    if (use_delete_bitmap_stats) {
+        for (const auto& rowset : rowset_vector) {
+            auto* rowset_stats = update_delete_bitmap_req.add_pre_rowset_delete_bitmap_stats();
+            rowset_stats->set_rowset_id(rowset);
+            for (const auto& [delete_bitmap_rowset, segment, version] :
+                 rowset_segment_version_vector) {
+                if (delete_bitmap_rowset == rowset && version >= 4 && version < 6) {
+                    auto* delete_bitmap_stat = rowset_stats->add_delete_bitmap_stats();
+                    delete_bitmap_stat->set_segment_id(segment);
+                    delete_bitmap_stat->set_version(version);
+                    delete_bitmap_stat->set_delete_bitmap_size(large_value.size());
+                }
+            }
+        }
+    }
     meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
                                        &update_delete_bitmap_req, &update_delete_bitmap_res,
                                        nullptr);
@@ -7128,11 +7160,18 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithRemovePreDeleteBitmap) {
         SyncPoint::get_instance()->clear_all_call_backs();
     };
 
-    update_delete_bitmap_with_remove_pre(meta_service.get(), 200, 202);
+    update_delete_bitmap_with_remove_pre(meta_service.get(), 200, 202, false, false, false);
 
     int64_t max_txn_commit_byte = config::max_txn_commit_byte;
     config::max_txn_commit_byte = 1000;
+    int remove_pre_rowsets_commit_count = 0;
+    sp->set_call_back("update_delete_bitmap:remove_pre_rowsets:commit",
+                      [&](auto&&) { remove_pre_rowsets_commit_count++; });
+    sp->enable_processing();
     update_delete_bitmap_with_remove_pre(meta_service.get(), 300, 302);
+    EXPECT_GT(remove_pre_rowsets_commit_count, 0);
+    sp->clear_all_call_backs();
+    sp->disable_processing();
 
     sp->set_call_back("update_delete_bitmap:commit:err", [&](auto&& args) {
         auto initiator = try_any_cast<int64_t>(args[0]);
@@ -7149,6 +7188,286 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithRemovePreDeleteBitmap) {
     config::max_txn_commit_byte = max_txn_commit_byte;
 
     update_delete_bitmap_with_remove_pre(meta_service.get(), 500, 502, false, true);
+
+    update_delete_bitmap_with_remove_pre(meta_service.get(), 600, 602);
+}
+
+TEST(MetaServiceTest, EmptyPreRowsetStatsUsesKeyRemoval) {
+    auto meta_service = get_meta_service();
+    extern std::string get_instance_id(const std::shared_ptr<ResourceManager>& rc_mgr,
+                                       const std::string& cloud_unique_id);
+    auto instance_id = get_instance_id(meta_service->resource_mgr(), "test_cloud_unique_id");
+    constexpr int64_t tablet_id = 622;
+    const std::string rowset_id = "empty_pre_rowset_stats";
+    put_delete_bitmap_test_rowset(meta_service.get(), instance_id, tablet_id, 1, rowset_id);
+
+    auto old_delete_bitmap_key = meta_delete_bitmap_key({instance_id, tablet_id, rowset_id, 1, 0});
+    const std::string old_delete_bitmap = "old_delete_bitmap";
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    blob_put(txn.get(), old_delete_bitmap_key, old_delete_bitmap, 0);
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+    brpc::Controller cntl;
+    UpdateDeleteBitmapRequest req;
+    UpdateDeleteBitmapResponse res;
+    req.set_cloud_unique_id("test_cloud_unique_id");
+    req.set_table_id(620);
+    req.set_partition_id(621);
+    req.set_tablet_id(tablet_id);
+    req.set_lock_id(-3);
+    req.set_without_lock(true);
+    req.set_initiator(tablet_id);
+    req.set_pre_rowset_agg_start_version(1);
+    req.set_pre_rowset_agg_end_version(2);
+    req.add_rowset_ids(rowset_id);
+    req.add_segment_ids(0);
+    req.add_versions(2);
+    req.add_segment_delete_bitmaps("aggregated_delete_bitmap");
+    req.add_pre_rowset_versions(1);
+    req.add_pre_rowset_delete_bitmap_stats()->set_rowset_id(rowset_id);
+    meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
+                                       &req, &res, nullptr);
+
+    ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    ValueBuf val;
+    ASSERT_EQ(blob_get(txn.get(), old_delete_bitmap_key, &val), TxnErrorCode::TXN_OK);
+    EXPECT_EQ(val.value(), old_delete_bitmap);
+}
+
+TEST(MetaServiceTest, UnderestimatedPreRowsetDeleteBitmapSizeLeavesSkippedTail) {
+    auto meta_service = get_meta_service();
+    extern std::string get_instance_id(const std::shared_ptr<ResourceManager>& rc_mgr,
+                                       const std::string& cloud_unique_id);
+    auto instance_id = get_instance_id(meta_service->resource_mgr(), "test_cloud_unique_id");
+    constexpr int64_t tablet_id = 632;
+    const std::string rowset_id = "underestimated_delete_bitmap";
+    put_delete_bitmap_test_rowset(meta_service.get(), instance_id, tablet_id, 1, rowset_id);
+
+    auto old_delete_bitmap_key = meta_delete_bitmap_key({instance_id, tablet_id, rowset_id, 1, 0});
+    const std::string old_delete_bitmap(DEFAULT_BLOB_SPLIT_SIZE * 3 + 1, 'a');
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    blob_put(txn.get(), old_delete_bitmap_key, old_delete_bitmap, 0);
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+    const std::string aggregated_delete_bitmap = "aggregated_delete_bitmap";
+    brpc::Controller update_cntl;
+    UpdateDeleteBitmapRequest update_req;
+    UpdateDeleteBitmapResponse update_res;
+    update_req.set_cloud_unique_id("test_cloud_unique_id");
+    update_req.set_table_id(630);
+    update_req.set_partition_id(631);
+    update_req.set_tablet_id(tablet_id);
+    update_req.set_lock_id(-3);
+    update_req.set_without_lock(true);
+    update_req.set_initiator(tablet_id);
+    update_req.set_pre_rowset_agg_start_version(1);
+    update_req.set_pre_rowset_agg_end_version(2);
+    update_req.add_rowset_ids(rowset_id);
+    update_req.add_segment_ids(0);
+    update_req.add_versions(2);
+    update_req.add_segment_delete_bitmaps(aggregated_delete_bitmap);
+    update_req.add_pre_rowset_versions(1);
+    auto* rowset_stats = update_req.add_pre_rowset_delete_bitmap_stats();
+    rowset_stats->set_rowset_id(rowset_id);
+    auto* delete_bitmap_stat = rowset_stats->add_delete_bitmap_stats();
+    delete_bitmap_stat->set_segment_id(0);
+    delete_bitmap_stat->set_version(1);
+    delete_bitmap_stat->set_delete_bitmap_size(DEFAULT_BLOB_SPLIT_SIZE);
+    meta_service->update_delete_bitmap(
+            reinterpret_cast<google::protobuf::RpcController*>(&update_cntl), &update_req,
+            &update_res, nullptr);
+    ASSERT_EQ(update_res.status().code(), MetaServiceCode::OK);
+
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    std::string value;
+    EXPECT_EQ(txn->get(blob_key(old_delete_bitmap_key, 0), &value),
+              TxnErrorCode::TXN_KEY_NOT_FOUND);
+    EXPECT_EQ(txn->get(blob_key(old_delete_bitmap_key, 1), &value), TxnErrorCode::TXN_OK);
+
+    brpc::Controller get_cntl;
+    GetDeleteBitmapRequest get_req;
+    GetDeleteBitmapResponse get_res;
+    get_req.set_cloud_unique_id("test_cloud_unique_id");
+    get_req.set_tablet_id(tablet_id);
+    get_req.add_rowset_ids(rowset_id);
+    get_req.add_begin_versions(0);
+    get_req.add_end_versions(3);
+    meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&get_cntl),
+                                    &get_req, &get_res, nullptr);
+
+    ASSERT_EQ(get_res.status().code(), MetaServiceCode::OK);
+    ASSERT_EQ(get_res.rowset_ids_size(), 1);
+    ASSERT_EQ(get_res.segment_ids_size(), 1);
+    ASSERT_EQ(get_res.versions_size(), 1);
+    ASSERT_EQ(get_res.segment_delete_bitmaps_size(), 1);
+    EXPECT_EQ(get_res.rowset_ids(0), rowset_id);
+    EXPECT_EQ(get_res.segment_ids(0), 0);
+    EXPECT_EQ(get_res.versions(0), 2);
+    EXPECT_EQ(get_res.segment_delete_bitmaps(0), aggregated_delete_bitmap);
+}
+
+static void test_get_delete_bitmap_during_point_cleanup(size_t delete_bitmap_size) {
+    auto meta_service = get_meta_service();
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        sp->clear_all_call_backs();
+        sp->disable_processing();
+    };
+
+    extern std::string get_instance_id(const std::shared_ptr<ResourceManager>& rc_mgr,
+                                       const std::string& cloud_unique_id);
+    auto instance_id = get_instance_id(meta_service->resource_mgr(), "test_cloud_unique_id");
+    constexpr int64_t table_id = 640;
+    constexpr int64_t partition_id = 641;
+    constexpr int64_t tablet_id = 642;
+    const std::string rowset_id = "point_cleanup_during_paginated_read";
+    put_delete_bitmap_test_rowset(meta_service.get(), instance_id, tablet_id, 1, rowset_id);
+
+    auto old_delete_bitmap_key = meta_delete_bitmap_key({instance_id, tablet_id, rowset_id, 1, 0});
+    std::string old_delete_bitmap(DEFAULT_BLOB_SPLIT_SIZE, 'a');
+    old_delete_bitmap.append(DEFAULT_BLOB_SPLIT_SIZE, 'b');
+    old_delete_bitmap.append(DEFAULT_BLOB_SPLIT_SIZE, 'c');
+    old_delete_bitmap.push_back('d');
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    blob_put(txn.get(), old_delete_bitmap_key, old_delete_bitmap, 0);
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+    const std::string aggregated_delete_bitmap = "aggregated_delete_bitmap";
+    UpdateDeleteBitmapRequest update_req;
+    update_req.set_cloud_unique_id("test_cloud_unique_id");
+    update_req.set_table_id(table_id);
+    update_req.set_partition_id(partition_id);
+    update_req.set_tablet_id(tablet_id);
+    update_req.set_lock_id(-3);
+    update_req.set_without_lock(true);
+    update_req.set_initiator(tablet_id);
+    update_req.set_pre_rowset_agg_start_version(1);
+    update_req.set_pre_rowset_agg_end_version(2);
+    update_req.add_rowset_ids(rowset_id);
+    update_req.add_segment_ids(0);
+    update_req.add_versions(2);
+    update_req.add_segment_delete_bitmaps(aggregated_delete_bitmap);
+    update_req.add_pre_rowset_versions(1);
+    auto* rowset_stats = update_req.add_pre_rowset_delete_bitmap_stats();
+    rowset_stats->set_rowset_id(rowset_id);
+    auto* delete_bitmap_stat = rowset_stats->add_delete_bitmap_stats();
+    delete_bitmap_stat->set_segment_id(0);
+    delete_bitmap_stat->set_version(1);
+    delete_bitmap_stat->set_delete_bitmap_size(delete_bitmap_size);
+
+    bool cleanup_done = false;
+    sp->set_call_back("get_delete_bitmap_test",
+                      [&](auto&& args) { *try_any_cast<bool*>(args[0]) = true; });
+    sp->set_call_back("get_delete_bitmap_err", [&](auto&& args) {
+        auto round = *try_any_cast<int64_t*>(args[0]);
+        if (round != 1 || cleanup_done) {
+            return;
+        }
+        cleanup_done = true;
+        brpc::Controller update_cntl;
+        UpdateDeleteBitmapResponse update_res;
+        meta_service->update_delete_bitmap(
+                reinterpret_cast<google::protobuf::RpcController*>(&update_cntl), &update_req,
+                &update_res, nullptr);
+        ASSERT_EQ(update_res.status().code(), MetaServiceCode::OK);
+        *try_any_cast<TxnErrorCode*>(args[1]) = TxnErrorCode::TXN_TOO_OLD;
+    });
+    sp->enable_processing();
+
+    brpc::Controller get_cntl;
+    GetDeleteBitmapRequest get_req;
+    GetDeleteBitmapResponse get_res;
+    get_req.set_cloud_unique_id("test_cloud_unique_id");
+    get_req.set_tablet_id(tablet_id);
+    get_req.add_rowset_ids(rowset_id);
+    get_req.add_begin_versions(0);
+    get_req.add_end_versions(3);
+    meta_service->get_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&get_cntl),
+                                    &get_req, &get_res, nullptr);
+
+    ASSERT_TRUE(cleanup_done);
+    ASSERT_EQ(get_res.status().code(), MetaServiceCode::OK);
+    ASSERT_EQ(get_res.rowset_ids_size(), 1);
+    ASSERT_EQ(get_res.segment_ids_size(), 1);
+    ASSERT_EQ(get_res.versions_size(), 1);
+    ASSERT_EQ(get_res.segment_delete_bitmaps_size(), 1);
+    EXPECT_EQ(get_res.rowset_ids(0), rowset_id);
+    EXPECT_EQ(get_res.segment_ids(0), 0);
+    EXPECT_EQ(get_res.versions(0), 2);
+    EXPECT_EQ(get_res.segment_delete_bitmaps(0), aggregated_delete_bitmap);
+}
+
+TEST(MetaServiceTest, GetDeleteBitmapSkipsPointCleanupTailAfterTxnTooOld) {
+    test_get_delete_bitmap_during_point_cleanup(DEFAULT_BLOB_SPLIT_SIZE * 3);
+}
+
+TEST(MetaServiceTest, GetDeleteBitmapDropsPartialValueAfterAllBlobKeysAreRemoved) {
+    test_get_delete_bitmap_during_point_cleanup(DEFAULT_BLOB_SPLIT_SIZE * 3 + 1);
+}
+
+TEST(MetaServiceTest, RemovePreDeleteBitmapBatchesEachBlobKey) {
+    auto meta_service = get_meta_service();
+    auto sp = SyncPoint::get_instance();
+    int64_t old_max_txn_commit_byte = config::max_txn_commit_byte;
+    DORIS_CLOUD_DEFER {
+        config::max_txn_commit_byte = old_max_txn_commit_byte;
+        sp->clear_all_call_backs();
+        sp->disable_processing();
+    };
+
+    constexpr size_t max_txn_commit_byte = 300;
+    config::max_txn_commit_byte = max_txn_commit_byte;
+    std::vector<size_t> committed_txn_sizes;
+    sp->set_call_back("update_delete_bitmap:remove_pre_rowsets:commit", [&](auto&& args) {
+        committed_txn_sizes.push_back(try_any_cast<size_t>(args[0]));
+    });
+    sp->enable_processing();
+
+    extern std::string get_instance_id(const std::shared_ptr<ResourceManager>& rc_mgr,
+                                       const std::string& cloud_unique_id);
+    auto instance_id = get_instance_id(meta_service->resource_mgr(), "test_cloud_unique_id");
+    constexpr int64_t tablet_id = 612;
+    const std::string rowset_id = "batch_blob_keys_rowset";
+    const std::string value(DEFAULT_BLOB_SPLIT_SIZE * 20, 'a');
+    auto delete_bitmap_key = meta_delete_bitmap_key({instance_id, tablet_id, rowset_id, 1, 0});
+    std::unique_ptr<Transaction> txn;
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    blob_put(txn.get(), delete_bitmap_key, value, 0);
+    ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+
+    brpc::Controller cntl;
+    UpdateDeleteBitmapRequest req;
+    UpdateDeleteBitmapResponse res;
+    req.set_cloud_unique_id("test_cloud_unique_id");
+    req.set_table_id(610);
+    req.set_partition_id(611);
+    req.set_tablet_id(tablet_id);
+    req.set_lock_id(-3);
+    req.set_without_lock(true);
+    req.set_initiator(tablet_id);
+    req.set_pre_rowset_agg_start_version(1);
+    req.set_pre_rowset_agg_end_version(2);
+    auto* rowset_stats = req.add_pre_rowset_delete_bitmap_stats();
+    rowset_stats->set_rowset_id(rowset_id);
+    auto* delete_bitmap_stat = rowset_stats->add_delete_bitmap_stats();
+    delete_bitmap_stat->set_segment_id(0);
+    delete_bitmap_stat->set_version(1);
+    delete_bitmap_stat->set_delete_bitmap_size(value.size());
+    meta_service->update_delete_bitmap(reinterpret_cast<google::protobuf::RpcController*>(&cntl),
+                                       &req, &res, nullptr);
+
+    ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+    ASSERT_FALSE(committed_txn_sizes.empty());
+    for (auto txn_size : committed_txn_sizes) {
+        EXPECT_LE(txn_size, max_txn_commit_byte);
+    }
+    ASSERT_EQ(meta_service->txn_kv()->create_txn(&txn), TxnErrorCode::TXN_OK);
+    ValueBuf val;
+    EXPECT_EQ(blob_get(txn.get(), delete_bitmap_key, &val), TxnErrorCode::TXN_KEY_NOT_FOUND);
 }
 
 TEST(MetaServiceTest, GetDeleteBitmapWithIdx) {

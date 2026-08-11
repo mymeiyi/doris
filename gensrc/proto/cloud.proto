@@ -2004,6 +2004,17 @@ message DeleteBitmapStoragePB {
     optional PackedSliceLocationPB packed_slice_location = 3;
 }
 
+message PreRowsetDeleteBitmapStatsPB {
+    message DeleteBitmapStatPB {
+        optional uint32 segment_id = 1;
+        optional int64 version = 2;
+        optional uint64 delete_bitmap_size = 3;
+    }
+
+    optional string rowset_id = 1;
+    repeated DeleteBitmapStatPB delete_bitmap_stats = 2;
+}
+
 message UpdateDeleteBitmapRequest {
     optional string cloud_unique_id = 1; // For auth
     optional int64 table_id = 2;
@@ -2029,6 +2040,8 @@ message UpdateDeleteBitmapRequest {
     optional int64 pre_rowset_agg_end_version = 17;
     // when update delete_bitmap of pre rowsets, check the rowset exists
     repeated int64 pre_rowset_versions = 18;
+    // original delete bitmaps removed after pre rowset aggregation
+    repeated PreRowsetDeleteBitmapStatsPB pre_rowset_delete_bitmap_stats = 19;
     // 50-51: used for storage v2
     repeated string delta_rowset_ids = 50;
     repeated DeleteBitmapStoragePB delete_bitmap_storages = 51;

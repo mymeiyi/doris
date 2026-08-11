@@ -40,6 +40,15 @@ static std::vector<std::string_view> split_string(const std::string_view& str, i
     return substrings;
 }
 
+std::string blob_key(std::string_view key, size_t sequence, uint8_t ver) {
+    std::string split_key(key);
+    int64_t suffix = ver;
+    suffix <<= 56;
+    suffix += static_cast<int64_t>(sequence);
+    encode_int64(suffix, &split_key);
+    return split_key;
+}
+
 bool ValueBuf::to_pb(google::protobuf::Message* pb) const {
     butil::IOBuf merge;
     for (auto&& it : iters) {
@@ -151,12 +160,8 @@ void blob_put(Transaction* txn, std::string_view key, const google::protobuf::Me
 void blob_put(Transaction* txn, std::string_view key, std::string_view value, uint8_t ver,
               size_t split_size) {
     auto split_vec = split_string(value, split_size);
-    int64_t suffix_base = ver;
-    suffix_base <<= 56;
     for (size_t i = 0; i < split_vec.size(); ++i) {
-        std::string k(key);
-        encode_int64(suffix_base + i, &k);
-        txn->put(k, split_vec[i]);
+        txn->put(blob_key(key, i, ver), split_vec[i]);
     }
 }
 
@@ -301,12 +306,8 @@ void blob_put(Transaction* txn, std::string_view key, std::string_view value, ui
     encode_versionstamp_end(&encoded_key);
 
     auto split_vec = split_string(value, split_size);
-    int64_t suffix_base = ver;
-    suffix_base <<= 56;
     for (size_t i = 0; i < split_vec.size(); ++i) {
-        std::string k(encoded_key);
-        encode_int64(suffix_base + i, &k);
-        txn->atomic_set_ver_key(k, offset, split_vec[i]);
+        txn->atomic_set_ver_key(blob_key(encoded_key, i, ver), offset, split_vec[i]);
     }
 }
 
