@@ -1019,7 +1019,7 @@ message PCloudDistributedCompactionCalcIncrementalDeleteBitmapResponse {
 
 enum PCloudDistributedCompactionFinalizeMode {
     CLOUD_DISTRIBUTED_COMPACTION_PRESERVE_OUTPUT_FILES = 0;
-    CLOUD_DISTRIBUTED_COMPACTION_ABORT_AND_DISCARD_OUTPUT_FILES = 1;
+    CLOUD_DISTRIBUTED_COMPACTION_CANCEL_AND_RELEASE_STATE = 1;
 }
 
 message PCloudDistributedCompactionFinalizeRequest {

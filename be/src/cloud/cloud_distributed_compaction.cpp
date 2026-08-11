@@ -1283,7 +1283,7 @@ void DistributedCompactionCoordinator::finalize(bool preserve_output_files) {
             request.set_execution_id(_execution_id);
             request.set_mode(preserve_output_files
                                      ? CLOUD_DISTRIBUTED_COMPACTION_PRESERVE_OUTPUT_FILES
-                                     : CLOUD_DISTRIBUTED_COMPACTION_ABORT_AND_DISCARD_OUTPUT_FILES);
+                                     : CLOUD_DISTRIBUTED_COMPACTION_CANCEL_AND_RELEASE_STATE);
             for (const size_t task_index : task_indices) {
                 const auto& task = _state->tasks[task_index];
                 auto* request_task = request.add_tasks();
