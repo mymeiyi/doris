@@ -127,6 +127,11 @@ struct RowsetWriterContext {
 
     bool is_transient_rowset_writer = false;
 
+    // A partial output writer produces only one shard of a rowset assembled by a coordinator.
+    // It must persist explicit physical segment ids and must not run writer-local segment
+    // compaction, even when its assigned segment-id slot starts at zero.
+    bool is_partial_output_writer = false;
+
     segment_v2::HistoricalRowRetrieverContext make_historical_row_retriever_context();
 
     // Intent flag: caller can actively turn merge-file feature on/off for this rowset.

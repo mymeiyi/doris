@@ -107,9 +107,20 @@ protected:
         bool is_segment_grouped = false;
         int64_t segment_group_size = 0;
         std::vector<int32_t> output_segment_group_sizes;
+        bool output_rowset_built = false;
+    };
+
+    struct MergeInputRowsetsContext {
+        MergeInputRowsetsResult result;
+        std::vector<RowsetReaderSharedPtr> input_rs_readers;
+        int64_t merge_start_time_ns = 0;
     };
 
     Status merge_input_rowsets();
+
+    Status prepare_merge_input_rowsets_execution(MergeInputRowsetsContext* context);
+
+    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context);
 
     virtual Status prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
         return Status::OK();
@@ -289,6 +300,12 @@ protected:
     // Returns the number of rowsets that were truncated
     size_t apply_txn_size_truncation_and_log(const std::string& compaction_name);
 
+    Status prepare_execute_compact(int64_t permits);
+
+    Status finish_execute_compact(int64_t execution_start_time_us);
+
+    int64_t get_compaction_permits();
+
     CloudStorageEngine& _engine;
 
     std::string _uuid;
@@ -305,8 +322,6 @@ private:
     Status build_basic_info();
 
     virtual Status modify_rowsets();
-
-    int64_t get_compaction_permits();
 
     void update_compaction_level();
 

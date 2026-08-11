@@ -165,6 +165,7 @@ import org.apache.doris.thrift.TBinlog;
 import org.apache.doris.thrift.TCertBasedAuth;
 import org.apache.doris.thrift.TCheckAuthRequest;
 import org.apache.doris.thrift.TCheckAuthResult;
+import org.apache.doris.thrift.TCloudCompactionBackend;
 import org.apache.doris.thrift.TColumnDef;
 import org.apache.doris.thrift.TColumnDesc;
 import org.apache.doris.thrift.TColumnInfo;
@@ -203,6 +204,8 @@ import org.apache.doris.thrift.TGetBackendMetaResult;
 import org.apache.doris.thrift.TGetBinlogLagResult;
 import org.apache.doris.thrift.TGetBinlogRequest;
 import org.apache.doris.thrift.TGetBinlogResult;
+import org.apache.doris.thrift.TGetCloudCompactionBackendsRequest;
+import org.apache.doris.thrift.TGetCloudCompactionBackendsResult;
 import org.apache.doris.thrift.TGetColumnInfoRequest;
 import org.apache.doris.thrift.TGetColumnInfoResult;
 import org.apache.doris.thrift.TGetDbsParams;
@@ -3829,6 +3832,63 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         result.setTabletReplicaInfos(tabletReplicaInfos);
         result.setToken(Env.getCurrentEnv().getToken());
         result.setStatus(new TStatus(TStatusCode.OK));
+        return result;
+    }
+
+    @Override
+    public TGetCloudCompactionBackendsResult getCloudCompactionBackends(
+            TGetCloudCompactionBackendsRequest request) {
+        TGetCloudCompactionBackendsResult result = new TGetCloudCompactionBackendsResult();
+        TStatus status = new TStatus(TStatusCode.OK);
+        result.setStatus(status);
+
+        if (!Config.isCloudMode()) {
+            status.setStatusCode(TStatusCode.NOT_IMPLEMENTED_ERROR);
+            status.addToErrorMsgs("cloud compaction backend discovery requires cloud mode");
+            return result;
+        }
+        if (!request.isSetBackendId() || request.getBackendId() <= 0) {
+            status.setStatusCode(TStatusCode.INVALID_ARGUMENT);
+            status.addToErrorMsgs("requester backend id is not set");
+            return result;
+        }
+
+        CloudSystemInfoService systemInfoService =
+                (CloudSystemInfoService) Env.getCurrentSystemInfo();
+        Backend requester = systemInfoService.getBackend(request.getBackendId());
+        if (requester == null) {
+            status.setStatusCode(TStatusCode.NOT_FOUND);
+            status.addToErrorMsgs("requester backend is not registered");
+            return result;
+        }
+        String computeGroupId = requester.getCloudClusterId();
+        if (computeGroupId.isEmpty()) {
+            status.setStatusCode(TStatusCode.INTERNAL_ERROR);
+            status.addToErrorMsgs("requester backend has no compute group id");
+            return result;
+        }
+
+        result.setBackends(selectCloudCompactionBackends(
+                requester, systemInfoService.getBackendsByClusterId(computeGroupId)));
+        return result;
+    }
+
+    static List<TCloudCompactionBackend> selectCloudCompactionBackends(
+            Backend requester, List<Backend> backends) {
+        List<TCloudCompactionBackend> result = new ArrayList<>();
+        String computeGroupId = requester.getCloudClusterId();
+        backends.stream()
+                .filter(Backend::isScheduleAvailable)
+                .filter(backend -> !backend.isDecommissioning())
+                .filter(backend -> backend.getBrpcPort() > 0)
+                .filter(backend -> computeGroupId.equals(backend.getCloudClusterId()))
+                .sorted(Comparator.comparingLong(Backend::getId))
+                .forEach(backend -> result.add(new TCloudCompactionBackend()
+                        .setBackendId(backend.getId())
+                        .setHost(backend.getHost())
+                        .setBrpcPort(backend.getBrpcPort())
+                        .setCloudUniqueId(backend.getCloudUniqueId())
+                        .setCloudComputeGroupId(backend.getCloudClusterId())));
         return result;
     }
 
