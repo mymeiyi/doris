@@ -237,7 +237,8 @@ group 的最终布局为 `NONOVERLAPPING_WITHIN_GROUP`，并记录 `segment_grou
 
 ## 8. Unique MOW
 
-每个 Worker 只为本 group 的源 segments 创建 ranged `RowIdConversion`：
+每个 Worker 只为本 group 的源 segments 创建 `RowIdConversion`；Reader 按 segment range
+初始化完整 segment 的 row ID 映射：
 
 ```text
 源 (rowset ID, physical segment ID, row ID)

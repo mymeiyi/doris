@@ -1003,39 +1003,55 @@ TEST_F(TestRowIdConversion, ConvertDestinationPositionToPhysicalSegmentId) {
     EXPECT_EQ(dst.segment_id, 100);
 }
 
-TEST_F(TestRowIdConversion, RangedConversionUsesExplicitOutputPhysicalSegmentIds) {
-    RowsetId input_rowset_id;
-    input_rowset_id.init(100);
-    RowsetId output_rowset_id;
-    output_rowset_id.init(200);
+TEST_F(TestRowIdConversion, SegmentRangeUsesExplicitOutputPhysicalSegmentIds) {
+    auto tablet_schema = create_schema(UNIQUE_KEYS);
+    const std::vector<std::vector<std::tuple<int64_t, int64_t>>> input_data = {
+            {{0, 1}, {1, 2}}, {{2, 3}, {3, 4}, {4, 5}}, {{5, 6}, {6, 7}}};
+    auto input_rowset = create_rowset(tablet_schema, OVERLAPPING, input_data, 2, 10,
+                                      DataWriteType::TYPE_COMPACTION);
+    auto writer_context = create_rowset_writer_context(tablet_schema, NONOVERLAPPING, 2, {2, 2});
+    writer_context.enable_unique_key_merge_on_write = true;
+    writer_context.write_type = DataWriteType::TYPE_COMPACTION;
+    auto writer_result = RowsetFactory::create_rowset_writer(*engine_ref, writer_context, false);
+    ASSERT_TRUE(writer_result.has_value()) << writer_result.error();
+    auto output_writer = std::move(writer_result).value();
 
+    RowsetReaderSharedPtr input_reader;
+    ASSERT_TRUE(input_rowset->create_reader(&input_reader).ok());
     RowIdConversion rowid_conversion;
-    ASSERT_TRUE(rowid_conversion
-                        .init_segment_ranges({{.rowset_id = input_rowset_id,
-                                               .segment_id = 10,
-                                               .begin = 2,
-                                               .end = 5}})
+    Merger::Statistics stats {.rowid_conversion = &rowid_conversion};
+    auto tablet = create_tablet(*tablet_schema, true);
+    ASSERT_TRUE(Merger::vmerge_rowsets(tablet, ReaderType::READER_CUMULATIVE_COMPACTION,
+                                       *tablet_schema, {input_reader}, output_writer.get(), &stats,
+                                       std::pair<int64_t, int64_t> {1, 2})
                         .ok());
-    rowid_conversion.set_dst_rowset_id(output_rowset_id);
-    rowid_conversion.add({RowLocation(input_rowset_id, 10, 2), RowLocation(input_rowset_id, 10, 3),
-                          RowLocation(input_rowset_id, 10, 4)},
-                         {2, 1});
+    RowsetSharedPtr output_rowset;
+    ASSERT_TRUE(output_writer->build(output_rowset).ok());
+    ASSERT_EQ(output_rowset->num_segments(), 2);
+
+    const auto selected_segment_id = cast_set<uint32_t>(input_rowset->segment(1).id());
+    const auto unselected_segment_id = cast_set<uint32_t>(input_rowset->segment(0).id());
+    ASSERT_EQ(rowid_conversion.get_src_segment_to_id_map().size(), 1);
+    EXPECT_TRUE(rowid_conversion.get_src_segment_to_id_map().contains(
+            {input_rowset->rowset_id(), selected_segment_id}));
+    RowIdConversion::DestinationRowId unselected_dst;
+    EXPECT_EQ(rowid_conversion.get(RowLocation(input_rowset->rowset_id(), unselected_segment_id, 0),
+                                   &unselected_dst),
+              -1);
 
     DeleteBitmap input_delete_bitmap(1);
-    input_delete_bitmap.add({input_rowset_id, 10, 5}, 1);
-    input_delete_bitmap.add({input_rowset_id, 10, 5}, 2);
-    input_delete_bitmap.add({input_rowset_id, 10, 5}, 4);
+    input_delete_bitmap.add({input_rowset->rowset_id(), selected_segment_id, 5}, 0);
+    input_delete_bitmap.add({input_rowset->rowset_id(), selected_segment_id, 5}, 2);
+    input_delete_bitmap.add({input_rowset->rowset_id(), unselected_segment_id, 5}, 0);
     DeleteBitmap output_delete_bitmap(1);
     std::set<RowLocation> missed_rows;
-    auto tablet_schema = create_schema(UNIQUE_KEYS);
-    auto tablet = create_tablet(*tablet_schema, true);
-    tablet->calc_compaction_output_rowset_delete_bitmap_by_ranges(
-            rowid_conversion, output_rowset_id, {117, 119}, 0, 10, input_delete_bitmap,
+    tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
+            rowid_conversion, output_rowset->rowset_id(), {117, 119}, 0, 10, input_delete_bitmap,
             &output_delete_bitmap, &missed_rows);
 
-    EXPECT_TRUE(output_delete_bitmap.contains({output_rowset_id, 117, 5}, 0));
-    EXPECT_TRUE(output_delete_bitmap.contains({output_rowset_id, 119, 5}, 0));
-    EXPECT_FALSE(output_delete_bitmap.contains({output_rowset_id, 117, 5}, 1));
+    EXPECT_TRUE(output_delete_bitmap.contains({output_rowset->rowset_id(), 117, 5}, 0));
+    EXPECT_TRUE(output_delete_bitmap.contains({output_rowset->rowset_id(), 119, 5}, 0));
+    EXPECT_FALSE(output_delete_bitmap.contains({output_rowset->rowset_id(), 117, 5}, 1));
     EXPECT_TRUE(missed_rows.empty());
 }
 

@@ -1519,20 +1519,7 @@ Status DistributedCompactionWorker::handle_compaction(
               _tablet->enable_unique_key_merge_on_write();
     Merger::Statistics stats;
     if (_is_mow) {
-        std::vector<uint32_t> segment_rows;
-        input_rowset->get_num_segment_rows(&segment_rows);
-        DORIS_CHECK_EQ(segment_rows.size(), cast_set<size_t>(input_rowset->num_segments()));
-        std::vector<SegmentRowIdRange> source_ranges;
-        source_ranges.reserve(cast_set<size_t>(segment_pos_end - segment_pos_start));
-        for (int64_t pos = segment_pos_start; pos < segment_pos_end; ++pos) {
-            source_ranges.push_back({.rowset_id = input_rowset->rowset_id(),
-                                     .segment_id = cast_set<uint32_t>(
-                                             input_rowset->segment(cast_set<size_t>(pos)).id()),
-                                     .begin = 0,
-                                     .end = segment_rows[cast_set<size_t>(pos)]});
-        }
         _rowid_conversion = std::make_unique<RowIdConversion>();
-        RETURN_IF_ERROR(_rowid_conversion->init_segment_ranges(source_ranges));
         stats.rowid_conversion = _rowid_conversion.get();
     }
 
@@ -1586,7 +1573,7 @@ Status DistributedCompactionWorker::handle_compaction(
         if (request->check_missed_rows()) {
             missed_rows = std::make_unique<std::set<RowLocation>>();
         }
-        _tablet->calc_compaction_output_rowset_delete_bitmap_by_ranges(
+        _tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
                 *_rowid_conversion, _output_rowset->rowset_id(), _output_segment_ids,
                 request->delete_bitmap_start_version(), request->delete_bitmap_end_version(),
                 _tablet->tablet_meta()->delete_bitmap(), &shard, missed_rows.get());
@@ -1606,7 +1593,7 @@ Status DistributedCompactionWorker::calc_incremental_delete_bitmap(
         return Status::InvalidArgument(
                 "incremental delete bitmap requested before a MoW group compaction");
     }
-    _tablet->calc_compaction_output_rowset_delete_bitmap_by_ranges(
+    _tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
             *_rowid_conversion, _output_rowset->rowset_id(), _output_segment_ids, start_version,
             end_version, _tablet->tablet_meta()->delete_bitmap(), output_delete_bitmap, nullptr);
     return Status::OK();

@@ -1832,25 +1832,22 @@ void BaseTablet::calc_compaction_output_rowset_delete_bitmap(
     }
 }
 
-void BaseTablet::calc_compaction_output_rowset_delete_bitmap_by_ranges(
+void BaseTablet::calc_compaction_output_rowset_delete_bitmap_by_segments(
         const RowIdConversion& rowid_conversion, const RowsetId& output_rowset_id,
         const std::vector<int64_t>& output_segment_ids, uint64_t start_version,
         uint64_t end_version, const DeleteBitmap& input_delete_bitmap,
         DeleteBitmap* output_rowset_delete_bitmap, std::set<RowLocation>* missed_rows) {
-    DORIS_CHECK(rowid_conversion.mode() == RowIdConversion::Mode::RANGED);
-    rowid_conversion.for_each_source_range([&](const SegmentRowIdRange& range) {
+    for (const auto& [source_segment, _] : rowid_conversion.get_src_segment_to_id_map()) {
+        const auto& [rowset_id, segment_id] = source_segment;
         RowLocation src;
-        src.rowset_id = range.rowset_id;
-        src.segment_id = range.segment_id;
+        src.rowset_id = rowset_id;
+        src.segment_id = segment_id;
         DeleteBitmap subset_map(tablet_id());
-        input_delete_bitmap.subset({range.rowset_id, range.segment_id, start_version},
-                                   {range.rowset_id, range.segment_id, end_version}, &subset_map);
+        input_delete_bitmap.subset({rowset_id, segment_id, start_version},
+                                   {rowset_id, segment_id, end_version}, &subset_map);
         for (const auto& [key, bitmap] : subset_map.delete_bitmap) {
             const auto version = std::get<2>(key);
             for (const auto row_id : bitmap) {
-                if (row_id < range.begin || row_id >= range.end) {
-                    continue;
-                }
                 src.row_id = row_id;
                 RowIdConversion::DestinationRowId converted_dst;
                 if (rowid_conversion.get(src, &converted_dst) != 0) {
@@ -1868,7 +1865,7 @@ void BaseTablet::calc_compaction_output_rowset_delete_bitmap_by_ranges(
                                                  dst.row_id);
             }
         }
-    });
+    }
 }
 
 Status BaseTablet::check_rowid_conversion(
