@@ -326,6 +326,18 @@ TEST_F(TestCloudSizeBasedCumulativeCompactionPolicy,
 }
 
 TEST_F(TestCloudSizeBasedCumulativeCompactionPolicy,
+       calculate_cumulative_point_advances_past_output_containing_point) {
+    CloudTablet tablet(_engine, _tablet_meta);
+    CloudSizeBasedCumulativeCompactionPolicy policy;
+    Version last_delete_version {-1, -1};
+    auto output_rowset = create_rowset(Version(5, 7), 1, false, kMiB);
+    std::vector<RowsetSharedPtr> rowsets {output_rowset};
+
+    EXPECT_EQ(8, policy.calculate_cumulative_point(&tablet, rowsets, output_rowset,
+                                                   last_delete_version, 6));
+}
+
+TEST_F(TestCloudSizeBasedCumulativeCompactionPolicy,
        calculate_cumulative_point_applies_delete_version_to_output_only) {
     CloudTablet tablet(_engine, _tablet_meta);
     tablet._base_size = 100;
