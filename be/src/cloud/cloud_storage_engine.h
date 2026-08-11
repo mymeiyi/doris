@@ -38,7 +38,8 @@
 namespace doris {
 namespace cloud {
 class CloudMetaMgr;
-}
+class DistributedCompactionPollScheduler;
+} // namespace cloud
 namespace io {
 class FileCacheBlockDownloader;
 }
@@ -101,6 +102,16 @@ public:
         return *_calc_tablet_delete_bitmap_task_thread_pool;
     }
     ThreadPool& sync_delete_bitmap_thread_pool() const { return *_sync_delete_bitmap_thread_pool; }
+    ThreadPool& distributed_compaction_rpc_thread_pool() const {
+        return *_distributed_compaction_rpc_thread_pool;
+    }
+
+    cloud::DistributedCompactionPollScheduler& distributed_compaction_poll_scheduler() const {
+        return *_distributed_compaction_poll_scheduler;
+    }
+    ThreadPool& distributed_compaction_worker_thread_pool() const {
+        return *_distributed_compaction_worker_thread_pool;
+    }
 
     std::optional<StorageResource> get_storage_resource(const std::string& vault_id) {
         VLOG_DEBUG << "Getting storage resource for vault_id: " << vault_id;
@@ -231,6 +242,10 @@ private:
     std::unique_ptr<CloudCommittedRSMgr> _committed_rs_mgr;
     std::unique_ptr<ThreadPool> _calc_tablet_delete_bitmap_task_thread_pool;
     std::unique_ptr<ThreadPool> _sync_delete_bitmap_thread_pool;
+    std::unique_ptr<ThreadPool> _distributed_compaction_rpc_thread_pool;
+    std::unique_ptr<ThreadPool> _distributed_compaction_worker_thread_pool;
+    std::unique_ptr<cloud::DistributedCompactionPollScheduler>
+            _distributed_compaction_poll_scheduler;
 
     // Components for cache warmup
     std::unique_ptr<io::FileCacheBlockDownloader> _file_cache_block_downloader;
