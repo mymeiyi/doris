@@ -196,8 +196,7 @@ private:
 
     Status submit_batches(const std::vector<CompactionWorkerInfo>& workers,
                           const std::vector<std::vector<size_t>>& groups_by_worker,
-                          const std::vector<PCloudDistributedCompactionSubmitRequest>& requests,
-                          std::vector<Status>* task_status);
+                          const std::vector<PCloudDistributedCompactionSubmitRequest>& requests);
 
     Status prepare_single_rowset(const RowsetSharedPtr& input_rowset,
                                  RowsetWriter& output_rowset_writer, int64_t segment_group_size,

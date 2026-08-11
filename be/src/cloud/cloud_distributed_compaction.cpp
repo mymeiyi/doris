@@ -476,7 +476,6 @@ struct DistributedCompactionCoordinator::ExecutionPlan {
     std::vector<CompactionWorkerInfo> workers;
     std::vector<std::vector<size_t>> groups_by_worker;
     std::vector<PCloudDistributedCompactionTaskResult> responses;
-    std::vector<Status> task_status;
     std::vector<bool> worker_completed;
     std::vector<bool> task_completed;
     size_t remaining_workers = 0;
@@ -512,14 +511,13 @@ DistributedCompactionCoordinator::~DistributedCompactionCoordinator() = default;
 Status DistributedCompactionCoordinator::submit_batches(
         const std::vector<CompactionWorkerInfo>& workers,
         const std::vector<std::vector<size_t>>& groups_by_worker,
-        const std::vector<PCloudDistributedCompactionSubmitRequest>& requests,
-        std::vector<Status>* task_status) {
+        const std::vector<PCloudDistributedCompactionSubmitRequest>& requests) {
     DORIS_CHECK(_state != nullptr);
     DORIS_CHECK_EQ(workers.size(), groups_by_worker.size());
     DORIS_CHECK_EQ(workers.size(), requests.size());
-    DORIS_CHECK_EQ(task_status->size(), _state->tasks.size());
 
     std::vector<PCloudDistributedCompactionSubmitResponse> submit_responses(workers.size());
+    std::vector<Status> rpc_statuses(workers.size(), Status::OK());
     auto token = _engine.distributed_compaction_rpc_thread_pool().new_token(
             ThreadPool::ExecutionMode::CONCURRENT, cast_set<int>(workers.size()));
 
@@ -529,11 +527,6 @@ Status DistributedCompactionCoordinator::submit_batches(
     for (size_t worker_index = 0; worker_index < workers.size(); ++worker_index) {
         submit_status = token->submit_func([&, worker_index]() {
             const auto& group_indexes = groups_by_worker[worker_index];
-            const auto set_batch_status = [&](const Status& status) {
-                for (const size_t group_index : group_indexes) {
-                    (*task_status)[group_index] = status;
-                }
-            };
             for (const size_t group_index : group_indexes) {
                 _state->tasks[group_index].started = true;
             }
@@ -553,9 +546,7 @@ Status DistributedCompactionCoordinator::submit_batches(
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100 * attempt));
             }
-            if (!rpc_status.ok()) {
-                set_batch_status(rpc_status);
-            }
+            rpc_statuses[worker_index] = std::move(rpc_status);
         });
         if (!submit_status.ok()) {
             break;
@@ -565,7 +556,7 @@ Status DistributedCompactionCoordinator::submit_batches(
     token->shutdown();
     RETURN_IF_ERROR(submit_status);
 
-    for (const auto& status : *task_status) {
+    for (const auto& status : rpc_statuses) {
         if (!status.ok()) {
             compaction_worker_cache()->invalidate();
             return status;
@@ -737,17 +728,21 @@ void DistributedCompactionCoordinator::finish_poll_round(std::shared_ptr<PollRou
                         group_index));
                 return;
             }
-            _execution_plan->responses[group_index] = task_result;
-            _execution_plan->task_completed[group_index] = true;
-            _execution_plan->task_status[group_index] = Status::create(task_result.status());
+            const Status result_status = Status::create(task_result.status());
             if ((worker_status.state() == CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED) !=
-                _execution_plan->task_status[group_index].ok()) {
+                result_status.ok()) {
                 complete_polling(Status::InvalidArgument(
                         "distributed single-rowset compaction state and result disagree for group "
                         "{}",
                         group_index));
                 return;
             }
+            if (!result_status.ok()) {
+                complete_polling(result_status);
+                return;
+            }
+            _execution_plan->responses[group_index] = task_result;
+            _execution_plan->task_completed[group_index] = true;
         }
         if (batch_completed) {
             _execution_plan->worker_completed[worker_index] = true;
@@ -755,12 +750,6 @@ void DistributedCompactionCoordinator::finish_poll_round(std::shared_ptr<PollRou
         }
     }
 
-    for (const auto& status : _execution_plan->task_status) {
-        if (!status.ok()) {
-            complete_polling(status);
-            return;
-        }
-    }
     if (_execution_plan->remaining_workers == 0) {
         LOG_INFO("finish polling distributed single-rowset compaction tasks")
                 .tag("job_id", _execution_id)
@@ -954,14 +943,12 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
             request_task->set_merge_way_num(range.merge_way_num);
         }
     }
-    std::vector<Status> task_status(segment_ranges.size(), Status::OK());
-    RETURN_IF_ERROR(submit_batches(workers, groups_by_worker, requests, &task_status));
+    RETURN_IF_ERROR(submit_batches(workers, groups_by_worker, requests));
 
     _execution_plan = std::make_unique<ExecutionPlan>();
     _execution_plan->workers = workers;
     _execution_plan->groups_by_worker = std::move(groups_by_worker);
     _execution_plan->responses.resize(segment_ranges.size());
-    _execution_plan->task_status = std::move(task_status);
     _execution_plan->worker_completed.assign(workers.size(), false);
     _execution_plan->task_completed.assign(segment_ranges.size(), false);
     _execution_plan->remaining_workers = workers.size();
