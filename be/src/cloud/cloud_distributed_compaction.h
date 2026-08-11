@@ -79,17 +79,13 @@ std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
         size_t group_count, std::string_view execution_id);
 
 struct DistributedCompactionTask {
-    int64_t worker_backend_id;
     std::string worker_endpoint;
-    std::string worker_cloud_unique_id;
-    std::string worker_compute_group_id;
     int32_t group_index;
     OutputRowsetSegmentIdSlot segment_id_slot;
     bool started = false;
 };
 
 struct DistributedCompactionState {
-    std::string execution_id;
     std::vector<DistributedCompactionTask> tasks;
     int64_t phase1_end_version = 0;
     std::shared_ptr<DeleteBitmap> output_delete_bitmap;

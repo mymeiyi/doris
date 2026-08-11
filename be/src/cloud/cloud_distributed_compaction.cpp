@@ -473,10 +473,8 @@ struct DistributedCompactionCoordinator::ValidatedPartialRowset {
 };
 
 struct DistributedCompactionCoordinator::ExecutionPlan {
-    std::vector<SegmentGroupMergeRange> segment_ranges;
     std::vector<CompactionWorkerInfo> workers;
     std::vector<std::vector<size_t>> groups_by_worker;
-    RowsetMetaPB output_meta_pb;
     std::vector<PCloudDistributedCompactionTaskResult> responses;
     std::vector<Status> task_status;
     std::vector<bool> worker_completed;
@@ -909,7 +907,6 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
     }
 
     _state = std::make_unique<DistributedCompactionState>();
-    _state->execution_id = _execution_id;
     _state->phase1_end_version = phase1_end_version;
     _state->output_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
     _state->tasks.reserve(segment_ranges.size());
@@ -919,10 +916,7 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
     for (size_t group_index = 0; group_index < segment_ranges.size(); ++group_index) {
         const size_t worker_index = group_index % workers.size();
         const auto& worker = workers[worker_index];
-        _state->tasks.push_back({.worker_backend_id = worker.backend_id,
-                                 .worker_endpoint = worker.endpoint,
-                                 .worker_cloud_unique_id = worker.cloud_unique_id,
-                                 .worker_compute_group_id = worker.compute_group_id,
+        _state->tasks.push_back({.worker_endpoint = worker.endpoint,
                                  .group_index = cast_set<int32_t>(group_index),
                                  .segment_id_slot = segment_slots[group_index]});
         groups_by_worker[worker_index].push_back(group_index);
@@ -964,10 +958,8 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
     RETURN_IF_ERROR(submit_batches(workers, groups_by_worker, requests, &task_status));
 
     _execution_plan = std::make_unique<ExecutionPlan>();
-    _execution_plan->segment_ranges = segment_ranges;
     _execution_plan->workers = workers;
     _execution_plan->groups_by_worker = std::move(groups_by_worker);
-    _execution_plan->output_meta_pb = output_meta_pb;
     _execution_plan->responses.resize(segment_ranges.size());
     _execution_plan->task_status = std::move(task_status);
     _execution_plan->worker_completed.assign(workers.size(), false);
@@ -986,7 +978,6 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
         Merger::Statistics* stats) {
     DORIS_CHECK(_execution_plan != nullptr);
     DORIS_CHECK(_execution_plan->polling_completed);
-    const auto& segment_ranges = _execution_plan->segment_ranges;
     const auto& workers = _execution_plan->workers;
     const auto& responses = _execution_plan->responses;
     const bool is_mow = _execution_plan->is_mow;
@@ -1126,7 +1117,7 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
     LOG_INFO("finish distributed single-rowset compaction merge, tablet_id={}",
              _tablet->tablet_id())
             .tag("job_id", _execution_id)
-            .tag("groups", segment_ranges.size())
+            .tag("groups", responses.size())
             .tag("workers", workers.size())
             .tag("output_segments", output_segment_ids.size());
     return Status::OK();
