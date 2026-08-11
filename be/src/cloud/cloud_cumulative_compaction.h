@@ -51,8 +51,9 @@ public:
 
     Status prepare_compact() override;
     Status execute_compact() override;
-    Status execute_compact_async(std::function<void(Status)> remote_completion, bool* suspended);
-    Status resume_compact(Status remote_status);
+    Status execute_grouped_compact_async(std::function<void(Status)> remote_completion,
+                                         bool* suspended);
+    Status resume_grouped_compact(Status remote_status);
     Status request_global_lock();
 
     std::optional<CompactionProfileType> profile_type() const override {
@@ -64,6 +65,9 @@ public:
 
     int64_t get_input_rowsets_bytes() const { return _input_rowsets_total_size; }
     int64_t get_input_num_rows() const { return _input_row_num; }
+    bool is_single_rowset_grouped_compaction() const {
+        return _single_rowset_compaction_segment_group_size.has_value();
+    }
 
 private:
     Status pick_rowsets_to_compact();

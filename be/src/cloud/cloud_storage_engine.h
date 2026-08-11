@@ -18,6 +18,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 
@@ -225,6 +226,11 @@ private:
     Status _submit_cumulative_compaction_task(
             const CloudTabletSPtr& tablet, int trigger_method = 0,
             CompactionType compaction_type = CompactionType::CUMULATIVE_COMPACTION);
+    Status _submit_grouped_cumulative_compaction_task(
+            const CloudTabletSPtr& tablet,
+            const std::shared_ptr<CloudCumulativeCompaction>& compaction, int64_t compaction_id,
+            std::function<void()> erase_submitted_cumu_compaction,
+            std::function<void()> erase_executing_cumu_compaction);
     Status _submit_binlog_compaction_task(const CloudTabletSPtr& tablet, int trigger_method = 0);
     Status _submit_full_compaction_task(const CloudTabletSPtr& tablet, int trigger_method = 0);
     Status _request_tablet_global_compaction_lock(ReaderType compaction_type,

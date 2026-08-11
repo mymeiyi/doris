@@ -615,6 +615,7 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     Compaction::MergeInputRowsetsResult result;
     ASSERT_TRUE(compaction.prepare_merge_input_rowsets(&result).ok());
     EXPECT_TRUE(compaction._single_rowset_compaction_segment_group_size.has_value());
+    EXPECT_TRUE(compaction.is_single_rowset_grouped_compaction());
     EXPECT_TRUE(result.is_segment_grouped);
     EXPECT_EQ(result.segment_group_size, config::cloud_single_rowset_compaction_segment_group_size);
 
@@ -625,6 +626,7 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     Compaction::MergeInputRowsetsResult time_series_result;
     ASSERT_TRUE(time_series_compaction.prepare_merge_input_rowsets(&time_series_result).ok());
     EXPECT_FALSE(time_series_compaction._single_rowset_compaction_segment_group_size.has_value());
+    EXPECT_FALSE(time_series_compaction.is_single_rowset_grouped_compaction());
     EXPECT_FALSE(time_series_result.is_segment_grouped);
 }
 

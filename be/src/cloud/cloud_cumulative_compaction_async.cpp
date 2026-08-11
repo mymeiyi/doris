@@ -37,13 +37,11 @@ namespace doris {
 
 extern bvar::Adder<uint64_t> cumu_output_size;
 
-Status CloudCumulativeCompaction::execute_compact_async(
+Status CloudCumulativeCompaction::execute_grouped_compact_async(
         std::function<void(Status)> remote_completion, bool* suspended) {
     DORIS_CHECK(remote_completion != nullptr);
+    DORIS_CHECK(is_single_rowset_grouped_compaction());
     *suspended = false;
-    if (!_single_rowset_compaction_segment_group_size.has_value()) {
-        return execute_compact();
-    }
     TEST_SYNC_POINT_RETURN_WITH_VALUE("CloudCumulativeCompaction::execute_compact_impl",
                                       Status::OK(), this);
     TEST_INJECTION_POINT("Compaction::do_compaction");
@@ -104,7 +102,8 @@ Status CloudCumulativeCompaction::execute_compact_async(
     }
 }
 
-Status CloudCumulativeCompaction::resume_compact(Status remote_status) {
+Status CloudCumulativeCompaction::resume_grouped_compact(Status remote_status) {
+    DORIS_CHECK(is_single_rowset_grouped_compaction());
     DORIS_CHECK(_async_merge_context != nullptr);
     DORIS_CHECK(_distributed_compaction != nullptr);
     SCOPED_ATTACH_TASK(_mem_tracker);
