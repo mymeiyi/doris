@@ -258,8 +258,13 @@ Status CloudIndexChangeCompaction::modify_rowsets() {
     compaction_job->set_id(_uuid);
     compaction_job->set_initiator(BackendOptions::get_localhost() + ':' +
                                   std::to_string(config::heartbeat_service_port));
-    compaction_job->set_input_cumulative_point(cloud_tablet()->cumulative_layer_point());
-    compaction_job->set_output_cumulative_point(cloud_tablet()->cumulative_layer_point());
+    {
+        std::shared_lock rlock(_tablet->get_header_lock());
+        compaction_job->set_input_cumulative_point(cloud_tablet()->cumulative_layer_point());
+        compaction_job->set_output_cumulative_point(cloud_tablet()->cumulative_layer_point());
+        compaction_job->set_base_compaction_cnt(cloud_tablet()->base_compaction_cnt());
+        compaction_job->set_cumulative_compaction_cnt(cloud_tablet()->cumulative_compaction_cnt());
+    }
     compaction_job->set_num_input_rows(_input_row_num);
     compaction_job->set_num_output_rows(_output_rowset->num_rows());
     compaction_job->set_size_input_rowsets(_input_rowsets_total_size);

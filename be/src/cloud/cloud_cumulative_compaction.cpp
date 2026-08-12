@@ -255,11 +255,19 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     int64_t prepare_max_conflict_version = _max_conflict_version;
     int64_t max_conflict_version = _refresh_conflict_versions();
     int64_t input_cumulative_point;
+    int64_t proposal_base_compaction_cnt;
+    int64_t proposal_cumulative_compaction_cnt;
+    TabletState input_tablet_state;
+    int64_t input_alter_version;
     bool output_already_passed;
     std::vector<RowsetSharedPtr> rowsets;
     {
         std::shared_lock rlock(_tablet->get_header_lock());
         input_cumulative_point = cloud_tablet()->cumulative_layer_point();
+        proposal_base_compaction_cnt = cloud_tablet()->base_compaction_cnt();
+        proposal_cumulative_compaction_cnt = cloud_tablet()->cumulative_compaction_cnt();
+        input_tablet_state = _tablet->tablet_state();
+        input_alter_version = cloud_tablet()->alter_version();
         output_already_passed = input_cumulative_point > _output_rowset->end_version();
         if (!output_already_passed && (input_cumulative_point < _output_rowset->start_version() ||
                                        max_conflict_version > _output_rowset->end_version())) {
@@ -284,11 +292,9 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     if (!output_already_passed) {
         rowsets.push_back(_output_rowset);
         std::sort(rowsets.begin(), rowsets.end(), Rowset::comparator);
-        auto compaction_policy = cloud_tablet()->tablet_meta()->compaction_policy();
         new_cumulative_point =
-                _engine.cumu_compaction_policy(compaction_policy)
-                        ->calculate_cumulative_point(cloud_tablet(), rowsets, _output_rowset,
-                                                     _last_delete_version, input_cumulative_point);
+                calculate_cumulative_point(rowsets, _output_rowset, input_cumulative_point,
+                                           input_tablet_state, input_alter_version);
     }
     LOG_INFO("calculate cumulative point for CloudCumulativeCompaction")
             .tag("job_id", _uuid)
@@ -312,6 +318,8 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     compaction_job->set_initiator(BackendOptions::get_localhost() + ':' +
                                   std::to_string(config::heartbeat_service_port));
     compaction_job->set_type(cloud::TabletCompactionJobPB::CUMULATIVE);
+    compaction_job->set_base_compaction_cnt(proposal_base_compaction_cnt);
+    compaction_job->set_cumulative_compaction_cnt(proposal_cumulative_compaction_cnt);
     compaction_job->set_input_cumulative_point(input_cumulative_point);
     compaction_job->set_output_cumulative_point(new_cumulative_point);
     compaction_job->set_num_input_rows(_input_row_num);
@@ -653,6 +661,23 @@ Status CloudCumulativeCompaction::pick_rowsets_to_compact() {
     return Status::OK();
 }
 
+int64_t CloudCumulativeCompaction::calculate_cumulative_point(
+        const std::vector<RowsetSharedPtr>& rowsets, const RowsetSharedPtr& output_rowset,
+        int64_t input_cumulative_point, TabletState input_tablet_state,
+        int64_t input_alter_version) {
+    if (rowsets.front()->start_version() > input_cumulative_point) {
+        // Historical rowsets are absent from a schema-change target until conversion finishes.
+        DORIS_CHECK_EQ(input_tablet_state, TABLET_NOTREADY);
+        DORIS_CHECK_LE(input_cumulative_point, input_alter_version);
+        DORIS_CHECK_GT(rowsets.front()->start_version(), input_alter_version);
+        return input_cumulative_point;
+    }
+    auto compaction_policy = cloud_tablet()->tablet_meta()->compaction_policy();
+    return _engine.cumu_compaction_policy(compaction_policy)
+            ->calculate_cumulative_point(cloud_tablet(), rowsets, output_rowset,
+                                         _last_delete_version, input_cumulative_point);
+}
+
 void CloudCumulativeCompaction::update_cumulative_point() {
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();
@@ -686,7 +711,13 @@ void CloudCumulativeCompaction::update_cumulative_point() {
                 .error(st);
         return;
     }
-    int64_t input_cumulative_point = cloud_tablet()->cumulative_layer_point();
+    int64_t input_cumulative_point;
+    {
+        std::shared_lock rlock(_tablet->get_header_lock());
+        input_cumulative_point = cloud_tablet()->cumulative_layer_point();
+        compaction_job->set_base_compaction_cnt(cloud_tablet()->base_compaction_cnt());
+        compaction_job->set_cumulative_compaction_cnt(cloud_tablet()->cumulative_compaction_cnt());
+    }
     int64_t output_cumulative_point = _last_delete_version.first + 1;
     compaction_job->set_input_cumulative_point(input_cumulative_point);
     compaction_job->set_output_cumulative_point(output_cumulative_point);

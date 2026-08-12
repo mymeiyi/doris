@@ -20,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
@@ -50,6 +51,11 @@ public:
 
 protected:
     int64_t _refresh_conflict_versions();
+
+    int64_t calculate_cumulative_point(const std::vector<RowsetSharedPtr>& rowsets,
+                                       const RowsetSharedPtr& output_rowset,
+                                       int64_t input_cumulative_point,
+                                       TabletState input_tablet_state, int64_t input_alter_version);
 
 private:
     Status pick_rowsets_to_compact();

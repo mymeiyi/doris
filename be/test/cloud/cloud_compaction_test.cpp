@@ -503,6 +503,15 @@ public:
     const std::vector<RowsetSharedPtr>& input_rowsets() const { return _input_rowsets; }
 
     int64_t refresh_max_conflict_version() { return _refresh_conflict_versions(); }
+
+    int64_t test_calculate_cumulative_point(const std::vector<RowsetSharedPtr>& rowsets,
+                                            const RowsetSharedPtr& output_rowset,
+                                            int64_t input_cumulative_point,
+                                            TabletState input_tablet_state,
+                                            int64_t input_alter_version) {
+        return calculate_cumulative_point(rowsets, output_rowset, input_cumulative_point,
+                                          input_tablet_state, input_alter_version);
+    }
 };
 
 static TabletMetaSharedPtr create_cloud_compaction_test_tablet_meta(int64_t tablet_id) {
@@ -635,6 +644,19 @@ TEST_F(CloudCompactionTest, cumulative_refreshes_local_conflict_window) {
 
     _engine._submitted_cumu_compactions.clear();
     EXPECT_EQ(30, compaction.refresh_max_conflict_version());
+}
+
+TEST_F(CloudCompactionTest, cumulative_point_stays_before_schema_change_prefix_gap) {
+    auto tablet_meta = create_cloud_compaction_test_tablet_meta(10005);
+    auto tablet = create_cloud_tablet_with_rowsets(_engine, tablet_meta, 2, {5, 6, 7, 8});
+    ASSERT_TRUE(tablet->set_tablet_state(TABLET_NOTREADY).ok());
+    tablet->set_alter_version(4);
+    TestableCloudCumulativeCompaction compaction(_engine, tablet);
+    auto output_rowset = create_rowset(Version(5, 8), 1, false, 1024 * 1024);
+
+    EXPECT_EQ(2, compaction.test_calculate_cumulative_point(
+                         {output_rowset}, output_rowset, tablet->cumulative_layer_point(),
+                         tablet->tablet_state(), tablet->alter_version()));
 }
 
 TEST_F(CloudCompactionTest, test_set_storage_resource_from_input_rowsets) {
