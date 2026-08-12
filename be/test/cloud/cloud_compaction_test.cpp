@@ -525,6 +525,10 @@ public:
     }
 
     const std::vector<RowsetSharedPtr>& input_rowsets() const { return _input_rowsets; }
+
+    void set_output_rowset(RowsetSharedPtr rowset) { _output_rowset = std::move(rowset); }
+
+    Status test_modify_rowsets() { return modify_rowsets(); }
 };
 
 static TabletMetaSharedPtr create_cloud_compaction_test_tablet_meta(int64_t tablet_id) {
@@ -640,6 +644,38 @@ TEST_F(CloudCompactionTest, cumulative_pick_uses_local_conflict_window) {
         EXPECT_EQ(compaction.input_rowsets().back()->end_version(), 119);
         _engine._submitted_cumu_compactions.clear();
     }
+}
+
+TEST_F(CloudCompactionTest, serial_suffix_compaction_on_running_tablet_keeps_point) {
+    auto old_parallel_cumu_compaction = config::enable_parallel_cumu_compaction;
+    Defer restore_config(
+            [&] { config::enable_parallel_cumu_compaction = old_parallel_cumu_compaction; });
+    config::enable_parallel_cumu_compaction = false;
+
+    auto* sync_point = SyncPoint::get_instance();
+    Defer clear_sync_points([&] {
+        sync_point->disable_processing();
+        sync_point->clear_all_call_backs();
+    });
+    sync_point->set_call_back("CloudMetaMgr::commit_tablet_job", [&](auto&& outcome) {
+        auto job = try_any_cast<cloud::TabletJobInfoPB>(outcome[0]);
+        ASSERT_EQ(job.compaction_size(), 1);
+        EXPECT_EQ(job.compaction(0).input_cumulative_point(), 2);
+        EXPECT_EQ(job.compaction(0).output_cumulative_point(), 2);
+
+        auto* result = try_any_cast_ret<Status>(outcome);
+        result->first = Status::InternalError("stop after checking cumulative point");
+        result->second = true;
+    });
+    sync_point->enable_processing();
+
+    auto tablet_meta = create_cloud_compaction_test_tablet_meta(10007);
+    auto tablet = create_cloud_tablet_with_rowsets(_engine, tablet_meta, 2, {2});
+    TestableCloudCumulativeCompaction compaction(_engine, tablet);
+    compaction.set_input_rowsets({create_rowset(Version(3, 22), 1, true, 20 * 1024 * 1024)});
+    compaction.set_output_rowset(create_rowset(Version(3, 22), 1, false, 20 * 1024 * 1024));
+
+    EXPECT_FALSE(compaction.test_modify_rowsets().ok());
 }
 
 TEST_F(CloudCompactionTest, parallel_pick_keeps_mode_after_dynamic_config_change) {

@@ -265,10 +265,9 @@ Status CloudCumulativeCompaction::modify_rowsets() {
     }
     auto compaction_policy = cloud_tablet()->tablet_meta()->compaction_policy();
     int64_t new_cumulative_point = input_cumulative_point;
-    if (!_enable_parallel_cumu_compaction &&
+    if (!_enable_parallel_cumu_compaction && input_tablet_state == TABLET_NOTREADY &&
         _output_rowset->start_version() > input_cumulative_point) {
         // Historical rowsets are absent from a schema-change target until conversion finishes.
-        DORIS_CHECK_EQ(input_tablet_state, TABLET_NOTREADY);
         DORIS_CHECK_LE(input_cumulative_point, input_alter_version);
         DORIS_CHECK_GT(_output_rowset->start_version(), input_alter_version);
     } else if (!_enable_parallel_cumu_compaction ||
