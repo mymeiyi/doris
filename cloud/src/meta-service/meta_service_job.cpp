@@ -815,6 +815,10 @@ static bool should_accept_cumulative_point(const std::string& instance_id, int64
         compaction.type() != TabletCompactionJobPB::EMPTY_CUMULATIVE) {
         return true;
     }
+    // Safe because tablet stats keep max(current, proposal).
+    if (compaction.output_cumulative_point() <= stats.cumulative_point()) {
+        return true;
+    }
 
     // For legacy BEs:
     // 1. The snapshot comes from START.
@@ -827,10 +831,7 @@ static bool should_accept_cumulative_point(const std::string& instance_id, int64
     bool accept = snapshot_base_cnt == stats.base_compaction_cnt() &&
                   snapshot_cumu_cnt == stats.cumulative_compaction_cnt();
     if (!finish_has_counters) {
-        if (compaction.output_cumulative_point() <= stats.cumulative_point()) {
-            // Safe because tablet stats keep max(current, proposal).
-            accept = true;
-        } else if (compaction.type() == TabletCompactionJobPB::CUMULATIVE) {
+        if (compaction.type() == TabletCompactionJobPB::CUMULATIVE) {
             // An advancing legacy CUMULATIVE proposal is safe only when:
             // With point=2, accept [2-4] -> 5 but reject [5-7] -> 8.
             // 1. The BASE/FULL layout is unchanged.
