@@ -266,11 +266,6 @@ namespace doris::cloud::fdb {
 // https://apple.github.io/foundationdb/known-limitations.html#design-limitations
 constexpr size_t FDB_VALUE_BYTES_LIMIT = 100'000; // 100 KB
 
-// FDB internal structure sizes for approximate size calculation
-// See fdbclient/ReadYourWrites.actor.cpp for details
-constexpr size_t FDB_SIZEOF_KEYRANGEREF = 32; // sizeof(KeyRangeRef)
-constexpr size_t FDB_SIZEOF_MUTATIONREF = 56; // sizeof(MutationRef)
-
 // Helper functions for calculating approximate size according to FDB's implementation
 namespace {
 
@@ -286,29 +281,6 @@ inline constexpr size_t read_get_approximate_size(size_t key_size) {
 // See fdbclient/ReadYourWrites.actor.cpp:245-280
 inline constexpr size_t read_get_range_approximate_size(size_t begin_size, size_t end_size) {
     return begin_size + end_size + FDB_SIZEOF_KEYRANGEREF;
-}
-
-// Calculate approximate size for write operation (set/atomic_op)
-// Formula: key + val + sizeof(MutationRef) + sizeof(KeyRangeRef) + 2*key + 1
-// See fdbclient/ReadYourWrites.actor.cpp:2267-2269
-inline constexpr size_t write_set_approximate_size(size_t key_size, size_t val_size) {
-    size_t write_conflict = FDB_SIZEOF_KEYRANGEREF + key_size * 2 + 1;
-    return key_size + val_size + FDB_SIZEOF_MUTATIONREF + write_conflict;
-}
-
-// Calculate approximate size for clear operation on single key
-// Formula: 2*key + 2*sizeof(KeyRangeRef)
-// See fdbclient/ReadYourWrites.actor.cpp:2361-2362
-inline constexpr size_t write_clear_approximate_size(size_t key_size) {
-    return key_size * 2 + FDB_SIZEOF_KEYRANGEREF * 2;
-}
-
-// Calculate approximate size for clear_range operation
-// Formula: begin+end + sizeof(MutationRef) + sizeof(KeyRangeRef) + begin+end
-// See fdbclient/ReadYourWrites.actor.cpp:2304-2306
-inline constexpr size_t write_clear_range_approximate_size(size_t begin_size, size_t end_size) {
-    size_t write_conflict = FDB_SIZEOF_KEYRANGEREF + begin_size + end_size;
-    return begin_size + end_size + FDB_SIZEOF_MUTATIONREF + write_conflict;
 }
 
 } // anonymous namespace

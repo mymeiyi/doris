@@ -64,6 +64,18 @@ static std::string dump_range(TxnKv* txn_kv, std::string_view begin = "",
     return buffer;
 }
 
+TEST(BlobMessageTest, DecodeBlobKey) {
+    std::string origin_key;
+    uint8_t version = 0;
+    uint16_t sequence = 0;
+    ASSERT_TRUE(
+            decode_blob_key(blob_key("test_blob_key", 123, 2), &origin_key, &version, &sequence));
+    EXPECT_EQ(origin_key, "test_blob_key");
+    EXPECT_EQ(version, 2);
+    EXPECT_EQ(sequence, 123);
+    EXPECT_FALSE(decode_blob_key("invalid", &origin_key, &version, &sequence));
+}
+
 // Test blob_put and blob_get with small message (single KV)
 TEST(BlobMessageTest, PutGetSmallMessage) {
     auto txn_kv = std::make_shared<MemTxnKv>();

@@ -3803,6 +3803,78 @@ struct UpdateDeleteBitmapTxnStats {
     size_t total_txn_count = 0;
 };
 
+static bool check_delete_bitmap_point_delete(MetaServiceCode& code, std::string& msg,
+                                             std::unique_ptr<Transaction>& txn,
+                                             const std::string& key, const std::string& val,
+                                             const UpdateDeleteBitmapRequest* request,
+                                             bool& point_delete, bool& delete_bitmap_exists,
+                                             std::optional<size_t>& max_blob_sequence) {
+    point_delete = config::enable_remove_pre_rowsets_delete_bitmap_by_keys &&
+                   request->lock_id() == COMPACTION_WITHOUT_LOCK_DELETE_BITMAP_LOCK_ID;
+    if (!point_delete) {
+        return true;
+    }
+    std::string end_key {key};
+    encode_int64(INT64_MAX, &end_key);
+    RangeGetOptions opts;
+    opts.batch_limit = 1;
+    opts.reverse = true;
+    std::unique_ptr<RangeGetIterator> it;
+    auto err = txn->get(key, end_key, &it, opts);
+    if (err != TxnErrorCode::TXN_OK) {
+        code = cast_as<ErrCategory::READ>(err);
+        msg = fmt::format(
+                "failed to get the last delete bitmap blob key, err={}, tablet_id={}, key={}", err,
+                request->tablet_id(), hex(key));
+        return false;
+    }
+
+    delete_bitmap_exists = it->has_next();
+    max_blob_sequence.reset();
+    if (!delete_bitmap_exists) {
+        return true;
+    }
+    auto max_key = it->next().first;
+    if (max_key.size() <= key.size()) {
+        DCHECK_EQ(max_key, key);
+        return true;
+    }
+    std::string origin_key;
+    uint8_t version = 0;
+    uint16_t sequence = 0;
+    if (!decode_blob_key(max_key, &origin_key, &version, &sequence)) [[unlikely]] {
+        code = MetaServiceCode::UNDEFINED_ERR;
+        msg = fmt::format("failed to decode delete bitmap blob key, tablet_id={}, key={}",
+                          request->tablet_id(), hex(max_key));
+        return false;
+    }
+    DCHECK_EQ(origin_key, key);
+    DCHECK_EQ(version, 0);
+    max_blob_sequence = sequence;
+    // A few point deletes have a transaction cost comparable to one range delete.
+    constexpr size_t max_blob_count_without_size_estimation = 10;
+    if (*max_blob_sequence + 1 <= max_blob_count_without_size_estimation) {
+        return true;
+    }
+
+    auto blob_key_size = key.size() + 9;
+    auto old_blobs_delete_bytes =
+            (*max_blob_sequence + 1) * fdb::write_clear_approximate_size(blob_key_size);
+    auto new_blobs_put_bytes =
+            val.size() + (val.size() + DEFAULT_BLOB_SPLIT_SIZE - 1) / DEFAULT_BLOB_SPLIT_SIZE *
+                                 fdb::write_set_approximate_size(blob_key_size, 0);
+    if (txn->approximate_bytes() + old_blobs_delete_bytes + new_blobs_put_bytes >
+        static_cast<size_t>(config::max_txn_commit_byte)) {
+        point_delete = false;
+        LOG(INFO) << "fallback to range remove for oversized delete bitmap point replacement"
+                  << " tablet_id=" << request->tablet_id() << " key=" << hex(key)
+                  << " max_blob_sequence=" << *max_blob_sequence
+                  << " old_blobs_delete_bytes=" << old_blobs_delete_bytes
+                  << " new_blobs_put_bytes=" << new_blobs_put_bytes;
+    }
+    return true;
+}
+
 void _write_delete_bitmap_kvs(MetaServiceCode& code, std::string& msg, std::stringstream& ss,
                               std::shared_ptr<TxnKv> txn_kv, std::unique_ptr<Transaction>& txn,
                               std::string& use_version, std::set<std::string>& non_exist_rowset_ids,
@@ -3938,12 +4010,36 @@ void _write_delete_bitmap_kvs(MetaServiceCode& code, std::string& msg, std::stri
     }
     // remove first
     if (request->lock_id() == COMPACTION_WITHOUT_LOCK_DELETE_BITMAP_LOCK_ID) {
-        auto& start_key = key;
-        std::string end_key {start_key};
-        encode_int64(INT64_MAX, &end_key);
-        txn->remove(start_key, end_key);
-        LOG(INFO) << "xxx remove delete_bitmap_key=" << hex(start_key) << " tablet_id=" << tablet_id
-                  << " lock_id=" << request->lock_id() << " initiator=" << request->initiator();
+        bool point_delete = false;
+        bool delete_bitmap_exists = false;
+        std::optional<size_t> max_blob_sequence;
+        if (!check_delete_bitmap_point_delete(code, msg, txn, key, val, request, point_delete,
+                                              delete_bitmap_exists, max_blob_sequence)) {
+            return;
+        }
+        if (point_delete) {
+            if (delete_bitmap_exists) {
+                if (max_blob_sequence.has_value()) {
+                    for (size_t sequence = 0; sequence <= *max_blob_sequence; ++sequence) {
+                        txn->remove(blob_key(key, sequence));
+                    }
+                } else {
+                    txn->remove(key);
+                }
+                LOG(INFO) << "xxx point remove delete_bitmap_key=" << hex(key)
+                          << " tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
+                          << " initiator=" << request->initiator()
+                          << " delete_key_count=" << (max_blob_sequence.value_or(0) + 1);
+            }
+        } else {
+            auto& start_key = key;
+            std::string end_key {start_key};
+            encode_int64(INT64_MAX, &end_key);
+            txn->remove(start_key, end_key);
+            LOG(INFO) << "xxx range remove delete_bitmap_key=" << hex(start_key)
+                      << " tablet_id=" << tablet_id << " lock_id=" << request->lock_id()
+                      << " initiator=" << request->initiator();
+        }
     }
     // splitting large values (>90*1000) into multiple KVs
     cloud::blob_put(txn.get(), key, val, 0);

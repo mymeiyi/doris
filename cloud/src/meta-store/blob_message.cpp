@@ -49,6 +49,26 @@ std::string blob_key(std::string_view key, size_t sequence, uint8_t ver) {
     return split_key;
 }
 
+bool decode_blob_key(std::string_view raw_key, std::string* output, uint8_t* version,
+                     uint16_t* sequence) {
+    if (raw_key.size() < 9) {
+        return false;
+    }
+
+    const size_t origin_key_size = raw_key.size() - 9;
+    std::string_view origin_key = raw_key.substr(0, origin_key_size);
+    raw_key.remove_prefix(origin_key_size);
+    int64_t suffix = 0;
+    if (decode_int64(&raw_key, &suffix) != 0) {
+        return false;
+    }
+
+    *version = (suffix >> 56) & 0xff;
+    *sequence = suffix & 0xffff;
+    *output = std::string(origin_key);
+    return true;
+}
+
 bool ValueBuf::to_pb(google::protobuf::Message* pb) const {
     butil::IOBuf merge;
     for (auto&& it : iters) {

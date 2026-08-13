@@ -36,6 +36,10 @@ inline constexpr size_t DEFAULT_BLOB_SPLIT_SIZE = 90 * 1000;
 // Return a split blob key with the encoded version and sequence suffix.
 std::string blob_key(std::string_view key, size_t sequence, uint8_t ver = 0);
 
+// Decode a split blob key into its origin key, value version, and fragment sequence.
+bool decode_blob_key(std::string_view raw_key, std::string* origin_key, uint8_t* version,
+                     uint16_t* sequence);
+
 /**
  * Supports splitting large values (>100KB) into multiple KVs, with a logical value size of up to the fdb transaction limit (<10MB).
  * Supports multi version format parsing of values (which can be any byte sequence format), and can recognize the version of values

@@ -6847,6 +6847,83 @@ TEST(MetaServiceTest, UpdateDeleteBitmap) {
     testUpdateDeleteBitmap(1);
 }
 
+TEST(MetaServiceTest, UpdateDeleteBitmapPointDelete) {
+    auto meta_service = get_meta_service();
+    auto txn_kv = std::dynamic_pointer_cast<MemTxnKv>(meta_service->txn_kv());
+    ASSERT_NE(txn_kv, nullptr);
+    extern std::string get_instance_id(const std::shared_ptr<ResourceManager>& rc_mgr,
+                                       const std::string& cloud_unique_id);
+    auto instance_id = get_instance_id(meta_service->resource_mgr(), "test_cloud_unique_id");
+    auto old_enable_point_delete = config::enable_remove_pre_rowsets_delete_bitmap_by_keys;
+    auto old_max_txn_commit_byte = config::max_txn_commit_byte;
+    auto sp = SyncPoint::get_instance();
+    DORIS_CLOUD_DEFER {
+        config::enable_remove_pre_rowsets_delete_bitmap_by_keys = old_enable_point_delete;
+        config::max_txn_commit_byte = old_max_txn_commit_byte;
+        sp->clear_all_call_backs();
+        sp->disable_processing();
+    };
+    config::enable_remove_pre_rowsets_delete_bitmap_by_keys = true;
+
+    int split_commit_count = 0;
+    sp->set_call_back("update_delete_bitmap:commit:err", [&](auto&&) { split_commit_count++; });
+    sp->enable_processing();
+
+    constexpr int64_t tablet_id = 3330;
+    auto replace_delete_bitmap = [&](const std::string& rowset_id, const std::string& value) {
+        brpc::Controller cntl;
+        UpdateDeleteBitmapRequest req;
+        UpdateDeleteBitmapResponse res;
+        req.set_cloud_unique_id("test_cloud_unique_id");
+        req.set_table_id(1120);
+        req.set_partition_id(1230);
+        req.set_without_lock(true);
+        req.set_lock_id(-3);
+        req.set_initiator(tablet_id);
+        req.set_tablet_id(tablet_id);
+        req.add_rowset_ids(rowset_id);
+        req.add_segment_ids(0);
+        req.add_versions(2);
+        req.add_segment_delete_bitmaps(value);
+        meta_service->update_delete_bitmap(
+                reinterpret_cast<google::protobuf::RpcController*>(&cntl), &req, &res, nullptr);
+        ASSERT_EQ(res.status().code(), MetaServiceCode::OK);
+    };
+    auto put_old_delete_bitmap = [&](const std::string& key, size_t blob_count) {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        std::string old_value(DEFAULT_BLOB_SPLIT_SIZE * (blob_count - 1) + 1, 'a');
+        blob_put(txn.get(), key, old_value, 0);
+        ASSERT_EQ(txn->commit(), TxnErrorCode::TXN_OK);
+    };
+    auto check_delete_bitmap = [&](const std::string& key, const std::string& expected) {
+        std::unique_ptr<Transaction> txn;
+        ASSERT_EQ(txn_kv->create_txn(&txn), TxnErrorCode::TXN_OK);
+        ValueBuf value;
+        ASSERT_EQ(blob_get(txn.get(), key, &value), TxnErrorCode::TXN_OK);
+        EXPECT_EQ(value.value(), expected);
+    };
+
+    const std::string point_rowset_id = "point_delete_rowset";
+    auto point_key = meta_delete_bitmap_key({instance_id, tablet_id, point_rowset_id, 2, 0});
+    put_old_delete_bitmap(point_key, 4);
+    auto delete_count = txn_kv->del_count_;
+    replace_delete_bitmap(point_rowset_id, "point_replacement");
+    EXPECT_EQ(txn_kv->del_count_ - delete_count, 4);
+    EXPECT_EQ(split_commit_count, 0);
+    check_delete_bitmap(point_key, "point_replacement");
+
+    const std::string fallback_rowset_id = "range_fallback_rowset";
+    auto fallback_key = meta_delete_bitmap_key({instance_id, tablet_id, fallback_rowset_id, 2, 0});
+    put_old_delete_bitmap(fallback_key, 11);
+    config::max_txn_commit_byte = 1500;
+    delete_count = txn_kv->del_count_;
+    replace_delete_bitmap(fallback_rowset_id, "range_replacement");
+    EXPECT_EQ(txn_kv->del_count_ - delete_count, 2);
+    EXPECT_EQ(split_commit_count, 0);
+    check_delete_bitmap(fallback_key, "range_replacement");
+}
+
 TEST(MetaServiceTest, UpdateDeleteBitmapWithException) {
     auto meta_service = get_meta_service();
     brpc::Controller cntl;

@@ -516,6 +516,25 @@ namespace fdb {
 class Database;
 class Transaction;
 class Network;
+
+// FDB internal structure sizes used to estimate transaction size.
+inline constexpr size_t FDB_SIZEOF_KEYRANGEREF = 32;
+inline constexpr size_t FDB_SIZEOF_MUTATIONREF = 56;
+
+// See fdbclient/ReadYourWrites.actor.cpp for the corresponding FDB formulas.
+inline constexpr size_t write_set_approximate_size(size_t key_size, size_t val_size) {
+    size_t write_conflict = FDB_SIZEOF_KEYRANGEREF + key_size * 2 + 1;
+    return key_size + val_size + FDB_SIZEOF_MUTATIONREF + write_conflict;
+}
+
+inline constexpr size_t write_clear_approximate_size(size_t key_size) {
+    return key_size * 2 + FDB_SIZEOF_KEYRANGEREF * 2;
+}
+
+inline constexpr size_t write_clear_range_approximate_size(size_t begin_size, size_t end_size) {
+    size_t write_conflict = FDB_SIZEOF_KEYRANGEREF + begin_size + end_size;
+    return begin_size + end_size + FDB_SIZEOF_MUTATIONREF + write_conflict;
+}
 } // namespace fdb
 
 class FdbTxnKv : public TxnKv {

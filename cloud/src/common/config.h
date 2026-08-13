@@ -397,6 +397,10 @@ CONF_Strings(recycler_storage_vault_white_list, "");
 // for test only
 CONF_mBool(enable_update_delete_bitmap_kv_check, "false");
 
+// Remove pre-rowset delete bitmaps by key. Falls back to range remove when one logical delete
+// bitmap would exceed the transaction size limit.
+CONF_mBool(enable_remove_pre_rowsets_delete_bitmap_by_keys, "true");
+
 // for get_delete_bitmap_update_lock
 CONF_mBool(enable_batch_get_mow_tablet_stats_and_meta, "true");
 
