@@ -80,13 +80,20 @@ suite("test_cloud_distributed_base_compaction", "docker") {
              keyModel: "AGGREGATE KEY", valueColumn: "v BIGINT SUM"],
             [name: "mor", type: "INT", keyExpr: "CAST(number AS INT)",
              keyModel: "UNIQUE KEY", valueColumn: "v INT NOT NULL",
-             properties: ', "enable_unique_key_merge_on_write" = "false"']
+             properties: ', "enable_unique_key_merge_on_write" = "false"'],
+            [name: "mow", type: "INT", keyExpr: "CAST(number AS INT)",
+             keyModel: "UNIQUE KEY", valueColumn: "v INT NOT NULL, seq BIGINT NOT NULL",
+             valueExpr: "CAST(number + ROUND * 10000 AS INT), " +
+                     "CAST(number + ROUND * 10000 AS BIGINT)",
+             properties: ', "enable_unique_key_merge_on_write" = "true"' +
+                     ', "function_column.sequence_col" = "seq"']
         ]
 
         keyCases.each { keyCase ->
             String tableName = "test_cloud_distributed_base_compaction_${keyCase.name}"
             String keyModel = keyCase.keyModel ?: "DUPLICATE KEY"
             String valueColumn = keyCase.valueColumn ?: "v INT NOT NULL"
+            String valueExpr = keyCase.valueExpr ?: "CAST(number + ROUND * 10000 AS INT)"
             String extraProperties = keyCase.properties ?: ""
             sql "DROP TABLE IF EXISTS ${tableName}"
             sql """
@@ -104,7 +111,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             for (int round = 0; round < 6; ++round) {
                 sql """
                     INSERT INTO ${tableName}
-                    SELECT ${keyCase.keyExpr}, CAST(number + ${round} * 10000 AS INT)
+                    SELECT ${keyCase.keyExpr}, ${valueExpr.replace("ROUND", round.toString())}
                     FROM numbers("number" = "8192")
                 """
                 if (round % 2 == 1) {
@@ -214,6 +221,12 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 line.contains("finish distributed single-rowset compaction merge") &&
                         line.contains("tablet_id=${tabletId}") && line.contains("workers=2")
             })
+            if (keyCase.name == "mow") {
+                assertNotNull(newCoordinatorLogLines.find { line ->
+                    line.contains("skip distributed single-rowset incremental delete bitmap") &&
+                            line.contains("tablet_id=${tabletId}")
+                })
+            }
 
             def backendsAfterCompaction = sql_return_maparray "SHOW BACKENDS"
             assertEquals(2, backendsAfterCompaction.size())
