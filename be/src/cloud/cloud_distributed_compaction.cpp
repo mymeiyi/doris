@@ -48,6 +48,7 @@
 #include "common/check.h"
 #include "common/consts.h"
 #include "common/logging.h"
+#include "core/data_type/data_type_factory.hpp"
 #include "cpp/sync_point.h"
 #include "runtime/cluster_info.h"
 #include "runtime/exec_env.h"
@@ -1288,12 +1289,16 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         size_t range_count, bool is_vertical, uint32_t avg_segment_rows, bool* started) {
     *started = false;
     DORIS_CHECK_GT(input_rowsets.size(), 1);
-    const auto& key_column = _tablet->tablet_schema()->column(0);
+    const auto& schema = *_tablet->tablet_schema();
+    const auto& key_column = schema.column(0);
     const FieldType key_type = key_column.type();
+    const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                        _tablet->enable_unique_key_merge_on_write();
     DORIS_CHECK(is_supported_distributed_base_key(key_type));
-    DORIS_CHECK_GT(_tablet->tablet_schema()->num_short_key_columns(), 0);
+    DORIS_CHECK(!is_mow || schema.cluster_key_uids().empty());
+    DORIS_CHECK(is_mow || schema.num_short_key_columns() > 0);
     if (key_type == FieldType::OLAP_FIELD_TYPE_VARCHAR) {
-        DORIS_CHECK_EQ(_tablet->tablet_schema()->num_short_key_columns(), 1);
+        DORIS_CHECK_EQ(is_mow ? schema.num_key_columns() : schema.num_short_key_columns(), 1);
     }
     if (!config::enable_cloud_distributed_base_compaction || range_count < 2) {
         return Status::OK();
@@ -1311,7 +1316,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         return Status::OK();
     }
 
-    // ponytail: collect all short-key entries; switch to a streaming k-way merge if coordinator
+    // ponytail: collect all index samples; switch to a streaming k-way merge if coordinator
     // memory becomes measurable for very large tablets.
     std::vector<IntegerKeySample> integer_samples;
     std::vector<StringKeySample> string_samples;
@@ -1324,20 +1329,57 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         RETURN_IF_ERROR(beta_rowset->load_segments(&segments));
         for (const auto& segment : segments) {
             OlapReaderStatistics reader_stats;
-            RETURN_IF_ERROR(segment->load_index(&reader_stats));
+            std::unique_ptr<segment_v2::IndexedColumnIterator> primary_key_iterator;
+            MutableColumnPtr primary_key_column;
+            if (is_mow) {
+                RETURN_IF_ERROR(segment->load_pk_index_and_bf(&reader_stats));
+                const auto* primary_key_index = segment->get_primary_key_index();
+                DORIS_CHECK(primary_key_index != nullptr);
+                RETURN_IF_ERROR(
+                        primary_key_index->new_iterator(&primary_key_iterator, &reader_stats));
+                primary_key_column = DataTypeFactory::instance()
+                                             .create_data_type(primary_key_index->type(), 1, 0)
+                                             ->create_column();
+            } else {
+                RETURN_IF_ERROR(segment->load_index(&reader_stats));
+            }
             const auto* short_key_index = segment->get_short_key_index();
-            DORIS_CHECK(short_key_index != nullptr);
-            const uint64_t rows_per_block = short_key_index->num_rows_per_block();
+            DORIS_CHECK(is_mow || short_key_index != nullptr);
+            const uint64_t rows_per_block = is_mow ? schema.num_rows_per_row_block()
+                                                   : short_key_index->num_rows_per_block();
             DORIS_CHECK_GT(rows_per_block, 0);
-            for (uint32_t ordinal = 0; ordinal < short_key_index->num_items(); ++ordinal) {
-                const Slice encoded_key = short_key_index->key(ordinal);
+            const uint64_t sample_count =
+                    is_mow ? (segment->num_rows() + rows_per_block - 1) / rows_per_block
+                           : short_key_index->num_items();
+            for (uint64_t sample = 0; sample < sample_count; ++sample) {
+                const uint64_t row_start = sample * rows_per_block;
+                std::string primary_key;
+                if (is_mow) {
+                    primary_key_column->clear();
+                    RETURN_IF_ERROR(primary_key_iterator->seek_to_ordinal(row_start));
+                    size_t num_read = 1;
+                    RETURN_IF_ERROR(
+                            primary_key_iterator->next_batch(&num_read, primary_key_column));
+                    DORIS_CHECK_EQ(num_read, 1);
+                    primary_key = primary_key_column->get_data_at(0).to_string();
+                }
+                Slice encoded_key = is_mow ? Slice(primary_key)
+                                           : short_key_index->key(cast_set<uint32_t>(sample));
+                if (is_mow && segment->tablet_schema()->has_sequence_col()) {
+                    const size_t sequence_length =
+                            segment->tablet_schema()
+                                    ->column(segment->tablet_schema()->sequence_col_idx())
+                                    .length() +
+                            1;
+                    DORIS_CHECK_GT(encoded_key.size, sequence_length);
+                    encoded_key.size -= sequence_length;
+                }
                 if (encoded_key.size < 1 ||
                     cast_set<uint8_t>(encoded_key.data[0]) != KeyConsts::KEY_NORMAL_MARKER) {
                     return Status::InvalidArgument(
-                            "invalid non-null short key in rowset {}, segment {}",
+                            "invalid non-null sampled key in rowset {}, segment {}",
                             rowset->rowset_id().to_string(), segment->id());
                 }
-                const uint64_t row_start = cast_set<uint64_t>(ordinal) * rows_per_block;
                 DORIS_CHECK_LT(row_start, segment->num_rows());
                 const uint64_t weight = std::min(
                         rows_per_block, cast_set<uint64_t>(segment->num_rows()) - row_start);
@@ -1347,9 +1389,11 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
                             key_type, Slice(encoded_key.data + 1, encoded_key.size - 1), &key));
                     integer_samples.push_back({.key = key, .weight = weight});
                 } else {
-                    const size_t key_size = key_type == FieldType::OLAP_FIELD_TYPE_CHAR
-                                                    ? cast_set<size_t>(key_column.index_length())
-                                                    : encoded_key.size - 1;
+                    const size_t key_size =
+                            key_type == FieldType::OLAP_FIELD_TYPE_CHAR
+                                    ? cast_set<size_t>(is_mow ? key_column.length()
+                                                              : key_column.index_length())
+                                    : encoded_key.size - 1;
                     DORIS_CHECK_LE(key_size, encoded_key.size - 1);
                     string_samples.push_back(
                             {.key = std::string(encoded_key.data + 1, key_size), .weight = weight});
@@ -1378,6 +1422,11 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             &segment_slots));
 
     _state = std::make_unique<DistributedCompactionState>();
+    if (is_mow) {
+        RETURN_IF_ERROR(_engine.meta_mgr().sync_tablet_rowsets(_tablet.get()));
+        _state->phase1_end_version = _tablet->max_version().second;
+        _state->output_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
+    }
     _state->tasks.reserve(group_count);
     std::vector<std::vector<size_t>> groups_by_worker(group_count);
     for (size_t group_index = 0; group_index < group_count; ++group_index) {
@@ -1405,6 +1454,9 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         *request.mutable_output_rowset_meta() = output_meta_pb;
         request.set_is_vertical(is_vertical);
         request.set_avg_segment_rows(avg_segment_rows);
+        request.set_delete_bitmap_start_version(0);
+        request.set_delete_bitmap_end_version(_state->phase1_end_version + 1);
+        request.set_check_missed_rows(false);
         request.set_target_backend_id(worker.backend_id);
         request.set_target_cloud_unique_id(worker.cloud_unique_id);
         request.set_target_compute_group_id(worker.compute_group_id);
@@ -1445,7 +1497,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     _execution_plan->task_completed.assign(group_count, false);
     _execution_plan->remaining_workers = group_count;
     _execution_plan->expiration_time = output_meta_pb.txn_expiration();
-    _execution_plan->is_mow = false;
+    _execution_plan->is_mow = is_mow;
     _execution_plan->check_missed_rows = false;
     *started = true;
     return Status::OK();
@@ -1956,16 +2008,23 @@ Status DistributedCompactionWorker::handle_compaction(
     FieldType key_type = FieldType::OLAP_FIELD_TYPE_UNKNOWN;
     if (is_base) {
         const auto& schema = *_tablet->tablet_schema();
+        const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                            _tablet->enable_unique_key_merge_on_write();
         const bool supported_keys_type = _tablet->keys_type() == KeysType::DUP_KEYS ||
                                          _tablet->keys_type() == KeysType::AGG_KEYS ||
                                          (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
-                                          !_tablet->enable_unique_key_merge_on_write());
+                                          (!is_mow || schema.cluster_key_uids().empty()));
+        const bool supported_varchar =
+                schema.num_key_columns() > 0 &&
+                (schema.column(0).type() != FieldType::OLAP_FIELD_TYPE_VARCHAR ||
+                 (is_mow ? schema.num_key_columns() == 1 : schema.num_short_key_columns() == 1));
         if (!supported_keys_type || schema.num_key_columns() == 0 ||
             !is_supported_distributed_base_key(schema.column(0).type()) ||
-            schema.column(0).is_nullable()) {
+            schema.column(0).is_nullable() || !supported_varchar) {
             return Status::InvalidArgument(
-                    "distributed base compaction requires DUP_KEYS, AGG_KEYS, or UNIQUE_KEYS MOR "
-                    "tablet with a non-null supported leading key");
+                    "distributed base compaction requires DUP_KEYS, AGG_KEYS, UNIQUE_KEYS MOR, "
+                    "or non-cluster-key UNIQUE_KEYS MOW tablet with a non-null supported leading "
+                    "key");
         }
         key_type = schema.column(0).type();
     }
