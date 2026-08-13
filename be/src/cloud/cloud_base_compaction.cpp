@@ -284,9 +284,13 @@ Status CloudBaseCompaction::pick_rowsets_to_compact() {
 Status CloudBaseCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
     const int64_t target_size = config::cloud_distributed_base_compaction_target_input_size_bytes;
     const auto& schema = *_tablet->tablet_schema();
+    const bool supported_keys_type = _tablet->keys_type() == KeysType::DUP_KEYS ||
+                                     _tablet->keys_type() == KeysType::AGG_KEYS ||
+                                     (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                                      !_tablet->enable_unique_key_merge_on_write());
     _use_distributed_base_compaction =
             config::enable_cloud_distributed_base_compaction && target_size > 0 &&
-            _input_rowsets_total_size > target_size && _tablet->keys_type() == KeysType::DUP_KEYS &&
+            _input_rowsets_total_size > target_size && supported_keys_type &&
             !_tablet->is_row_binlog_tablet() && schema.num_key_columns() > 0 &&
             cloud::is_supported_distributed_base_key(schema.column(0).type()) &&
             !schema.column(0).is_nullable();

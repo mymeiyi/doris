@@ -1956,12 +1956,16 @@ Status DistributedCompactionWorker::handle_compaction(
     FieldType key_type = FieldType::OLAP_FIELD_TYPE_UNKNOWN;
     if (is_base) {
         const auto& schema = *_tablet->tablet_schema();
-        if (_tablet->keys_type() != KeysType::DUP_KEYS || schema.num_key_columns() == 0 ||
+        const bool supported_keys_type = _tablet->keys_type() == KeysType::DUP_KEYS ||
+                                         _tablet->keys_type() == KeysType::AGG_KEYS ||
+                                         (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                                          !_tablet->enable_unique_key_merge_on_write());
+        if (!supported_keys_type || schema.num_key_columns() == 0 ||
             !is_supported_distributed_base_key(schema.column(0).type()) ||
             schema.column(0).is_nullable()) {
             return Status::InvalidArgument(
-                    "distributed base compaction requires DUP_KEYS tablet with a non-null "
-                    "supported leading key");
+                    "distributed base compaction requires DUP_KEYS, AGG_KEYS, or UNIQUE_KEYS MOR "
+                    "tablet with a non-null supported leading key");
         }
         key_type = schema.column(0).type();
     }
