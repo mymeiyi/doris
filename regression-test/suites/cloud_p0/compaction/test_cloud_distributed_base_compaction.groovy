@@ -75,21 +75,29 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             """],
             [name: "varchar", type: "VARCHAR(128)", keyExpr: """
                 CONCAT(LPAD(CAST(number AS STRING), 5, '0'), REPEAT('v', 123))
-            """]
+            """],
+            [name: "agg", type: "INT", keyExpr: "CAST(number AS INT)",
+             keyModel: "AGGREGATE KEY", valueColumn: "v BIGINT SUM"],
+            [name: "mor", type: "INT", keyExpr: "CAST(number AS INT)",
+             keyModel: "UNIQUE KEY", valueColumn: "v INT NOT NULL",
+             properties: ', "enable_unique_key_merge_on_write" = "false"']
         ]
 
         keyCases.each { keyCase ->
             String tableName = "test_cloud_distributed_base_compaction_${keyCase.name}"
+            String keyModel = keyCase.keyModel ?: "DUPLICATE KEY"
+            String valueColumn = keyCase.valueColumn ?: "v INT NOT NULL"
+            String extraProperties = keyCase.properties ?: ""
             sql "DROP TABLE IF EXISTS ${tableName}"
             sql """
                 CREATE TABLE ${tableName} (
                     k ${keyCase.type} NOT NULL,
-                    v INT NOT NULL
-                ) DUPLICATE KEY(k)
+                    ${valueColumn}
+                ) ${keyModel}(k)
                 DISTRIBUTED BY HASH(k) BUCKETS 1
                 PROPERTIES (
                     "replication_num" = "1",
-                    "disable_auto_compaction" = "true"
+                    "disable_auto_compaction" = "true"${extraProperties}
                 )
             """
 
