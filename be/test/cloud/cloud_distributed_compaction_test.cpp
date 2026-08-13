@@ -75,6 +75,37 @@ TEST(CloudDistributedCompactionTest, chooses_weighted_short_key_boundaries) {
               (std::vector<std::string> {"bravo", "charlie", "delta"}));
 }
 
+TEST(CloudDistributedCompactionTest, expands_key_prefix_until_ranges_are_distinct) {
+    const std::vector<cloud::CompositeKeySample> samples = {
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_STRING>("alpha")},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_STRING>("bravo")},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_STRING>("charlie")},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_STRING>("delta")},
+             .weight = 10}};
+
+    const auto plan = cloud::choose_composite_key_range_boundaries(samples, 4);
+    ASSERT_EQ(plan.prefix_length, 2);
+    ASSERT_EQ(plan.boundaries.size(), 3);
+    EXPECT_EQ(plan.boundaries[0][1].get<TYPE_STRING>(), "bravo");
+    EXPECT_EQ(plan.boundaries[1][1].get<TYPE_STRING>(), "charlie");
+    EXPECT_EQ(plan.boundaries[2][1].get<TYPE_STRING>(), "delta");
+
+    const std::vector<cloud::CompositeKeySample> distinct_leading_keys = {
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_INT>(0)},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(1), Field::create_field<TYPE_INT>(0)},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(2), Field::create_field<TYPE_INT>(0)},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(3), Field::create_field<TYPE_INT>(0)},
+             .weight = 10}};
+    EXPECT_EQ(cloud::choose_composite_key_range_boundaries(distinct_leading_keys, 4).prefix_length,
+              1);
+}
+
 TEST(CloudDistributedCompactionTest, distributed_single_rowset_compaction_builds_segment_slots) {
     std::vector<cloud::OutputRowsetSegmentIdSlot> slots;
     ASSERT_TRUE(cloud::build_output_rowset_segment_id_slots(17, 100, 3, &slots).ok());

@@ -76,12 +76,17 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             [name: "varchar", type: "VARCHAR(128)", keyExpr: """
                 CONCAT(LPAD(CAST(number AS STRING), 5, '0'), REPEAT('v', 123))
             """],
+            [name: "composite", keyColumns: "k INT NOT NULL, k2 VARCHAR(128) NOT NULL",
+             keyExpr: "CAST(0 AS INT), CONCAT('key-', LPAD(CAST(number AS STRING), 5, '0'))",
+             keyModelColumns: "k, k2", sampleKey: "k, k2"],
             [name: "agg", type: "INT", keyExpr: "CAST(number AS INT)",
              keyModel: "AGGREGATE KEY", valueColumn: "v BIGINT SUM"],
             [name: "mor", type: "INT", keyExpr: "CAST(number AS INT)",
              keyModel: "UNIQUE KEY", valueColumn: "v INT NOT NULL",
              properties: ', "enable_unique_key_merge_on_write" = "false"'],
-            [name: "mow", type: "INT", keyExpr: "CAST(number AS INT)",
+            [name: "mow", keyColumns: "k INT NOT NULL, k2 BIGINT NOT NULL",
+             keyExpr: "CAST(0 AS INT), CAST(number AS BIGINT)", keyModelColumns: "k, k2",
+             sampleKey: "k, k2",
              keyModel: "UNIQUE KEY", valueColumn: "v INT NOT NULL, seq BIGINT NOT NULL",
              valueExpr: "CAST(number + ROUND * 10000 AS INT), " +
                      "CAST(number + ROUND * 10000 AS BIGINT)",
@@ -92,15 +97,18 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         keyCases.each { keyCase ->
             String tableName = "test_cloud_distributed_base_compaction_${keyCase.name}"
             String keyModel = keyCase.keyModel ?: "DUPLICATE KEY"
+            String keyColumns = keyCase.keyColumns ?: "k ${keyCase.type} NOT NULL"
+            String keyModelColumns = keyCase.keyModelColumns ?: "k"
+            String sampleKey = keyCase.sampleKey ?: "k"
             String valueColumn = keyCase.valueColumn ?: "v INT NOT NULL"
             String valueExpr = keyCase.valueExpr ?: "CAST(number + ROUND * 10000 AS INT)"
             String extraProperties = keyCase.properties ?: ""
             sql "DROP TABLE IF EXISTS ${tableName}"
             sql """
                 CREATE TABLE ${tableName} (
-                    k ${keyCase.type} NOT NULL,
+                    ${keyColumns},
                     ${valueColumn}
-                ) ${keyModel}(k)
+                ) ${keyModel}(${keyModelColumns})
                 DISTRIBUTED BY HASH(k) BUCKETS 1
                 PROPERTIES (
                     "replication_num" = "1",
@@ -125,17 +133,17 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 FROM ${tableName}
             """
             def lowSamplesBefore = sql """
-                SELECT k, COUNT(*), SUM(v)
+                SELECT ${sampleKey}, COUNT(*), SUM(v)
                 FROM ${tableName}
-                GROUP BY k
-                ORDER BY k
+                GROUP BY ${sampleKey}
+                ORDER BY ${sampleKey}
                 LIMIT 4
             """
             def highSamplesBefore = sql """
-                SELECT k, COUNT(*), SUM(v)
+                SELECT ${sampleKey}, COUNT(*), SUM(v)
                 FROM ${tableName}
-                GROUP BY k
-                ORDER BY k DESC
+                GROUP BY ${sampleKey}
+                ORDER BY ${sampleKey} DESC
                 LIMIT 4
             """
 
@@ -193,17 +201,17 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 FROM ${tableName}
             """))
             assertEquals(lowSamplesBefore, sql("""
-                SELECT k, COUNT(*), SUM(v)
+                SELECT ${sampleKey}, COUNT(*), SUM(v)
                 FROM ${tableName}
-                GROUP BY k
-                ORDER BY k
+                GROUP BY ${sampleKey}
+                ORDER BY ${sampleKey}
                 LIMIT 4
             """))
             assertEquals(highSamplesBefore, sql("""
-                SELECT k, COUNT(*), SUM(v)
+                SELECT ${sampleKey}, COUNT(*), SUM(v)
                 FROM ${tableName}
-                GROUP BY k
-                ORDER BY k DESC
+                GROUP BY ${sampleKey}
+                ORDER BY ${sampleKey} DESC
                 LIMIT 4
             """))
 
