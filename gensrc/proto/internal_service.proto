@@ -932,6 +932,19 @@ message PGetFileCacheMetaResponse {
 }
 
 // ---- Cross-BE distributed compaction (cloud) ----
+message PCloudDistributedCompactionKey {
+    // One PValues per key column. Each PValues contains exactly one logical value.
+    repeated PValues columns = 1;
+}
+
+message PCloudDistributedCompactionKeyRange {
+    // Missing lower_key/upper_key represents an unbounded endpoint.
+    optional PCloudDistributedCompactionKey lower_key = 1;
+    optional PCloudDistributedCompactionKey upper_key = 2;
+    optional bool lower_inclusive = 3 [default = true];
+    optional bool upper_inclusive = 4 [default = false];
+}
+
 message PCloudDistributedCompactionTask {
     optional int32 group_index = 2;
     optional int64 segment_pos_start = 3;
@@ -939,6 +952,12 @@ message PCloudDistributedCompactionTask {
     optional int32 output_segment_start_id = 6;
     optional int32 max_segment_num = 7;
     optional int64 merge_way_num = 8;
+    optional PCloudDistributedCompactionKeyRange key_range = 9;
+}
+
+enum PCloudDistributedCompactionType {
+    CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION = 0;
+    CLOUD_DISTRIBUTED_BASE_COMPACTION = 1;
 }
 
 message PCloudDistributedCompactionSubmitRequest {
@@ -955,6 +974,11 @@ message PCloudDistributedCompactionSubmitRequest {
     optional string target_cloud_unique_id = 14;
     optional string target_compute_group_id = 15;
     repeated PCloudDistributedCompactionTask tasks = 16;
+    optional PCloudDistributedCompactionType compaction_type = 17
+            [default = CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION];
+    // Base compaction consumes multiple rowsets. Field 3 remains for compatibility with the
+    // existing single-rowset cumulative protocol.
+    repeated RowsetMetaPB input_rowset_metas = 18;
 }
 
 message PCloudDistributedCompactionSubmitResponse {

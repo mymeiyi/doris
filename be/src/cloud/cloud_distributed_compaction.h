@@ -33,6 +33,7 @@
 
 #include "common/status.h"
 #include "storage/merger.h"
+#include "storage/olap_common.h"
 #include "storage/rowset/rowset_fwd.h"
 #include "storage/tablet/tablet_fwd.h"
 
@@ -96,6 +97,22 @@ struct SegmentGroupMergeRange {
     int64_t segment_pos_end;
     int64_t merge_way_num;
 };
+
+template <typename T>
+struct KeySample {
+    T key;
+    uint64_t weight;
+};
+
+using IntegerKeySample = KeySample<int128_t>;
+using StringKeySample = KeySample<std::string>;
+
+bool is_supported_distributed_base_key(FieldType type);
+
+std::vector<int128_t> choose_integer_key_range_boundaries(std::vector<IntegerKeySample> samples,
+                                                          size_t range_count);
+std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKeySample> samples,
+                                                            size_t range_count);
 
 std::vector<SegmentGroupMergeRange> build_segment_group_merge_ranges(const RowsetMeta& rowset_meta,
                                                                      int64_t segment_group_size);
@@ -178,6 +195,11 @@ public:
                                uint32_t avg_segment_rows, CompletionCallback callback,
                                bool* started);
 
+    Status start_base_key_ranges(const std::vector<RowsetSharedPtr>& input_rowsets,
+                                 RowsetWriter& output_rowset_writer, size_t range_count,
+                                 bool is_vertical, uint32_t avg_segment_rows,
+                                 CompletionCallback callback, bool* started);
+
     Status assemble_single_rowset(RowsetWriter& output_rowset_writer,
                                   const TabletSchema& tablet_schema,
                                   std::vector<int32_t>* output_segment_group_sizes,
@@ -202,6 +224,10 @@ private:
                                  RowsetWriter& output_rowset_writer, int64_t segment_group_size,
                                  bool allow_delete_in_cumu_compaction, bool is_vertical,
                                  uint32_t avg_segment_rows, bool* started);
+
+    Status prepare_base_key_ranges(const std::vector<RowsetSharedPtr>& input_rowsets,
+                                   RowsetWriter& output_rowset_writer, size_t range_count,
+                                   bool is_vertical, uint32_t avg_segment_rows, bool* started);
 
     Status schedule_poll(std::chrono::milliseconds delay);
     void dispatch_poll();
