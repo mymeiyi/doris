@@ -27,6 +27,7 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <cstring>
 #include <ctime>
 #include <limits>
 #include <optional>
@@ -45,6 +46,7 @@
 #include "cloud/config.h"
 #include "common/cast_set.h"
 #include "common/check.h"
+#include "common/consts.h"
 #include "common/logging.h"
 #include "cpp/sync_point.h"
 #include "runtime/cluster_info.h"
@@ -54,13 +56,17 @@
 #include "runtime/thread_context.h"
 #include "service/backend_options.h"
 #include "storage/compaction/compaction.h"
+#include "storage/index/short_key_index.h"
+#include "storage/key_coder.h"
 #include "storage/merger.h"
 #include "storage/rowid_conversion.h"
+#include "storage/rowset/beta_rowset.h"
 #include "storage/rowset/rowset_factory.h"
 #include "storage/rowset/rowset_meta.h"
 #include "storage/rowset/rowset_reader.h"
 #include "storage/rowset/rowset_writer.h"
 #include "storage/rowset/rowset_writer_context.h"
+#include "storage/segment/segment.h"
 #include "storage/storage_policy.h"
 #include "storage/tablet/tablet_meta.h"
 #include "storage/tablet/tablet_schema.h"
@@ -78,6 +84,16 @@ namespace {
 
 constexpr uint64_t WORKER_SELECTION_HASH_SEED = 0x6a09e667f3bcc909ULL;
 
+bool is_integer_key(FieldType type) {
+    return type == FieldType::OLAP_FIELD_TYPE_TINYINT ||
+           type == FieldType::OLAP_FIELD_TYPE_SMALLINT || type == FieldType::OLAP_FIELD_TYPE_INT ||
+           type == FieldType::OLAP_FIELD_TYPE_BIGINT || type == FieldType::OLAP_FIELD_TYPE_LARGEINT;
+}
+
+bool is_string_key(FieldType type) {
+    return type == FieldType::OLAP_FIELD_TYPE_CHAR || type == FieldType::OLAP_FIELD_TYPE_VARCHAR;
+}
+
 uint64_t compaction_worker_score(uint64_t execution_seed, int64_t backend_id) {
     const std::string backend_id_string = std::to_string(backend_id);
     return HashUtil::xxHash64WithSeed(backend_id_string.data(), backend_id_string.size(),
@@ -85,6 +101,68 @@ uint64_t compaction_worker_score(uint64_t execution_seed, int64_t backend_id) {
 }
 
 } // namespace
+
+bool is_supported_distributed_base_key(FieldType type) {
+    return is_integer_key(type) || is_string_key(type);
+}
+
+template <typename T>
+std::vector<T> choose_key_range_boundaries(std::vector<KeySample<T>> samples, size_t range_count) {
+    if (range_count < 2 || samples.size() < 2) {
+        return {};
+    }
+    std::ranges::sort(samples, {}, &KeySample<T>::key);
+    std::vector<KeySample<T>> distinct;
+    distinct.reserve(samples.size());
+    for (const auto& sample : samples) {
+        DORIS_CHECK_GT(sample.weight, 0);
+        if (!distinct.empty() && distinct.back().key == sample.key) {
+            DORIS_CHECK_LE(distinct.back().weight,
+                           std::numeric_limits<uint64_t>::max() - sample.weight);
+            distinct.back().weight += sample.weight;
+        } else {
+            distinct.push_back(sample);
+        }
+    }
+    if (distinct.size() < 2) {
+        return {};
+    }
+
+    unsigned __int128 total_weight = 0;
+    for (const auto& sample : distinct) {
+        total_weight += sample.weight;
+    }
+    std::vector<T> boundaries;
+    boundaries.reserve(range_count - 1);
+    for (size_t split = 1; split < range_count; ++split) {
+        const unsigned __int128 target = total_weight * split / range_count;
+        unsigned __int128 prefix = 0;
+        unsigned __int128 best_distance = total_weight;
+        T best_key = distinct[1].key;
+        for (size_t i = 1; i < distinct.size(); ++i) {
+            prefix += distinct[i - 1].weight;
+            const unsigned __int128 distance = prefix > target ? prefix - target : target - prefix;
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_key = distinct[i].key;
+            }
+        }
+        if (boundaries.empty() || boundaries.back() != best_key) {
+            boundaries.push_back(best_key);
+        }
+    }
+    return boundaries;
+}
+
+std::vector<int128_t> choose_integer_key_range_boundaries(std::vector<IntegerKeySample> samples,
+                                                          size_t range_count) {
+    return choose_key_range_boundaries(std::move(samples), range_count);
+}
+
+std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKeySample> samples,
+                                                            size_t range_count) {
+    return choose_key_range_boundaries(std::move(samples), range_count);
+}
 
 std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
         const std::vector<CompactionWorkerInfo>& candidates, int64_t coordinator_backend_id,
@@ -283,9 +361,212 @@ bool is_retryable_control_rpc_error(const Status& status) {
     return status.is<ErrorCode::THRIFT_RPC_ERROR>() || status.is<ErrorCode::TOO_MANY_TASKS>();
 }
 
+bool has_only_integer_value(const PValues& column) {
+    return column.double_value().empty() && column.float_value().empty() &&
+           column.uint32_value().empty() && column.uint64_value().empty() &&
+           column.bool_value().empty() && column.string_value().empty() &&
+           column.datetime_value().empty() && column.child_element().empty() &&
+           column.child_offset().empty();
+}
+
+bool extract_integer_key(const PCloudDistributedCompactionKey& key, PGenericType_TypeId* type,
+                         int128_t* value) {
+    if (key.columns_size() != 1) {
+        return false;
+    }
+    const auto& column = key.columns(0);
+    if (!column.has_type() || column.has_null() || !column.null_map().empty() ||
+        !has_only_integer_value(column)) {
+        return false;
+    }
+    *type = column.type().id();
+    switch (*type) {
+    case PGenericType::INT8:
+        if (column.int32_value_size() != 1 || !column.int64_value().empty() ||
+            !column.bytes_value().empty() ||
+            column.int32_value(0) < std::numeric_limits<int8_t>::min() ||
+            column.int32_value(0) > std::numeric_limits<int8_t>::max()) {
+            return false;
+        }
+        *value = column.int32_value(0);
+        return true;
+    case PGenericType::INT16:
+        if (column.int32_value_size() != 1 || !column.int64_value().empty() ||
+            !column.bytes_value().empty() ||
+            column.int32_value(0) < std::numeric_limits<int16_t>::min() ||
+            column.int32_value(0) > std::numeric_limits<int16_t>::max()) {
+            return false;
+        }
+        *value = column.int32_value(0);
+        return true;
+    case PGenericType::INT32:
+        if (column.int32_value_size() != 1 || !column.int64_value().empty() ||
+            !column.bytes_value().empty()) {
+            return false;
+        }
+        *value = column.int32_value(0);
+        return true;
+    case PGenericType::INT64:
+        if (!column.int32_value().empty() || column.int64_value_size() != 1 ||
+            !column.bytes_value().empty()) {
+            return false;
+        }
+        *value = column.int64_value(0);
+        return true;
+    case PGenericType::INT128:
+        if (!column.int32_value().empty() || !column.int64_value().empty() ||
+            column.bytes_value_size() != 1 || column.bytes_value(0).size() != sizeof(int128_t)) {
+            return false;
+        }
+        memcpy(value, column.bytes_value(0).data(), sizeof(*value));
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool extract_string_key(const PCloudDistributedCompactionKey& key, std::string* value) {
+    if (key.columns_size() != 1) {
+        return false;
+    }
+    const auto& column = key.columns(0);
+    if (!column.has_type() || column.type().id() != PGenericType::STRING || column.has_null() ||
+        !column.null_map().empty() || !column.double_value().empty() ||
+        !column.float_value().empty() || !column.int32_value().empty() ||
+        !column.int64_value().empty() || !column.uint32_value().empty() ||
+        !column.uint64_value().empty() || !column.bool_value().empty() ||
+        column.string_value_size() != 1 || !column.bytes_value().empty() ||
+        !column.datetime_value().empty() || !column.child_element().empty() ||
+        !column.child_offset().empty()) {
+        return false;
+    }
+    *value = column.string_value(0);
+    return true;
+}
+
+PGenericType_TypeId integer_key_pb_type(FieldType type) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return PGenericType::INT8;
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return PGenericType::INT16;
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return PGenericType::INT32;
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return PGenericType::INT64;
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return PGenericType::INT128;
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+void set_integer_key(PCloudDistributedCompactionKey* key, FieldType type, int128_t value) {
+    auto* column = key->add_columns();
+    column->mutable_type()->set_id(integer_key_pb_type(type));
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        column->add_int32_value(cast_set<int8_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        column->add_int32_value(cast_set<int16_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        column->add_int32_value(cast_set<int32_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        column->add_int64_value(cast_set<int64_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        column->add_bytes_value(&value, sizeof(value));
+        return;
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+void set_string_key(PCloudDistributedCompactionKey* key, std::string_view value) {
+    auto* column = key->add_columns();
+    column->mutable_type()->set_id(PGenericType::STRING);
+    column->add_string_value(value.data(), value.size());
+}
+
+std::pair<int128_t, int128_t> integer_key_limits(FieldType type) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return {std::numeric_limits<int8_t>::min(), std::numeric_limits<int8_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return {std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return {std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return {std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return {std::numeric_limits<int128_t>::min(), std::numeric_limits<int128_t>::max()};
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+template <FieldType field_type>
+Status decode_integer_short_key(Slice encoded_key, int128_t* value) {
+    typename CppTypeTraits<field_type>::CppType decoded = 0;
+    RETURN_IF_ERROR(KeyCoderTraits<field_type>::decode_ascending(
+            &encoded_key, 0, reinterpret_cast<uint8_t*>(&decoded)));
+    *value = decoded;
+    return Status::OK();
+}
+
+Status decode_integer_short_key(FieldType type, Slice encoded_key, int128_t* value) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_TINYINT>(encoded_key, value);
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_SMALLINT>(encoded_key, value);
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_INT>(encoded_key, value);
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_BIGINT>(encoded_key, value);
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_LARGEINT>(encoded_key, value);
+    default:
+        return Status::InvalidArgument("unsupported distributed base compaction key type: {}",
+                                       int(type));
+    }
+}
+
+Field create_integer_key_field(FieldType type, int128_t value) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return Field::create_field<TYPE_TINYINT>(cast_set<int8_t>(value));
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return Field::create_field<TYPE_SMALLINT>(cast_set<int16_t>(value));
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return Field::create_field<TYPE_INT>(cast_set<int32_t>(value));
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return Field::create_field<TYPE_BIGINT>(cast_set<int64_t>(value));
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return Field::create_field<TYPE_LARGEINT>(value);
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+Field create_string_key_field(std::string value) {
+    return Field::create_field<TYPE_STRING>(std::move(value));
+}
+
 Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& request) {
-    if (!request.has_input_rowset_meta() || !request.has_output_rowset_meta() ||
-        request.execution_id().empty()) {
+    const bool has_valid_input =
+            request.compaction_type() == CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION
+                    ? request.has_input_rowset_meta()
+                    : request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION &&
+                              request.input_rowset_metas_size() > 1;
+    if (!has_valid_input || !request.has_output_rowset_meta() || request.execution_id().empty()) {
         return Status::InvalidArgument("invalid distributed compaction request");
     }
     const auto* cluster_info =
@@ -305,9 +586,36 @@ Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& r
     return Status::OK();
 }
 
-Status validate_compaction_task(const PCloudDistributedCompactionTask& task) {
-    if (task.segment_pos_start() < 0 || task.segment_pos_start() >= task.segment_pos_end() ||
-        task.max_segment_num() <= 0 || task.output_segment_start_id() < 0 ||
+Status validate_compaction_task(const PCloudDistributedCompactionSubmitRequest& request,
+                                const PCloudDistributedCompactionTask& task) {
+    const auto& key_range = task.key_range();
+    PGenericType_TypeId lower_type = PGenericType::UNKNOWN;
+    PGenericType_TypeId upper_type = PGenericType::UNKNOWN;
+    int128_t lower_value = 0;
+    int128_t upper_value = 0;
+    const bool valid_integer_range =
+            task.has_key_range() && key_range.has_lower_key() && key_range.has_upper_key() &&
+            extract_integer_key(key_range.lower_key(), &lower_type, &lower_value) &&
+            extract_integer_key(key_range.upper_key(), &upper_type, &upper_value) &&
+            lower_type == upper_type &&
+            (lower_value < upper_value ||
+             (key_range.upper_inclusive() && lower_value == upper_value));
+    std::string lower_string;
+    std::string upper_string;
+    const bool valid_string_range = task.has_key_range() && key_range.has_lower_key() &&
+                                    key_range.has_upper_key() &&
+                                    extract_string_key(key_range.lower_key(), &lower_string) &&
+                                    extract_string_key(key_range.upper_key(), &upper_string) &&
+                                    (lower_string < upper_string ||
+                                     (key_range.upper_inclusive() && lower_string == upper_string));
+    const bool valid_range =
+            request.compaction_type() == CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION
+                    ? task.segment_pos_start() >= 0 &&
+                              task.segment_pos_start() < task.segment_pos_end()
+                    : request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION &&
+                              key_range.lower_inclusive() &&
+                              (valid_integer_range || valid_string_range);
+    if (!valid_range || task.max_segment_num() <= 0 || task.output_segment_start_id() < 0 ||
         task.group_index() < 0 ||
         cast_set<int64_t>(task.output_segment_start_id()) + task.max_segment_num() >
                 std::numeric_limits<int32_t>::max()) {
@@ -574,6 +882,22 @@ Status DistributedCompactionCoordinator::start_single_rowset(
     RETURN_IF_ERROR(prepare_single_rowset(input_rowset, output_rowset_writer, segment_group_size,
                                           allow_delete_in_cumu_compaction, is_vertical,
                                           avg_segment_rows, started));
+    if (!*started) {
+        return Status::OK();
+    }
+    _execution_plan->completion_callback = std::move(callback);
+    return schedule_poll(std::chrono::milliseconds(
+            config::cloud_distributed_compaction_status_poll_interval_ms));
+}
+
+Status DistributedCompactionCoordinator::start_base_key_ranges(
+        const std::vector<RowsetSharedPtr>& input_rowsets, RowsetWriter& output_rowset_writer,
+        size_t range_count, bool is_vertical, uint32_t avg_segment_rows,
+        CompletionCallback callback, bool* started) {
+    DORIS_CHECK(callback != nullptr);
+    DORIS_CHECK_GT(config::cloud_distributed_compaction_status_poll_interval_ms, 0);
+    RETURN_IF_ERROR(prepare_base_key_ranges(input_rowsets, output_rowset_writer, range_count,
+                                            is_vertical, avg_segment_rows, started));
     if (!*started) {
         return Status::OK();
     }
@@ -955,6 +1279,174 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
     _execution_plan->expiration_time = output_meta_pb.txn_expiration();
     _execution_plan->is_mow = is_mow;
     _execution_plan->check_missed_rows = check_missed_rows;
+    *started = true;
+    return Status::OK();
+}
+
+Status DistributedCompactionCoordinator::prepare_base_key_ranges(
+        const std::vector<RowsetSharedPtr>& input_rowsets, RowsetWriter& output_rowset_writer,
+        size_t range_count, bool is_vertical, uint32_t avg_segment_rows, bool* started) {
+    *started = false;
+    DORIS_CHECK_GT(input_rowsets.size(), 1);
+    const auto& key_column = _tablet->tablet_schema()->column(0);
+    const FieldType key_type = key_column.type();
+    DORIS_CHECK(is_supported_distributed_base_key(key_type));
+    DORIS_CHECK_GT(_tablet->tablet_schema()->num_short_key_columns(), 0);
+    if (key_type == FieldType::OLAP_FIELD_TYPE_VARCHAR) {
+        DORIS_CHECK_EQ(_tablet->tablet_schema()->num_short_key_columns(), 1);
+    }
+    if (!config::enable_cloud_distributed_base_compaction || range_count < 2) {
+        return Status::OK();
+    }
+
+    std::vector<CompactionWorkerInfo> candidates;
+    const Status discovery_status = compaction_worker_cache()->get_workers(&candidates);
+    if (!discovery_status.ok()) {
+        LOG(WARNING) << "failed to discover distributed base compaction workers from FE, "
+                     << "fallback to local compaction: " << discovery_status;
+        return Status::OK();
+    }
+    range_count = std::min(range_count, candidates.size());
+    if (range_count < 2) {
+        return Status::OK();
+    }
+
+    // ponytail: collect all short-key entries; switch to a streaming k-way merge if coordinator
+    // memory becomes measurable for very large tablets.
+    std::vector<IntegerKeySample> integer_samples;
+    std::vector<StringKeySample> string_samples;
+    for (const auto& rowset : input_rowsets) {
+        auto beta_rowset = std::dynamic_pointer_cast<BetaRowset>(rowset);
+        if (beta_rowset == nullptr) {
+            return Status::InvalidArgument("distributed base compaction requires beta rowsets");
+        }
+        std::vector<segment_v2::SegmentSharedPtr> segments;
+        RETURN_IF_ERROR(beta_rowset->load_segments(&segments));
+        for (const auto& segment : segments) {
+            OlapReaderStatistics reader_stats;
+            RETURN_IF_ERROR(segment->load_index(&reader_stats));
+            const auto* short_key_index = segment->get_short_key_index();
+            DORIS_CHECK(short_key_index != nullptr);
+            const uint64_t rows_per_block = short_key_index->num_rows_per_block();
+            DORIS_CHECK_GT(rows_per_block, 0);
+            for (uint32_t ordinal = 0; ordinal < short_key_index->num_items(); ++ordinal) {
+                const Slice encoded_key = short_key_index->key(ordinal);
+                if (encoded_key.size < 1 ||
+                    cast_set<uint8_t>(encoded_key.data[0]) != KeyConsts::KEY_NORMAL_MARKER) {
+                    return Status::InvalidArgument(
+                            "invalid non-null short key in rowset {}, segment {}",
+                            rowset->rowset_id().to_string(), segment->id());
+                }
+                const uint64_t row_start = cast_set<uint64_t>(ordinal) * rows_per_block;
+                DORIS_CHECK_LT(row_start, segment->num_rows());
+                const uint64_t weight = std::min(
+                        rows_per_block, cast_set<uint64_t>(segment->num_rows()) - row_start);
+                if (is_integer_key(key_type)) {
+                    int128_t key = 0;
+                    RETURN_IF_ERROR(decode_integer_short_key(
+                            key_type, Slice(encoded_key.data + 1, encoded_key.size - 1), &key));
+                    integer_samples.push_back({.key = key, .weight = weight});
+                } else {
+                    const size_t key_size = key_type == FieldType::OLAP_FIELD_TYPE_CHAR
+                                                    ? cast_set<size_t>(key_column.index_length())
+                                                    : encoded_key.size - 1;
+                    DORIS_CHECK_LE(key_size, encoded_key.size - 1);
+                    string_samples.push_back(
+                            {.key = std::string(encoded_key.data + 1, key_size), .weight = weight});
+                }
+            }
+        }
+    }
+
+    const auto integer_boundaries =
+            choose_integer_key_range_boundaries(std::move(integer_samples), range_count);
+    const auto string_boundaries =
+            choose_string_key_range_boundaries(std::move(string_samples), range_count);
+    const size_t group_count =
+            (is_integer_key(key_type) ? integer_boundaries.size() : string_boundaries.size()) + 1;
+    if (group_count < 2) {
+        return Status::OK();
+    }
+    auto workers = select_compaction_workers_for_groups(
+            candidates, BackendOptions::get_backend_id(), group_count, _execution_id);
+    DORIS_CHECK_EQ(workers.size(), group_count);
+
+    std::vector<OutputRowsetSegmentIdSlot> segment_slots;
+    RETURN_IF_ERROR(build_output_rowset_segment_id_slots(
+            output_rowset_writer.get_allocated_segment_id(),
+            config::cloud_distributed_compaction_segment_slot_capacity, group_count,
+            &segment_slots));
+
+    _state = std::make_unique<DistributedCompactionState>();
+    _state->tasks.reserve(group_count);
+    std::vector<std::vector<size_t>> groups_by_worker(group_count);
+    for (size_t group_index = 0; group_index < group_count; ++group_index) {
+        _state->tasks.push_back({.worker_endpoint = workers[group_index].endpoint,
+                                 .group_index = cast_set<int32_t>(group_index),
+                                 .segment_id_slot = segment_slots[group_index]});
+        groups_by_worker[group_index].push_back(group_index);
+    }
+
+    int64_t merge_way_num = 0;
+    for (const auto& rowset : input_rowsets) {
+        merge_way_num += rowset->rowset_meta()->get_merge_way_num();
+    }
+    const auto output_meta_pb = output_rowset_writer.rowset_meta()->get_rowset_pb();
+    std::vector<PCloudDistributedCompactionSubmitRequest> requests(group_count);
+    for (size_t group_index = 0; group_index < group_count; ++group_index) {
+        const auto& worker = workers[group_index];
+        auto& request = requests[group_index];
+        request.set_tablet_id(_tablet->tablet_id());
+        request.set_execution_id(_execution_id);
+        request.set_compaction_type(CLOUD_DISTRIBUTED_BASE_COMPACTION);
+        for (const auto& rowset : input_rowsets) {
+            *request.add_input_rowset_metas() = rowset->rowset_meta()->get_rowset_pb();
+        }
+        *request.mutable_output_rowset_meta() = output_meta_pb;
+        request.set_is_vertical(is_vertical);
+        request.set_avg_segment_rows(avg_segment_rows);
+        request.set_target_backend_id(worker.backend_id);
+        request.set_target_cloud_unique_id(worker.cloud_unique_id);
+        request.set_target_compute_group_id(worker.compute_group_id);
+
+        const auto& distributed_task = _state->tasks[group_index];
+        auto* request_task = request.add_tasks();
+        request_task->set_group_index(distributed_task.group_index);
+        request_task->set_output_segment_start_id(distributed_task.segment_id_slot.start_id);
+        request_task->set_max_segment_num(distributed_task.segment_id_slot.capacity);
+        request_task->set_merge_way_num(merge_way_num);
+        auto* key_range = request_task->mutable_key_range();
+        if (is_integer_key(key_type)) {
+            const auto [min_key, max_key] = integer_key_limits(key_type);
+            set_integer_key(key_range->mutable_lower_key(), key_type,
+                            group_index == 0 ? min_key : integer_boundaries[group_index - 1]);
+            set_integer_key(
+                    key_range->mutable_upper_key(), key_type,
+                    group_index + 1 == group_count ? max_key : integer_boundaries[group_index]);
+        } else {
+            const std::string max_key(cast_set<size_t>(key_column.length()), '\xff');
+            set_string_key(key_range->mutable_lower_key(),
+                           group_index == 0 ? std::string_view()
+                                            : std::string_view(string_boundaries[group_index - 1]));
+            set_string_key(key_range->mutable_upper_key(),
+                           group_index + 1 == group_count
+                                   ? std::string_view(max_key)
+                                   : std::string_view(string_boundaries[group_index]));
+        }
+        key_range->set_upper_inclusive(group_index + 1 == group_count);
+    }
+    RETURN_IF_ERROR(submit_batches(workers, groups_by_worker, requests));
+
+    _execution_plan = std::make_unique<ExecutionPlan>();
+    _execution_plan->workers = std::move(workers);
+    _execution_plan->groups_by_worker = std::move(groups_by_worker);
+    _execution_plan->responses.resize(group_count);
+    _execution_plan->worker_completed.assign(group_count, false);
+    _execution_plan->task_completed.assign(group_count, false);
+    _execution_plan->remaining_workers = group_count;
+    _execution_plan->expiration_time = output_meta_pb.txn_expiration();
+    _execution_plan->is_mow = false;
+    _execution_plan->check_missed_rows = false;
     *started = true;
     return Status::OK();
 }
@@ -1428,7 +1920,9 @@ Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_out
     context.newest_write_timestamp = output_meta.newest_write_timestamp();
     context.enable_unique_key_merge_on_write = _tablet->enable_unique_key_merge_on_write();
     context.write_type = DataWriteType::TYPE_COMPACTION;
-    context.compaction_type = ReaderType::READER_CUMULATIVE_COMPACTION;
+    context.compaction_type = request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION
+                                      ? ReaderType::READER_BASE_COMPACTION
+                                      : ReaderType::READER_CUMULATIVE_COMPACTION;
     context.tablet = _tablet;
     context.encrypt_algorithm = _tablet->tablet_meta()->encryption_algorithm();
     context.job_id = request.execution_id();
@@ -1458,23 +1952,84 @@ Status DistributedCompactionWorker::handle_compaction(
                 request->execution_id(), task->group_index());
     }
 
-    auto input_meta = std::make_shared<RowsetMeta>();
-    if (!input_meta->init_from_pb(request->input_rowset_meta())) {
-        return Status::InvalidArgument("failed to initialize input rowset metadata");
+    const bool is_base = request->compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION;
+    FieldType key_type = FieldType::OLAP_FIELD_TYPE_UNKNOWN;
+    if (is_base) {
+        const auto& schema = *_tablet->tablet_schema();
+        if (_tablet->keys_type() != KeysType::DUP_KEYS || schema.num_key_columns() == 0 ||
+            !is_supported_distributed_base_key(schema.column(0).type()) ||
+            schema.column(0).is_nullable()) {
+            return Status::InvalidArgument(
+                    "distributed base compaction requires DUP_KEYS tablet with a non-null "
+                    "supported leading key");
+        }
+        key_type = schema.column(0).type();
     }
-    if (input_meta->tablet_id() != request->tablet_id()) {
-        return Status::InvalidArgument("input rowset tablet id does not match request");
+    std::vector<RowsetMetaPB> input_meta_pbs;
+    if (is_base) {
+        input_meta_pbs.assign(request->input_rowset_metas().begin(),
+                              request->input_rowset_metas().end());
+    } else {
+        input_meta_pbs.push_back(request->input_rowset_meta());
     }
-    RowsetSharedPtr input_rowset;
-    RETURN_IF_ERROR(RowsetFactory::create_rowset(
-            input_meta->tablet_schema(), _tablet->tablet_path(), input_meta, &input_rowset));
+    std::vector<RowsetSharedPtr> input_rowsets;
+    input_rowsets.reserve(input_meta_pbs.size());
+    for (const auto& input_meta_pb : input_meta_pbs) {
+        auto input_meta = std::make_shared<RowsetMeta>();
+        if (!input_meta->init_from_pb(input_meta_pb)) {
+            return Status::InvalidArgument("failed to initialize input rowset metadata");
+        }
+        if (input_meta->tablet_id() != request->tablet_id()) {
+            return Status::InvalidArgument("input rowset tablet id does not match request");
+        }
+        RowsetSharedPtr input_rowset;
+        RETURN_IF_ERROR(RowsetFactory::create_rowset(
+                input_meta->tablet_schema(), _tablet->tablet_path(), input_meta, &input_rowset));
+        input_rowsets.push_back(std::move(input_rowset));
+    }
 
-    const int64_t segment_pos_start = task->segment_pos_start();
-    const int64_t segment_pos_end = task->segment_pos_end();
-    if (segment_pos_end > input_rowset->num_segments()) {
-        return Status::InvalidArgument("invalid input segment range: start={}, end={}, segments={}",
-                                       segment_pos_start, segment_pos_end,
-                                       input_rowset->num_segments());
+    std::optional<std::pair<int64_t, int64_t>> segment_range;
+    std::optional<Merger::KeyRange> merge_key_range;
+    if (is_base) {
+        const auto& key_range = task->key_range();
+        OlapTuple lower_key;
+        OlapTuple upper_key;
+        if (is_integer_key(key_type)) {
+            PGenericType_TypeId lower_type = PGenericType::UNKNOWN;
+            PGenericType_TypeId upper_type = PGenericType::UNKNOWN;
+            int128_t lower_value = 0;
+            int128_t upper_value = 0;
+            if (!extract_integer_key(key_range.lower_key(), &lower_type, &lower_value) ||
+                !extract_integer_key(key_range.upper_key(), &upper_type, &upper_value) ||
+                lower_type != integer_key_pb_type(key_type) || upper_type != lower_type) {
+                return Status::InvalidArgument(
+                        "distributed base compaction key range does not match tablet key type");
+            }
+            lower_key.add_field(create_integer_key_field(key_type, lower_value));
+            upper_key.add_field(create_integer_key_field(key_type, upper_value));
+        } else {
+            std::string lower_value;
+            std::string upper_value;
+            if (!extract_string_key(key_range.lower_key(), &lower_value) ||
+                !extract_string_key(key_range.upper_key(), &upper_value)) {
+                return Status::InvalidArgument(
+                        "distributed base compaction key range does not match tablet key type");
+            }
+            lower_key.add_field(create_string_key_field(std::move(lower_value)));
+            upper_key.add_field(create_string_key_field(std::move(upper_value)));
+        }
+        merge_key_range = Merger::KeyRange {.lower_key = std::move(lower_key),
+                                            .upper_key = std::move(upper_key),
+                                            .lower_inclusive = key_range.lower_inclusive(),
+                                            .upper_inclusive = key_range.upper_inclusive()};
+    } else {
+        segment_range = std::make_pair(task->segment_pos_start(), task->segment_pos_end());
+        if (segment_range->second > input_rowsets.front()->num_segments()) {
+            return Status::InvalidArgument(
+                    "invalid input segment range: start={}, end={}, segments={}",
+                    segment_range->first, segment_range->second,
+                    input_rowsets.front()->num_segments());
+        }
     }
 
     RowsetMeta output_meta;
@@ -1502,20 +2057,24 @@ Status DistributedCompactionWorker::handle_compaction(
     }
 
     RETURN_IF_CANCELLED(_runtime_state.get());
-    RowsetReaderSharedPtr reader;
-    RETURN_IF_ERROR(input_rowset->create_reader(&reader));
     std::vector<RowsetReaderSharedPtr> readers;
-    readers.push_back(std::move(reader));
-    const auto segment_range = std::make_pair(segment_pos_start, segment_pos_end);
+    readers.reserve(input_rowsets.size());
+    for (const auto& input_rowset : input_rowsets) {
+        RowsetReaderSharedPtr reader;
+        RETURN_IF_ERROR(input_rowset->create_reader(&reader));
+        readers.push_back(std::move(reader));
+    }
+    const ReaderType reader_type =
+            is_base ? ReaderType::READER_BASE_COMPACTION : ReaderType::READER_CUMULATIVE_COMPACTION;
     if (request->is_vertical()) {
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(
-                _tablet, ReaderType::READER_CUMULATIVE_COMPACTION, *output_meta.tablet_schema(),
-                readers, writer.get(), request->avg_segment_rows(), task->merge_way_num(), &stats,
-                nullptr, segment_range, _runtime_state.get()));
+                _tablet, reader_type, *output_meta.tablet_schema(), readers, writer.get(),
+                request->avg_segment_rows(), task->merge_way_num(), &stats, nullptr, segment_range,
+                _runtime_state.get(), merge_key_range));
     } else {
-        RETURN_IF_ERROR(Merger::vmerge_rowsets(_tablet, ReaderType::READER_CUMULATIVE_COMPACTION,
-                                               *output_meta.tablet_schema(), readers, writer.get(),
-                                               &stats, segment_range, _runtime_state.get()));
+        RETURN_IF_ERROR(Merger::vmerge_rowsets(_tablet, reader_type, *output_meta.tablet_schema(),
+                                               readers, writer.get(), &stats, segment_range,
+                                               _runtime_state.get(), merge_key_range));
     }
     RETURN_IF_CANCELLED(_runtime_state.get());
     RETURN_IF_ERROR(writer->build(_output_rowset));
@@ -1615,7 +2174,7 @@ Status DistributedCompactionWorkerManager::submit(
     std::unordered_set<std::string> request_keys;
     request_keys.reserve(cast_set<size_t>(request.tasks_size()));
     for (const auto& task : request.tasks()) {
-        RETURN_IF_ERROR(validate_compaction_task(task));
+        RETURN_IF_ERROR(validate_compaction_task(request, task));
         const std::string worker_key = key(request.execution_id(), task.group_index());
         if (!request_keys.emplace(worker_key).second) {
             return Status::InvalidArgument(

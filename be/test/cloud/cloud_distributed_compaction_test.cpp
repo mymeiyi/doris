@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include "cloud/cloud_distributed_compaction.h"
+
 #include <gen_cpp/AgentService_types.h>
 #include <gen_cpp/internal_service.pb.h>
 #include <gtest/gtest.h>
@@ -30,7 +32,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "cloud/cloud_distributed_compaction.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/config.h"
@@ -39,6 +40,40 @@
 #include "util/uid_util.h"
 
 namespace doris {
+
+TEST(CloudDistributedCompactionTest, chooses_weighted_short_key_boundaries) {
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_TINYINT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_SMALLINT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_INT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_BIGINT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_LARGEINT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_CHAR));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_VARCHAR));
+    EXPECT_FALSE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_STRING));
+
+    const std::vector<cloud::IntegerKeySample> samples = {
+            {.key = 30, .weight = 10}, {.key = 0, .weight = 10}, {.key = 20, .weight = 5},
+            {.key = 10, .weight = 5},  {.key = 20, .weight = 5}, {.key = 10, .weight = 5}};
+    EXPECT_EQ(cloud::choose_integer_key_range_boundaries(samples, 4),
+              (std::vector<int128_t> {10, 20, 30}));
+
+    const std::vector<cloud::IntegerKeySample> hot_key = {
+            {.key = 0, .weight = 90}, {.key = 10, .weight = 5}, {.key = 20, .weight = 5}};
+    EXPECT_EQ(cloud::choose_integer_key_range_boundaries(hot_key, 4), (std::vector<int128_t> {10}));
+
+    const std::vector<cloud::IntegerKeySample> edge_keys = {
+            {.key = std::numeric_limits<int128_t>::min(), .weight = 10},
+            {.key = std::numeric_limits<int128_t>::max(), .weight = 10}};
+    EXPECT_EQ(cloud::choose_integer_key_range_boundaries(edge_keys, 2),
+              (std::vector<int128_t> {std::numeric_limits<int128_t>::max()}));
+
+    const std::vector<cloud::StringKeySample> string_samples = {
+            {.key = "delta", .weight = 10},  {.key = "alpha", .weight = 10},
+            {.key = "charlie", .weight = 5}, {.key = "bravo", .weight = 5},
+            {.key = "charlie", .weight = 5}, {.key = "bravo", .weight = 5}};
+    EXPECT_EQ(cloud::choose_string_key_range_boundaries(string_samples, 4),
+              (std::vector<std::string> {"bravo", "charlie", "delta"}));
+}
 
 TEST(CloudDistributedCompactionTest, distributed_single_rowset_compaction_builds_segment_slots) {
     std::vector<cloud::OutputRowsetSegmentIdSlot> slots;
@@ -191,10 +226,10 @@ TEST(CloudDistributedCompactionTest, distributed_compaction_poll_scheduler_runs_
 TEST(CloudDistributedCompactionTest,
      distributed_single_rowset_compaction_tracks_async_task_status) {
     CloudStorageEngine engine(EngineOptions {});
-    auto tablet_meta = std::make_shared<TabletMeta>(
-            1, 2, 15673, 15674, 4, 5, TTabletSchema(), 6,
-            std::unordered_map<uint32_t, uint32_t> {{7, 8}},
-            UniqueId(9, 10), TTabletType::TABLET_TYPE_DISK, TCompressionType::LZ4F);
+    auto tablet_meta = std::make_shared<TabletMeta>(1, 2, 15673, 15674, 4, 5, TTabletSchema(), 6,
+                                                    std::unordered_map<uint32_t, uint32_t> {{7, 8}},
+                                                    UniqueId(9, 10), TTabletType::TABLET_TYPE_DISK,
+                                                    TCompressionType::LZ4F);
     auto tablet = std::make_shared<CloudTablet>(engine, tablet_meta);
     auto worker = std::make_shared<cloud::DistributedCompactionWorker>(engine, tablet);
 

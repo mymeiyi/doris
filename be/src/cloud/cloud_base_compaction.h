@@ -27,6 +27,10 @@
 
 namespace doris {
 
+namespace cloud {
+class DistributedCompactionCoordinator;
+}
+
 class CloudBaseCompaction : public CloudCompactionMixin {
 public:
     CloudBaseCompaction(CloudStorageEngine& engine, CloudTabletSPtr tablet);
@@ -46,6 +50,11 @@ public:
 private:
     Status pick_rowsets_to_compact();
 
+    Status prepare_merge_input_rowsets(MergeInputRowsetsResult* result) override;
+
+    Status do_merge_input_rowsets(const std::vector<RowsetReaderSharedPtr>& input_rs_readers,
+                                  MergeInputRowsetsResult* result) override;
+
     std::string_view compaction_name() const override { return "CloudBaseCompaction"; }
 
     Status modify_rowsets() override;
@@ -61,6 +70,9 @@ private:
     int64_t _input_segments = 0;
     int64_t _base_compaction_cnt = 0;
     int64_t _cumulative_compaction_cnt = 0;
+    bool _use_distributed_base_compaction = false;
+    std::shared_ptr<cloud::DistributedCompactionCoordinator> _distributed_compaction;
+    bool _distributed_commit_started = false;
 };
 
 } // namespace doris
