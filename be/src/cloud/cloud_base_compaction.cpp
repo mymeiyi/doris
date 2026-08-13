@@ -297,15 +297,12 @@ Status CloudBaseCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult*
             _tablet->keys_type() == KeysType::DUP_KEYS ||
             _tablet->keys_type() == KeysType::AGG_KEYS ||
             (_tablet->keys_type() == KeysType::UNIQUE_KEYS && (!is_mow || supported_mow));
-    const bool supported_varchar =
-            schema.column(0).type() != FieldType::OLAP_FIELD_TYPE_VARCHAR ||
-            (is_mow ? schema.num_key_columns() == 1 : schema.num_short_key_columns() == 1);
     _use_distributed_base_compaction =
             config::enable_cloud_distributed_base_compaction && target_size > 0 &&
             _input_rowsets_total_size > target_size && supported_keys_type &&
             !_tablet->is_row_binlog_tablet() && schema.num_key_columns() > 0 &&
             cloud::is_supported_distributed_base_key(schema.column(0).type()) &&
-            !schema.column(0).is_nullable() && supported_varchar;
+            !schema.column(0).is_nullable();
     if (_use_distributed_base_compaction) {
         // Partial writers cannot reuse coordinator-local inverted index files.
         _enable_inverted_index_compaction = false;

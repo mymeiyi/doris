@@ -32,6 +32,7 @@
 #include <vector>
 
 #include "common/status.h"
+#include "core/field.h"
 #include "storage/merger.h"
 #include "storage/olap_common.h"
 #include "storage/rowset/rowset_fwd.h"
@@ -106,6 +107,13 @@ struct KeySample {
 
 using IntegerKeySample = KeySample<int128_t>;
 using StringKeySample = KeySample<std::string>;
+using CompositeKey = std::vector<Field>;
+using CompositeKeySample = KeySample<CompositeKey>;
+
+struct CompositeKeyRangePlan {
+    size_t prefix_length = 0;
+    std::vector<CompositeKey> boundaries;
+};
 
 bool is_supported_distributed_base_key(FieldType type);
 
@@ -113,6 +121,8 @@ std::vector<int128_t> choose_integer_key_range_boundaries(std::vector<IntegerKey
                                                           size_t range_count);
 std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKeySample> samples,
                                                             size_t range_count);
+CompositeKeyRangePlan choose_composite_key_range_boundaries(
+        const std::vector<CompositeKeySample>& samples, size_t range_count);
 
 std::vector<SegmentGroupMergeRange> build_segment_group_merge_ranges(const RowsetMeta& rowset_meta,
                                                                      int64_t segment_group_size);

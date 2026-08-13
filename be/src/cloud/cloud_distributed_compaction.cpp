@@ -46,7 +46,6 @@
 #include "cloud/config.h"
 #include "common/cast_set.h"
 #include "common/check.h"
-#include "common/consts.h"
 #include "common/logging.h"
 #include "core/data_type/data_type_factory.hpp"
 #include "cpp/sync_point.h"
@@ -57,9 +56,7 @@
 #include "runtime/thread_context.h"
 #include "service/backend_options.h"
 #include "storage/compaction/compaction.h"
-#include "storage/index/primary_key_index.h"
 #include "storage/index/short_key_index.h"
-#include "storage/key_coder.h"
 #include "storage/merger.h"
 #include "storage/rowid_conversion.h"
 #include "storage/rowset/beta_rowset.h"
@@ -68,6 +65,7 @@
 #include "storage/rowset/rowset_reader.h"
 #include "storage/rowset/rowset_writer.h"
 #include "storage/rowset/rowset_writer_context.h"
+#include "storage/segment/column_reader.h"
 #include "storage/segment/segment.h"
 #include "storage/storage_policy.h"
 #include "storage/tablet/tablet_meta.h"
@@ -164,6 +162,37 @@ std::vector<int128_t> choose_integer_key_range_boundaries(std::vector<IntegerKey
 std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKeySample> samples,
                                                             size_t range_count) {
     return choose_key_range_boundaries(std::move(samples), range_count);
+}
+
+CompositeKeyRangePlan choose_composite_key_range_boundaries(
+        const std::vector<CompositeKeySample>& samples, size_t range_count) {
+    CompositeKeyRangePlan plan;
+    if (samples.empty()) {
+        return plan;
+    }
+    const size_t key_columns = samples.front().key.size();
+    DORIS_CHECK_GT(key_columns, 0);
+    for (const auto& sample : samples) {
+        DORIS_CHECK_EQ(sample.key.size(), key_columns);
+    }
+
+    for (size_t prefix_length = 1; prefix_length <= key_columns; ++prefix_length) {
+        std::vector<CompositeKeySample> prefix_samples;
+        prefix_samples.reserve(samples.size());
+        for (const auto& sample : samples) {
+            prefix_samples.push_back(
+                    {.key = CompositeKey(sample.key.begin(), sample.key.begin() + prefix_length),
+                     .weight = sample.weight});
+        }
+        auto boundaries = choose_key_range_boundaries(std::move(prefix_samples), range_count);
+        if (boundaries.size() > plan.boundaries.size()) {
+            plan = {.prefix_length = prefix_length, .boundaries = std::move(boundaries)};
+        }
+        if (plan.boundaries.size() + 1 >= range_count) {
+            break;
+        }
+    }
+    return plan;
 }
 
 std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
@@ -371,12 +400,7 @@ bool has_only_integer_value(const PValues& column) {
            column.child_offset().empty();
 }
 
-bool extract_integer_key(const PCloudDistributedCompactionKey& key, PGenericType_TypeId* type,
-                         int128_t* value) {
-    if (key.columns_size() != 1) {
-        return false;
-    }
-    const auto& column = key.columns(0);
+bool extract_integer_value(const PValues& column, PGenericType_TypeId* type, int128_t* value) {
     if (!column.has_type() || column.has_null() || !column.null_map().empty() ||
         !has_only_integer_value(column)) {
         return false;
@@ -427,11 +451,7 @@ bool extract_integer_key(const PCloudDistributedCompactionKey& key, PGenericType
     }
 }
 
-bool extract_string_key(const PCloudDistributedCompactionKey& key, std::string* value) {
-    if (key.columns_size() != 1) {
-        return false;
-    }
-    const auto& column = key.columns(0);
+bool extract_string_value(const PValues& column, std::string* value) {
     if (!column.has_type() || column.type().id() != PGenericType::STRING || column.has_null() ||
         !column.null_map().empty() || !column.double_value().empty() ||
         !column.float_value().empty() || !column.int32_value().empty() ||
@@ -464,79 +484,20 @@ PGenericType_TypeId integer_key_pb_type(FieldType type) {
     }
 }
 
-void set_integer_key(PCloudDistributedCompactionKey* key, FieldType type, int128_t value) {
-    auto* column = key->add_columns();
-    column->mutable_type()->set_id(integer_key_pb_type(type));
+FieldType integer_key_field_type(PGenericType_TypeId type) {
     switch (type) {
-    case FieldType::OLAP_FIELD_TYPE_TINYINT:
-        column->add_int32_value(cast_set<int8_t>(value));
-        return;
-    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
-        column->add_int32_value(cast_set<int16_t>(value));
-        return;
-    case FieldType::OLAP_FIELD_TYPE_INT:
-        column->add_int32_value(cast_set<int32_t>(value));
-        return;
-    case FieldType::OLAP_FIELD_TYPE_BIGINT:
-        column->add_int64_value(cast_set<int64_t>(value));
-        return;
-    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
-        column->add_bytes_value(&value, sizeof(value));
-        return;
+    case PGenericType::INT8:
+        return FieldType::OLAP_FIELD_TYPE_TINYINT;
+    case PGenericType::INT16:
+        return FieldType::OLAP_FIELD_TYPE_SMALLINT;
+    case PGenericType::INT32:
+        return FieldType::OLAP_FIELD_TYPE_INT;
+    case PGenericType::INT64:
+        return FieldType::OLAP_FIELD_TYPE_BIGINT;
+    case PGenericType::INT128:
+        return FieldType::OLAP_FIELD_TYPE_LARGEINT;
     default:
-        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
-        __builtin_unreachable();
-    }
-}
-
-void set_string_key(PCloudDistributedCompactionKey* key, std::string_view value) {
-    auto* column = key->add_columns();
-    column->mutable_type()->set_id(PGenericType::STRING);
-    column->add_string_value(value.data(), value.size());
-}
-
-std::pair<int128_t, int128_t> integer_key_limits(FieldType type) {
-    switch (type) {
-    case FieldType::OLAP_FIELD_TYPE_TINYINT:
-        return {std::numeric_limits<int8_t>::min(), std::numeric_limits<int8_t>::max()};
-    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
-        return {std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::max()};
-    case FieldType::OLAP_FIELD_TYPE_INT:
-        return {std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()};
-    case FieldType::OLAP_FIELD_TYPE_BIGINT:
-        return {std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()};
-    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
-        return {std::numeric_limits<int128_t>::min(), std::numeric_limits<int128_t>::max()};
-    default:
-        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
-        __builtin_unreachable();
-    }
-}
-
-template <FieldType field_type>
-Status decode_integer_short_key(Slice encoded_key, int128_t* value) {
-    typename CppTypeTraits<field_type>::CppType decoded = 0;
-    RETURN_IF_ERROR(KeyCoderTraits<field_type>::decode_ascending(
-            &encoded_key, 0, reinterpret_cast<uint8_t*>(&decoded)));
-    *value = decoded;
-    return Status::OK();
-}
-
-Status decode_integer_short_key(FieldType type, Slice encoded_key, int128_t* value) {
-    switch (type) {
-    case FieldType::OLAP_FIELD_TYPE_TINYINT:
-        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_TINYINT>(encoded_key, value);
-    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
-        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_SMALLINT>(encoded_key, value);
-    case FieldType::OLAP_FIELD_TYPE_INT:
-        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_INT>(encoded_key, value);
-    case FieldType::OLAP_FIELD_TYPE_BIGINT:
-        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_BIGINT>(encoded_key, value);
-    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
-        return decode_integer_short_key<FieldType::OLAP_FIELD_TYPE_LARGEINT>(encoded_key, value);
-    default:
-        return Status::InvalidArgument("unsupported distributed base compaction key type: {}",
-                                       int(type));
+        return FieldType::OLAP_FIELD_TYPE_UNKNOWN;
     }
 }
 
@@ -560,6 +521,197 @@ Field create_integer_key_field(FieldType type, int128_t value) {
 
 Field create_string_key_field(std::string value) {
     return Field::create_field<TYPE_STRING>(std::move(value));
+}
+
+bool extract_key_fields(const PCloudDistributedCompactionKey& key,
+                        std::vector<PGenericType_TypeId>* types, CompositeKey* fields) {
+    if (key.columns().empty()) {
+        return false;
+    }
+    types->clear();
+    fields->clear();
+    types->reserve(key.columns_size());
+    fields->reserve(key.columns_size());
+    for (const auto& column : key.columns()) {
+        if (!column.has_type()) {
+            return false;
+        }
+        const auto type = column.type().id();
+        const FieldType field_type = integer_key_field_type(type);
+        if (field_type != FieldType::OLAP_FIELD_TYPE_UNKNOWN) {
+            PGenericType_TypeId actual_type = PGenericType::UNKNOWN;
+            int128_t value = 0;
+            if (!extract_integer_value(column, &actual_type, &value) || actual_type != type) {
+                return false;
+            }
+            fields->push_back(create_integer_key_field(field_type, value));
+        } else if (type == PGenericType::STRING) {
+            std::string value;
+            if (!extract_string_value(column, &value)) {
+                return false;
+            }
+            fields->push_back(create_string_key_field(std::move(value)));
+        } else {
+            return false;
+        }
+        types->push_back(type);
+    }
+    return true;
+}
+
+int128_t get_integer_key_field(const Field& field, FieldType type) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return field.get<TYPE_TINYINT>();
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return field.get<TYPE_SMALLINT>();
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return field.get<TYPE_INT>();
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return field.get<TYPE_BIGINT>();
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return field.get<TYPE_LARGEINT>();
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+void set_integer_key_column(PValues* column, FieldType type, int128_t value) {
+    column->mutable_type()->set_id(integer_key_pb_type(type));
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        column->add_int32_value(cast_set<int8_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        column->add_int32_value(cast_set<int16_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        column->add_int32_value(cast_set<int32_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        column->add_int64_value(cast_set<int64_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        column->add_bytes_value(&value, sizeof(value));
+        return;
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+void set_string_key_column(PValues* column, std::string_view value) {
+    column->mutable_type()->set_id(PGenericType::STRING);
+    column->add_string_value(value.data(), value.size());
+}
+
+void set_key_fields(PCloudDistributedCompactionKey* key, const TabletSchema& schema,
+                    const CompositeKey& fields) {
+    DORIS_CHECK_LE(fields.size(), schema.num_key_columns());
+    for (size_t column_index = 0; column_index < fields.size(); ++column_index) {
+        const auto type = schema.column(column_index).type();
+        auto* column = key->add_columns();
+        if (is_integer_key(type)) {
+            set_integer_key_column(column, type, get_integer_key_field(fields[column_index], type));
+        } else {
+            DORIS_CHECK(is_string_key(type));
+            set_string_key_column(column, fields[column_index].get<TYPE_STRING>());
+        }
+    }
+}
+
+std::pair<int128_t, int128_t> integer_key_limits(FieldType type) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return {std::numeric_limits<int8_t>::min(), std::numeric_limits<int8_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return {std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return {std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return {std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return {std::numeric_limits<int128_t>::min(), std::numeric_limits<int128_t>::max()};
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+CompositeKey key_limit(const TabletSchema& schema, size_t prefix_length, bool upper) {
+    CompositeKey key;
+    key.reserve(prefix_length);
+    for (size_t column_index = 0; column_index < prefix_length; ++column_index) {
+        const auto& column = schema.column(column_index);
+        if (is_integer_key(column.type())) {
+            const auto [min_value, max_value] = integer_key_limits(column.type());
+            key.push_back(create_integer_key_field(column.type(), upper ? max_value : min_value));
+        } else {
+            DORIS_CHECK(is_string_key(column.type()));
+            key.push_back(create_string_key_field(
+                    upper ? std::string(cast_set<size_t>(column.length()), '\xff')
+                          : std::string()));
+        }
+    }
+    return key;
+}
+
+bool extract_key_tuple(const PCloudDistributedCompactionKey& key, const TabletSchema& schema,
+                       OlapTuple* tuple) {
+    std::vector<PGenericType_TypeId> types;
+    CompositeKey fields;
+    if (!extract_key_fields(key, &types, &fields) || fields.size() > schema.num_key_columns()) {
+        return false;
+    }
+    for (size_t column_index = 0; column_index < fields.size(); ++column_index) {
+        const auto& column = schema.column(column_index);
+        if (column.is_nullable() || !is_supported_distributed_base_key(column.type())) {
+            return false;
+        }
+        const auto expected_type = is_integer_key(column.type())
+                                           ? integer_key_pb_type(column.type())
+                                           : PGenericType::STRING;
+        if (types[column_index] != expected_type) {
+            return false;
+        }
+        tuple->add_field(std::move(fields[column_index]));
+    }
+    return true;
+}
+
+Status read_key_samples(const segment_v2::SegmentSharedPtr& segment, const TabletSchema& schema,
+                        size_t key_column_count, const std::vector<rowid_t>& rowids,
+                        OlapReaderStatistics* reader_stats, std::vector<CompositeKey>* keys) {
+    keys->assign(rowids.size(), {});
+    if (rowids.empty()) {
+        return Status::OK();
+    }
+    StorageReadOptions read_options;
+    read_options.stats = reader_stats;
+    read_options.tablet_schema = segment->tablet_schema();
+    auto io_ctx = read_options.io_ctx;
+    io_ctx.reader_type = ReaderType::READER_BASE_COMPACTION;
+    io_ctx.file_cache_stats = &reader_stats->file_cache_stats;
+    segment_v2::ColumnIteratorOptions iterator_options {
+            .use_page_cache = !config::disable_storage_page_cache,
+            .file_reader = segment->file_reader().get(),
+            .stats = reader_stats,
+            .io_ctx = io_ctx,
+    };
+    for (size_t column_index = 0; column_index < key_column_count; ++column_index) {
+        const auto& column = schema.column(column_index);
+        auto values = DataTypeFactory::instance().create_data_type(column)->create_column();
+        std::unique_ptr<segment_v2::ColumnIterator> iterator;
+        RETURN_IF_ERROR(segment->new_column_iterator(column, &iterator, &read_options));
+        RETURN_IF_ERROR(iterator->init(iterator_options));
+        RETURN_IF_ERROR(iterator->read_by_rowids(rowids.data(), rowids.size(), values));
+        DORIS_CHECK_EQ(values->size(), rowids.size());
+        for (size_t sample_index = 0; sample_index < rowids.size(); ++sample_index) {
+            (*keys)[sample_index].push_back((*values)[sample_index]);
+        }
+    }
+    return Status::OK();
 }
 
 Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& request) {
@@ -591,32 +743,22 @@ Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& r
 Status validate_compaction_task(const PCloudDistributedCompactionSubmitRequest& request,
                                 const PCloudDistributedCompactionTask& task) {
     const auto& key_range = task.key_range();
-    PGenericType_TypeId lower_type = PGenericType::UNKNOWN;
-    PGenericType_TypeId upper_type = PGenericType::UNKNOWN;
-    int128_t lower_value = 0;
-    int128_t upper_value = 0;
-    const bool valid_integer_range =
+    std::vector<PGenericType_TypeId> lower_types;
+    std::vector<PGenericType_TypeId> upper_types;
+    CompositeKey lower_key;
+    CompositeKey upper_key;
+    const bool valid_key_range =
             task.has_key_range() && key_range.has_lower_key() && key_range.has_upper_key() &&
-            extract_integer_key(key_range.lower_key(), &lower_type, &lower_value) &&
-            extract_integer_key(key_range.upper_key(), &upper_type, &upper_value) &&
-            lower_type == upper_type &&
-            (lower_value < upper_value ||
-             (key_range.upper_inclusive() && lower_value == upper_value));
-    std::string lower_string;
-    std::string upper_string;
-    const bool valid_string_range = task.has_key_range() && key_range.has_lower_key() &&
-                                    key_range.has_upper_key() &&
-                                    extract_string_key(key_range.lower_key(), &lower_string) &&
-                                    extract_string_key(key_range.upper_key(), &upper_string) &&
-                                    (lower_string < upper_string ||
-                                     (key_range.upper_inclusive() && lower_string == upper_string));
+            extract_key_fields(key_range.lower_key(), &lower_types, &lower_key) &&
+            extract_key_fields(key_range.upper_key(), &upper_types, &upper_key) &&
+            lower_types == upper_types &&
+            (lower_key < upper_key || (key_range.upper_inclusive() && lower_key == upper_key));
     const bool valid_range =
             request.compaction_type() == CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION
                     ? task.segment_pos_start() >= 0 &&
                               task.segment_pos_start() < task.segment_pos_end()
                     : request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION &&
-                              key_range.lower_inclusive() &&
-                              (valid_integer_range || valid_string_range);
+                              key_range.lower_inclusive() && valid_key_range;
     if (!valid_range || task.max_segment_num() <= 0 || task.output_segment_start_id() < 0 ||
         task.group_index() < 0 ||
         cast_set<int64_t>(task.output_segment_start_id()) + task.max_segment_num() >
@@ -1291,16 +1433,17 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     *started = false;
     DORIS_CHECK_GT(input_rowsets.size(), 1);
     const auto& schema = *_tablet->tablet_schema();
-    const auto& key_column = schema.column(0);
-    const FieldType key_type = key_column.type();
     const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
                         _tablet->enable_unique_key_merge_on_write();
-    DORIS_CHECK(is_supported_distributed_base_key(key_type));
     DORIS_CHECK(!is_mow || schema.cluster_key_uids().empty());
     DORIS_CHECK(is_mow || schema.num_short_key_columns() > 0);
-    if (key_type == FieldType::OLAP_FIELD_TYPE_VARCHAR) {
-        DORIS_CHECK_EQ(is_mow ? schema.num_key_columns() : schema.num_short_key_columns(), 1);
+    size_t key_column_count = 0;
+    while (key_column_count < schema.num_key_columns() &&
+           is_supported_distributed_base_key(schema.column(key_column_count).type()) &&
+           !schema.column(key_column_count).is_nullable()) {
+        ++key_column_count;
     }
+    DORIS_CHECK_GT(key_column_count, 0);
     if (!config::enable_cloud_distributed_base_compaction || range_count < 2) {
         return Status::OK();
     }
@@ -1319,8 +1462,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
 
     // ponytail: collect all index samples; switch to a streaming k-way merge if coordinator
     // memory becomes measurable for very large tablets.
-    std::vector<IntegerKeySample> integer_samples;
-    std::vector<StringKeySample> string_samples;
+    std::vector<CompositeKeySample> samples;
     for (const auto& rowset : input_rowsets) {
         auto beta_rowset = std::dynamic_pointer_cast<BetaRowset>(rowset);
         if (beta_rowset == nullptr) {
@@ -1330,21 +1472,10 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         RETURN_IF_ERROR(beta_rowset->load_segments(&segments));
         for (const auto& segment : segments) {
             OlapReaderStatistics reader_stats;
-            std::unique_ptr<segment_v2::IndexedColumnIterator> primary_key_iterator;
-            MutableColumnPtr primary_key_column;
-            if (is_mow) {
-                RETURN_IF_ERROR(segment->load_pk_index_and_bf(&reader_stats));
-                const auto* primary_key_index = segment->get_primary_key_index();
-                DORIS_CHECK(primary_key_index != nullptr);
-                RETURN_IF_ERROR(
-                        primary_key_index->new_iterator(&primary_key_iterator, &reader_stats));
-                primary_key_column = DataTypeFactory::instance()
-                                             .create_data_type(primary_key_index->type(), 1, 0)
-                                             ->create_column();
-            } else {
+            if (!is_mow) {
                 RETURN_IF_ERROR(segment->load_index(&reader_stats));
             }
-            const auto* short_key_index = segment->get_short_key_index();
+            const auto* short_key_index = is_mow ? nullptr : segment->get_short_key_index();
             DORIS_CHECK(is_mow || short_key_index != nullptr);
             const uint64_t rows_per_block = is_mow ? schema.num_rows_per_row_block()
                                                    : short_key_index->num_rows_per_block();
@@ -1352,63 +1483,30 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             const uint64_t sample_count =
                     is_mow ? (segment->num_rows() + rows_per_block - 1) / rows_per_block
                            : short_key_index->num_items();
+            std::vector<rowid_t> rowids;
+            std::vector<uint64_t> weights;
+            rowids.reserve(sample_count);
+            weights.reserve(sample_count);
             for (uint64_t sample = 0; sample < sample_count; ++sample) {
                 const uint64_t row_start = sample * rows_per_block;
-                std::string primary_key;
-                if (is_mow) {
-                    primary_key_column->clear();
-                    RETURN_IF_ERROR(primary_key_iterator->seek_to_ordinal(row_start));
-                    size_t num_read = 1;
-                    RETURN_IF_ERROR(
-                            primary_key_iterator->next_batch(&num_read, primary_key_column));
-                    DORIS_CHECK_EQ(num_read, 1);
-                    primary_key = primary_key_column->get_data_at(0).to_string();
-                }
-                Slice encoded_key = is_mow ? Slice(primary_key)
-                                           : short_key_index->key(cast_set<uint32_t>(sample));
-                if (is_mow && segment->tablet_schema()->has_sequence_col()) {
-                    const size_t sequence_length =
-                            segment->tablet_schema()
-                                    ->column(segment->tablet_schema()->sequence_col_idx())
-                                    .length() +
-                            1;
-                    DORIS_CHECK_GT(encoded_key.size, sequence_length);
-                    encoded_key.size -= sequence_length;
-                }
-                if (encoded_key.size < 1 ||
-                    cast_set<uint8_t>(encoded_key.data[0]) != KeyConsts::KEY_NORMAL_MARKER) {
-                    return Status::InvalidArgument(
-                            "invalid non-null sampled key in rowset {}, segment {}",
-                            rowset->rowset_id().to_string(), segment->id());
-                }
                 DORIS_CHECK_LT(row_start, segment->num_rows());
-                const uint64_t weight = std::min(
-                        rows_per_block, cast_set<uint64_t>(segment->num_rows()) - row_start);
-                if (is_integer_key(key_type)) {
-                    int128_t key = 0;
-                    RETURN_IF_ERROR(decode_integer_short_key(
-                            key_type, Slice(encoded_key.data + 1, encoded_key.size - 1), &key));
-                    integer_samples.push_back({.key = key, .weight = weight});
-                } else {
-                    const size_t key_size =
-                            key_type == FieldType::OLAP_FIELD_TYPE_CHAR
-                                    ? cast_set<size_t>(is_mow ? key_column.length()
-                                                              : key_column.index_length())
-                                    : encoded_key.size - 1;
-                    DORIS_CHECK_LE(key_size, encoded_key.size - 1);
-                    string_samples.push_back(
-                            {.key = std::string(encoded_key.data + 1, key_size), .weight = weight});
-                }
+                rowids.push_back(cast_set<rowid_t>(row_start));
+                weights.push_back(std::min(rows_per_block,
+                                           cast_set<uint64_t>(segment->num_rows()) - row_start));
+            }
+            std::vector<CompositeKey> keys;
+            RETURN_IF_ERROR(read_key_samples(segment, schema, key_column_count, rowids,
+                                             &reader_stats, &keys));
+            DORIS_CHECK_EQ(keys.size(), weights.size());
+            for (size_t sample_index = 0; sample_index < keys.size(); ++sample_index) {
+                samples.push_back(
+                        {.key = std::move(keys[sample_index]), .weight = weights[sample_index]});
             }
         }
     }
 
-    const auto integer_boundaries =
-            choose_integer_key_range_boundaries(std::move(integer_samples), range_count);
-    const auto string_boundaries =
-            choose_string_key_range_boundaries(std::move(string_samples), range_count);
-    const size_t group_count =
-            (is_integer_key(key_type) ? integer_boundaries.size() : string_boundaries.size()) + 1;
+    const auto key_plan = choose_composite_key_range_boundaries(samples, range_count);
+    const size_t group_count = key_plan.boundaries.size() + 1;
     if (group_count < 2) {
         return Status::OK();
     }
@@ -1469,23 +1567,13 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         request_task->set_max_segment_num(distributed_task.segment_id_slot.capacity);
         request_task->set_merge_way_num(merge_way_num);
         auto* key_range = request_task->mutable_key_range();
-        if (is_integer_key(key_type)) {
-            const auto [min_key, max_key] = integer_key_limits(key_type);
-            set_integer_key(key_range->mutable_lower_key(), key_type,
-                            group_index == 0 ? min_key : integer_boundaries[group_index - 1]);
-            set_integer_key(
-                    key_range->mutable_upper_key(), key_type,
-                    group_index + 1 == group_count ? max_key : integer_boundaries[group_index]);
-        } else {
-            const std::string max_key(cast_set<size_t>(key_column.length()), '\xff');
-            set_string_key(key_range->mutable_lower_key(),
-                           group_index == 0 ? std::string_view()
-                                            : std::string_view(string_boundaries[group_index - 1]));
-            set_string_key(key_range->mutable_upper_key(),
-                           group_index + 1 == group_count
-                                   ? std::string_view(max_key)
-                                   : std::string_view(string_boundaries[group_index]));
-        }
+        const auto lower_key = group_index == 0 ? key_limit(schema, key_plan.prefix_length, false)
+                                                : key_plan.boundaries[group_index - 1];
+        const auto upper_key = group_index + 1 == group_count
+                                       ? key_limit(schema, key_plan.prefix_length, true)
+                                       : key_plan.boundaries[group_index];
+        set_key_fields(key_range->mutable_lower_key(), schema, lower_key);
+        set_key_fields(key_range->mutable_upper_key(), schema, upper_key);
         key_range->set_upper_inclusive(group_index + 1 == group_count);
     }
     RETURN_IF_ERROR(submit_batches(workers, groups_by_worker, requests));
@@ -2006,7 +2094,6 @@ Status DistributedCompactionWorker::handle_compaction(
     }
 
     const bool is_base = request->compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION;
-    FieldType key_type = FieldType::OLAP_FIELD_TYPE_UNKNOWN;
     if (is_base) {
         const auto& schema = *_tablet->tablet_schema();
         const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
@@ -2015,19 +2102,14 @@ Status DistributedCompactionWorker::handle_compaction(
                                          _tablet->keys_type() == KeysType::AGG_KEYS ||
                                          (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
                                           (!is_mow || schema.cluster_key_uids().empty()));
-        const bool supported_varchar =
-                schema.num_key_columns() > 0 &&
-                (schema.column(0).type() != FieldType::OLAP_FIELD_TYPE_VARCHAR ||
-                 (is_mow ? schema.num_key_columns() == 1 : schema.num_short_key_columns() == 1));
         if (!supported_keys_type || schema.num_key_columns() == 0 ||
             !is_supported_distributed_base_key(schema.column(0).type()) ||
-            schema.column(0).is_nullable() || !supported_varchar) {
+            schema.column(0).is_nullable()) {
             return Status::InvalidArgument(
                     "distributed base compaction requires DUP_KEYS, AGG_KEYS, UNIQUE_KEYS MOR, "
                     "or non-cluster-key UNIQUE_KEYS MOW tablet with a non-null supported leading "
                     "key");
         }
-        key_type = schema.column(0).type();
     }
     std::vector<RowsetMetaPB> input_meta_pbs;
     if (is_base) {
@@ -2058,29 +2140,11 @@ Status DistributedCompactionWorker::handle_compaction(
         const auto& key_range = task->key_range();
         OlapTuple lower_key;
         OlapTuple upper_key;
-        if (is_integer_key(key_type)) {
-            PGenericType_TypeId lower_type = PGenericType::UNKNOWN;
-            PGenericType_TypeId upper_type = PGenericType::UNKNOWN;
-            int128_t lower_value = 0;
-            int128_t upper_value = 0;
-            if (!extract_integer_key(key_range.lower_key(), &lower_type, &lower_value) ||
-                !extract_integer_key(key_range.upper_key(), &upper_type, &upper_value) ||
-                lower_type != integer_key_pb_type(key_type) || upper_type != lower_type) {
-                return Status::InvalidArgument(
-                        "distributed base compaction key range does not match tablet key type");
-            }
-            lower_key.add_field(create_integer_key_field(key_type, lower_value));
-            upper_key.add_field(create_integer_key_field(key_type, upper_value));
-        } else {
-            std::string lower_value;
-            std::string upper_value;
-            if (!extract_string_key(key_range.lower_key(), &lower_value) ||
-                !extract_string_key(key_range.upper_key(), &upper_value)) {
-                return Status::InvalidArgument(
-                        "distributed base compaction key range does not match tablet key type");
-            }
-            lower_key.add_field(create_string_key_field(std::move(lower_value)));
-            upper_key.add_field(create_string_key_field(std::move(upper_value)));
+        const auto& schema = *_tablet->tablet_schema();
+        if (!extract_key_tuple(key_range.lower_key(), schema, &lower_key) ||
+            !extract_key_tuple(key_range.upper_key(), schema, &upper_key)) {
+            return Status::InvalidArgument(
+                    "distributed base compaction key range does not match tablet key type");
         }
         merge_key_range = Merger::KeyRange {.lower_key = std::move(lower_key),
                                             .upper_key = std::move(upper_key),
