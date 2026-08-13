@@ -819,6 +819,13 @@ static bool should_accept_cumulative_point(const std::string& instance_id, int64
     if (compaction.output_cumulative_point() <= stats.cumulative_point()) {
         return true;
     }
+    // The committed output covers [current point, proposal - 1].
+    if (compaction.type() == TabletCompactionJobPB::CUMULATIVE &&
+        compaction.input_versions_size() == 2 &&
+        compaction.input_versions(0) == stats.cumulative_point() &&
+        compaction.output_cumulative_point() == compaction.input_versions(1) + 1) {
+        return true;
+    }
 
     // For legacy BEs:
     // 1. The snapshot comes from START.
