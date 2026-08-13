@@ -57,6 +57,7 @@
 #include "runtime/thread_context.h"
 #include "service/backend_options.h"
 #include "storage/compaction/compaction.h"
+#include "storage/index/primary_key_index.h"
 #include "storage/index/short_key_index.h"
 #include "storage/key_coder.h"
 #include "storage/merger.h"
