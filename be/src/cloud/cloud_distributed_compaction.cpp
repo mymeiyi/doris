@@ -1560,6 +1560,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         request.set_target_backend_id(worker.backend_id);
         request.set_target_cloud_unique_id(worker.cloud_unique_id);
         request.set_target_compute_group_id(worker.compute_group_id);
+        request.set_is_coordinator(worker.backend_id == BackendOptions::get_backend_id());
 
         const auto& distributed_task = _state->tasks[group_index];
         auto* request_task = request.add_tasks();
@@ -2060,7 +2061,8 @@ void DistributedCompactionWorker::get_compaction_status(
 Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_output_rowset_writer(
         const PCloudDistributedCompactionSubmitRequest& request,
         const PCloudDistributedCompactionTask& task, const RowsetMeta& output_meta,
-        const StorageResource& storage_resource) {
+        const StorageResource& storage_resource,
+        const std::vector<RowsetSharedPtr>& input_rowsets) {
     RowsetWriterContext context;
     context.rowset_id = output_meta.rowset_id();
     context.db_id = output_meta.db_id();
@@ -2082,11 +2084,24 @@ Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_out
     context.compaction_type = request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION
                                       ? ReaderType::READER_BASE_COMPACTION
                                       : ReaderType::READER_CUMULATIVE_COMPACTION;
-    if (context.compaction_type == ReaderType::READER_CUMULATIVE_COMPACTION) {
-        context.disable_file_cache = !request.is_coordinator();
-        context.write_file_cache = should_cache_cloud_cumulative_compaction_output();
+    context.disable_file_cache = !request.is_coordinator();
+    if (request.is_coordinator()) {
         context.file_cache_ttl_sec = _tablet->ttl_seconds();
-        context.approximate_bytes_to_write = request.input_rowset_meta().total_disk_size();
+        if (context.compaction_type == ReaderType::READER_CUMULATIVE_COMPACTION) {
+            context.write_file_cache = should_cache_cloud_cumulative_compaction_output();
+            context.approximate_bytes_to_write = request.input_rowset_meta().total_disk_size();
+        } else {
+            int64_t total_size = 0;
+            int64_t cached_size = 0;
+            for (const auto& input_rowset : input_rowsets) {
+                total_size += input_rowset->total_disk_size();
+                cached_size += input_rowset->approximate_cached_data_size() +
+                               input_rowset->approximate_cache_index_size();
+            }
+            context.write_file_cache =
+                    should_cache_cloud_base_compaction_output(cached_size, total_size);
+            context.approximate_bytes_to_write = total_size;
+        }
         context.compaction_output_write_index_only = should_enable_compaction_cache_index_only(
                 context.write_file_cache, context.compaction_type,
                 config::enable_file_cache_write_base_compaction_index_only,
@@ -2201,8 +2216,8 @@ Status DistributedCompactionWorker::handle_compaction(
                                        storage_resource.error().to_string());
     }
 
-    auto writer = DORIS_TRY(construct_output_rowset_writer(*request, *task, output_meta,
-                                                           *storage_resource.value()));
+    auto writer = DORIS_TRY(construct_output_rowset_writer(
+            *request, *task, output_meta, *storage_resource.value(), input_rowsets));
 
     _is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
               _tablet->enable_unique_key_merge_on_write();

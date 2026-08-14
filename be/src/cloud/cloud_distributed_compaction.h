@@ -283,7 +283,8 @@ private:
     Result<std::unique_ptr<RowsetWriter>> construct_output_rowset_writer(
             const PCloudDistributedCompactionSubmitRequest& request,
             const PCloudDistributedCompactionTask& task, const RowsetMeta& output_meta,
-            const StorageResource& storage_resource);
+            const StorageResource& storage_resource,
+            const std::vector<RowsetSharedPtr>& input_rowsets);
     Status handle_compaction(const PCloudDistributedCompactionSubmitRequest* request,
                              const PCloudDistributedCompactionTask* task,
                              PCloudDistributedCompactionTaskResult* result);
