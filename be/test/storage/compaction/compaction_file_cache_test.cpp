@@ -19,16 +19,11 @@
 
 #include "cloud/config.h"
 #include "io/fs/file_writer.h"
+#include "storage/compaction/compaction.h"
 #include "storage/olap_common.h"
 #include "storage/rowset/rowset_writer_context.h"
 
 namespace doris {
-
-// Extern declaration for the free function in compaction.cpp
-extern bool should_enable_compaction_cache_index_only(bool write_file_cache,
-                                                      ReaderType compaction_type,
-                                                      bool enable_base_index_only,
-                                                      bool enable_cumu_index_only);
 
 class CompactionFileCacheTest : public testing::Test {
 public:
@@ -345,6 +340,34 @@ TEST_F(CompactionFileCacheTest, GlobalIndexFileOnlyTakesPrecedenceOverCompaction
     EXPECT_TRUE(index_opts.write_file_cache);
     EXPECT_FALSE(index_opts.allow_adaptive_file_cache_write);
     EXPECT_EQ(index_opts.approximate_bytes_to_write, 0);
+}
+
+TEST_F(CompactionFileCacheTest, DisableFileCacheOverridesAllWritePolicies) {
+    config::enable_file_cache_write_index_file_only = true;
+
+    RowsetWriterContext ctx;
+    ctx.write_file_cache = true;
+    ctx.disable_file_cache = true;
+    ctx.compaction_output_write_index_only = true;
+    ctx.approximate_bytes_to_write = 12345;
+
+    auto segment_opts = ctx.get_file_writer_options(FileType::SEGMENT_FILE);
+    EXPECT_FALSE(segment_opts.write_file_cache);
+    EXPECT_FALSE(segment_opts.allow_adaptive_file_cache_write);
+    EXPECT_EQ(segment_opts.approximate_bytes_to_write, 0);
+
+    auto index_opts = ctx.get_file_writer_options(FileType::INVERTED_INDEX_FILE);
+    EXPECT_FALSE(index_opts.write_file_cache);
+    EXPECT_FALSE(index_opts.allow_adaptive_file_cache_write);
+    EXPECT_EQ(index_opts.approximate_bytes_to_write, 0);
+}
+
+TEST_F(CompactionFileCacheTest, CloudCumulativeCacheFollowsGlobalIndexOnlyPolicy) {
+    config::enable_file_cache_write_index_file_only = false;
+    EXPECT_TRUE(should_cache_cloud_cumulative_compaction_output());
+
+    config::enable_file_cache_write_index_file_only = true;
+    EXPECT_FALSE(should_cache_cloud_cumulative_compaction_output());
 }
 
 // ============================================================================

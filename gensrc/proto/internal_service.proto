@@ -979,6 +979,8 @@ message PCloudDistributedCompactionSubmitRequest {
     // Base compaction consumes multiple rowsets. Field 3 remains for compatibility with the
     // existing single-rowset cumulative protocol.
     repeated RowsetMetaPB input_rowset_metas = 18;
+    // Whether the target worker runs on the coordinator BE.
+    optional bool is_coordinator = 19;
 }
 
 message PCloudDistributedCompactionSubmitResponse {

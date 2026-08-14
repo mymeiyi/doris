@@ -1399,6 +1399,7 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
         request.set_target_backend_id(worker.backend_id);
         request.set_target_cloud_unique_id(worker.cloud_unique_id);
         request.set_target_compute_group_id(worker.compute_group_id);
+        request.set_is_coordinator(worker.backend_id == BackendOptions::get_backend_id());
         for (const size_t group_index : groups_by_worker[worker_index]) {
             const auto& range = segment_ranges[group_index];
             const auto& distributed_task = _state->tasks[group_index];
@@ -2081,6 +2082,16 @@ Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_out
     context.compaction_type = request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION
                                       ? ReaderType::READER_BASE_COMPACTION
                                       : ReaderType::READER_CUMULATIVE_COMPACTION;
+    if (context.compaction_type == ReaderType::READER_CUMULATIVE_COMPACTION) {
+        context.disable_file_cache = !request.is_coordinator();
+        context.write_file_cache = should_cache_cloud_cumulative_compaction_output();
+        context.file_cache_ttl_sec = _tablet->ttl_seconds();
+        context.approximate_bytes_to_write = request.input_rowset_meta().total_disk_size();
+        context.compaction_output_write_index_only = should_enable_compaction_cache_index_only(
+                context.write_file_cache, context.compaction_type,
+                config::enable_file_cache_write_base_compaction_index_only,
+                config::enable_file_cache_write_cumu_compaction_index_only);
+    }
     context.tablet = _tablet;
     context.encrypt_algorithm = _tablet->tablet_meta()->encryption_algorithm();
     context.job_id = request.execution_id();

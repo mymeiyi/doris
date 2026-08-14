@@ -94,6 +94,10 @@ using std::vector;
 namespace doris {
 using namespace ErrorCode;
 
+bool should_cache_cloud_cumulative_compaction_output() {
+    return !config::enable_file_cache_write_index_file_only;
+}
+
 // Determine whether to enable index-only file cache mode for compaction output.
 // This function decides if only index files should be written to cache, based on:
 // - write_file_cache: whether file cache is enabled
@@ -2138,12 +2142,12 @@ int64_t CloudCompactionMixin::num_input_rowsets() const {
 }
 
 bool CloudCompactionMixin::should_cache_compaction_output() {
-    if (config::enable_file_cache_write_index_file_only) {
-        return false;
+    if (compaction_type() == ReaderType::READER_CUMULATIVE_COMPACTION) {
+        return should_cache_cloud_cumulative_compaction_output();
     }
 
-    if (compaction_type() == ReaderType::READER_CUMULATIVE_COMPACTION) {
-        return true;
+    if (config::enable_file_cache_write_index_file_only) {
+        return false;
     }
 
     if (compaction_type() == ReaderType::READER_BASE_COMPACTION) {
