@@ -227,6 +227,17 @@ std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
     return workers;
 }
 
+std::vector<std::vector<size_t>> assign_compaction_groups_round_robin(size_t group_count,
+                                                                     size_t worker_count) {
+    DORIS_CHECK_GT(group_count, 0);
+    DORIS_CHECK_GT(worker_count, 0);
+    std::vector<std::vector<size_t>> groups_by_worker(worker_count);
+    for (size_t group_index = 0; group_index < group_count; ++group_index) {
+        groups_by_worker[group_index % worker_count].push_back(group_index);
+    }
+    return groups_by_worker;
+}
+
 std::vector<SegmentGroupMergeRange> build_segment_group_merge_ranges(const RowsetMeta& rowset_meta,
                                                                      int64_t segment_group_size) {
     DORIS_CHECK_GT(segment_group_size, 1);
@@ -1367,7 +1378,8 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
     _state->phase1_end_version = phase1_end_version;
     _state->output_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
     _state->tasks.reserve(segment_ranges.size());
-    std::vector<std::vector<size_t>> groups_by_worker(workers.size());
+    auto groups_by_worker =
+            assign_compaction_groups_round_robin(segment_ranges.size(), workers.size());
     // The coordinator is first in workers, so it receives one additional group when the groups
     // cannot be evenly distributed among workers.
     for (size_t group_index = 0; group_index < segment_ranges.size(); ++group_index) {
@@ -1376,7 +1388,6 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
         _state->tasks.push_back({.worker_endpoint = worker.endpoint,
                                  .group_index = cast_set<int32_t>(group_index),
                                  .segment_id_slot = segment_slots[group_index]});
-        groups_by_worker[worker_index].push_back(group_index);
     }
 
     const auto input_meta_pb = input_rowset->rowset_meta()->get_rowset_pb();
@@ -1456,8 +1467,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
                      << "fallback to local compaction: " << discovery_status;
         return Status::OK();
     }
-    range_count = std::min(range_count, candidates.size());
-    if (range_count < 2) {
+    if (candidates.size() < 2) {
         return Status::OK();
     }
 
@@ -1513,7 +1523,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     }
     auto workers = select_compaction_workers_for_groups(
             candidates, BackendOptions::get_backend_id(), group_count, _execution_id);
-    DORIS_CHECK_EQ(workers.size(), group_count);
+    DORIS_CHECK_GE(workers.size(), 2);
 
     std::vector<OutputRowsetSegmentIdSlot> segment_slots;
     RETURN_IF_ERROR(build_output_rowset_segment_id_slots(
@@ -1528,12 +1538,12 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         _state->output_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
     }
     _state->tasks.reserve(group_count);
-    std::vector<std::vector<size_t>> groups_by_worker(group_count);
+    auto groups_by_worker = assign_compaction_groups_round_robin(group_count, workers.size());
     for (size_t group_index = 0; group_index < group_count; ++group_index) {
-        _state->tasks.push_back({.worker_endpoint = workers[group_index].endpoint,
+        const size_t worker_index = group_index % workers.size();
+        _state->tasks.push_back({.worker_endpoint = workers[worker_index].endpoint,
                                  .group_index = cast_set<int32_t>(group_index),
                                  .segment_id_slot = segment_slots[group_index]});
-        groups_by_worker[group_index].push_back(group_index);
     }
 
     int64_t merge_way_num = 0;
@@ -1541,10 +1551,10 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         merge_way_num += rowset->rowset_meta()->get_merge_way_num();
     }
     const auto output_meta_pb = output_rowset_writer.rowset_meta()->get_rowset_pb();
-    std::vector<PCloudDistributedCompactionSubmitRequest> requests(group_count);
-    for (size_t group_index = 0; group_index < group_count; ++group_index) {
-        const auto& worker = workers[group_index];
-        auto& request = requests[group_index];
+    std::vector<PCloudDistributedCompactionSubmitRequest> requests(workers.size());
+    for (size_t worker_index = 0; worker_index < workers.size(); ++worker_index) {
+        const auto& worker = workers[worker_index];
+        auto& request = requests[worker_index];
         request.set_tablet_id(_tablet->tablet_id());
         request.set_execution_id(_execution_id);
         request.set_compaction_type(CLOUD_DISTRIBUTED_BASE_COMPACTION);
@@ -1562,21 +1572,24 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         request.set_target_compute_group_id(worker.compute_group_id);
         request.set_is_coordinator(worker.backend_id == BackendOptions::get_backend_id());
 
-        const auto& distributed_task = _state->tasks[group_index];
-        auto* request_task = request.add_tasks();
-        request_task->set_group_index(distributed_task.group_index);
-        request_task->set_output_segment_start_id(distributed_task.segment_id_slot.start_id);
-        request_task->set_max_segment_num(distributed_task.segment_id_slot.capacity);
-        request_task->set_merge_way_num(merge_way_num);
-        auto* key_range = request_task->mutable_key_range();
-        const auto lower_key = group_index == 0 ? key_limit(schema, key_plan.prefix_length, false)
-                                                : key_plan.boundaries[group_index - 1];
-        const auto upper_key = group_index + 1 == group_count
-                                       ? key_limit(schema, key_plan.prefix_length, true)
-                                       : key_plan.boundaries[group_index];
-        set_key_fields(key_range->mutable_lower_key(), schema, lower_key);
-        set_key_fields(key_range->mutable_upper_key(), schema, upper_key);
-        key_range->set_upper_inclusive(group_index + 1 == group_count);
+        for (const size_t group_index : groups_by_worker[worker_index]) {
+            const auto& distributed_task = _state->tasks[group_index];
+            auto* request_task = request.add_tasks();
+            request_task->set_group_index(distributed_task.group_index);
+            request_task->set_output_segment_start_id(distributed_task.segment_id_slot.start_id);
+            request_task->set_max_segment_num(distributed_task.segment_id_slot.capacity);
+            request_task->set_merge_way_num(merge_way_num);
+            auto* key_range = request_task->mutable_key_range();
+            const auto lower_key =
+                    group_index == 0 ? key_limit(schema, key_plan.prefix_length, false)
+                                     : key_plan.boundaries[group_index - 1];
+            const auto upper_key = group_index + 1 == group_count
+                                           ? key_limit(schema, key_plan.prefix_length, true)
+                                           : key_plan.boundaries[group_index];
+            set_key_fields(key_range->mutable_lower_key(), schema, lower_key);
+            set_key_fields(key_range->mutable_upper_key(), schema, upper_key);
+            key_range->set_upper_inclusive(group_index + 1 == group_count);
+        }
     }
     RETURN_IF_ERROR(submit_batches(workers, groups_by_worker, requests));
 
@@ -1584,9 +1597,9 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     _execution_plan->workers = std::move(workers);
     _execution_plan->groups_by_worker = std::move(groups_by_worker);
     _execution_plan->responses.resize(group_count);
-    _execution_plan->worker_completed.assign(group_count, false);
+    _execution_plan->worker_completed.assign(_execution_plan->workers.size(), false);
     _execution_plan->task_completed.assign(group_count, false);
-    _execution_plan->remaining_workers = group_count;
+    _execution_plan->remaining_workers = _execution_plan->workers.size();
     _execution_plan->expiration_time = output_meta_pb.txn_expiration();
     _execution_plan->is_mow = is_mow;
     _execution_plan->check_missed_rows = false;
@@ -2332,6 +2345,19 @@ Status DistributedCompactionWorkerManager::submit(
         std::shared_ptr<DistributedCompactionWorker> worker;
         PCloudDistributedCompactionTask task;
     };
+    struct CompactionBatch {
+        std::vector<CompactionJob> jobs;
+        std::atomic<bool> failed {false};
+
+        void cancel(const Status& status) {
+            if (failed.exchange(true)) {
+                return;
+            }
+            for (const auto& job : jobs) {
+                job.worker->cancel_compaction(job.task.group_index(), status);
+            }
+        }
+    };
     struct CreatedWorker {
         std::string key;
         int32_t group_index;
@@ -2383,30 +2409,36 @@ Status DistributedCompactionWorkerManager::submit(
         if (jobs.empty()) {
             return Status::OK();
         }
-        submit_status = engine.distributed_compaction_worker_thread_pool().submit_func(
-                [request_copy, jobs = std::move(jobs)]() {
-                    bool batch_failed = false;
-                    for (const auto& job : jobs) {
-                        if (batch_failed) {
-                            job.worker->cancel_compaction(
-                                    job.task.group_index(),
-                                    Status::Cancelled(
-                                            "skipped after a previous task in the batch failed"));
-                            continue;
-                        }
-                        if (request_copy->output_rowset_meta().txn_expiration() <=
-                            ::time(nullptr)) {
-                            job.worker->cancel_compaction(
-                                    job.task.group_index(),
-                                    Status::TimedOut("distributed compaction task expired before "
-                                                     "execution"));
-                            batch_failed = true;
-                            continue;
-                        }
-                        batch_failed =
-                                !job.worker->execute_compaction(request_copy.get(), &job.task).ok();
-                    }
-                });
+        auto batch = std::make_shared<CompactionBatch>();
+        batch->jobs = std::move(jobs);
+        auto* worker_pool = &engine.distributed_compaction_worker_thread_pool();
+        submit_status = worker_pool->submit_func([request_copy, batch, worker_pool]() {
+            for (size_t job_index = 0; job_index < batch->jobs.size(); ++job_index) {
+                const Status task_submit_status = worker_pool->submit_func(
+                        [request_copy, batch, job_index]() {
+                            const auto& job = batch->jobs[job_index];
+                            Status task_status = Status::OK();
+                            if (request_copy->output_rowset_meta().txn_expiration() <=
+                                ::time(nullptr)) {
+                                task_status = Status::TimedOut(
+                                        "distributed compaction task expired before execution");
+                                job.worker->cancel_compaction(job.task.group_index(), task_status);
+                            } else {
+                                task_status = job.worker->execute_compaction(request_copy.get(),
+                                                                             &job.task);
+                            }
+                            if (!task_status.ok()) {
+                                batch->cancel(task_status);
+                            }
+                        });
+                if (!task_submit_status.ok()) {
+                    batch->cancel(Status::TooManyTasks(
+                            "failed to submit distributed compaction task: {}",
+                            task_submit_status.to_string()));
+                    return;
+                }
+            }
+        });
         if (!submit_status.ok()) {
             const Status cancel_status =
                     Status::Cancelled("distributed compaction worker batch submission failed: {}",

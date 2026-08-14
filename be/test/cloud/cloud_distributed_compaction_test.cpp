@@ -184,6 +184,14 @@ TEST(CloudDistributedCompactionTest,
     EXPECT_GT(selected_remote_backend_ids.size(), 1);
 }
 
+TEST(CloudDistributedCompactionTest, distributed_compaction_assigns_groups_round_robin) {
+    const auto groups = cloud::assign_compaction_groups_round_robin(7, 3);
+    ASSERT_EQ(groups.size(), 3);
+    EXPECT_EQ(groups[0], (std::vector<size_t> {0, 3, 6}));
+    EXPECT_EQ(groups[1], (std::vector<size_t> {1, 4}));
+    EXPECT_EQ(groups[2], (std::vector<size_t> {2, 5}));
+}
+
 TEST(CloudDistributedCompactionTest,
      distributed_single_rowset_compaction_caches_discovered_workers) {
     const int32_t old_ttl = config::cloud_distributed_compaction_worker_cache_ttl_ms;

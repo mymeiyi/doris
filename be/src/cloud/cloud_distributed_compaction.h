@@ -79,6 +79,8 @@ struct CompactionWorkerInfo {
 std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
         const std::vector<CompactionWorkerInfo>& candidates, int64_t coordinator_backend_id,
         size_t group_count, std::string_view execution_id);
+std::vector<std::vector<size_t>> assign_compaction_groups_round_robin(size_t group_count,
+                                                                     size_t worker_count);
 
 struct DistributedCompactionTask {
     std::string worker_endpoint;

@@ -79,9 +79,9 @@ DEFINE_mInt32(cloud_distributed_compaction_status_poll_interval_ms, "20000");
 DEFINE_Int32(cloud_distributed_compaction_thread_num, "32");
 // Maximum number of distributed compaction coordinator RPC tasks queued on this BE.
 DEFINE_Int32(cloud_distributed_compaction_queue_size, "4096");
-// Maximum number of distributed compaction requests executed concurrently on a worker BE.
+// Maximum number of distributed compaction tasks executed concurrently on a worker BE.
 DEFINE_Int32(cloud_distributed_compaction_worker_thread_num, "32");
-// Maximum number of distributed compaction requests queued on a worker BE.
+// Maximum number of distributed compaction tasks queued on a worker BE.
 DEFINE_Int32(cloud_distributed_compaction_worker_queue_size, "4096");
 
 DEFINE_mInt32(refresh_s3_info_interval_s, "60");

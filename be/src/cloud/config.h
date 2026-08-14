@@ -119,9 +119,9 @@ DECLARE_mInt32(cloud_distributed_compaction_status_poll_interval_ms);
 DECLARE_Int32(cloud_distributed_compaction_thread_num);
 // Maximum number of distributed compaction coordinator RPC tasks queued on this BE.
 DECLARE_Int32(cloud_distributed_compaction_queue_size);
-// Maximum number of distributed compaction requests executed concurrently on a worker BE.
+// Maximum number of distributed compaction tasks executed concurrently on a worker BE.
 DECLARE_Int32(cloud_distributed_compaction_worker_thread_num);
-// Maximum number of distributed compaction requests queued on a worker BE.
+// Maximum number of distributed compaction tasks queued on a worker BE.
 DECLARE_Int32(cloud_distributed_compaction_worker_queue_size);
 
 // CloudStorageEngine config
