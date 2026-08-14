@@ -281,6 +281,10 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
                 _read_context->runtime_state->query_options().enable_file_cache;
         _read_options.io_ctx.is_disposable =
                 _read_context->runtime_state->query_options().disable_file_cache;
+        _read_options.io_ctx.preferred_peer_host =
+                _read_context->runtime_state->preferred_file_cache_peer_host();
+        _read_options.io_ctx.preferred_peer_port =
+                _read_context->runtime_state->preferred_file_cache_peer_port();
         auto* query_ctx = _read_context->runtime_state->get_query_ctx();
         if (_read_context->reader_type == ReaderType::READER_QUERY && query_ctx != nullptr) {
             _read_options.io_ctx.remote_scan_cache_write_limiter =

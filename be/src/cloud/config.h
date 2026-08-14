@@ -103,6 +103,8 @@ DECLARE_mInt32(cloud_single_rowset_compaction_segment_group_size);
 DECLARE_mBool(enable_cloud_single_rowset_distributed_compaction);
 // Enable cross-BE key-range base compaction for DUP_KEYS tables with an INT leading key.
 DECLARE_mBool(enable_cloud_distributed_base_compaction);
+// Let remote distributed compaction workers read cache misses from the coordinator BE first.
+DECLARE_mBool(enable_cloud_distributed_compaction_peer_read);
 // Target input bytes per distributed base compaction range.
 DECLARE_mInt64(cloud_distributed_base_compaction_target_input_size_bytes);
 // TTL for the live same-compute-group BE snapshot fetched from FE.

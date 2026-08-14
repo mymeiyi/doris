@@ -379,6 +379,13 @@ Status parse_endpoint(std::string_view endpoint, std::string* host, int* port) {
     return Status::OK();
 }
 
+void set_coordinator_peer_if_enabled(PCloudDistributedCompactionSubmitRequest* request) {
+    if (config::enable_cloud_distributed_compaction_peer_read && !request->is_coordinator()) {
+        request->set_coordinator_host(BackendOptions::get_localhost());
+        request->set_coordinator_brpc_port(config::brpc_port);
+    }
+}
+
 template <typename Request, typename Response, typename Method>
 Status call_worker(const std::string& endpoint, const Request& request, Response* response,
                    Method method, std::string_view rpc_name, int64_t timeout_ms) {
@@ -733,6 +740,12 @@ Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& r
                               request.input_rowset_metas_size() > 1;
     if (!has_valid_input || !request.has_output_rowset_meta() || request.execution_id().empty()) {
         return Status::InvalidArgument("invalid distributed compaction request");
+    }
+    if (request.has_coordinator_host() != request.has_coordinator_brpc_port() ||
+        (request.has_coordinator_host() &&
+         (request.coordinator_host().empty() || request.coordinator_brpc_port() <= 0 ||
+          request.coordinator_brpc_port() > 65535))) {
+        return Status::InvalidArgument("invalid distributed compaction coordinator peer");
     }
     const auto* cluster_info =
             static_cast<const CloudClusterInfo*>(ExecEnv::GetInstance()->cluster_info());
@@ -1411,6 +1424,7 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
         request.set_target_cloud_unique_id(worker.cloud_unique_id);
         request.set_target_compute_group_id(worker.compute_group_id);
         request.set_is_coordinator(worker.backend_id == BackendOptions::get_backend_id());
+        set_coordinator_peer_if_enabled(&request);
         for (const size_t group_index : groups_by_worker[worker_index]) {
             const auto& range = segment_ranges[group_index];
             const auto& distributed_task = _state->tasks[group_index];
@@ -1571,6 +1585,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         request.set_target_cloud_unique_id(worker.cloud_unique_id);
         request.set_target_compute_group_id(worker.compute_group_id);
         request.set_is_coordinator(worker.backend_id == BackendOptions::get_backend_id());
+        set_coordinator_peer_if_enabled(&request);
 
         for (const size_t group_index : groups_by_worker[worker_index]) {
             const auto& distributed_task = _state->tasks[group_index];
@@ -2143,6 +2158,10 @@ Status DistributedCompactionWorker::handle_compaction(
         PCloudDistributedCompactionTaskResult* result) {
     SCOPED_ATTACH_TASK(_mem_tracker);
     std::lock_guard<std::mutex> lock(_mutex);
+    if (!request->is_coordinator() && request->has_coordinator_host()) {
+        _runtime_state->set_preferred_file_cache_peer(request->coordinator_host(),
+                                                      request->coordinator_brpc_port());
+    }
     if (_output_rowset != nullptr) {
         return Status::InvalidArgument(
                 "duplicate distributed compaction task: execution={}, group={}",

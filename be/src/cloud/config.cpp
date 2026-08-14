@@ -63,6 +63,8 @@ DEFINE_mInt32(cloud_single_rowset_compaction_segment_group_size, "64");
 DEFINE_mBool(enable_cloud_single_rowset_distributed_compaction, "false");
 // Run large DUP_KEYS base compactions on multiple BEs, split by the first INT key column.
 DEFINE_mBool(enable_cloud_distributed_base_compaction, "false");
+// Let remote distributed compaction workers read cache misses from the coordinator BE first.
+DEFINE_mBool(enable_cloud_distributed_compaction_peer_read, "false");
 // Target input bytes per distributed base compaction range. This is also the activation threshold.
 DEFINE_mInt64(cloud_distributed_base_compaction_target_input_size_bytes, "10737418240");
 // TTL for the live same-compute-group BE snapshot fetched from FE.

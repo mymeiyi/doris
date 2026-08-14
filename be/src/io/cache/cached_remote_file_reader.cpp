@@ -166,7 +166,8 @@ bool CachedRemoteFileReader::_can_read_cache_file_directly() const {
 bool CachedRemoteFileReader::_should_read_from_peer(const IOContext* io_ctx) const {
     return doris::config::is_cloud_mode() && _is_doris_table && _tablet_id > 0 &&
            !io_ctx->is_warmup && !io_ctx->bypass_peer_read &&
-           doris::config::enable_cache_read_from_peer;
+           (doris::config::enable_cache_read_from_peer ||
+            !io_ctx->preferred_peer_host.empty());
 }
 
 void CachedRemoteFileReader::_insert_file_reader(FileBlockSPtr file_block) {
@@ -646,6 +647,17 @@ Status CachedRemoteFileReader::_execute_remote_read(const std::vector<FileBlockS
                                                     const IOContext* io_ctx) {
     // --- Non-peer path: direct S3 ---
     if (!_should_read_from_peer(io_ctx)) {
+        return _execute_s3_fallback(empty_start, span_size, buffer, peer_result, stats, io_ctx);
+    }
+
+    if (!io_ctx->preferred_peer_host.empty()) {
+        const auto st = execute_peer_read(empty_blocks, peer_result, path().native(), this->size(),
+                                          _is_doris_table, stats, io_ctx,
+                                          io_ctx->preferred_peer_host,
+                                          io_ctx->preferred_peer_port);
+        if (st.ok()) {
+            return st;
+        }
         return _execute_s3_fallback(empty_start, span_size, buffer, peer_result, stats, io_ctx);
     }
 

@@ -981,6 +981,10 @@ message PCloudDistributedCompactionSubmitRequest {
     repeated RowsetMetaPB input_rowset_metas = 18;
     // Whether the target worker runs on the coordinator BE.
     optional bool is_coordinator = 19;
+    // Preferred peer cache endpoint for remote workers. Absent when peer read is disabled or the
+    // target worker is the coordinator.
+    optional string coordinator_host = 20;
+    optional int32 coordinator_brpc_port = 21;
 }
 
 message PCloudDistributedCompactionSubmitResponse {
