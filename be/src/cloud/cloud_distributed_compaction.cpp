@@ -1671,9 +1671,12 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
                 .tag("filtered_rows", response.filtered_rows())
                 .tag("local_read_bytes", response.bytes_read_from_local())
                 .tag("remote_read_bytes", response.bytes_read_from_remote())
+                .tag("peer_read_bytes", response.bytes_read_from_peer())
                 .tag("cached_bytes_total", response.cached_bytes_total())
                 .tag("local_read_time_us", response.cloud_local_read_time())
-                .tag("remote_read_time_us", response.cloud_remote_read_time());
+                .tag("remote_read_time_us", response.cloud_remote_read_time())
+                .tag("peer_read_time_us", response.peer_read_time_us())
+                .tag("task_elapsed_time_us", response.task_elapsed_time_us());
 
         for (const auto segment : partial_meta.segments()) {
             if (!output_segment_id_set.emplace(segment.id()).second) {
@@ -1712,9 +1715,11 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
         stats->filtered_rows += response.filtered_rows();
         stats->bytes_read_from_local += response.bytes_read_from_local();
         stats->bytes_read_from_remote += response.bytes_read_from_remote();
+        stats->bytes_read_from_peer += response.bytes_read_from_peer();
         stats->cached_bytes_total += response.cached_bytes_total();
         stats->cloud_local_read_time += response.cloud_local_read_time();
         stats->cloud_remote_read_time += response.cloud_remote_read_time();
+        stats->peer_read_time_us += response.peer_read_time_us();
         if (is_mow && response.has_output_delete_bitmap_shard()) {
             _state->output_delete_bitmap->merge(DeleteBitmap::from_pb(
                     response.output_delete_bitmap_shard(), _tablet->tablet_id()));
@@ -2025,7 +2030,11 @@ Status DistributedCompactionWorker::execute_compaction(
     }
 
     PCloudDistributedCompactionTaskResult result;
+    const auto start = std::chrono::steady_clock::now();
     const Status status = handle_compaction(request, task, &result);
+    const auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start);
+    result.set_task_elapsed_time_us(elapsed_time.count());
     result.set_group_index(task->group_index());
     status.to_protobuf(result.mutable_status());
     {
@@ -2301,9 +2310,11 @@ Status DistributedCompactionWorker::handle_compaction(
     result->set_filtered_rows(stats.filtered_rows);
     result->set_bytes_read_from_local(stats.bytes_read_from_local);
     result->set_bytes_read_from_remote(stats.bytes_read_from_remote);
+    result->set_bytes_read_from_peer(stats.bytes_read_from_peer);
     result->set_cached_bytes_total(stats.cached_bytes_total);
     result->set_cloud_local_read_time(stats.cloud_local_read_time);
     result->set_cloud_remote_read_time(stats.cloud_remote_read_time);
+    result->set_peer_read_time_us(stats.peer_read_time_us);
 
     if (_is_mow) {
         RETURN_IF_CANCELLED(_runtime_state.get());

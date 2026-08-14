@@ -59,6 +59,7 @@ public:
     struct Statistics {
         int64_t cloud_local_read_time = 0;
         int64_t cloud_remote_read_time = 0;
+        int64_t peer_read_time_us = 0;
         // number of rows written to the destination rowset after merge
         int64_t output_rows = 0;
         int64_t merged_rows = 0;
@@ -68,6 +69,7 @@ public:
         int64_t cached_bytes_total = 0;
         int64_t bytes_read_from_local = 0;
         int64_t bytes_read_from_remote = 0;
+        int64_t bytes_read_from_peer = 0;
     };
 
     // merge rows from `src_rowset_readers` and write into `dst_rowset_writer`.

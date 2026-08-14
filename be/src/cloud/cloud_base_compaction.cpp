@@ -402,8 +402,10 @@ Status CloudBaseCompaction::execute_compact() {
             .tag("output_rowset_total_size", _output_rowset->total_disk_size())
             .tag("local_read_time_us", _stats.cloud_local_read_time)
             .tag("remote_read_time_us", _stats.cloud_remote_read_time)
+            .tag("peer_read_time_us", _stats.peer_read_time_us)
             .tag("local_read_bytes", _local_read_bytes_total)
-            .tag("remote_read_bytes", _remote_read_bytes_total);
+            .tag("remote_read_bytes", _remote_read_bytes_total)
+            .tag("peer_read_bytes", _stats.bytes_read_from_peer);
 
     //_compaction_succeed = true;
     _state = CompactionState::SUCCESS;

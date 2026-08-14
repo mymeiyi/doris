@@ -182,12 +182,15 @@ Status Merger::vmerge_rowsets(BaseTabletSPtr tablet, ReaderType reader_type,
         stats_output->bytes_read_from_local = reader.stats().file_cache_stats.bytes_read_from_local;
         stats_output->bytes_read_from_remote =
                 reader.stats().file_cache_stats.bytes_read_from_remote;
+        stats_output->bytes_read_from_peer = reader.stats().file_cache_stats.bytes_read_from_peer;
         stats_output->cached_bytes_total = reader.stats().file_cache_stats.bytes_write_into_cache;
         if (config::is_cloud_mode()) {
             stats_output->cloud_local_read_time =
                     reader.stats().file_cache_stats.local_io_timer / 1000;
             stats_output->cloud_remote_read_time =
                     reader.stats().file_cache_stats.remote_io_timer / 1000;
+            stats_output->peer_read_time_us =
+                    reader.stats().file_cache_stats.peer_io_timer / 1000;
         }
     }
 
@@ -387,12 +390,15 @@ Status Merger::vertical_compact_one_group(
         stats_output->bytes_read_from_local = reader.stats().file_cache_stats.bytes_read_from_local;
         stats_output->bytes_read_from_remote =
                 reader.stats().file_cache_stats.bytes_read_from_remote;
+        stats_output->bytes_read_from_peer = reader.stats().file_cache_stats.bytes_read_from_peer;
         stats_output->cached_bytes_total = reader.stats().file_cache_stats.bytes_write_into_cache;
         if (config::is_cloud_mode()) {
             stats_output->cloud_local_read_time =
                     reader.stats().file_cache_stats.local_io_timer / 1000;
             stats_output->cloud_remote_read_time =
                     reader.stats().file_cache_stats.remote_io_timer / 1000;
+            stats_output->peer_read_time_us =
+                    reader.stats().file_cache_stats.peer_io_timer / 1000;
         }
     }
     RETURN_IF_ERROR(dst_rowset_writer->flush_columns(is_key));
@@ -444,6 +450,8 @@ Status Merger::vertical_compact_one_group(
                 src_block_reader.stats().file_cache_stats.bytes_read_from_local;
         stats_output->bytes_read_from_remote =
                 src_block_reader.stats().file_cache_stats.bytes_read_from_remote;
+        stats_output->bytes_read_from_peer =
+                src_block_reader.stats().file_cache_stats.bytes_read_from_peer;
         stats_output->cached_bytes_total =
                 src_block_reader.stats().file_cache_stats.bytes_write_into_cache;
     }
@@ -771,9 +779,11 @@ Status Merger::vertical_merge_rowsets(
         if (stats_output != nullptr) {
             total_stats.bytes_read_from_local += group_stats.bytes_read_from_local;
             total_stats.bytes_read_from_remote += group_stats.bytes_read_from_remote;
+            total_stats.bytes_read_from_peer += group_stats.bytes_read_from_peer;
             total_stats.cached_bytes_total += group_stats.cached_bytes_total;
             total_stats.cloud_local_read_time += group_stats.cloud_local_read_time;
             total_stats.cloud_remote_read_time += group_stats.cloud_remote_read_time;
+            total_stats.peer_read_time_us += group_stats.peer_read_time_us;
             if (is_key) {
                 total_stats.output_rows = group_stats.output_rows;
                 total_stats.merged_rows = group_stats.merged_rows;

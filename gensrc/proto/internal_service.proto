@@ -1021,6 +1021,9 @@ message PCloudDistributedCompactionTaskResult {
     optional int64 cloud_remote_read_time = 13;
     optional DeleteBitmapPB output_delete_bitmap_shard = 14;
     optional int64 missed_rows_count = 15;
+    optional int64 bytes_read_from_peer = 16;
+    optional int64 peer_read_time_us = 17;
+    optional int64 task_elapsed_time_us = 18;
 }
 
 message PCloudDistributedCompactionTaskStatus {
