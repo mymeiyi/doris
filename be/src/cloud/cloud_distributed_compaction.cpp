@@ -1627,6 +1627,23 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
         RETURN_IF_ERROR(validate_partial_rowset(group_index, response, task, tablet_schema,
                                                 output_rowset_writer.rowset_id(), &partial_rowset));
         const auto& partial_meta = partial_rowset.meta;
+        LOG_INFO("finish distributed compaction worker task")
+                .tag("job_id", _execution_id)
+                .tag("tablet_id", _tablet->tablet_id())
+                .tag("group_index", task.group_index)
+                .tag("endpoint", task.worker_endpoint)
+                .tag("output_rows", partial_meta.num_rows())
+                .tag("output_segments", partial_meta.num_segments())
+                .tag("output_rowset_data_size", partial_meta.data_disk_size())
+                .tag("output_rowset_index_size", partial_meta.index_disk_size())
+                .tag("output_rowset_total_size", partial_meta.total_disk_size())
+                .tag("merged_rows", response.merged_rows())
+                .tag("filtered_rows", response.filtered_rows())
+                .tag("local_read_bytes", response.bytes_read_from_local())
+                .tag("remote_read_bytes", response.bytes_read_from_remote())
+                .tag("cached_bytes_total", response.cached_bytes_total())
+                .tag("local_read_time_us", response.cloud_local_read_time())
+                .tag("remote_read_time_us", response.cloud_remote_read_time());
 
         for (const auto segment : partial_meta.segments()) {
             if (!output_segment_id_set.emplace(segment.id()).second) {
