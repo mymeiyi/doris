@@ -2250,6 +2250,10 @@ Status CloudMetaMgr::cloud_update_delete_bitmap_without_lock(
     }
     if (pre_rowset_delete_bitmap_stats != nullptr) {
         for (const auto& [rowset_id, delete_bitmap_stats] : *pre_rowset_delete_bitmap_stats) {
+            if (delete_bitmap_stats.empty() &&
+                req.pre_rowset_delete_bitmap_stats_size() > 0) {
+                continue;
+            }
             auto* rowset_stats_pb = req.add_pre_rowset_delete_bitmap_stats();
             rowset_stats_pb->set_rowset_id(rowset_id);
             for (const auto& [segment_id, version, delete_bitmap_size] : delete_bitmap_stats) {

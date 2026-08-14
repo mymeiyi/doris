@@ -149,6 +149,9 @@ TEST_F(CloudMetaMgrTest, PreRowsetDeleteBitmapStatsRequestEncoding) {
     empty_stats.emplace(
             "rowset_without_delete_bitmap",
             std::vector<std::tuple<DeleteBitmap::SegmentId, DeleteBitmap::Version, size_t>> {});
+    empty_stats.emplace(
+            "second_rowset_without_delete_bitmap",
+            std::vector<std::tuple<DeleteBitmap::SegmentId, DeleteBitmap::Version, size_t>> {});
     auto config_enabled_req = capture_request(&empty_stats);
     ASSERT_EQ(config_enabled_req.pre_rowset_delete_bitmap_stats_size(), 1);
     EXPECT_EQ(config_enabled_req.pre_rowset_delete_bitmap_stats(0).rowset_id(),
