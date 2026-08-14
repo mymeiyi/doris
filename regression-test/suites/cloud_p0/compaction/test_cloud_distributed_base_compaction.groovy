@@ -24,7 +24,6 @@ suite("test_cloud_distributed_base_compaction", "docker") {
     options.setBeNum(2)
     options.beConfigs += [
         "enable_cloud_distributed_base_compaction=true",
-        "cloud_distributed_base_compaction_target_input_size_bytes=1",
         "cloud_distributed_compaction_status_poll_interval_ms=100",
         "base_compaction_min_rowset_num=2",
         "cumulative_compaction_min_deltas=2",
@@ -151,6 +150,21 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             assertEquals(2, backends.size())
             def tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
             assertEquals(1, tablets.size())
+            int expectedTaskCount = 2 * backends.size()
+            long inputSizeBytes = tablets[0].RemoteDataSize.toString().toLong()
+            assertTrue(inputSizeBytes > 0)
+            long targetInputSizeBytes =
+                    (inputSizeBytes + expectedTaskCount - 1) / expectedTaskCount
+            backends.each { backend ->
+                def (code, out, err) = update_be_config(
+                        backend.Host, backend.HttpPort,
+                        "cloud_distributed_base_compaction_target_input_size_bytes",
+                        targetInputSizeBytes.toString())
+                logger.info("Set distributed Base target on BE ${backend.BackendId}: " +
+                        "code=${code}, out=${out}, err=${err}, target=${targetInputSizeBytes}")
+                assertEquals(0, code)
+                assertTrue(out.contains("OK"))
+            }
             String tabletId = tablets[0].TabletId
             String coordinatorBackendId = tablets[0].BackendId
             def coordinator = backends.find {
@@ -218,16 +232,19 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             def newCoordinatorLogLines = readNewLog(coordinatorLog, logOffset)
             def submitLogs = newCoordinatorLogLines.findAll { line ->
                 line.contains("submit distributed single-rowset compaction batch") &&
-                        line.contains("tasks=1")
+                        line.contains("tasks=2")
             }
-            assertEquals(2, submitLogs.size())
+            assertEquals(backends.size(), submitLogs.size())
             assertNotNull(newCoordinatorLogLines.find { line ->
                 line.contains("finish polling distributed single-rowset compaction tasks") &&
-                        line.contains("workers=2") && line.contains("tasks=2")
+                        line.contains("workers=${backends.size()}") &&
+                        line.contains("tasks=${expectedTaskCount}")
             })
             assertNotNull(newCoordinatorLogLines.find { line ->
                 line.contains("finish distributed single-rowset compaction merge") &&
-                        line.contains("tablet_id=${tabletId}") && line.contains("workers=2")
+                        line.contains("tablet_id=${tabletId}") &&
+                        line.contains("groups=${expectedTaskCount}") &&
+                        line.contains("workers=${backends.size()}")
             })
             if (keyCase.name == "mow") {
                 assertNotNull(newCoordinatorLogLines.find { line ->
