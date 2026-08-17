@@ -263,8 +263,10 @@ void CloudCumulativeCompaction::finish_compaction_success(int64_t execution_star
             .tag("cumu_num_rowsets", cloud_tablet()->fetch_add_approximate_cumu_num_rowsets(0))
             .tag("local_read_time_us", _stats.cloud_local_read_time)
             .tag("remote_read_time_us", _stats.cloud_remote_read_time)
+            .tag("peer_read_time_us", _stats.peer_read_time_us)
             .tag("local_read_bytes", _local_read_bytes_total)
-            .tag("remote_read_bytes", _remote_read_bytes_total);
+            .tag("remote_read_bytes", _remote_read_bytes_total)
+            .tag("peer_read_bytes", _stats.bytes_read_from_peer);
 
     _state = CompactionState::SUCCESS;
 
@@ -850,9 +852,11 @@ Status CloudCumulativeCompaction::do_local_single_rowset_grouped_compaction(
         _stats.filtered_rows += group_stats.filtered_rows;
         _stats.bytes_read_from_local += group_stats.bytes_read_from_local;
         _stats.bytes_read_from_remote += group_stats.bytes_read_from_remote;
+        _stats.bytes_read_from_peer += group_stats.bytes_read_from_peer;
         _stats.cached_bytes_total += group_stats.cached_bytes_total;
         _stats.cloud_local_read_time += group_stats.cloud_local_read_time;
         _stats.cloud_remote_read_time += group_stats.cloud_remote_read_time;
+        _stats.peer_read_time_us += group_stats.peer_read_time_us;
 
         std::vector<uint32_t> output_segment_num_rows;
         RETURN_IF_ERROR(_output_rs_writer->get_segment_num_rows(&output_segment_num_rows));

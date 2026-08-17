@@ -32,7 +32,9 @@
 #include <vector>
 
 #include "common/status.h"
+#include "core/field.h"
 #include "storage/merger.h"
+#include "storage/olap_common.h"
 #include "storage/rowset/rowset_fwd.h"
 #include "storage/tablet/tablet_fwd.h"
 
@@ -77,6 +79,8 @@ struct CompactionWorkerInfo {
 std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
         const std::vector<CompactionWorkerInfo>& candidates, int64_t coordinator_backend_id,
         size_t group_count, std::string_view execution_id);
+std::vector<std::vector<size_t>> assign_compaction_groups_round_robin(size_t group_count,
+                                                                     size_t worker_count);
 
 struct DistributedCompactionTask {
     std::string worker_endpoint;
@@ -96,6 +100,54 @@ struct SegmentGroupMergeRange {
     int64_t segment_pos_end;
     int64_t merge_way_num;
 };
+
+template <typename T>
+struct KeySample {
+    T key;
+    uint64_t weight;
+};
+
+using IntegerKeySample = KeySample<int128_t>;
+using StringKeySample = KeySample<std::string>;
+using CompositeKey = std::vector<Field>;
+using CompositeKeySample = KeySample<CompositeKey>;
+
+struct WeightedRowId {
+    rowid_t rowid;
+    uint64_t weight;
+};
+
+struct EncodedKeySample {
+    std::string key;
+    uint64_t weight;
+    size_t segment_index;
+    rowid_t rowid;
+};
+
+struct EncodedKeyBoundary {
+    std::string key;
+    size_t segment_index;
+    rowid_t rowid;
+};
+
+struct CompositeKeyRangePlan {
+    size_t prefix_length = 0;
+    std::vector<CompositeKey> boundaries;
+};
+
+bool is_supported_distributed_base_key(FieldType type);
+
+std::vector<int128_t> choose_integer_key_range_boundaries(std::vector<IntegerKeySample> samples,
+                                                          size_t range_count);
+std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKeySample> samples,
+                                                            size_t range_count);
+CompositeKeyRangePlan choose_composite_key_range_boundaries(
+        const std::vector<CompositeKeySample>& samples, size_t range_count);
+std::vector<EncodedKeyBoundary> choose_encoded_key_range_boundaries(
+        std::vector<EncodedKeySample> samples, size_t range_count);
+std::vector<WeightedRowId> build_weighted_key_sample_rowids(uint64_t num_rows,
+                                                            uint64_t rows_per_block,
+                                                            size_t max_samples);
 
 std::vector<SegmentGroupMergeRange> build_segment_group_merge_ranges(const RowsetMeta& rowset_meta,
                                                                      int64_t segment_group_size);
@@ -178,6 +230,11 @@ public:
                                uint32_t avg_segment_rows, CompletionCallback callback,
                                bool* started);
 
+    Status start_base_key_ranges(const std::vector<RowsetSharedPtr>& input_rowsets,
+                                 RowsetWriter& output_rowset_writer, size_t range_count,
+                                 bool is_vertical, uint32_t avg_segment_rows,
+                                 CompletionCallback callback, bool* started);
+
     Status assemble_single_rowset(RowsetWriter& output_rowset_writer,
                                   const TabletSchema& tablet_schema,
                                   std::vector<int32_t>* output_segment_group_sizes,
@@ -203,6 +260,10 @@ private:
                                  bool allow_delete_in_cumu_compaction, bool is_vertical,
                                  uint32_t avg_segment_rows, bool* started);
 
+    Status prepare_base_key_ranges(const std::vector<RowsetSharedPtr>& input_rowsets,
+                                   RowsetWriter& output_rowset_writer, size_t range_count,
+                                   bool is_vertical, uint32_t avg_segment_rows, bool* started);
+
     Status schedule_poll(std::chrono::milliseconds delay);
     void dispatch_poll();
     void finish_poll_round(std::shared_ptr<PollRoundContext> round);
@@ -227,7 +288,8 @@ private:
 
 class DistributedCompactionWorker {
 public:
-    DistributedCompactionWorker(CloudStorageEngine& engine, std::shared_ptr<CloudTablet> tablet);
+    DistributedCompactionWorker(CloudStorageEngine& engine, std::shared_ptr<CloudTablet> tablet,
+                                int64_t arrival_time_us);
     ~DistributedCompactionWorker();
 
     Status execute_compaction(const PCloudDistributedCompactionSubmitRequest* request,
@@ -247,7 +309,8 @@ private:
     Result<std::unique_ptr<RowsetWriter>> construct_output_rowset_writer(
             const PCloudDistributedCompactionSubmitRequest& request,
             const PCloudDistributedCompactionTask& task, const RowsetMeta& output_meta,
-            const StorageResource& storage_resource);
+            const StorageResource& storage_resource,
+            const std::vector<RowsetSharedPtr>& input_rowsets);
     Status handle_compaction(const PCloudDistributedCompactionSubmitRequest* request,
                              const PCloudDistributedCompactionTask* task,
                              PCloudDistributedCompactionTaskResult* result);
@@ -259,6 +322,7 @@ private:
     std::shared_ptr<CloudTablet> _tablet;
     std::shared_ptr<MemTrackerLimiter> _mem_tracker;
     std::unique_ptr<RuntimeState> _runtime_state;
+    int64_t _arrival_time_us;
     std::mutex _mutex;
     mutable std::mutex _status_mutex;
     State _state = State::PENDING;
@@ -274,7 +338,7 @@ public:
     static DistributedCompactionWorkerManager* instance();
 
     Status submit(const PCloudDistributedCompactionSubmitRequest& request,
-                  CloudStorageEngine& engine);
+                  CloudStorageEngine& engine, int64_t arrival_time_us);
 
     Status calc_incremental_delete_bitmap(
             const PCloudDistributedCompactionCalcIncrementalDeleteBitmapRequest& request,

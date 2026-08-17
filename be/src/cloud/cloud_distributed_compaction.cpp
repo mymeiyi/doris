@@ -27,6 +27,7 @@
 #include <atomic>
 #include <charconv>
 #include <chrono>
+#include <cstring>
 #include <ctime>
 #include <limits>
 #include <optional>
@@ -46,6 +47,7 @@
 #include "common/cast_set.h"
 #include "common/check.h"
 #include "common/logging.h"
+#include "core/data_type/data_type_factory.hpp"
 #include "cpp/sync_point.h"
 #include "runtime/cluster_info.h"
 #include "runtime/exec_env.h"
@@ -54,13 +56,18 @@
 #include "runtime/thread_context.h"
 #include "service/backend_options.h"
 #include "storage/compaction/compaction.h"
+#include "storage/index/primary_key_index.h"
+#include "storage/index/short_key_index.h"
 #include "storage/merger.h"
 #include "storage/rowid_conversion.h"
+#include "storage/rowset/beta_rowset.h"
 #include "storage/rowset/rowset_factory.h"
 #include "storage/rowset/rowset_meta.h"
 #include "storage/rowset/rowset_reader.h"
 #include "storage/rowset/rowset_writer.h"
 #include "storage/rowset/rowset_writer_context.h"
+#include "storage/segment/column_reader.h"
+#include "storage/segment/segment.h"
 #include "storage/storage_policy.h"
 #include "storage/tablet/tablet_meta.h"
 #include "storage/tablet/tablet_schema.h"
@@ -68,6 +75,7 @@
 #include "util/client_cache.h"
 #include "util/hash_util.hpp"
 #include "util/network_util.h"
+#include "util/stopwatch.hpp"
 #include "util/threadpool.h"
 #include "util/thrift_rpc_helper.h"
 #include "util/time.h"
@@ -78,6 +86,21 @@ namespace {
 
 constexpr uint64_t WORKER_SELECTION_HASH_SEED = 0x6a09e667f3bcc909ULL;
 
+bool is_integer_key(FieldType type) {
+    return type == FieldType::OLAP_FIELD_TYPE_TINYINT ||
+           type == FieldType::OLAP_FIELD_TYPE_SMALLINT || type == FieldType::OLAP_FIELD_TYPE_INT ||
+           type == FieldType::OLAP_FIELD_TYPE_BIGINT || type == FieldType::OLAP_FIELD_TYPE_LARGEINT;
+}
+
+bool is_string_key(FieldType type) {
+    return type == FieldType::OLAP_FIELD_TYPE_CHAR || type == FieldType::OLAP_FIELD_TYPE_VARCHAR;
+}
+
+bool has_lossless_short_key_encoding(const TabletColumn& column) {
+    return is_integer_key(column.type()) ||
+           (is_string_key(column.type()) && column.index_length() >= column.length());
+}
+
 uint64_t compaction_worker_score(uint64_t execution_seed, int64_t backend_id) {
     const std::string backend_id_string = std::to_string(backend_id);
     return HashUtil::xxHash64WithSeed(backend_id_string.data(), backend_id_string.size(),
@@ -85,6 +108,221 @@ uint64_t compaction_worker_score(uint64_t execution_seed, int64_t backend_id) {
 }
 
 } // namespace
+
+bool is_supported_distributed_base_key(FieldType type) {
+    return is_integer_key(type) || is_string_key(type);
+}
+
+template <typename T>
+std::vector<T> choose_key_range_boundaries(std::vector<KeySample<T>> samples, size_t range_count) {
+    if (range_count < 2 || samples.size() < 2) {
+        return {};
+    }
+    std::ranges::sort(samples, {}, &KeySample<T>::key);
+    std::vector<KeySample<T>> distinct;
+    distinct.reserve(samples.size());
+    for (const auto& sample : samples) {
+        DORIS_CHECK_GT(sample.weight, 0);
+        if (!distinct.empty() && distinct.back().key == sample.key) {
+            DORIS_CHECK_LE(distinct.back().weight,
+                           std::numeric_limits<uint64_t>::max() - sample.weight);
+            distinct.back().weight += sample.weight;
+        } else {
+            distinct.push_back(sample);
+        }
+    }
+    if (distinct.size() < 2) {
+        return {};
+    }
+
+    unsigned __int128 total_weight = 0;
+    for (const auto& sample : distinct) {
+        total_weight += sample.weight;
+    }
+    std::vector<T> boundaries;
+    boundaries.reserve(range_count - 1);
+    for (size_t split = 1; split < range_count; ++split) {
+        const unsigned __int128 target = total_weight * split / range_count;
+        unsigned __int128 prefix = 0;
+        unsigned __int128 best_distance = total_weight;
+        T best_key = distinct[1].key;
+        for (size_t i = 1; i < distinct.size(); ++i) {
+            prefix += distinct[i - 1].weight;
+            const unsigned __int128 distance = prefix > target ? prefix - target : target - prefix;
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_key = distinct[i].key;
+            }
+        }
+        if (boundaries.empty() || boundaries.back() != best_key) {
+            boundaries.push_back(best_key);
+        }
+    }
+    return boundaries;
+}
+
+std::vector<int128_t> choose_integer_key_range_boundaries(std::vector<IntegerKeySample> samples,
+                                                          size_t range_count) {
+    return choose_key_range_boundaries(std::move(samples), range_count);
+}
+
+std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKeySample> samples,
+                                                            size_t range_count) {
+    return choose_key_range_boundaries(std::move(samples), range_count);
+}
+
+CompositeKeyRangePlan choose_composite_key_range_boundaries(
+        const std::vector<CompositeKeySample>& samples, size_t range_count) {
+    CompositeKeyRangePlan plan;
+    if (samples.empty()) {
+        return plan;
+    }
+    const size_t key_columns = samples.front().key.size();
+    DORIS_CHECK_GT(key_columns, 0);
+    for (const auto& sample : samples) {
+        DORIS_CHECK_EQ(sample.key.size(), key_columns);
+    }
+
+    for (size_t prefix_length = 1; prefix_length <= key_columns; ++prefix_length) {
+        std::vector<CompositeKeySample> prefix_samples;
+        prefix_samples.reserve(samples.size());
+        for (const auto& sample : samples) {
+            prefix_samples.push_back(
+                    {.key = CompositeKey(sample.key.begin(), sample.key.begin() + prefix_length),
+                     .weight = sample.weight});
+        }
+        auto boundaries = choose_key_range_boundaries(std::move(prefix_samples), range_count);
+        if (boundaries.size() > plan.boundaries.size()) {
+            plan = {.prefix_length = prefix_length, .boundaries = std::move(boundaries)};
+        }
+        if (plan.boundaries.size() + 1 >= range_count) {
+            break;
+        }
+    }
+    return plan;
+}
+
+namespace {
+
+struct EncodedKeyLocator {
+    uint64_t weight;
+    size_t segment_index;
+    rowid_t rowid;
+};
+
+struct EncodedKeyGroup {
+    std::string key;
+    std::vector<EncodedKeyLocator> samples;
+    uint64_t weight_before = 0;
+    uint64_t weight = 0;
+};
+
+std::vector<EncodedKeyGroup> group_encoded_key_samples(std::vector<EncodedKeySample> samples) {
+    std::ranges::sort(samples, [](const EncodedKeySample& lhs, const EncodedKeySample& rhs) {
+        return Slice(lhs.key).compare(Slice(rhs.key)) < 0;
+    });
+    std::vector<EncodedKeyGroup> groups;
+    for (auto& sample : samples) {
+        DORIS_CHECK_GT(sample.weight, 0);
+        if (groups.empty() || groups.back().key != sample.key) {
+            const uint64_t weight_before =
+                    groups.empty() ? 0 : groups.back().weight_before + groups.back().weight;
+            groups.push_back({.key = std::move(sample.key),
+                              .samples = {},
+                              .weight_before = weight_before,
+                              .weight = 0});
+        }
+        DORIS_CHECK_LE(groups.back().weight, std::numeric_limits<uint64_t>::max() - sample.weight);
+        groups.back().weight += sample.weight;
+        groups.back().samples.push_back({.weight = sample.weight,
+                                         .segment_index = sample.segment_index,
+                                         .rowid = sample.rowid});
+    }
+    return groups;
+}
+
+std::vector<CompositeKeySample> sort_and_merge_composite_key_samples(
+        std::vector<CompositeKeySample> samples) {
+    std::ranges::sort(samples, {}, &CompositeKeySample::key);
+    std::vector<CompositeKeySample> distinct;
+    distinct.reserve(samples.size());
+    for (auto& sample : samples) {
+        if (!distinct.empty() && distinct.back().key == sample.key) {
+            DORIS_CHECK_LE(distinct.back().weight,
+                           std::numeric_limits<uint64_t>::max() - sample.weight);
+            distinct.back().weight += sample.weight;
+        } else {
+            distinct.push_back(std::move(sample));
+        }
+    }
+    return distinct;
+}
+
+} // namespace
+
+std::vector<EncodedKeyBoundary> choose_encoded_key_range_boundaries(
+        std::vector<EncodedKeySample> samples, size_t range_count) {
+    if (range_count < 2 || samples.size() < 2) {
+        return {};
+    }
+    auto groups = group_encoded_key_samples(std::move(samples));
+    if (groups.size() < 2) {
+        return {};
+    }
+    const uint128_t total_weight =
+            static_cast<uint128_t>(groups.back().weight_before) + groups.back().weight;
+    std::vector<EncodedKeyBoundary> boundaries;
+    boundaries.reserve(range_count - 1);
+    for (size_t split = 1; split < range_count; ++split) {
+        const uint128_t target = total_weight * split / range_count;
+        uint128_t best_distance = total_weight;
+        size_t best_index = 1;
+        for (size_t index = 1; index < groups.size(); ++index) {
+            const uint128_t prefix = groups[index].weight_before;
+            const uint128_t distance = prefix > target ? prefix - target : target - prefix;
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_index = index;
+            }
+        }
+        const auto& best_group = groups[best_index];
+        const auto& best_locator = best_group.samples.front();
+        if (boundaries.empty() || boundaries.back().key != best_group.key) {
+            boundaries.push_back({.key = best_group.key,
+                                  .segment_index = best_locator.segment_index,
+                                  .rowid = best_locator.rowid});
+        }
+    }
+    return boundaries;
+}
+
+std::vector<WeightedRowId> build_weighted_key_sample_rowids(uint64_t num_rows,
+                                                            uint64_t rows_per_block,
+                                                            size_t max_samples) {
+    DORIS_CHECK_GT(rows_per_block, 0);
+    if (num_rows == 0) {
+        return {};
+    }
+    DORIS_CHECK_GT(max_samples, 0);
+
+    const uint64_t block_count = (num_rows - 1) / rows_per_block + 1;
+    const uint64_t sample_count = std::min(block_count, cast_set<uint64_t>(max_samples));
+    std::vector<WeightedRowId> samples;
+    samples.reserve(sample_count);
+    for (uint64_t sample = 0; sample < sample_count; ++sample) {
+        const uint64_t block_begin =
+                cast_set<uint64_t>(static_cast<uint128_t>(sample) * block_count / sample_count);
+        const uint64_t block_end =
+                cast_set<uint64_t>(static_cast<uint128_t>(sample + 1) * block_count / sample_count);
+        const uint64_t representative_block = block_begin + (block_end - block_begin - 1) / 2;
+        const uint64_t covered_begin = block_begin * rows_per_block;
+        const uint64_t covered_end =
+                block_end == block_count ? num_rows : block_end * rows_per_block;
+        samples.push_back({.rowid = cast_set<rowid_t>(representative_block * rows_per_block),
+                           .weight = covered_end - covered_begin});
+    }
+    return samples;
+}
 
 std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
         const std::vector<CompactionWorkerInfo>& candidates, int64_t coordinator_backend_id,
@@ -116,6 +354,17 @@ std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
             });
     workers.resize(std::min(workers.size(), group_count));
     return workers;
+}
+
+std::vector<std::vector<size_t>> assign_compaction_groups_round_robin(size_t group_count,
+                                                                     size_t worker_count) {
+    DORIS_CHECK_GT(group_count, 0);
+    DORIS_CHECK_GT(worker_count, 0);
+    std::vector<std::vector<size_t>> groups_by_worker(worker_count);
+    for (size_t group_index = 0; group_index < group_count; ++group_index) {
+        groups_by_worker[group_index % worker_count].push_back(group_index);
+    }
+    return groups_by_worker;
 }
 
 std::vector<SegmentGroupMergeRange> build_segment_group_merge_ranges(const RowsetMeta& rowset_meta,
@@ -259,6 +508,13 @@ Status parse_endpoint(std::string_view endpoint, std::string* host, int* port) {
     return Status::OK();
 }
 
+void set_coordinator_peer_if_enabled(PCloudDistributedCompactionSubmitRequest* request) {
+    if (config::enable_cloud_distributed_compaction_peer_read && !request->is_coordinator()) {
+        request->set_coordinator_host(BackendOptions::get_localhost());
+        request->set_coordinator_brpc_port(config::brpc_port);
+    }
+}
+
 template <typename Request, typename Response, typename Method>
 Status call_worker(const std::string& endpoint, const Request& request, Response* response,
                    Method method, std::string_view rpc_name, int64_t timeout_ms) {
@@ -283,10 +539,380 @@ bool is_retryable_control_rpc_error(const Status& status) {
     return status.is<ErrorCode::THRIFT_RPC_ERROR>() || status.is<ErrorCode::TOO_MANY_TASKS>();
 }
 
+bool has_only_integer_value(const PValues& column) {
+    return column.double_value().empty() && column.float_value().empty() &&
+           column.uint32_value().empty() && column.uint64_value().empty() &&
+           column.bool_value().empty() && column.string_value().empty() &&
+           column.datetime_value().empty() && column.child_element().empty() &&
+           column.child_offset().empty();
+}
+
+bool extract_integer_value(const PValues& column, PGenericType_TypeId* type, int128_t* value) {
+    if (!column.has_type() || column.has_null() || !column.null_map().empty() ||
+        !has_only_integer_value(column)) {
+        return false;
+    }
+    *type = column.type().id();
+    switch (*type) {
+    case PGenericType::INT8:
+        if (column.int32_value_size() != 1 || !column.int64_value().empty() ||
+            !column.bytes_value().empty() ||
+            column.int32_value(0) < std::numeric_limits<int8_t>::min() ||
+            column.int32_value(0) > std::numeric_limits<int8_t>::max()) {
+            return false;
+        }
+        *value = column.int32_value(0);
+        return true;
+    case PGenericType::INT16:
+        if (column.int32_value_size() != 1 || !column.int64_value().empty() ||
+            !column.bytes_value().empty() ||
+            column.int32_value(0) < std::numeric_limits<int16_t>::min() ||
+            column.int32_value(0) > std::numeric_limits<int16_t>::max()) {
+            return false;
+        }
+        *value = column.int32_value(0);
+        return true;
+    case PGenericType::INT32:
+        if (column.int32_value_size() != 1 || !column.int64_value().empty() ||
+            !column.bytes_value().empty()) {
+            return false;
+        }
+        *value = column.int32_value(0);
+        return true;
+    case PGenericType::INT64:
+        if (!column.int32_value().empty() || column.int64_value_size() != 1 ||
+            !column.bytes_value().empty()) {
+            return false;
+        }
+        *value = column.int64_value(0);
+        return true;
+    case PGenericType::INT128:
+        if (!column.int32_value().empty() || !column.int64_value().empty() ||
+            column.bytes_value_size() != 1 || column.bytes_value(0).size() != sizeof(int128_t)) {
+            return false;
+        }
+        memcpy(value, column.bytes_value(0).data(), sizeof(*value));
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool extract_string_value(const PValues& column, std::string* value) {
+    if (!column.has_type() || column.type().id() != PGenericType::STRING || column.has_null() ||
+        !column.null_map().empty() || !column.double_value().empty() ||
+        !column.float_value().empty() || !column.int32_value().empty() ||
+        !column.int64_value().empty() || !column.uint32_value().empty() ||
+        !column.uint64_value().empty() || !column.bool_value().empty() ||
+        column.string_value_size() != 1 || !column.bytes_value().empty() ||
+        !column.datetime_value().empty() || !column.child_element().empty() ||
+        !column.child_offset().empty()) {
+        return false;
+    }
+    *value = column.string_value(0);
+    return true;
+}
+
+PGenericType_TypeId integer_key_pb_type(FieldType type) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return PGenericType::INT8;
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return PGenericType::INT16;
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return PGenericType::INT32;
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return PGenericType::INT64;
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return PGenericType::INT128;
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+FieldType integer_key_field_type(PGenericType_TypeId type) {
+    switch (type) {
+    case PGenericType::INT8:
+        return FieldType::OLAP_FIELD_TYPE_TINYINT;
+    case PGenericType::INT16:
+        return FieldType::OLAP_FIELD_TYPE_SMALLINT;
+    case PGenericType::INT32:
+        return FieldType::OLAP_FIELD_TYPE_INT;
+    case PGenericType::INT64:
+        return FieldType::OLAP_FIELD_TYPE_BIGINT;
+    case PGenericType::INT128:
+        return FieldType::OLAP_FIELD_TYPE_LARGEINT;
+    default:
+        return FieldType::OLAP_FIELD_TYPE_UNKNOWN;
+    }
+}
+
+Field create_integer_key_field(FieldType type, int128_t value) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return Field::create_field<TYPE_TINYINT>(cast_set<int8_t>(value));
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return Field::create_field<TYPE_SMALLINT>(cast_set<int16_t>(value));
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return Field::create_field<TYPE_INT>(cast_set<int32_t>(value));
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return Field::create_field<TYPE_BIGINT>(cast_set<int64_t>(value));
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return Field::create_field<TYPE_LARGEINT>(value);
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+Field create_string_key_field(std::string value) {
+    return Field::create_field<TYPE_STRING>(std::move(value));
+}
+
+bool extract_key_fields(const PCloudDistributedCompactionKey& key,
+                        std::vector<PGenericType_TypeId>* types, CompositeKey* fields) {
+    if (key.columns().empty()) {
+        return false;
+    }
+    types->clear();
+    fields->clear();
+    types->reserve(key.columns_size());
+    fields->reserve(key.columns_size());
+    for (const auto& column : key.columns()) {
+        if (!column.has_type()) {
+            return false;
+        }
+        const auto type = column.type().id();
+        const FieldType field_type = integer_key_field_type(type);
+        if (field_type != FieldType::OLAP_FIELD_TYPE_UNKNOWN) {
+            PGenericType_TypeId actual_type = PGenericType::UNKNOWN;
+            int128_t value = 0;
+            if (!extract_integer_value(column, &actual_type, &value) || actual_type != type) {
+                return false;
+            }
+            fields->push_back(create_integer_key_field(field_type, value));
+        } else if (type == PGenericType::STRING) {
+            std::string value;
+            if (!extract_string_value(column, &value)) {
+                return false;
+            }
+            fields->push_back(create_string_key_field(std::move(value)));
+        } else {
+            return false;
+        }
+        types->push_back(type);
+    }
+    return true;
+}
+
+int128_t get_integer_key_field(const Field& field, FieldType type) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return field.get<TYPE_TINYINT>();
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return field.get<TYPE_SMALLINT>();
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return field.get<TYPE_INT>();
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return field.get<TYPE_BIGINT>();
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return field.get<TYPE_LARGEINT>();
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+void set_integer_key_column(PValues* column, FieldType type, int128_t value) {
+    column->mutable_type()->set_id(integer_key_pb_type(type));
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        column->add_int32_value(cast_set<int8_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        column->add_int32_value(cast_set<int16_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        column->add_int32_value(cast_set<int32_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        column->add_int64_value(cast_set<int64_t>(value));
+        return;
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        column->add_bytes_value(&value, sizeof(value));
+        return;
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+void set_string_key_column(PValues* column, std::string_view value) {
+    column->mutable_type()->set_id(PGenericType::STRING);
+    column->add_string_value(value.data(), value.size());
+}
+
+void set_key_fields(PCloudDistributedCompactionKey* key, const TabletSchema& schema,
+                    const CompositeKey& fields) {
+    DORIS_CHECK_LE(fields.size(), schema.num_key_columns());
+    for (size_t column_index = 0; column_index < fields.size(); ++column_index) {
+        const auto type = schema.column(column_index).type();
+        auto* column = key->add_columns();
+        if (is_integer_key(type)) {
+            set_integer_key_column(column, type, get_integer_key_field(fields[column_index], type));
+        } else {
+            DORIS_CHECK(is_string_key(type));
+            set_string_key_column(column, fields[column_index].get<TYPE_STRING>());
+        }
+    }
+}
+
+std::pair<int128_t, int128_t> integer_key_limits(FieldType type) {
+    switch (type) {
+    case FieldType::OLAP_FIELD_TYPE_TINYINT:
+        return {std::numeric_limits<int8_t>::min(), std::numeric_limits<int8_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_SMALLINT:
+        return {std::numeric_limits<int16_t>::min(), std::numeric_limits<int16_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_INT:
+        return {std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_BIGINT:
+        return {std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()};
+    case FieldType::OLAP_FIELD_TYPE_LARGEINT:
+        return {std::numeric_limits<int128_t>::min(), std::numeric_limits<int128_t>::max()};
+    default:
+        DORIS_CHECK(false) << "unsupported distributed base compaction key type: " << int(type);
+        __builtin_unreachable();
+    }
+}
+
+CompositeKey key_limit(const TabletSchema& schema, size_t prefix_length, bool upper) {
+    CompositeKey key;
+    key.reserve(prefix_length);
+    for (size_t column_index = 0; column_index < prefix_length; ++column_index) {
+        const auto& column = schema.column(column_index);
+        if (is_integer_key(column.type())) {
+            const auto [min_value, max_value] = integer_key_limits(column.type());
+            key.push_back(create_integer_key_field(column.type(), upper ? max_value : min_value));
+        } else {
+            DORIS_CHECK(is_string_key(column.type()));
+            key.push_back(create_string_key_field(
+                    upper ? std::string(cast_set<size_t>(column.length()), '\xff')
+                          : std::string()));
+        }
+    }
+    return key;
+}
+
+bool extract_key_tuple(const PCloudDistributedCompactionKey& key, const TabletSchema& schema,
+                       OlapTuple* tuple) {
+    std::vector<PGenericType_TypeId> types;
+    CompositeKey fields;
+    if (!extract_key_fields(key, &types, &fields) || fields.size() > schema.num_key_columns()) {
+        return false;
+    }
+    for (size_t column_index = 0; column_index < fields.size(); ++column_index) {
+        const auto& column = schema.column(column_index);
+        if (column.is_nullable() || !is_supported_distributed_base_key(column.type())) {
+            return false;
+        }
+        const auto expected_type = is_integer_key(column.type())
+                                           ? integer_key_pb_type(column.type())
+                                           : PGenericType::STRING;
+        if (types[column_index] != expected_type) {
+            return false;
+        }
+        tuple->add_field(std::move(fields[column_index]));
+    }
+    return true;
+}
+
+Status read_key_samples(const segment_v2::SegmentSharedPtr& segment, const TabletSchema& schema,
+                        size_t key_column_count, const std::vector<rowid_t>& rowids,
+                        OlapReaderStatistics* reader_stats, std::vector<CompositeKey>* keys) {
+    keys->assign(rowids.size(), {});
+    if (rowids.empty()) {
+        return Status::OK();
+    }
+    StorageReadOptions read_options;
+    read_options.stats = reader_stats;
+    read_options.tablet_schema = segment->tablet_schema();
+    auto io_ctx = read_options.io_ctx;
+    io_ctx.reader_type = ReaderType::READER_BASE_COMPACTION;
+    io_ctx.file_cache_stats = &reader_stats->file_cache_stats;
+    segment_v2::ColumnIteratorOptions iterator_options {
+            .use_page_cache = !config::disable_storage_page_cache,
+            .file_reader = segment->file_reader().get(),
+            .stats = reader_stats,
+            .io_ctx = io_ctx,
+    };
+    for (size_t column_index = 0; column_index < key_column_count; ++column_index) {
+        const auto& column = schema.column(column_index);
+        auto values = DataTypeFactory::instance().create_data_type(column)->create_column();
+        std::unique_ptr<segment_v2::ColumnIterator> iterator;
+        RETURN_IF_ERROR(segment->new_column_iterator(column, &iterator, &read_options));
+        RETURN_IF_ERROR(iterator->init(iterator_options));
+        RETURN_IF_ERROR(iterator->read_by_rowids(rowids.data(), rowids.size(), values));
+        DORIS_CHECK_EQ(values->size(), rowids.size());
+        for (size_t sample_index = 0; sample_index < rowids.size(); ++sample_index) {
+            (*keys)[sample_index].push_back((*values)[sample_index]);
+        }
+    }
+    return Status::OK();
+}
+
+Status read_encoded_primary_key_samples(const segment_v2::SegmentSharedPtr& segment,
+                                        const std::vector<WeightedRowId>& samples,
+                                        OlapReaderStatistics* reader_stats,
+                                        std::vector<std::string>* keys) {
+    keys->clear();
+    keys->reserve(samples.size());
+    if (samples.empty()) {
+        return Status::OK();
+    }
+    const auto* primary_key_index = segment->get_primary_key_index();
+    DORIS_CHECK(primary_key_index != nullptr);
+    DORIS_CHECK_EQ(primary_key_index->num_rows(), segment->num_rows());
+    std::unique_ptr<segment_v2::IndexedColumnIterator> iterator;
+    StorageReadOptions read_options;
+    read_options.stats = reader_stats;
+    auto io_ctx = read_options.io_ctx;
+    io_ctx.reader_type = ReaderType::READER_BASE_COMPACTION;
+    io_ctx.file_cache_stats = &reader_stats->file_cache_stats;
+    RETURN_IF_ERROR(primary_key_index->new_iterator(&iterator, reader_stats, &io_ctx));
+    auto index_type =
+            DataTypeFactory::instance().create_data_type(primary_key_index->type(), 1, 0);
+    auto index_column = index_type->create_column();
+    rowid_t previous_rowid = 0;
+    for (size_t sample_index = 0; sample_index < samples.size(); ++sample_index) {
+        const rowid_t rowid = samples[sample_index].rowid;
+        DORIS_CHECK_LT(rowid, segment->num_rows());
+        DORIS_CHECK(sample_index == 0 || previous_rowid < rowid);
+        previous_rowid = rowid;
+        RETURN_IF_ERROR(iterator->seek_to_ordinal(rowid));
+        index_column->clear();
+        size_t num_read = 1;
+        RETURN_IF_ERROR(iterator->next_batch(&num_read, index_column));
+        DORIS_CHECK_EQ(num_read, 1);
+        keys->push_back(index_column->get_data_at(0).to_string());
+    }
+    return Status::OK();
+}
+
 Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& request) {
-    if (!request.has_input_rowset_meta() || !request.has_output_rowset_meta() ||
-        request.execution_id().empty()) {
+    const bool has_valid_input =
+            request.compaction_type() == CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION
+                    ? request.has_input_rowset_meta()
+                    : request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION &&
+                              request.input_rowset_metas_size() > 1;
+    if (!has_valid_input || !request.has_output_rowset_meta() || request.execution_id().empty()) {
         return Status::InvalidArgument("invalid distributed compaction request");
+    }
+    if (request.has_coordinator_host() != request.has_coordinator_brpc_port() ||
+        (request.has_coordinator_host() &&
+         (request.coordinator_host().empty() || request.coordinator_brpc_port() <= 0 ||
+          request.coordinator_brpc_port() > 65535))) {
+        return Status::InvalidArgument("invalid distributed compaction coordinator peer");
     }
     const auto* cluster_info =
             static_cast<const CloudClusterInfo*>(ExecEnv::GetInstance()->cluster_info());
@@ -305,9 +931,26 @@ Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& r
     return Status::OK();
 }
 
-Status validate_compaction_task(const PCloudDistributedCompactionTask& task) {
-    if (task.segment_pos_start() < 0 || task.segment_pos_start() >= task.segment_pos_end() ||
-        task.max_segment_num() <= 0 || task.output_segment_start_id() < 0 ||
+Status validate_compaction_task(const PCloudDistributedCompactionSubmitRequest& request,
+                                const PCloudDistributedCompactionTask& task) {
+    const auto& key_range = task.key_range();
+    std::vector<PGenericType_TypeId> lower_types;
+    std::vector<PGenericType_TypeId> upper_types;
+    CompositeKey lower_key;
+    CompositeKey upper_key;
+    const bool valid_key_range =
+            task.has_key_range() && key_range.has_lower_key() && key_range.has_upper_key() &&
+            extract_key_fields(key_range.lower_key(), &lower_types, &lower_key) &&
+            extract_key_fields(key_range.upper_key(), &upper_types, &upper_key) &&
+            lower_types == upper_types &&
+            (lower_key < upper_key || (key_range.upper_inclusive() && lower_key == upper_key));
+    const bool valid_range =
+            request.compaction_type() == CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION
+                    ? task.segment_pos_start() >= 0 &&
+                              task.segment_pos_start() < task.segment_pos_end()
+                    : request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION &&
+                              key_range.lower_inclusive() && valid_key_range;
+    if (!valid_range || task.max_segment_num() <= 0 || task.output_segment_start_id() < 0 ||
         task.group_index() < 0 ||
         cast_set<int64_t>(task.output_segment_start_id()) + task.max_segment_num() >
                 std::numeric_limits<int32_t>::max()) {
@@ -480,6 +1123,7 @@ struct DistributedCompactionCoordinator::ExecutionPlan {
     std::vector<bool> task_completed;
     size_t remaining_workers = 0;
     int64_t expiration_time = 0;
+    int64_t input_rowsets_total_size = 0;
     bool is_mow = false;
     bool check_missed_rows = false;
     bool polling_completed = false;
@@ -574,6 +1218,22 @@ Status DistributedCompactionCoordinator::start_single_rowset(
     RETURN_IF_ERROR(prepare_single_rowset(input_rowset, output_rowset_writer, segment_group_size,
                                           allow_delete_in_cumu_compaction, is_vertical,
                                           avg_segment_rows, started));
+    if (!*started) {
+        return Status::OK();
+    }
+    _execution_plan->completion_callback = std::move(callback);
+    return schedule_poll(std::chrono::milliseconds(
+            config::cloud_distributed_compaction_status_poll_interval_ms));
+}
+
+Status DistributedCompactionCoordinator::start_base_key_ranges(
+        const std::vector<RowsetSharedPtr>& input_rowsets, RowsetWriter& output_rowset_writer,
+        size_t range_count, bool is_vertical, uint32_t avg_segment_rows,
+        CompletionCallback callback, bool* started) {
+    DORIS_CHECK(callback != nullptr);
+    DORIS_CHECK_GT(config::cloud_distributed_compaction_status_poll_interval_ms, 0);
+    RETURN_IF_ERROR(prepare_base_key_ranges(input_rowsets, output_rowset_writer, range_count,
+                                            is_vertical, avg_segment_rows, started));
     if (!*started) {
         return Status::OK();
     }
@@ -899,7 +1559,8 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
     _state->phase1_end_version = phase1_end_version;
     _state->output_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
     _state->tasks.reserve(segment_ranges.size());
-    std::vector<std::vector<size_t>> groups_by_worker(workers.size());
+    auto groups_by_worker =
+            assign_compaction_groups_round_robin(segment_ranges.size(), workers.size());
     // The coordinator is first in workers, so it receives one additional group when the groups
     // cannot be evenly distributed among workers.
     for (size_t group_index = 0; group_index < segment_ranges.size(); ++group_index) {
@@ -908,7 +1569,6 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
         _state->tasks.push_back({.worker_endpoint = worker.endpoint,
                                  .group_index = cast_set<int32_t>(group_index),
                                  .segment_id_slot = segment_slots[group_index]});
-        groups_by_worker[worker_index].push_back(group_index);
     }
 
     const auto input_meta_pb = input_rowset->rowset_meta()->get_rowset_pb();
@@ -931,6 +1591,8 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
         request.set_target_backend_id(worker.backend_id);
         request.set_target_cloud_unique_id(worker.cloud_unique_id);
         request.set_target_compute_group_id(worker.compute_group_id);
+        request.set_is_coordinator(worker.backend_id == BackendOptions::get_backend_id());
+        set_coordinator_peer_if_enabled(&request);
         for (const size_t group_index : groups_by_worker[worker_index]) {
             const auto& range = segment_ranges[group_index];
             const auto& distributed_task = _state->tasks[group_index];
@@ -953,8 +1615,563 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
     _execution_plan->task_completed.assign(segment_ranges.size(), false);
     _execution_plan->remaining_workers = workers.size();
     _execution_plan->expiration_time = output_meta_pb.txn_expiration();
+    _execution_plan->input_rowsets_total_size = input_rowset->total_disk_size();
     _execution_plan->is_mow = is_mow;
     _execution_plan->check_missed_rows = check_missed_rows;
+    *started = true;
+    return Status::OK();
+}
+
+Status DistributedCompactionCoordinator::prepare_base_key_ranges(
+        const std::vector<RowsetSharedPtr>& input_rowsets, RowsetWriter& output_rowset_writer,
+        size_t range_count, bool is_vertical, uint32_t avg_segment_rows, bool* started) {
+    const int64_t prepare_start_time_us = UnixMicros();
+    const int64_t prepare_start_us = MonotonicMicros();
+    *started = false;
+    DORIS_CHECK_GT(input_rowsets.size(), 1);
+    const auto& schema = *_tablet->tablet_schema();
+    const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                        _tablet->enable_unique_key_merge_on_write();
+    DORIS_CHECK(!is_mow || schema.cluster_key_uids().empty());
+    DORIS_CHECK(is_mow || schema.num_short_key_columns() > 0);
+    size_t key_column_count = 0;
+    while (key_column_count < schema.num_key_columns() &&
+           is_supported_distributed_base_key(schema.column(key_column_count).type()) &&
+           !schema.column(key_column_count).is_nullable()) {
+        ++key_column_count;
+    }
+    DORIS_CHECK_GT(key_column_count, 0);
+    if (!config::enable_cloud_distributed_base_compaction || range_count < 2) {
+        return Status::OK();
+    }
+    DORIS_CHECK_GT(config::cloud_distributed_base_compaction_samples_per_range, 0);
+    uint64_t total_input_rows = 0;
+    for (const auto& rowset : input_rowsets) {
+        total_input_rows += rowset->num_rows();
+    }
+    if (total_input_rows == 0) {
+        return Status::OK();
+    }
+    const uint64_t target_sample_count =
+            cast_set<uint64_t>(range_count) *
+            cast_set<uint64_t>(config::cloud_distributed_base_compaction_samples_per_range);
+
+    std::vector<CompactionWorkerInfo> candidates;
+    const int64_t discovery_start_us = MonotonicMicros();
+    const Status discovery_status = compaction_worker_cache()->get_workers(&candidates);
+    const int64_t worker_discovery_time_us = MonotonicMicros() - discovery_start_us;
+    if (!discovery_status.ok()) {
+        LOG(WARNING) << "failed to discover distributed base compaction workers from FE, "
+                     << "fallback to local compaction: " << discovery_status;
+        return Status::OK();
+    }
+    if (candidates.size() < 2) {
+        return Status::OK();
+    }
+
+    const size_t short_key_prefix_length = is_mow ? 0 : schema.num_short_key_columns();
+    // Cluster-key MOW is rejected above, so a PK-index ordinal is also the segment rowid.
+    const bool primary_key_fast_path_eligible =
+            is_mow && key_column_count == schema.num_key_columns();
+    const size_t primary_key_suffix_length =
+            primary_key_fast_path_eligible && schema.has_sequence_col()
+                    ? schema.column(schema.sequence_col_idx()).length() + 1
+                    : 0;
+    bool short_key_fast_path_eligible = false;
+    bool short_key_encoding_lossless = true;
+    std::string short_key_fast_path_fallback_reason;
+    std::string primary_key_fast_path_fallback_reason = is_mow ? "none" : "not_mow";
+    if (is_mow) {
+        short_key_fast_path_fallback_reason = "mow";
+        if (!primary_key_fast_path_eligible) {
+            primary_key_fast_path_fallback_reason = "unsupported_primary_key";
+        }
+    } else if (short_key_prefix_length > key_column_count) {
+        short_key_fast_path_fallback_reason = "unsupported_short_key";
+    } else {
+        short_key_fast_path_eligible = true;
+        for (size_t column_index = 0; column_index < short_key_prefix_length; ++column_index) {
+            if (!has_lossless_short_key_encoding(schema.column(column_index))) {
+                if (column_index + 1 < short_key_prefix_length) {
+                    short_key_fast_path_eligible = false;
+                    short_key_fast_path_fallback_reason = "non_terminal_lossy_short_key";
+                }
+                short_key_encoding_lossless = false;
+                break;
+            }
+        }
+    }
+
+    struct SegmentKeySamples {
+        segment_v2::SegmentSharedPtr segment;
+        std::vector<WeightedRowId> weighted_rowids;
+    };
+    std::vector<SegmentKeySamples> segment_samples;
+    std::vector<EncodedKeySample> encoded_samples;
+    size_t sampled_row_count = 0;
+    int64_t segment_load_time_us = 0;
+    int64_t short_key_index_load_time_us = 0;
+    int64_t primary_key_index_load_time_us = 0;
+    int64_t primary_key_sample_read_time_us = 0;
+    int64_t key_sample_read_time_us = 0;
+    int64_t boundary_key_read_time_us = 0;
+    io::FileCacheStatistics planning_io_stats;
+    io::FileCacheStatistics primary_key_sample_io_stats;
+    io::FileCacheStatistics key_sample_io_stats;
+    size_t segment_count = 0;
+    for (const auto& rowset : input_rowsets) {
+        auto beta_rowset = std::dynamic_pointer_cast<BetaRowset>(rowset);
+        if (beta_rowset == nullptr) {
+            return Status::InvalidArgument("distributed base compaction requires beta rowsets");
+        }
+        std::vector<segment_v2::SegmentSharedPtr> segments;
+        const int64_t segment_load_start_us = MonotonicMicros();
+        const Status segment_load_status = beta_rowset->load_segments(&segments);
+        segment_load_time_us += MonotonicMicros() - segment_load_start_us;
+        RETURN_IF_ERROR(segment_load_status);
+        segment_count += segments.size();
+        for (const auto& segment : segments) {
+            OlapReaderStatistics index_reader_stats;
+            if (!is_mow || primary_key_fast_path_eligible) {
+                const int64_t index_load_start_us = MonotonicMicros();
+                const Status index_load_status = segment->load_index(&index_reader_stats);
+                const int64_t index_load_time_us = MonotonicMicros() - index_load_start_us;
+                if (is_mow) {
+                    primary_key_index_load_time_us += index_load_time_us;
+                } else {
+                    short_key_index_load_time_us += index_load_time_us;
+                }
+                RETURN_IF_ERROR(index_load_status);
+                planning_io_stats.merge_from(index_reader_stats.file_cache_stats);
+            }
+            const auto* short_key_index = is_mow ? nullptr : segment->get_short_key_index();
+            DORIS_CHECK(is_mow || short_key_index != nullptr);
+            const auto* primary_key_index =
+                    primary_key_fast_path_eligible ? segment->get_primary_key_index() : nullptr;
+            DORIS_CHECK(!primary_key_fast_path_eligible || primary_key_index != nullptr);
+            const uint64_t rows_per_block =
+                    primary_key_fast_path_eligible
+                            ? 1
+                            : is_mow ? schema.num_rows_per_row_block()
+                                     : short_key_index->num_rows_per_block();
+            DORIS_CHECK_GT(rows_per_block, 0);
+            const size_t segment_sample_count = cast_set<size_t>(
+                    (static_cast<uint128_t>(segment->num_rows()) * target_sample_count +
+                     total_input_rows - 1) /
+                    total_input_rows);
+            auto weighted_rowids = build_weighted_key_sample_rowids(
+                    segment->num_rows(), rows_per_block, segment_sample_count);
+            sampled_row_count += weighted_rowids.size();
+            const size_t segment_index = segment_samples.size();
+            if (primary_key_fast_path_eligible) {
+                std::vector<std::string> primary_keys;
+                OlapReaderStatistics primary_key_reader_stats;
+                const int64_t primary_key_read_start_us = MonotonicMicros();
+                const Status primary_key_read_status = read_encoded_primary_key_samples(
+                        segment, weighted_rowids, &primary_key_reader_stats, &primary_keys);
+                primary_key_sample_read_time_us +=
+                        MonotonicMicros() - primary_key_read_start_us;
+                RETURN_IF_ERROR(primary_key_read_status);
+                planning_io_stats.merge_from(primary_key_reader_stats.file_cache_stats);
+                primary_key_sample_io_stats.merge_from(
+                        primary_key_reader_stats.file_cache_stats);
+                DORIS_CHECK_EQ(primary_keys.size(), weighted_rowids.size());
+                for (size_t sample_index = 0; sample_index < weighted_rowids.size();
+                    ++sample_index) {
+                    auto& primary_key = primary_keys[sample_index];
+                    DORIS_CHECK_GT(primary_key.size(), primary_key_suffix_length);
+                    primary_key.resize(primary_key.size() - primary_key_suffix_length);
+                    encoded_samples.push_back(
+                            {.key = std::move(primary_key),
+                             .weight = weighted_rowids[sample_index].weight,
+                             .segment_index = segment_index,
+                             .rowid = weighted_rowids[sample_index].rowid});
+                }
+            } else if (short_key_fast_path_eligible) {
+                for (const auto& sample : weighted_rowids) {
+                    DORIS_CHECK_EQ(sample.rowid % rows_per_block, 0);
+                    const size_t block_ordinal = sample.rowid / rows_per_block;
+                    DORIS_CHECK_LT(block_ordinal, short_key_index->num_items());
+                    encoded_samples.push_back(
+                            {.key = short_key_index->key(block_ordinal).to_string(),
+                             .weight = sample.weight,
+                             .segment_index = segment_index,
+                             .rowid = sample.rowid});
+                }
+            }
+            segment_samples.push_back(
+                    {.segment = segment, .weighted_rowids = std::move(weighted_rowids)});
+        }
+    }
+
+    CompositeKeyRangePlan key_plan;
+    int64_t boundary_choose_time_us = 0;
+    bool short_key_fast_path = false;
+    bool primary_key_fast_path = false;
+    bool short_key_collision_refinement = false;
+    size_t typed_sample_count = 0;
+    size_t boundary_refinement_group_count = 0;
+    size_t boundary_refinement_sample_count = 0;
+    const size_t encoded_sample_count = encoded_samples.size();
+    if (primary_key_fast_path_eligible ||
+        (short_key_fast_path_eligible && short_key_encoding_lossless)) {
+        const int64_t boundary_choose_start_us = MonotonicMicros();
+        const auto encoded_boundaries =
+                choose_encoded_key_range_boundaries(std::move(encoded_samples), range_count);
+        boundary_choose_time_us += MonotonicMicros() - boundary_choose_start_us;
+        if (primary_key_fast_path_eligible || encoded_boundaries.size() + 1 >= range_count) {
+            primary_key_fast_path = primary_key_fast_path_eligible;
+            short_key_fast_path = short_key_fast_path_eligible;
+            if (short_key_fast_path) {
+                short_key_fast_path_fallback_reason = "none";
+            }
+            key_plan.prefix_length =
+                    primary_key_fast_path ? key_column_count : short_key_prefix_length;
+            key_plan.boundaries.reserve(encoded_boundaries.size());
+            for (const auto& boundary : encoded_boundaries) {
+                DORIS_CHECK_LT(boundary.segment_index, segment_samples.size());
+                std::vector<rowid_t> rowids {boundary.rowid};
+                std::vector<CompositeKey> keys;
+                OlapReaderStatistics reader_stats;
+                const int64_t sample_read_start_us = MonotonicMicros();
+                const Status sample_read_status =
+                        read_key_samples(segment_samples[boundary.segment_index].segment, schema,
+                                         key_plan.prefix_length, rowids, &reader_stats, &keys);
+                const int64_t sample_read_time_us = MonotonicMicros() - sample_read_start_us;
+                key_sample_read_time_us += sample_read_time_us;
+                boundary_key_read_time_us += sample_read_time_us;
+                RETURN_IF_ERROR(sample_read_status);
+                planning_io_stats.merge_from(reader_stats.file_cache_stats);
+                key_sample_io_stats.merge_from(reader_stats.file_cache_stats);
+                DORIS_CHECK_EQ(keys.size(), 1);
+                key_plan.boundaries.push_back(std::move(keys.front()));
+                ++typed_sample_count;
+            }
+            for (size_t boundary_index = 1; boundary_index < key_plan.boundaries.size();
+                 ++boundary_index) {
+                DORIS_CHECK(key_plan.boundaries[boundary_index - 1] <
+                            key_plan.boundaries[boundary_index]);
+            }
+        } else {
+            short_key_fast_path_fallback_reason = "insufficient_encoded_boundaries";
+        }
+    } else if (short_key_fast_path_eligible) {
+        short_key_fast_path = true;
+        short_key_collision_refinement = true;
+        short_key_fast_path_fallback_reason = "none";
+        const int64_t encoded_group_start_us = MonotonicMicros();
+        auto encoded_groups = group_encoded_key_samples(std::move(encoded_samples));
+        std::vector<size_t> target_group_indices;
+        std::set<size_t> refinement_group_indices;
+        uint128_t total_weight = 0;
+        if (!encoded_groups.empty()) {
+            total_weight = static_cast<uint128_t>(encoded_groups.back().weight_before) +
+                           encoded_groups.back().weight;
+            target_group_indices.reserve(range_count - 1);
+            for (size_t split = 1; split < range_count; ++split) {
+                const uint128_t target = total_weight * split / range_count;
+                size_t group_index = 0;
+                while (group_index + 1 < encoded_groups.size() &&
+                       static_cast<uint128_t>(encoded_groups[group_index].weight_before) +
+                                       encoded_groups[group_index].weight <=
+                               target) {
+                    ++group_index;
+                }
+                target_group_indices.push_back(group_index);
+                refinement_group_indices.insert(group_index);
+                if (group_index + 1 < encoded_groups.size()) {
+                    refinement_group_indices.insert(group_index + 1);
+                }
+            }
+        }
+        boundary_choose_time_us += MonotonicMicros() - encoded_group_start_us;
+
+        std::unordered_map<size_t, std::vector<CompositeKeySample>> refined_groups;
+        for (const size_t group_index : refinement_group_indices) {
+            const auto& encoded_group = encoded_groups[group_index];
+            std::vector<std::vector<const EncodedKeyLocator*>> samples_by_segment(
+                    segment_samples.size());
+            for (const auto& sample : encoded_group.samples) {
+                DORIS_CHECK_LT(sample.segment_index, samples_by_segment.size());
+                samples_by_segment[sample.segment_index].push_back(&sample);
+            }
+            std::vector<CompositeKeySample> typed_samples;
+            typed_samples.reserve(encoded_group.samples.size());
+            for (size_t segment_index = 0; segment_index < samples_by_segment.size();
+                 ++segment_index) {
+                auto& segment_group_samples = samples_by_segment[segment_index];
+                if (segment_group_samples.empty()) {
+                    continue;
+                }
+                std::ranges::sort(segment_group_samples, {},
+                                  [](const EncodedKeyLocator* sample) { return sample->rowid; });
+                std::vector<rowid_t> rowids;
+                rowids.reserve(segment_group_samples.size());
+                for (const auto* sample : segment_group_samples) {
+                    rowids.push_back(sample->rowid);
+                }
+                std::vector<CompositeKey> keys;
+                OlapReaderStatistics reader_stats;
+                const int64_t sample_read_start_us = MonotonicMicros();
+                const Status sample_read_status =
+                        read_key_samples(segment_samples[segment_index].segment, schema,
+                                         key_column_count, rowids, &reader_stats, &keys);
+                const int64_t sample_read_time_us = MonotonicMicros() - sample_read_start_us;
+                key_sample_read_time_us += sample_read_time_us;
+                boundary_key_read_time_us += sample_read_time_us;
+                RETURN_IF_ERROR(sample_read_status);
+                planning_io_stats.merge_from(reader_stats.file_cache_stats);
+                key_sample_io_stats.merge_from(reader_stats.file_cache_stats);
+                DORIS_CHECK_EQ(keys.size(), segment_group_samples.size());
+                for (size_t sample_index = 0; sample_index < keys.size(); ++sample_index) {
+                    typed_samples.push_back(
+                            {.key = std::move(keys[sample_index]),
+                             .weight = segment_group_samples[sample_index]->weight});
+                }
+            }
+            typed_sample_count += typed_samples.size();
+            boundary_refinement_sample_count += typed_samples.size();
+            refined_groups.emplace(group_index,
+                                   sort_and_merge_composite_key_samples(std::move(typed_samples)));
+        }
+        boundary_refinement_group_count = refined_groups.size();
+
+        const int64_t refined_boundary_start_us = MonotonicMicros();
+        key_plan.prefix_length = key_column_count;
+        key_plan.boundaries.reserve(range_count - 1);
+        for (size_t split = 1; split < range_count; ++split) {
+            if (target_group_indices.empty()) {
+                break;
+            }
+            const uint128_t target = total_weight * split / range_count;
+            const size_t group_index = target_group_indices[split - 1];
+            const auto& encoded_group = encoded_groups[group_index];
+            const auto& current_group = refined_groups.at(group_index);
+            uint128_t prefix = encoded_group.weight_before;
+            uint128_t best_distance = total_weight;
+            std::optional<CompositeKey> best_key;
+            for (const auto& sample : current_group) {
+                if (prefix > 0) {
+                    const uint128_t distance = prefix > target ? prefix - target : target - prefix;
+                    if (distance < best_distance) {
+                        best_distance = distance;
+                        best_key = sample.key;
+                    }
+                }
+                prefix += sample.weight;
+            }
+            if (group_index + 1 < encoded_groups.size()) {
+                const auto& next_group = refined_groups.at(group_index + 1);
+                DORIS_CHECK(!next_group.empty());
+                const uint128_t next_prefix =
+                        static_cast<uint128_t>(encoded_group.weight_before) + encoded_group.weight;
+                const uint128_t distance =
+                        next_prefix > target ? next_prefix - target : target - next_prefix;
+                if (distance < best_distance) {
+                    best_key = next_group.front().key;
+                }
+            }
+            if (best_key.has_value() &&
+                (key_plan.boundaries.empty() || key_plan.boundaries.back() != *best_key)) {
+                DORIS_CHECK(key_plan.boundaries.empty() || key_plan.boundaries.back() < *best_key);
+                key_plan.boundaries.push_back(std::move(*best_key));
+            }
+        }
+        boundary_choose_time_us += MonotonicMicros() - refined_boundary_start_us;
+    }
+
+    std::vector<CompositeKeySample> samples;
+    if (!short_key_fast_path && !primary_key_fast_path) {
+        samples.reserve(sampled_row_count);
+        for (const auto& segment_sample : segment_samples) {
+            std::vector<rowid_t> rowids;
+            rowids.reserve(segment_sample.weighted_rowids.size());
+            for (const auto& sample : segment_sample.weighted_rowids) {
+                rowids.push_back(sample.rowid);
+            }
+            std::vector<CompositeKey> keys;
+            OlapReaderStatistics reader_stats;
+            const int64_t sample_read_start_us = MonotonicMicros();
+            const Status sample_read_status = read_key_samples(
+                    segment_sample.segment, schema, key_column_count, rowids, &reader_stats, &keys);
+            key_sample_read_time_us += MonotonicMicros() - sample_read_start_us;
+            RETURN_IF_ERROR(sample_read_status);
+            planning_io_stats.merge_from(reader_stats.file_cache_stats);
+            key_sample_io_stats.merge_from(reader_stats.file_cache_stats);
+            DORIS_CHECK_EQ(keys.size(), segment_sample.weighted_rowids.size());
+            for (size_t sample_index = 0; sample_index < keys.size(); ++sample_index) {
+                samples.push_back({.key = std::move(keys[sample_index]),
+                                   .weight = segment_sample.weighted_rowids[sample_index].weight});
+            }
+        }
+        typed_sample_count = samples.size();
+        const int64_t boundary_choose_start_us = MonotonicMicros();
+        key_plan = choose_composite_key_range_boundaries(samples, range_count);
+        boundary_choose_time_us += MonotonicMicros() - boundary_choose_start_us;
+    }
+    const size_t group_count = key_plan.boundaries.size() + 1;
+    if (group_count < 2) {
+        return Status::OK();
+    }
+    const int64_t task_build_start_us = MonotonicMicros();
+    auto workers = select_compaction_workers_for_groups(
+            candidates, BackendOptions::get_backend_id(), group_count, _execution_id);
+    DORIS_CHECK_GE(workers.size(), 2);
+
+    std::vector<OutputRowsetSegmentIdSlot> segment_slots;
+    RETURN_IF_ERROR(build_output_rowset_segment_id_slots(
+            output_rowset_writer.get_allocated_segment_id(),
+            config::cloud_distributed_compaction_segment_slot_capacity, group_count,
+            &segment_slots));
+
+    _state = std::make_unique<DistributedCompactionState>();
+    if (is_mow) {
+        RETURN_IF_ERROR(_engine.meta_mgr().sync_tablet_rowsets(_tablet.get()));
+        _state->phase1_end_version = _tablet->max_version().second;
+        _state->output_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
+    }
+    _state->tasks.reserve(group_count);
+    auto groups_by_worker = assign_compaction_groups_round_robin(group_count, workers.size());
+    for (size_t group_index = 0; group_index < group_count; ++group_index) {
+        const size_t worker_index = group_index % workers.size();
+        _state->tasks.push_back({.worker_endpoint = workers[worker_index].endpoint,
+                                 .group_index = cast_set<int32_t>(group_index),
+                                 .segment_id_slot = segment_slots[group_index]});
+    }
+
+    int64_t merge_way_num = 0;
+    for (const auto& rowset : input_rowsets) {
+        merge_way_num += rowset->rowset_meta()->get_merge_way_num();
+    }
+    const auto output_meta_pb = output_rowset_writer.rowset_meta()->get_rowset_pb();
+    std::vector<PCloudDistributedCompactionSubmitRequest> requests(workers.size());
+    for (size_t worker_index = 0; worker_index < workers.size(); ++worker_index) {
+        const auto& worker = workers[worker_index];
+        auto& request = requests[worker_index];
+        request.set_tablet_id(_tablet->tablet_id());
+        request.set_execution_id(_execution_id);
+        request.set_compaction_type(CLOUD_DISTRIBUTED_BASE_COMPACTION);
+        for (const auto& rowset : input_rowsets) {
+            *request.add_input_rowset_metas() = rowset->rowset_meta()->get_rowset_pb();
+        }
+        *request.mutable_output_rowset_meta() = output_meta_pb;
+        request.set_is_vertical(is_vertical);
+        request.set_avg_segment_rows(avg_segment_rows);
+        request.set_delete_bitmap_start_version(0);
+        request.set_delete_bitmap_end_version(_state->phase1_end_version + 1);
+        request.set_check_missed_rows(false);
+        request.set_target_backend_id(worker.backend_id);
+        request.set_target_cloud_unique_id(worker.cloud_unique_id);
+        request.set_target_compute_group_id(worker.compute_group_id);
+        request.set_is_coordinator(worker.backend_id == BackendOptions::get_backend_id());
+        set_coordinator_peer_if_enabled(&request);
+
+        for (const size_t group_index : groups_by_worker[worker_index]) {
+            const auto& distributed_task = _state->tasks[group_index];
+            auto* request_task = request.add_tasks();
+            request_task->set_group_index(distributed_task.group_index);
+            request_task->set_output_segment_start_id(distributed_task.segment_id_slot.start_id);
+            request_task->set_max_segment_num(distributed_task.segment_id_slot.capacity);
+            request_task->set_merge_way_num(merge_way_num);
+            auto* key_range = request_task->mutable_key_range();
+            const auto lower_key =
+                    group_index == 0 ? key_limit(schema, key_plan.prefix_length, false)
+                                     : key_plan.boundaries[group_index - 1];
+            const auto upper_key = group_index + 1 == group_count
+                                           ? key_limit(schema, key_plan.prefix_length, true)
+                                           : key_plan.boundaries[group_index];
+            set_key_fields(key_range->mutable_lower_key(), schema, lower_key);
+            set_key_fields(key_range->mutable_upper_key(), schema, upper_key);
+            key_range->set_upper_inclusive(group_index + 1 == group_count);
+        }
+    }
+    const int64_t task_build_time_us = MonotonicMicros() - task_build_start_us;
+    const int64_t submit_start_us = MonotonicMicros();
+    const Status submit_status = submit_batches(workers, groups_by_worker, requests);
+    const int64_t submit_rpc_time_us = MonotonicMicros() - submit_start_us;
+    RETURN_IF_ERROR(submit_status);
+
+    _execution_plan = std::make_unique<ExecutionPlan>();
+    _execution_plan->workers = std::move(workers);
+    _execution_plan->groups_by_worker = std::move(groups_by_worker);
+    _execution_plan->responses.resize(group_count);
+    _execution_plan->worker_completed.assign(_execution_plan->workers.size(), false);
+    _execution_plan->task_completed.assign(group_count, false);
+    _execution_plan->remaining_workers = _execution_plan->workers.size();
+    _execution_plan->expiration_time = output_meta_pb.txn_expiration();
+    for (const auto& rowset : input_rowsets) {
+        _execution_plan->input_rowsets_total_size += rowset->total_disk_size();
+    }
+    _execution_plan->is_mow = is_mow;
+    _execution_plan->check_missed_rows = false;
+    const int64_t prepare_finish_time_us = UnixMicros();
+    LOG_INFO("finish distributed base compaction range planning")
+            .tag("job_id", _execution_id)
+            .tag("tablet_id", _tablet->tablet_id())
+            .tag("prepare_start_time_us", prepare_start_time_us)
+            .tag("prepare_finish_time_us", prepare_finish_time_us)
+            .tag("prepare_time_us", MonotonicMicros() - prepare_start_us)
+            .tag("worker_discovery_time_us", worker_discovery_time_us)
+            .tag("segment_load_time_us", segment_load_time_us)
+            .tag("short_key_index_load_time_us", short_key_index_load_time_us)
+            .tag("primary_key_index_load_time_us", primary_key_index_load_time_us)
+            .tag("primary_key_sample_read_time_us", primary_key_sample_read_time_us)
+            .tag("key_sample_read_time_us", key_sample_read_time_us)
+            .tag("boundary_key_read_time_us", boundary_key_read_time_us)
+            .tag("local_read_bytes", planning_io_stats.bytes_read_from_local)
+            .tag("remote_read_bytes", planning_io_stats.bytes_read_from_remote)
+            .tag("peer_read_bytes", planning_io_stats.bytes_read_from_peer)
+            .tag("local_read_count", planning_io_stats.num_local_io_total)
+            .tag("remote_read_count", planning_io_stats.num_remote_io_total)
+            .tag("peer_read_count", planning_io_stats.num_peer_io_total)
+            .tag("local_read_time_us", planning_io_stats.local_io_timer / 1000)
+            .tag("remote_read_time_us", planning_io_stats.remote_io_timer / 1000)
+            .tag("peer_read_time_us", planning_io_stats.peer_io_timer / 1000)
+            .tag("primary_key_sample_local_read_bytes",
+                 primary_key_sample_io_stats.bytes_read_from_local)
+            .tag("primary_key_sample_remote_read_bytes",
+                 primary_key_sample_io_stats.bytes_read_from_remote)
+            .tag("primary_key_sample_peer_read_bytes",
+                 primary_key_sample_io_stats.bytes_read_from_peer)
+            .tag("primary_key_sample_local_read_count",
+                 primary_key_sample_io_stats.num_local_io_total)
+            .tag("primary_key_sample_remote_read_count",
+                 primary_key_sample_io_stats.num_remote_io_total)
+            .tag("primary_key_sample_peer_read_count",
+                 primary_key_sample_io_stats.num_peer_io_total)
+            .tag("primary_key_sample_local_read_time_us",
+                 primary_key_sample_io_stats.local_io_timer / 1000)
+            .tag("primary_key_sample_remote_read_time_us",
+                 primary_key_sample_io_stats.remote_io_timer / 1000)
+            .tag("primary_key_sample_peer_read_time_us",
+                 primary_key_sample_io_stats.peer_io_timer / 1000)
+            .tag("key_sample_local_read_bytes", key_sample_io_stats.bytes_read_from_local)
+            .tag("key_sample_remote_read_bytes", key_sample_io_stats.bytes_read_from_remote)
+            .tag("key_sample_peer_read_bytes", key_sample_io_stats.bytes_read_from_peer)
+            .tag("key_sample_local_read_count", key_sample_io_stats.num_local_io_total)
+            .tag("key_sample_remote_read_count", key_sample_io_stats.num_remote_io_total)
+            .tag("key_sample_peer_read_count", key_sample_io_stats.num_peer_io_total)
+            .tag("boundary_choose_time_us", boundary_choose_time_us)
+            .tag("task_build_time_us", task_build_time_us)
+            .tag("submit_rpc_time_us", submit_rpc_time_us)
+            .tag("input_rowsets", input_rowsets.size())
+            .tag("segments", segment_count)
+            .tag("samples", sampled_row_count)
+            .tag("encoded_samples", encoded_sample_count)
+            .tag("typed_samples", typed_sample_count)
+            .tag("boundary_candidate_rows", key_plan.boundaries.size())
+            .tag("short_key_fast_path", short_key_fast_path)
+            .tag("primary_key_fast_path", primary_key_fast_path)
+            .tag("primary_key_fast_path_fallback_reason",
+                 primary_key_fast_path_fallback_reason)
+            .tag("short_key_encoding_lossless", short_key_encoding_lossless)
+            .tag("short_key_collision_refinement", short_key_collision_refinement)
+            .tag("boundary_refinement_groups", boundary_refinement_group_count)
+            .tag("boundary_refinement_samples", boundary_refinement_sample_count)
+            .tag("short_key_fast_path_fallback_reason", short_key_fast_path_fallback_reason)
+            .tag("target_samples", target_sample_count)
+            .tag("requested_ranges", range_count)
+            .tag("actual_ranges", group_count);
     *started = true;
     return Status::OK();
 }
@@ -979,6 +2196,9 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
     bool key_bounds_truncated = false;
     bool segment_file_sizes_available = true;
     int64_t missed_rows_count = 0;
+    int64_t first_merge_start_time_us = std::numeric_limits<int64_t>::max();
+    int64_t last_merge_finish_time_us = 0;
+    int64_t sum_task_merge_time_us = 0;
     std::unordered_set<int64_t> output_segment_id_set;
     std::vector<int64_t> output_segment_ids;
     std::vector<KeyBoundsPB> output_key_bounds;
@@ -993,7 +2213,46 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
         ValidatedPartialRowset partial_rowset;
         RETURN_IF_ERROR(validate_partial_rowset(group_index, response, task, tablet_schema,
                                                 output_rowset_writer.rowset_id(), &partial_rowset));
+        DORIS_CHECK(response.has_merge_start_time_us());
+        DORIS_CHECK(response.has_merge_finish_time_us());
+        first_merge_start_time_us =
+                std::min(first_merge_start_time_us, response.merge_start_time_us());
+        last_merge_finish_time_us =
+                std::max(last_merge_finish_time_us, response.merge_finish_time_us());
+        sum_task_merge_time_us += response.merge_time_us();
         const auto& partial_meta = partial_rowset.meta;
+        LOG_INFO("finish distributed compaction worker task")
+                .tag("job_id", _execution_id)
+                .tag("tablet_id", _tablet->tablet_id())
+                .tag("group_index", task.group_index)
+                .tag("endpoint", task.worker_endpoint)
+                .tag("output_rows", partial_meta.num_rows())
+                .tag("output_segments", partial_meta.num_segments())
+                .tag("output_rowset_data_size", partial_meta.data_disk_size())
+                .tag("output_rowset_index_size", partial_meta.index_disk_size())
+                .tag("output_rowset_total_size", partial_meta.total_disk_size())
+                .tag("merged_rows", response.merged_rows())
+                .tag("filtered_rows", response.filtered_rows())
+                .tag("local_read_bytes", response.bytes_read_from_local())
+                .tag("remote_read_bytes", response.bytes_read_from_remote())
+                .tag("peer_read_bytes", response.bytes_read_from_peer())
+                .tag("cached_bytes_total", response.cached_bytes_total())
+                .tag("local_read_time_us", response.cloud_local_read_time())
+                .tag("remote_read_time_us", response.cloud_remote_read_time())
+                .tag("peer_read_time_us", response.peer_read_time_us())
+                .tag("cpu_time_us", response.cpu_time_us())
+                .tag("merge_time_us", response.merge_time_us())
+                .tag("remote_output_write_time_us", response.remote_output_write_time_us())
+                .tag("worker_arrival_time_us", response.worker_arrival_time_us())
+                .tag("worker_start_time_us", response.worker_start_time_us())
+                .tag("worker_queue_time_us",
+                     response.worker_start_time_us() - response.worker_arrival_time_us())
+                .tag("merge_start_time_us", response.merge_start_time_us())
+                .tag("merge_finish_time_us", response.merge_finish_time_us())
+                .tag("worker_finish_time_us", response.worker_finish_time_us())
+                .tag("worker_total_time_us",
+                     response.worker_finish_time_us() - response.worker_arrival_time_us())
+                .tag("task_elapsed_time_us", response.task_elapsed_time_us());
 
         for (const auto segment : partial_meta.segments()) {
             if (!output_segment_id_set.emplace(segment.id()).second) {
@@ -1032,9 +2291,11 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
         stats->filtered_rows += response.filtered_rows();
         stats->bytes_read_from_local += response.bytes_read_from_local();
         stats->bytes_read_from_remote += response.bytes_read_from_remote();
+        stats->bytes_read_from_peer += response.bytes_read_from_peer();
         stats->cached_bytes_total += response.cached_bytes_total();
         stats->cloud_local_read_time += response.cloud_local_read_time();
         stats->cloud_remote_read_time += response.cloud_remote_read_time();
+        stats->peer_read_time_us += response.peer_read_time_us();
         if (is_mow && response.has_output_delete_bitmap_shard()) {
             _state->output_delete_bitmap->merge(DeleteBitmap::from_pb(
                     response.output_delete_bitmap_shard(), _tablet->tablet_id()));
@@ -1101,12 +2362,27 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
     }
 
     *output_rowset = _output_rowset;
+    const int64_t parallel_merge_time_us =
+            last_merge_finish_time_us - first_merge_start_time_us;
+    DORIS_CHECK_GT(parallel_merge_time_us, 0);
+    const double merge_throughput_mib_per_second =
+            cast_set<double>(_execution_plan->input_rowsets_total_size) * 1'000'000 /
+            parallel_merge_time_us / 1024 / 1024;
+    const double effective_merge_parallelism =
+            cast_set<double>(sum_task_merge_time_us) / parallel_merge_time_us;
     LOG_INFO("finish distributed single-rowset compaction merge, tablet_id={}",
              _tablet->tablet_id())
             .tag("job_id", _execution_id)
             .tag("groups", responses.size())
             .tag("workers", workers.size())
-            .tag("output_segments", output_segment_ids.size());
+            .tag("output_segments", output_segment_ids.size())
+            .tag("input_rowsets_total_size", _execution_plan->input_rowsets_total_size)
+            .tag("first_merge_start_time_us", first_merge_start_time_us)
+            .tag("last_merge_finish_time_us", last_merge_finish_time_us)
+            .tag("parallel_merge_time_us", parallel_merge_time_us)
+            .tag("sum_task_merge_time_us", sum_task_merge_time_us)
+            .tag("effective_merge_parallelism", effective_merge_parallelism)
+            .tag("merge_throughput_mib_per_second", merge_throughput_mib_per_second);
     return Status::OK();
 }
 
@@ -1317,13 +2593,15 @@ void DistributedCompactionCoordinator::finalize(bool preserve_output_files) {
 }
 
 DistributedCompactionWorker::DistributedCompactionWorker(CloudStorageEngine& engine,
-                                                         std::shared_ptr<CloudTablet> tablet)
+                                                         std::shared_ptr<CloudTablet> tablet,
+                                                         int64_t arrival_time_us)
         : _engine(engine),
           _tablet(std::move(tablet)),
           _mem_tracker(MemTrackerLimiter::create_shared(
                   MemTrackerLimiter::Type::COMPACTION,
                   fmt::format("distributed-compaction-tablet-{}", _tablet->tablet_id()))),
-          _runtime_state(RuntimeState::create_unique()) {}
+          _runtime_state(RuntimeState::create_unique()),
+          _arrival_time_us(arrival_time_us) {}
 
 DistributedCompactionWorker::~DistributedCompactionWorker() {
     SCOPED_INIT_THREAD_CONTEXT();
@@ -1345,7 +2623,17 @@ Status DistributedCompactionWorker::execute_compaction(
     }
 
     PCloudDistributedCompactionTaskResult result;
+    result.set_worker_arrival_time_us(_arrival_time_us);
+    result.set_worker_start_time_us(UnixMicros());
+    const auto start = std::chrono::steady_clock::now();
+    ThreadCpuStopWatch cpu_timer;
+    cpu_timer.start();
     const Status status = handle_compaction(request, task, &result);
+    const auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start);
+    result.set_task_elapsed_time_us(elapsed_time.count());
+    result.set_cpu_time_us(cpu_timer.elapsed_time_microseconds());
+    result.set_worker_finish_time_us(UnixMicros());
     result.set_group_index(task->group_index());
     status.to_protobuf(result.mutable_status());
     {
@@ -1409,7 +2697,8 @@ void DistributedCompactionWorker::get_compaction_status(
 Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_output_rowset_writer(
         const PCloudDistributedCompactionSubmitRequest& request,
         const PCloudDistributedCompactionTask& task, const RowsetMeta& output_meta,
-        const StorageResource& storage_resource) {
+        const StorageResource& storage_resource,
+        const std::vector<RowsetSharedPtr>& input_rowsets) {
     RowsetWriterContext context;
     context.rowset_id = output_meta.rowset_id();
     context.db_id = output_meta.db_id();
@@ -1428,7 +2717,32 @@ Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_out
     context.newest_write_timestamp = output_meta.newest_write_timestamp();
     context.enable_unique_key_merge_on_write = _tablet->enable_unique_key_merge_on_write();
     context.write_type = DataWriteType::TYPE_COMPACTION;
-    context.compaction_type = ReaderType::READER_CUMULATIVE_COMPACTION;
+    context.compaction_type = request.compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION
+                                      ? ReaderType::READER_BASE_COMPACTION
+                                      : ReaderType::READER_CUMULATIVE_COMPACTION;
+    context.disable_file_cache = !request.is_coordinator();
+    if (request.is_coordinator()) {
+        context.file_cache_ttl_sec = _tablet->ttl_seconds();
+        if (context.compaction_type == ReaderType::READER_CUMULATIVE_COMPACTION) {
+            context.write_file_cache = should_cache_cloud_cumulative_compaction_output();
+            context.approximate_bytes_to_write = request.input_rowset_meta().total_disk_size();
+        } else {
+            int64_t total_size = 0;
+            int64_t cached_size = 0;
+            for (const auto& input_rowset : input_rowsets) {
+                total_size += input_rowset->total_disk_size();
+                cached_size += input_rowset->approximate_cached_data_size() +
+                               input_rowset->approximate_cache_index_size();
+            }
+            context.write_file_cache =
+                    should_cache_cloud_base_compaction_output(cached_size, total_size);
+            context.approximate_bytes_to_write = total_size;
+        }
+        context.compaction_output_write_index_only = should_enable_compaction_cache_index_only(
+                context.write_file_cache, context.compaction_type,
+                config::enable_file_cache_write_base_compaction_index_only,
+                config::enable_file_cache_write_cumu_compaction_index_only);
+    }
     context.tablet = _tablet;
     context.encrypt_algorithm = _tablet->tablet_meta()->encryption_algorithm();
     context.job_id = request.execution_id();
@@ -1452,33 +2766,86 @@ Status DistributedCompactionWorker::handle_compaction(
         PCloudDistributedCompactionTaskResult* result) {
     SCOPED_ATTACH_TASK(_mem_tracker);
     std::lock_guard<std::mutex> lock(_mutex);
+    if (!request->is_coordinator() && request->has_coordinator_host()) {
+        _runtime_state->set_preferred_file_cache_peer(request->coordinator_host(),
+                                                      request->coordinator_brpc_port());
+    }
     if (_output_rowset != nullptr) {
         return Status::InvalidArgument(
                 "duplicate distributed compaction task: execution={}, group={}",
                 request->execution_id(), task->group_index());
     }
 
-    auto input_meta = std::make_shared<RowsetMeta>();
-    if (!input_meta->init_from_pb(request->input_rowset_meta())) {
-        return Status::InvalidArgument("failed to initialize input rowset metadata");
+    const bool is_base = request->compaction_type() == CLOUD_DISTRIBUTED_BASE_COMPACTION;
+    if (is_base) {
+        const auto& schema = *_tablet->tablet_schema();
+        const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                            _tablet->enable_unique_key_merge_on_write();
+        const bool supported_keys_type = _tablet->keys_type() == KeysType::DUP_KEYS ||
+                                         _tablet->keys_type() == KeysType::AGG_KEYS ||
+                                         (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                                          (!is_mow || schema.cluster_key_uids().empty()));
+        if (!supported_keys_type || schema.num_key_columns() == 0 ||
+            !is_supported_distributed_base_key(schema.column(0).type()) ||
+            schema.column(0).is_nullable()) {
+            return Status::InvalidArgument(
+                    "distributed base compaction requires DUP_KEYS, AGG_KEYS, UNIQUE_KEYS MOR, "
+                    "or non-cluster-key UNIQUE_KEYS MOW tablet with a non-null supported leading "
+                    "key");
+        }
     }
-    if (input_meta->tablet_id() != request->tablet_id()) {
-        return Status::InvalidArgument("input rowset tablet id does not match request");
+    std::vector<RowsetMetaPB> input_meta_pbs;
+    if (is_base) {
+        input_meta_pbs.assign(request->input_rowset_metas().begin(),
+                              request->input_rowset_metas().end());
+    } else {
+        input_meta_pbs.push_back(request->input_rowset_meta());
     }
-    RowsetSharedPtr input_rowset;
-    RETURN_IF_ERROR(RowsetFactory::create_rowset(
-            input_meta->tablet_schema(), _tablet->tablet_path(), input_meta, &input_rowset));
+    std::vector<RowsetSharedPtr> input_rowsets;
+    input_rowsets.reserve(input_meta_pbs.size());
+    for (const auto& input_meta_pb : input_meta_pbs) {
+        auto input_meta = std::make_shared<RowsetMeta>();
+        if (!input_meta->init_from_pb(input_meta_pb)) {
+            return Status::InvalidArgument("failed to initialize input rowset metadata");
+        }
+        if (input_meta->tablet_id() != request->tablet_id()) {
+            return Status::InvalidArgument("input rowset tablet id does not match request");
+        }
+        RowsetSharedPtr input_rowset;
+        RETURN_IF_ERROR(RowsetFactory::create_rowset(
+                input_meta->tablet_schema(), _tablet->tablet_path(), input_meta, &input_rowset));
+        input_rowsets.push_back(std::move(input_rowset));
+    }
 
-    const int64_t segment_pos_start = task->segment_pos_start();
-    const int64_t segment_pos_end = task->segment_pos_end();
-    if (segment_pos_end > input_rowset->num_segments()) {
-        return Status::InvalidArgument("invalid input segment range: start={}, end={}, segments={}",
-                                       segment_pos_start, segment_pos_end,
-                                       input_rowset->num_segments());
+    std::optional<std::pair<int64_t, int64_t>> segment_range;
+    std::optional<Merger::KeyRange> merge_key_range;
+    if (is_base) {
+        const auto& key_range = task->key_range();
+        OlapTuple lower_key;
+        OlapTuple upper_key;
+        const auto& schema = *_tablet->tablet_schema();
+        if (!extract_key_tuple(key_range.lower_key(), schema, &lower_key) ||
+            !extract_key_tuple(key_range.upper_key(), schema, &upper_key)) {
+            return Status::InvalidArgument(
+                    "distributed base compaction key range does not match tablet key type");
+        }
+        merge_key_range = Merger::KeyRange {.lower_key = std::move(lower_key),
+                                            .upper_key = std::move(upper_key),
+                                            .lower_inclusive = key_range.lower_inclusive(),
+                                            .upper_inclusive = key_range.upper_inclusive()};
+    } else {
+        segment_range = std::make_pair(task->segment_pos_start(), task->segment_pos_end());
+        if (segment_range->second > input_rowsets.front()->num_segments()) {
+            return Status::InvalidArgument(
+                    "invalid input segment range: start={}, end={}, segments={}",
+                    segment_range->first, segment_range->second,
+                    input_rowsets.front()->num_segments());
+        }
     }
 
+    auto output_meta_pb = request->output_rowset_meta();
     RowsetMeta output_meta;
-    if (!output_meta.init_from_pb(request->output_rowset_meta())) {
+    if (!output_meta.init_from_pb(output_meta_pb)) {
         return Status::InvalidArgument("failed to initialize output rowset metadata");
     }
     if (output_meta.tablet_id() != request->tablet_id()) {
@@ -1490,8 +2857,8 @@ Status DistributedCompactionWorker::handle_compaction(
                                        storage_resource.error().to_string());
     }
 
-    auto writer = DORIS_TRY(construct_output_rowset_writer(*request, *task, output_meta,
-                                                           *storage_resource.value()));
+    auto writer = DORIS_TRY(construct_output_rowset_writer(
+            *request, *task, output_meta, *storage_resource.value(), input_rowsets));
 
     _is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
               _tablet->enable_unique_key_merge_on_write();
@@ -1502,23 +2869,37 @@ Status DistributedCompactionWorker::handle_compaction(
     }
 
     RETURN_IF_CANCELLED(_runtime_state.get());
-    RowsetReaderSharedPtr reader;
-    RETURN_IF_ERROR(input_rowset->create_reader(&reader));
     std::vector<RowsetReaderSharedPtr> readers;
-    readers.push_back(std::move(reader));
-    const auto segment_range = std::make_pair(segment_pos_start, segment_pos_end);
+    readers.reserve(input_rowsets.size());
+    for (const auto& input_rowset : input_rowsets) {
+        RowsetReaderSharedPtr reader;
+        RETURN_IF_ERROR(input_rowset->create_reader(&reader));
+        readers.push_back(std::move(reader));
+    }
+    const ReaderType reader_type =
+            is_base ? ReaderType::READER_BASE_COMPACTION : ReaderType::READER_CUMULATIVE_COMPACTION;
+    MonotonicStopWatch merge_timer;
+    merge_timer.start();
+    result->set_merge_start_time_us(UnixMicros());
     if (request->is_vertical()) {
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(
-                _tablet, ReaderType::READER_CUMULATIVE_COMPACTION, *output_meta.tablet_schema(),
-                readers, writer.get(), request->avg_segment_rows(), task->merge_way_num(), &stats,
-                nullptr, segment_range, _runtime_state.get()));
+                _tablet, reader_type, *output_meta.tablet_schema(), readers, writer.get(),
+                request->avg_segment_rows(), task->merge_way_num(), &stats, nullptr, segment_range,
+                _runtime_state.get(), merge_key_range));
     } else {
-        RETURN_IF_ERROR(Merger::vmerge_rowsets(_tablet, ReaderType::READER_CUMULATIVE_COMPACTION,
-                                               *output_meta.tablet_schema(), readers, writer.get(),
-                                               &stats, segment_range, _runtime_state.get()));
+        RETURN_IF_ERROR(Merger::vmerge_rowsets(_tablet, reader_type, *output_meta.tablet_schema(),
+                                               readers, writer.get(), &stats, segment_range,
+                                               _runtime_state.get(), merge_key_range));
     }
+    merge_timer.stop();
+    result->set_merge_finish_time_us(UnixMicros());
+    result->set_merge_time_us(merge_timer.elapsed_time_microseconds());
     RETURN_IF_CANCELLED(_runtime_state.get());
+    MonotonicStopWatch remote_output_write_timer;
+    remote_output_write_timer.start();
     RETURN_IF_ERROR(writer->build(_output_rowset));
+    remote_output_write_timer.stop();
+    result->set_remote_output_write_time_us(remote_output_write_timer.elapsed_time_microseconds());
     RETURN_IF_CANCELLED(_runtime_state.get());
 
     _output_segment_ids.clear();
@@ -1539,9 +2920,11 @@ Status DistributedCompactionWorker::handle_compaction(
     result->set_filtered_rows(stats.filtered_rows);
     result->set_bytes_read_from_local(stats.bytes_read_from_local);
     result->set_bytes_read_from_remote(stats.bytes_read_from_remote);
+    result->set_bytes_read_from_peer(stats.bytes_read_from_peer);
     result->set_cached_bytes_total(stats.cached_bytes_total);
     result->set_cloud_local_read_time(stats.cloud_local_read_time);
     result->set_cloud_remote_read_time(stats.cloud_remote_read_time);
+    result->set_peer_read_time_us(stats.peer_read_time_us);
 
     if (_is_mow) {
         RETURN_IF_CANCELLED(_runtime_state.get());
@@ -1597,10 +2980,24 @@ DistributedCompactionWorkerManager* DistributedCompactionWorkerManager::instance
 }
 
 Status DistributedCompactionWorkerManager::submit(
-        const PCloudDistributedCompactionSubmitRequest& request, CloudStorageEngine& engine) {
+        const PCloudDistributedCompactionSubmitRequest& request, CloudStorageEngine& engine,
+        int64_t arrival_time_us) {
     struct CompactionJob {
         std::shared_ptr<DistributedCompactionWorker> worker;
         PCloudDistributedCompactionTask task;
+    };
+    struct CompactionBatch {
+        std::vector<CompactionJob> jobs;
+        std::atomic<bool> failed {false};
+
+        void cancel(const Status& status) {
+            if (failed.exchange(true)) {
+                return;
+            }
+            for (const auto& job : jobs) {
+                job.worker->cancel_compaction(job.task.group_index(), status);
+            }
+        }
     };
     struct CreatedWorker {
         std::string key;
@@ -1615,7 +3012,7 @@ Status DistributedCompactionWorkerManager::submit(
     std::unordered_set<std::string> request_keys;
     request_keys.reserve(cast_set<size_t>(request.tasks_size()));
     for (const auto& task : request.tasks()) {
-        RETURN_IF_ERROR(validate_compaction_task(task));
+        RETURN_IF_ERROR(validate_compaction_task(request, task));
         const std::string worker_key = key(request.execution_id(), task.group_index());
         if (!request_keys.emplace(worker_key).second) {
             return Status::InvalidArgument(
@@ -1642,7 +3039,8 @@ Status DistributedCompactionWorkerManager::submit(
                                request.output_rowset_meta().txn_expiration());
                 continue;
             }
-            auto worker = std::make_shared<DistributedCompactionWorker>(engine, tablet);
+            auto worker = std::make_shared<DistributedCompactionWorker>(engine, tablet,
+                                                                        arrival_time_us);
             _workers.emplace(
                     worker_key,
                     WorkerEntry {.worker = worker,
@@ -1653,30 +3051,36 @@ Status DistributedCompactionWorkerManager::submit(
         if (jobs.empty()) {
             return Status::OK();
         }
-        submit_status = engine.distributed_compaction_worker_thread_pool().submit_func(
-                [request_copy, jobs = std::move(jobs)]() {
-                    bool batch_failed = false;
-                    for (const auto& job : jobs) {
-                        if (batch_failed) {
-                            job.worker->cancel_compaction(
-                                    job.task.group_index(),
-                                    Status::Cancelled(
-                                            "skipped after a previous task in the batch failed"));
-                            continue;
-                        }
-                        if (request_copy->output_rowset_meta().txn_expiration() <=
-                            ::time(nullptr)) {
-                            job.worker->cancel_compaction(
-                                    job.task.group_index(),
-                                    Status::TimedOut("distributed compaction task expired before "
-                                                     "execution"));
-                            batch_failed = true;
-                            continue;
-                        }
-                        batch_failed =
-                                !job.worker->execute_compaction(request_copy.get(), &job.task).ok();
-                    }
-                });
+        auto batch = std::make_shared<CompactionBatch>();
+        batch->jobs = std::move(jobs);
+        auto* worker_pool = &engine.distributed_compaction_worker_thread_pool();
+        submit_status = worker_pool->submit_func([request_copy, batch, worker_pool]() {
+            for (size_t job_index = 0; job_index < batch->jobs.size(); ++job_index) {
+                const Status task_submit_status = worker_pool->submit_func(
+                        [request_copy, batch, job_index]() {
+                            const auto& job = batch->jobs[job_index];
+                            Status task_status = Status::OK();
+                            if (request_copy->output_rowset_meta().txn_expiration() <=
+                                ::time(nullptr)) {
+                                task_status = Status::TimedOut(
+                                        "distributed compaction task expired before execution");
+                                job.worker->cancel_compaction(job.task.group_index(), task_status);
+                            } else {
+                                task_status = job.worker->execute_compaction(request_copy.get(),
+                                                                             &job.task);
+                            }
+                            if (!task_status.ok()) {
+                                batch->cancel(task_status);
+                            }
+                        });
+                if (!task_submit_status.ok()) {
+                    batch->cancel(Status::TooManyTasks(
+                            "failed to submit distributed compaction task: {}",
+                            task_submit_status.to_string()));
+                    return;
+                }
+            }
+        });
         if (!submit_status.ok()) {
             const Status cancel_status =
                     Status::Cancelled("distributed compaction worker batch submission failed: {}",

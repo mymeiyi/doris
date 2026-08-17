@@ -20,9 +20,13 @@
 #include <gen_cpp/cloud.pb.h>
 
 #include <boost/container_hash/hash.hpp>
+#include <condition_variable>
+#include <mutex>
 
+#include "cloud/cloud_distributed_compaction.h"
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/config.h"
+#include "common/cast_set.h"
 #include "common/config.h"
 #include "core/value/vdatetime_value.h"
 #include "cpp/sync_point.h"
@@ -277,6 +281,83 @@ Status CloudBaseCompaction::pick_rowsets_to_compact() {
     return Status::Error<BE_NO_SUITABLE_VERSION>("no suitable versions for compaction");
 }
 
+Status CloudBaseCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
+    const int64_t target_size = config::cloud_distributed_base_compaction_target_input_size_bytes;
+    const auto& schema = *_tablet->tablet_schema();
+    const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+                        _tablet->enable_unique_key_merge_on_write();
+    // ponytail: range workers rescan source delete bitmaps independently; keep diagnostic modes
+    // local until row-id conversion can filter missed-row checks by key range.
+    const bool supported_mow = is_mow && schema.cluster_key_uids().empty() &&
+                               !config::enable_missing_rows_correctness_check &&
+                               !config::enable_mow_compaction_correctness_check_core &&
+                               !config::enable_mow_compaction_correctness_check_fail &&
+                               !config::enable_rowid_conversion_correctness_check;
+    const bool supported_keys_type =
+            _tablet->keys_type() == KeysType::DUP_KEYS ||
+            _tablet->keys_type() == KeysType::AGG_KEYS ||
+            (_tablet->keys_type() == KeysType::UNIQUE_KEYS && (!is_mow || supported_mow));
+    _use_distributed_base_compaction =
+            config::enable_cloud_distributed_base_compaction && target_size > 0 &&
+            _input_rowsets_total_size > target_size && supported_keys_type &&
+            !_tablet->is_row_binlog_tablet() && schema.num_key_columns() > 0 &&
+            cloud::is_supported_distributed_base_key(schema.column(0).type()) &&
+            !schema.column(0).is_nullable();
+    if (_use_distributed_base_compaction) {
+        // Partial writers cannot reuse coordinator-local inverted index files.
+        _enable_inverted_index_compaction = false;
+    }
+    return Status::OK();
+}
+
+Status CloudBaseCompaction::do_merge_input_rowsets(
+        const std::vector<RowsetReaderSharedPtr>& input_rs_readers,
+        MergeInputRowsetsResult* result) {
+    if (!_use_distributed_base_compaction) {
+        return Compaction::do_merge_input_rowsets(input_rs_readers, result);
+    }
+
+    const int64_t target_size = config::cloud_distributed_base_compaction_target_input_size_bytes;
+    const size_t range_count = cast_set<size_t>(1 + (_input_rowsets_total_size - 1) / target_size);
+    _distributed_compaction = std::make_shared<cloud::DistributedCompactionCoordinator>(
+            _engine, std::static_pointer_cast<CloudTablet>(_tablet), _uuid);
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool completed = false;
+    Status remote_status;
+    bool started = false;
+    RETURN_IF_ERROR(_distributed_compaction->start_base_key_ranges(
+            _input_rowsets, *_output_rs_writer, range_count, _is_vertical,
+            cast_set<uint32_t>(get_avg_segment_rows()),
+            [&](Status status) {
+                {
+                    std::lock_guard lock(mutex);
+                    remote_status = std::move(status);
+                    completed = true;
+                }
+                cv.notify_one();
+            },
+            &started));
+    if (!started) {
+        _distributed_compaction.reset();
+        return Compaction::do_merge_input_rowsets(input_rs_readers, result);
+    }
+
+    {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] { return completed; });
+    }
+    RETURN_IF_ERROR(remote_status);
+
+    std::vector<int32_t> output_segment_group_sizes;
+    RETURN_IF_ERROR(_distributed_compaction->assemble_single_rowset(
+            *_output_rs_writer, *_cur_tablet_schema, &output_segment_group_sizes, &_output_rowset,
+            &_stats));
+    result->output_rowset_built = true;
+    return Status::OK();
+}
+
 Status CloudBaseCompaction::execute_compact() {
 #ifndef __APPLE__
     if (config::enable_base_compaction_idle_sched) {
@@ -321,8 +402,10 @@ Status CloudBaseCompaction::execute_compact() {
             .tag("output_rowset_total_size", _output_rowset->total_disk_size())
             .tag("local_read_time_us", _stats.cloud_local_read_time)
             .tag("remote_read_time_us", _stats.cloud_remote_read_time)
+            .tag("peer_read_time_us", _stats.peer_read_time_us)
             .tag("local_read_bytes", _local_read_bytes_total)
-            .tag("remote_read_bytes", _remote_read_bytes_total);
+            .tag("remote_read_bytes", _remote_read_bytes_total)
+            .tag("peer_read_bytes", _stats.bytes_read_from_peer);
 
     //_compaction_succeed = true;
     _state = CompactionState::SUCCESS;
@@ -373,10 +456,16 @@ Status CloudBaseCompaction::modify_rowsets() {
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
         int64_t initiator = this->initiator();
-        RETURN_IF_ERROR(cloud_tablet()->calc_delete_bitmap_for_compaction(
-                _input_rowsets, _output_rowset, *_rowid_conversion, compaction_type(),
-                _stats.merged_rows, _stats.filtered_rows, initiator, output_rowset_delete_bitmap,
-                _allow_delete_in_cumu_compaction, get_delete_bitmap_lock_start_time));
+        if (_distributed_compaction != nullptr) {
+            RETURN_IF_ERROR(_distributed_compaction->finish_mow_delete_bitmap(
+                    initiator, &output_rowset_delete_bitmap, &get_delete_bitmap_lock_start_time));
+        } else {
+            RETURN_IF_ERROR(cloud_tablet()->calc_delete_bitmap_for_compaction(
+                    _input_rowsets, _output_rowset, *_rowid_conversion, compaction_type(),
+                    _stats.merged_rows, _stats.filtered_rows, initiator,
+                    output_rowset_delete_bitmap, _allow_delete_in_cumu_compaction,
+                    get_delete_bitmap_lock_start_time));
+        }
         LOG_INFO("update delete bitmap in CloudBaseCompaction, tablet_id={}, range=[{}-{}]",
                  _tablet->tablet_id(), _input_rowsets.front()->start_version(),
                  _input_rowsets.back()->end_version())
@@ -390,6 +479,7 @@ Status CloudBaseCompaction::modify_rowsets() {
     }
 
     cloud::FinishTabletJobResponse resp;
+    _distributed_commit_started = _distributed_compaction != nullptr;
     auto st = _engine.meta_mgr().commit_tablet_job(job, &resp);
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
@@ -418,6 +508,10 @@ Status CloudBaseCompaction::modify_rowsets() {
             return Status::InternalError(msg);
         }
         return st;
+    }
+    if (_distributed_compaction != nullptr) {
+        _distributed_compaction->finalize(true);
+        _distributed_compaction.reset();
     }
     auto& stats = resp.stats();
     LOG(INFO) << "tablet stats=" << stats.ShortDebugString();
@@ -455,6 +549,10 @@ Status CloudBaseCompaction::modify_rowsets() {
 }
 
 Status CloudBaseCompaction::garbage_collection() {
+    if (_distributed_compaction != nullptr) {
+        _distributed_compaction->finalize(_distributed_commit_started);
+        _distributed_compaction.reset();
+    }
     RETURN_IF_ERROR(CloudCompactionMixin::garbage_collection());
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();

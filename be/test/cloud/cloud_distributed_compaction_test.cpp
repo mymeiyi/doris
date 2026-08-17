@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#include "cloud/cloud_distributed_compaction.h"
+
 #include <gen_cpp/AgentService_types.h>
 #include <gen_cpp/internal_service.pb.h>
 #include <gtest/gtest.h>
@@ -30,7 +32,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "cloud/cloud_distributed_compaction.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/config.h"
@@ -39,6 +40,133 @@
 #include "util/uid_util.h"
 
 namespace doris {
+
+TEST(CloudDistributedCompactionTest, chooses_weighted_short_key_boundaries) {
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_TINYINT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_SMALLINT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_INT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_BIGINT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_LARGEINT));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_CHAR));
+    EXPECT_TRUE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_VARCHAR));
+    EXPECT_FALSE(cloud::is_supported_distributed_base_key(FieldType::OLAP_FIELD_TYPE_STRING));
+
+    const std::vector<cloud::IntegerKeySample> samples = {
+            {.key = 30, .weight = 10}, {.key = 0, .weight = 10}, {.key = 20, .weight = 5},
+            {.key = 10, .weight = 5},  {.key = 20, .weight = 5}, {.key = 10, .weight = 5}};
+    EXPECT_EQ(cloud::choose_integer_key_range_boundaries(samples, 4),
+              (std::vector<int128_t> {10, 20, 30}));
+
+    const std::vector<cloud::IntegerKeySample> hot_key = {
+            {.key = 0, .weight = 90}, {.key = 10, .weight = 5}, {.key = 20, .weight = 5}};
+    EXPECT_EQ(cloud::choose_integer_key_range_boundaries(hot_key, 4), (std::vector<int128_t> {10}));
+
+    const std::vector<cloud::IntegerKeySample> edge_keys = {
+            {.key = std::numeric_limits<int128_t>::min(), .weight = 10},
+            {.key = std::numeric_limits<int128_t>::max(), .weight = 10}};
+    EXPECT_EQ(cloud::choose_integer_key_range_boundaries(edge_keys, 2),
+              (std::vector<int128_t> {std::numeric_limits<int128_t>::max()}));
+
+    const std::vector<cloud::StringKeySample> string_samples = {
+            {.key = "delta", .weight = 10},  {.key = "alpha", .weight = 10},
+            {.key = "charlie", .weight = 5}, {.key = "bravo", .weight = 5},
+            {.key = "charlie", .weight = 5}, {.key = "bravo", .weight = 5}};
+    EXPECT_EQ(cloud::choose_string_key_range_boundaries(string_samples, 4),
+              (std::vector<std::string> {"bravo", "charlie", "delta"}));
+}
+
+TEST(CloudDistributedCompactionTest, expands_key_prefix_until_ranges_are_distinct) {
+    const std::vector<cloud::CompositeKeySample> samples = {
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_STRING>("alpha")},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_STRING>("bravo")},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_STRING>("charlie")},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_STRING>("delta")},
+             .weight = 10}};
+
+    const auto plan = cloud::choose_composite_key_range_boundaries(samples, 4);
+    ASSERT_EQ(plan.prefix_length, 2);
+    ASSERT_EQ(plan.boundaries.size(), 3);
+    EXPECT_EQ(plan.boundaries[0][1].get<TYPE_STRING>(), "bravo");
+    EXPECT_EQ(plan.boundaries[1][1].get<TYPE_STRING>(), "charlie");
+    EXPECT_EQ(plan.boundaries[2][1].get<TYPE_STRING>(), "delta");
+
+    const std::vector<cloud::CompositeKeySample> distinct_leading_keys = {
+            {.key = {Field::create_field<TYPE_INT>(0), Field::create_field<TYPE_INT>(0)},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(1), Field::create_field<TYPE_INT>(0)},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(2), Field::create_field<TYPE_INT>(0)},
+             .weight = 10},
+            {.key = {Field::create_field<TYPE_INT>(3), Field::create_field<TYPE_INT>(0)},
+             .weight = 10}};
+    EXPECT_EQ(cloud::choose_composite_key_range_boundaries(distinct_leading_keys, 4).prefix_length,
+              1);
+}
+
+TEST(CloudDistributedCompactionTest, downsamples_short_key_blocks_with_exact_weights) {
+    const auto samples = cloud::build_weighted_key_sample_rowids(10 * 1024 + 17, 1024, 3);
+    ASSERT_EQ(samples.size(), 3);
+    EXPECT_EQ(samples[0].rowid, 1024);
+    EXPECT_EQ(samples[0].weight, 3 * 1024);
+    EXPECT_EQ(samples[1].rowid, 4 * 1024);
+    EXPECT_EQ(samples[1].weight, 4 * 1024);
+    EXPECT_EQ(samples[2].rowid, 8 * 1024);
+    EXPECT_EQ(samples[2].weight, 3 * 1024 + 17);
+
+    uint64_t total_weight = 0;
+    for (const auto& sample : samples) {
+        total_weight += sample.weight;
+    }
+    EXPECT_EQ(total_weight, 10 * 1024 + 17);
+
+    const auto all_blocks = cloud::build_weighted_key_sample_rowids(2 * 1024 + 17, 1024, 10);
+    ASSERT_EQ(all_blocks.size(), 3);
+    EXPECT_EQ(all_blocks[0].rowid, 0);
+    EXPECT_EQ(all_blocks[1].rowid, 1024);
+    EXPECT_EQ(all_blocks[2].rowid, 2 * 1024);
+    EXPECT_EQ(all_blocks[2].weight, 17);
+}
+
+TEST(CloudDistributedCompactionTest, chooses_encoded_key_boundaries_with_locators) {
+    std::vector<cloud::EncodedKeySample> samples = {
+            {.key = "delta", .weight = 10, .segment_index = 3, .rowid = 300},
+            {.key = "alpha", .weight = 10, .segment_index = 0, .rowid = 0},
+            {.key = "charlie", .weight = 10, .segment_index = 2, .rowid = 200},
+            {.key = "bravo", .weight = 10, .segment_index = 1, .rowid = 100}};
+    const auto boundaries = cloud::choose_encoded_key_range_boundaries(std::move(samples), 4);
+    ASSERT_EQ(boundaries.size(), 3);
+    EXPECT_EQ(boundaries[0].key, "bravo");
+    EXPECT_EQ(boundaries[0].segment_index, 1);
+    EXPECT_EQ(boundaries[0].rowid, 100);
+    EXPECT_EQ(boundaries[1].key, "charlie");
+    EXPECT_EQ(boundaries[1].segment_index, 2);
+    EXPECT_EQ(boundaries[1].rowid, 200);
+    EXPECT_EQ(boundaries[2].key, "delta");
+    EXPECT_EQ(boundaries[2].segment_index, 3);
+    EXPECT_EQ(boundaries[2].rowid, 300);
+
+    const std::vector<cloud::EncodedKeySample> hot_key = {
+            {.key = "alpha", .weight = 90, .segment_index = 0, .rowid = 0},
+            {.key = "bravo", .weight = 5, .segment_index = 1, .rowid = 100},
+            {.key = "charlie", .weight = 5, .segment_index = 2, .rowid = 200}};
+    EXPECT_EQ(cloud::choose_encoded_key_range_boundaries(hot_key, 4).size(), 1);
+
+    const std::vector<cloud::EncodedKeySample> duplicate_primary_keys = {
+            {.key = "delta", .weight = 40, .segment_index = 4, .rowid = 400},
+            {.key = "alpha", .weight = 20, .segment_index = 0, .rowid = 0},
+            {.key = "charlie", .weight = 10, .segment_index = 3, .rowid = 300},
+            {.key = "alpha", .weight = 20, .segment_index = 1, .rowid = 100},
+            {.key = "bravo", .weight = 10, .segment_index = 2, .rowid = 200}};
+    const auto duplicate_boundaries =
+            cloud::choose_encoded_key_range_boundaries(duplicate_primary_keys, 4);
+    ASSERT_EQ(duplicate_boundaries.size(), 3);
+    EXPECT_EQ(duplicate_boundaries[0].key, "bravo");
+    EXPECT_EQ(duplicate_boundaries[1].key, "charlie");
+    EXPECT_EQ(duplicate_boundaries[2].key, "delta");
+}
 
 TEST(CloudDistributedCompactionTest, distributed_single_rowset_compaction_builds_segment_slots) {
     std::vector<cloud::OutputRowsetSegmentIdSlot> slots;
@@ -118,6 +246,14 @@ TEST(CloudDistributedCompactionTest,
     EXPECT_GT(selected_remote_backend_ids.size(), 1);
 }
 
+TEST(CloudDistributedCompactionTest, distributed_compaction_assigns_groups_round_robin) {
+    const auto groups = cloud::assign_compaction_groups_round_robin(7, 3);
+    ASSERT_EQ(groups.size(), 3);
+    EXPECT_EQ(groups[0], (std::vector<size_t> {0, 3, 6}));
+    EXPECT_EQ(groups[1], (std::vector<size_t> {1, 4}));
+    EXPECT_EQ(groups[2], (std::vector<size_t> {2, 5}));
+}
+
 TEST(CloudDistributedCompactionTest,
      distributed_single_rowset_compaction_caches_discovered_workers) {
     const int32_t old_ttl = config::cloud_distributed_compaction_worker_cache_ttl_ms;
@@ -191,12 +327,12 @@ TEST(CloudDistributedCompactionTest, distributed_compaction_poll_scheduler_runs_
 TEST(CloudDistributedCompactionTest,
      distributed_single_rowset_compaction_tracks_async_task_status) {
     CloudStorageEngine engine(EngineOptions {});
-    auto tablet_meta = std::make_shared<TabletMeta>(
-            1, 2, 15673, 15674, 4, 5, TTabletSchema(), 6,
-            std::unordered_map<uint32_t, uint32_t> {{7, 8}},
-            UniqueId(9, 10), TTabletType::TABLET_TYPE_DISK, TCompressionType::LZ4F);
+    auto tablet_meta = std::make_shared<TabletMeta>(1, 2, 15673, 15674, 4, 5, TTabletSchema(), 6,
+                                                    std::unordered_map<uint32_t, uint32_t> {{7, 8}},
+                                                    UniqueId(9, 10), TTabletType::TABLET_TYPE_DISK,
+                                                    TCompressionType::LZ4F);
     auto tablet = std::make_shared<CloudTablet>(engine, tablet_meta);
-    auto worker = std::make_shared<cloud::DistributedCompactionWorker>(engine, tablet);
+    auto worker = std::make_shared<cloud::DistributedCompactionWorker>(engine, tablet, 0);
 
     PCloudDistributedCompactionTaskStatus task_status;
     worker->get_compaction_status(&task_status);
