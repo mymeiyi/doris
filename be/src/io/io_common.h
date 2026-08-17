@@ -212,7 +212,7 @@ struct IOContext {
     bool bypass_peer_read {false};
     // Request-scoped preferred peer. When set, try this peer before remote storage without using
     // the global tablet peer candidate cache.
-    std::string preferred_peer_host;
+    std::string preferred_peer_host {};
     int32_t preferred_peer_port {0};
     FileCacheMissPolicy file_cache_miss_policy = FileCacheMissPolicy::READ_THROUGH_AND_WRITE_BACK;
     RemoteScanCacheWriteLimiter* remote_scan_cache_write_limiter = nullptr; // Ref
