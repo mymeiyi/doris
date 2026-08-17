@@ -130,6 +130,31 @@ TEST(CloudDistributedCompactionTest, downsamples_short_key_blocks_with_exact_wei
     EXPECT_EQ(all_blocks[2].weight, 17);
 }
 
+TEST(CloudDistributedCompactionTest, chooses_encoded_short_key_boundaries_with_locators) {
+    std::vector<cloud::EncodedKeySample> samples = {
+            {.key = "delta", .weight = 10, .segment_index = 3, .rowid = 300},
+            {.key = "alpha", .weight = 10, .segment_index = 0, .rowid = 0},
+            {.key = "charlie", .weight = 10, .segment_index = 2, .rowid = 200},
+            {.key = "bravo", .weight = 10, .segment_index = 1, .rowid = 100}};
+    const auto boundaries = cloud::choose_encoded_key_range_boundaries(std::move(samples), 4);
+    ASSERT_EQ(boundaries.size(), 3);
+    EXPECT_EQ(boundaries[0].key, "bravo");
+    EXPECT_EQ(boundaries[0].segment_index, 1);
+    EXPECT_EQ(boundaries[0].rowid, 100);
+    EXPECT_EQ(boundaries[1].key, "charlie");
+    EXPECT_EQ(boundaries[1].segment_index, 2);
+    EXPECT_EQ(boundaries[1].rowid, 200);
+    EXPECT_EQ(boundaries[2].key, "delta");
+    EXPECT_EQ(boundaries[2].segment_index, 3);
+    EXPECT_EQ(boundaries[2].rowid, 300);
+
+    const std::vector<cloud::EncodedKeySample> hot_key = {
+            {.key = "alpha", .weight = 90, .segment_index = 0, .rowid = 0},
+            {.key = "bravo", .weight = 5, .segment_index = 1, .rowid = 100},
+            {.key = "charlie", .weight = 5, .segment_index = 2, .rowid = 200}};
+    EXPECT_EQ(cloud::choose_encoded_key_range_boundaries(hot_key, 4).size(), 1);
+}
+
 TEST(CloudDistributedCompactionTest, distributed_single_rowset_compaction_builds_segment_slots) {
     std::vector<cloud::OutputRowsetSegmentIdSlot> slots;
     ASSERT_TRUE(cloud::build_output_rowset_segment_id_slots(17, 100, 3, &slots).ok());

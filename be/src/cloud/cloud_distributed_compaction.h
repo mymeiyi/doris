@@ -117,6 +117,19 @@ struct WeightedRowId {
     uint64_t weight;
 };
 
+struct EncodedKeySample {
+    std::string key;
+    uint64_t weight;
+    size_t segment_index;
+    rowid_t rowid;
+};
+
+struct EncodedKeyBoundary {
+    std::string key;
+    size_t segment_index;
+    rowid_t rowid;
+};
+
 struct CompositeKeyRangePlan {
     size_t prefix_length = 0;
     std::vector<CompositeKey> boundaries;
@@ -130,6 +143,8 @@ std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKe
                                                             size_t range_count);
 CompositeKeyRangePlan choose_composite_key_range_boundaries(
         const std::vector<CompositeKeySample>& samples, size_t range_count);
+std::vector<EncodedKeyBoundary> choose_encoded_key_range_boundaries(
+        std::vector<EncodedKeySample> samples, size_t range_count);
 std::vector<WeightedRowId> build_weighted_key_sample_rowids(uint64_t num_rows,
                                                             uint64_t rows_per_block,
                                                             size_t max_samples);
