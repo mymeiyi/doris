@@ -75,8 +75,9 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 CAST(CONCAT(LPAD(CAST(number AS STRING), 5, '0'), REPEAT('c', 59)) AS CHAR(64))
             """],
             [name: "varchar", type: "VARCHAR(128)", keyExpr: """
-                CONCAT(LPAD(CAST(number AS STRING), 5, '0'), REPEAT('v', 123))
-            """, expectedFastPath: false, fallbackReason: "lossy_short_key"],
+                CONCAT(REPEAT('v', 123), LPAD(CAST(number AS STRING), 5, '0'))
+            """, expectedFastPath: true, expectedCollisionRefinement: true,
+             expectedRefinementGroups: 1],
             [name: "composite", keyColumns: "k INT NOT NULL, k2 VARCHAR(128) NOT NULL",
              keyExpr: "CAST(0 AS INT), CONCAT('key-', LPAD(CAST(number AS STRING), 5, '0'))",
              keyModelColumns: "k, k2", sampleKey: "k, k2"],
@@ -92,7 +93,8 @@ suite("test_cloud_distributed_base_compaction", "docker") {
              valueExpr: "CAST(number + ROUND * 10000 AS INT), " +
                      "CAST(number + ROUND * 10000 AS BIGINT)",
              properties: ', "enable_unique_key_merge_on_write" = "true"' +
-                     ', "function_column.sequence_col" = "seq"']
+                     ', "function_column.sequence_col" = "seq"',
+             expectedFastPath: false, fallbackReason: "mow"]
         ]
 
         keyCases.each { keyCase ->
@@ -257,11 +259,19 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 if (keyCase.expectedFastPath) {
                     assertTrue(rangePlanningLog.contains("short_key_fast_path=1"),
                             rangePlanningLog)
-                    assertTrue(rangePlanningLog.contains("typed_samples=${expectedTaskCount - 1}"),
-                            rangePlanningLog)
                     assertTrue(rangePlanningLog.contains(
                             "boundary_candidate_rows=${expectedTaskCount - 1}"),
                             rangePlanningLog)
+                    if (keyCase.expectedCollisionRefinement) {
+                        assertTrue(rangePlanningLog.contains(
+                                "short_key_collision_refinement=1"), rangePlanningLog)
+                        assertTrue(rangePlanningLog.contains(
+                                "boundary_refinement_groups=${keyCase.expectedRefinementGroups}"),
+                                rangePlanningLog)
+                    } else {
+                        assertTrue(rangePlanningLog.contains(
+                                "typed_samples=${expectedTaskCount - 1}"), rangePlanningLog)
+                    }
                 } else {
                     assertTrue(rangePlanningLog.contains("short_key_fast_path=0"),
                             rangePlanningLog)

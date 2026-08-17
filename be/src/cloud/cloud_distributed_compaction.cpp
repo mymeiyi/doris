@@ -201,18 +201,51 @@ CompositeKeyRangePlan choose_composite_key_range_boundaries(
     return plan;
 }
 
-std::vector<EncodedKeyBoundary> choose_encoded_key_range_boundaries(
-        std::vector<EncodedKeySample> samples, size_t range_count) {
-    if (range_count < 2 || samples.size() < 2) {
-        return {};
-    }
+namespace {
+
+struct EncodedKeyLocator {
+    uint64_t weight;
+    size_t segment_index;
+    rowid_t rowid;
+};
+
+struct EncodedKeyGroup {
+    std::string key;
+    std::vector<EncodedKeyLocator> samples;
+    uint64_t weight_before = 0;
+    uint64_t weight = 0;
+};
+
+std::vector<EncodedKeyGroup> group_encoded_key_samples(std::vector<EncodedKeySample> samples) {
     std::ranges::sort(samples, [](const EncodedKeySample& lhs, const EncodedKeySample& rhs) {
         return Slice(lhs.key).compare(Slice(rhs.key)) < 0;
     });
-    std::vector<EncodedKeySample> distinct;
-    distinct.reserve(samples.size());
+    std::vector<EncodedKeyGroup> groups;
     for (auto& sample : samples) {
         DORIS_CHECK_GT(sample.weight, 0);
+        if (groups.empty() || groups.back().key != sample.key) {
+            const uint64_t weight_before =
+                    groups.empty() ? 0 : groups.back().weight_before + groups.back().weight;
+            groups.push_back({.key = std::move(sample.key),
+                              .samples = {},
+                              .weight_before = weight_before,
+                              .weight = 0});
+        }
+        DORIS_CHECK_LE(groups.back().weight, std::numeric_limits<uint64_t>::max() - sample.weight);
+        groups.back().weight += sample.weight;
+        groups.back().samples.push_back({.weight = sample.weight,
+                                         .segment_index = sample.segment_index,
+                                         .rowid = sample.rowid});
+    }
+    return groups;
+}
+
+std::vector<CompositeKeySample> sort_and_merge_composite_key_samples(
+        std::vector<CompositeKeySample> samples) {
+    std::ranges::sort(samples, {}, &CompositeKeySample::key);
+    std::vector<CompositeKeySample> distinct;
+    distinct.reserve(samples.size());
+    for (auto& sample : samples) {
         if (!distinct.empty() && distinct.back().key == sample.key) {
             DORIS_CHECK_LE(distinct.back().weight,
                            std::numeric_limits<uint64_t>::max() - sample.weight);
@@ -221,33 +254,42 @@ std::vector<EncodedKeyBoundary> choose_encoded_key_range_boundaries(
             distinct.push_back(std::move(sample));
         }
     }
-    if (distinct.size() < 2) {
+    return distinct;
+}
+
+} // namespace
+
+std::vector<EncodedKeyBoundary> choose_encoded_key_range_boundaries(
+        std::vector<EncodedKeySample> samples, size_t range_count) {
+    if (range_count < 2 || samples.size() < 2) {
         return {};
     }
-
-    uint128_t total_weight = 0;
-    for (const auto& sample : distinct) {
-        total_weight += sample.weight;
+    auto groups = group_encoded_key_samples(std::move(samples));
+    if (groups.size() < 2) {
+        return {};
     }
+    const uint128_t total_weight =
+            static_cast<uint128_t>(groups.back().weight_before) + groups.back().weight;
     std::vector<EncodedKeyBoundary> boundaries;
     boundaries.reserve(range_count - 1);
     for (size_t split = 1; split < range_count; ++split) {
         const uint128_t target = total_weight * split / range_count;
-        uint128_t prefix = 0;
         uint128_t best_distance = total_weight;
         size_t best_index = 1;
-        for (size_t index = 1; index < distinct.size(); ++index) {
-            prefix += distinct[index - 1].weight;
+        for (size_t index = 1; index < groups.size(); ++index) {
+            const uint128_t prefix = groups[index].weight_before;
             const uint128_t distance = prefix > target ? prefix - target : target - prefix;
             if (distance < best_distance) {
                 best_distance = distance;
                 best_index = index;
             }
         }
-        const auto& best = distinct[best_index];
-        if (boundaries.empty() || boundaries.back().key != best.key) {
-            boundaries.push_back(
-                    {.key = best.key, .segment_index = best.segment_index, .rowid = best.rowid});
+        const auto& best_group = groups[best_index];
+        const auto& best_locator = best_group.samples.front();
+        if (boundaries.empty() || boundaries.back().key != best_group.key) {
+            boundaries.push_back({.key = best_group.key,
+                                  .segment_index = best_locator.segment_index,
+                                  .rowid = best_locator.rowid});
         }
     }
     return boundaries;
@@ -1590,6 +1632,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
 
     const size_t short_key_prefix_length = is_mow ? 0 : schema.num_short_key_columns();
     bool short_key_fast_path_eligible = false;
+    bool short_key_encoding_lossless = true;
     std::string short_key_fast_path_fallback_reason;
     if (is_mow) {
         short_key_fast_path_fallback_reason = "mow";
@@ -1599,8 +1642,11 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         short_key_fast_path_eligible = true;
         for (size_t column_index = 0; column_index < short_key_prefix_length; ++column_index) {
             if (!has_lossless_short_key_encoding(schema.column(column_index))) {
-                short_key_fast_path_eligible = false;
-                short_key_fast_path_fallback_reason = "lossy_short_key";
+                if (column_index + 1 < short_key_prefix_length) {
+                    short_key_fast_path_eligible = false;
+                    short_key_fast_path_fallback_reason = "non_terminal_lossy_short_key";
+                }
+                short_key_encoding_lossless = false;
                 break;
             }
         }
@@ -1673,9 +1719,12 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     CompositeKeyRangePlan key_plan;
     int64_t boundary_choose_time_us = 0;
     bool short_key_fast_path = false;
+    bool short_key_collision_refinement = false;
     size_t typed_sample_count = 0;
+    size_t boundary_refinement_group_count = 0;
+    size_t boundary_refinement_sample_count = 0;
     const size_t encoded_sample_count = encoded_samples.size();
-    if (short_key_fast_path_eligible) {
+    if (short_key_fast_path_eligible && short_key_encoding_lossless) {
         const int64_t boundary_choose_start_us = MonotonicMicros();
         const auto encoded_boundaries =
                 choose_encoded_key_range_boundaries(std::move(encoded_samples), range_count);
@@ -1712,6 +1761,129 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         } else {
             short_key_fast_path_fallback_reason = "insufficient_encoded_boundaries";
         }
+    } else if (short_key_fast_path_eligible) {
+        short_key_fast_path = true;
+        short_key_collision_refinement = true;
+        short_key_fast_path_fallback_reason = "none";
+        const int64_t encoded_group_start_us = MonotonicMicros();
+        auto encoded_groups = group_encoded_key_samples(std::move(encoded_samples));
+        std::vector<size_t> target_group_indices;
+        std::set<size_t> refinement_group_indices;
+        uint128_t total_weight = 0;
+        if (!encoded_groups.empty()) {
+            total_weight = static_cast<uint128_t>(encoded_groups.back().weight_before) +
+                           encoded_groups.back().weight;
+            target_group_indices.reserve(range_count - 1);
+            for (size_t split = 1; split < range_count; ++split) {
+                const uint128_t target = total_weight * split / range_count;
+                size_t group_index = 0;
+                while (group_index + 1 < encoded_groups.size() &&
+                       static_cast<uint128_t>(encoded_groups[group_index].weight_before) +
+                                       encoded_groups[group_index].weight <=
+                               target) {
+                    ++group_index;
+                }
+                target_group_indices.push_back(group_index);
+                refinement_group_indices.insert(group_index);
+                if (group_index + 1 < encoded_groups.size()) {
+                    refinement_group_indices.insert(group_index + 1);
+                }
+            }
+        }
+        boundary_choose_time_us += MonotonicMicros() - encoded_group_start_us;
+
+        std::unordered_map<size_t, std::vector<CompositeKeySample>> refined_groups;
+        for (const size_t group_index : refinement_group_indices) {
+            const auto& encoded_group = encoded_groups[group_index];
+            std::vector<std::vector<const EncodedKeyLocator*>> samples_by_segment(
+                    segment_samples.size());
+            for (const auto& sample : encoded_group.samples) {
+                DORIS_CHECK_LT(sample.segment_index, samples_by_segment.size());
+                samples_by_segment[sample.segment_index].push_back(&sample);
+            }
+            std::vector<CompositeKeySample> typed_samples;
+            typed_samples.reserve(encoded_group.samples.size());
+            for (size_t segment_index = 0; segment_index < samples_by_segment.size();
+                 ++segment_index) {
+                auto& segment_group_samples = samples_by_segment[segment_index];
+                if (segment_group_samples.empty()) {
+                    continue;
+                }
+                std::ranges::sort(segment_group_samples, {},
+                                  [](const EncodedKeyLocator* sample) { return sample->rowid; });
+                std::vector<rowid_t> rowids;
+                rowids.reserve(segment_group_samples.size());
+                for (const auto* sample : segment_group_samples) {
+                    rowids.push_back(sample->rowid);
+                }
+                std::vector<CompositeKey> keys;
+                OlapReaderStatistics reader_stats;
+                const int64_t sample_read_start_us = MonotonicMicros();
+                const Status sample_read_status =
+                        read_key_samples(segment_samples[segment_index].segment, schema,
+                                         key_column_count, rowids, &reader_stats, &keys);
+                const int64_t sample_read_time_us = MonotonicMicros() - sample_read_start_us;
+                key_sample_read_time_us += sample_read_time_us;
+                boundary_key_read_time_us += sample_read_time_us;
+                RETURN_IF_ERROR(sample_read_status);
+                planning_io_stats.merge_from(reader_stats.file_cache_stats);
+                key_sample_io_stats.merge_from(reader_stats.file_cache_stats);
+                DORIS_CHECK_EQ(keys.size(), segment_group_samples.size());
+                for (size_t sample_index = 0; sample_index < keys.size(); ++sample_index) {
+                    typed_samples.push_back(
+                            {.key = std::move(keys[sample_index]),
+                             .weight = segment_group_samples[sample_index]->weight});
+                }
+            }
+            typed_sample_count += typed_samples.size();
+            boundary_refinement_sample_count += typed_samples.size();
+            refined_groups.emplace(group_index,
+                                   sort_and_merge_composite_key_samples(std::move(typed_samples)));
+        }
+        boundary_refinement_group_count = refined_groups.size();
+
+        const int64_t refined_boundary_start_us = MonotonicMicros();
+        key_plan.prefix_length = key_column_count;
+        key_plan.boundaries.reserve(range_count - 1);
+        for (size_t split = 1; split < range_count; ++split) {
+            if (target_group_indices.empty()) {
+                break;
+            }
+            const uint128_t target = total_weight * split / range_count;
+            const size_t group_index = target_group_indices[split - 1];
+            const auto& encoded_group = encoded_groups[group_index];
+            const auto& current_group = refined_groups.at(group_index);
+            uint128_t prefix = encoded_group.weight_before;
+            uint128_t best_distance = total_weight;
+            std::optional<CompositeKey> best_key;
+            for (const auto& sample : current_group) {
+                if (prefix > 0) {
+                    const uint128_t distance = prefix > target ? prefix - target : target - prefix;
+                    if (distance < best_distance) {
+                        best_distance = distance;
+                        best_key = sample.key;
+                    }
+                }
+                prefix += sample.weight;
+            }
+            if (group_index + 1 < encoded_groups.size()) {
+                const auto& next_group = refined_groups.at(group_index + 1);
+                DORIS_CHECK(!next_group.empty());
+                const uint128_t next_prefix =
+                        static_cast<uint128_t>(encoded_group.weight_before) + encoded_group.weight;
+                const uint128_t distance =
+                        next_prefix > target ? next_prefix - target : target - next_prefix;
+                if (distance < best_distance) {
+                    best_key = next_group.front().key;
+                }
+            }
+            if (best_key.has_value() &&
+                (key_plan.boundaries.empty() || key_plan.boundaries.back() != *best_key)) {
+                DORIS_CHECK(key_plan.boundaries.empty() || key_plan.boundaries.back() < *best_key);
+                key_plan.boundaries.push_back(std::move(*best_key));
+            }
+        }
+        boundary_choose_time_us += MonotonicMicros() - refined_boundary_start_us;
     }
 
     std::vector<CompositeKeySample> samples;
@@ -1875,6 +2047,10 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             .tag("typed_samples", typed_sample_count)
             .tag("boundary_candidate_rows", key_plan.boundaries.size())
             .tag("short_key_fast_path", short_key_fast_path)
+            .tag("short_key_encoding_lossless", short_key_encoding_lossless)
+            .tag("short_key_collision_refinement", short_key_collision_refinement)
+            .tag("boundary_refinement_groups", boundary_refinement_group_count)
+            .tag("boundary_refinement_samples", boundary_refinement_sample_count)
             .tag("short_key_fast_path_fallback_reason", short_key_fast_path_fallback_reason)
             .tag("target_samples", target_sample_count)
             .tag("requested_ranges", range_count)
