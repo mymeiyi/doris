@@ -106,6 +106,30 @@ TEST(CloudDistributedCompactionTest, expands_key_prefix_until_ranges_are_distinc
               1);
 }
 
+TEST(CloudDistributedCompactionTest, downsamples_short_key_blocks_with_exact_weights) {
+    const auto samples = cloud::build_weighted_key_sample_rowids(10 * 1024 + 17, 1024, 3);
+    ASSERT_EQ(samples.size(), 3);
+    EXPECT_EQ(samples[0].rowid, 1024);
+    EXPECT_EQ(samples[0].weight, 3 * 1024);
+    EXPECT_EQ(samples[1].rowid, 4 * 1024);
+    EXPECT_EQ(samples[1].weight, 4 * 1024);
+    EXPECT_EQ(samples[2].rowid, 8 * 1024);
+    EXPECT_EQ(samples[2].weight, 3 * 1024 + 17);
+
+    uint64_t total_weight = 0;
+    for (const auto& sample : samples) {
+        total_weight += sample.weight;
+    }
+    EXPECT_EQ(total_weight, 10 * 1024 + 17);
+
+    const auto all_blocks = cloud::build_weighted_key_sample_rowids(2 * 1024 + 17, 1024, 10);
+    ASSERT_EQ(all_blocks.size(), 3);
+    EXPECT_EQ(all_blocks[0].rowid, 0);
+    EXPECT_EQ(all_blocks[1].rowid, 1024);
+    EXPECT_EQ(all_blocks[2].rowid, 2 * 1024);
+    EXPECT_EQ(all_blocks[2].weight, 17);
+}
+
 TEST(CloudDistributedCompactionTest, distributed_single_rowset_compaction_builds_segment_slots) {
     std::vector<cloud::OutputRowsetSegmentIdSlot> slots;
     ASSERT_TRUE(cloud::build_output_rowset_segment_id_slots(17, 100, 3, &slots).ok());

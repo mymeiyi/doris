@@ -107,6 +107,8 @@ DECLARE_mBool(enable_cloud_distributed_base_compaction);
 DECLARE_mBool(enable_cloud_distributed_compaction_peer_read);
 // Target input bytes per distributed base compaction range.
 DECLARE_mInt64(cloud_distributed_base_compaction_target_input_size_bytes);
+// Target number of short-key samples read per distributed base compaction range.
+DECLARE_mInt32(cloud_distributed_base_compaction_samples_per_range);
 // TTL for the live same-compute-group BE snapshot fetched from FE.
 DECLARE_mInt32(cloud_distributed_compaction_worker_cache_ttl_ms);
 // Physical segment-id capacity assigned to each group.

@@ -196,6 +196,34 @@ CompositeKeyRangePlan choose_composite_key_range_boundaries(
     return plan;
 }
 
+std::vector<WeightedRowId> build_weighted_key_sample_rowids(uint64_t num_rows,
+                                                            uint64_t rows_per_block,
+                                                            size_t max_samples) {
+    DORIS_CHECK_GT(rows_per_block, 0);
+    if (num_rows == 0) {
+        return {};
+    }
+    DORIS_CHECK_GT(max_samples, 0);
+
+    const uint64_t block_count = (num_rows - 1) / rows_per_block + 1;
+    const uint64_t sample_count = std::min(block_count, cast_set<uint64_t>(max_samples));
+    std::vector<WeightedRowId> samples;
+    samples.reserve(sample_count);
+    for (uint64_t sample = 0; sample < sample_count; ++sample) {
+        const uint64_t block_begin =
+                cast_set<uint64_t>(static_cast<uint128_t>(sample) * block_count / sample_count);
+        const uint64_t block_end =
+                cast_set<uint64_t>(static_cast<uint128_t>(sample + 1) * block_count / sample_count);
+        const uint64_t representative_block = block_begin + (block_end - block_begin - 1) / 2;
+        const uint64_t covered_begin = block_begin * rows_per_block;
+        const uint64_t covered_end =
+                block_end == block_count ? num_rows : block_end * rows_per_block;
+        samples.push_back({.rowid = cast_set<rowid_t>(representative_block * rows_per_block),
+                           .weight = covered_end - covered_begin});
+    }
+    return samples;
+}
+
 std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
         const std::vector<CompactionWorkerInfo>& candidates, int64_t coordinator_backend_id,
         size_t group_count, std::string_view execution_id) {
@@ -1478,6 +1506,17 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     if (!config::enable_cloud_distributed_base_compaction || range_count < 2) {
         return Status::OK();
     }
+    DORIS_CHECK_GT(config::cloud_distributed_base_compaction_samples_per_range, 0);
+    uint64_t total_input_rows = 0;
+    for (const auto& rowset : input_rowsets) {
+        total_input_rows += rowset->num_rows();
+    }
+    if (total_input_rows == 0) {
+        return Status::OK();
+    }
+    const uint64_t target_sample_count =
+            cast_set<uint64_t>(range_count) *
+            cast_set<uint64_t>(config::cloud_distributed_base_compaction_samples_per_range);
 
     std::vector<CompactionWorkerInfo> candidates;
     const int64_t discovery_start_us = MonotonicMicros();
@@ -1524,31 +1563,28 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             const uint64_t rows_per_block = is_mow ? schema.num_rows_per_row_block()
                                                    : short_key_index->num_rows_per_block();
             DORIS_CHECK_GT(rows_per_block, 0);
-            const uint64_t sample_count =
-                    is_mow ? (segment->num_rows() + rows_per_block - 1) / rows_per_block
-                           : short_key_index->num_items();
+            const size_t segment_sample_count = cast_set<size_t>(
+                    (static_cast<uint128_t>(segment->num_rows()) * target_sample_count +
+                     total_input_rows - 1) /
+                    total_input_rows);
+            const auto weighted_rowids = build_weighted_key_sample_rowids(
+                    segment->num_rows(), rows_per_block, segment_sample_count);
             std::vector<rowid_t> rowids;
-            std::vector<uint64_t> weights;
-            rowids.reserve(sample_count);
-            weights.reserve(sample_count);
-            for (uint64_t sample = 0; sample < sample_count; ++sample) {
-                const uint64_t row_start = sample * rows_per_block;
-                DORIS_CHECK_LT(row_start, segment->num_rows());
-                rowids.push_back(cast_set<rowid_t>(row_start));
-                weights.push_back(std::min(rows_per_block,
-                                           cast_set<uint64_t>(segment->num_rows()) - row_start));
+            rowids.reserve(weighted_rowids.size());
+            for (const auto& sample : weighted_rowids) {
+                rowids.push_back(sample.rowid);
             }
             std::vector<CompositeKey> keys;
             const int64_t sample_read_start_us = MonotonicMicros();
-            const Status sample_read_status = read_key_samples(
-                    segment, schema, key_column_count, rowids, &reader_stats, &keys);
+            const Status sample_read_status = read_key_samples(segment, schema, key_column_count,
+                                                               rowids, &reader_stats, &keys);
             key_sample_read_time_us += MonotonicMicros() - sample_read_start_us;
             RETURN_IF_ERROR(sample_read_status);
             planning_io_stats.merge_from(reader_stats.file_cache_stats);
-            DORIS_CHECK_EQ(keys.size(), weights.size());
+            DORIS_CHECK_EQ(keys.size(), weighted_rowids.size());
             for (size_t sample_index = 0; sample_index < keys.size(); ++sample_index) {
-                samples.push_back(
-                        {.key = std::move(keys[sample_index]), .weight = weights[sample_index]});
+                samples.push_back({.key = std::move(keys[sample_index]),
+                                   .weight = weighted_rowids[sample_index].weight});
             }
         }
     }
@@ -1677,6 +1713,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             .tag("input_rowsets", input_rowsets.size())
             .tag("segments", segment_count)
             .tag("samples", samples.size())
+            .tag("target_samples", target_sample_count)
             .tag("requested_ranges", range_count)
             .tag("actual_ranges", group_count);
     *started = true;

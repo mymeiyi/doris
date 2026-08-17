@@ -112,6 +112,11 @@ using StringKeySample = KeySample<std::string>;
 using CompositeKey = std::vector<Field>;
 using CompositeKeySample = KeySample<CompositeKey>;
 
+struct WeightedRowId {
+    rowid_t rowid;
+    uint64_t weight;
+};
+
 struct CompositeKeyRangePlan {
     size_t prefix_length = 0;
     std::vector<CompositeKey> boundaries;
@@ -125,6 +130,9 @@ std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKe
                                                             size_t range_count);
 CompositeKeyRangePlan choose_composite_key_range_boundaries(
         const std::vector<CompositeKeySample>& samples, size_t range_count);
+std::vector<WeightedRowId> build_weighted_key_sample_rowids(uint64_t num_rows,
+                                                            uint64_t rows_per_block,
+                                                            size_t max_samples);
 
 std::vector<SegmentGroupMergeRange> build_segment_group_merge_ranges(const RowsetMeta& rowset_meta,
                                                                      int64_t segment_group_size);
