@@ -130,7 +130,7 @@ TEST(CloudDistributedCompactionTest, downsamples_short_key_blocks_with_exact_wei
     EXPECT_EQ(all_blocks[2].weight, 17);
 }
 
-TEST(CloudDistributedCompactionTest, chooses_encoded_short_key_boundaries_with_locators) {
+TEST(CloudDistributedCompactionTest, chooses_encoded_key_boundaries_with_locators) {
     std::vector<cloud::EncodedKeySample> samples = {
             {.key = "delta", .weight = 10, .segment_index = 3, .rowid = 300},
             {.key = "alpha", .weight = 10, .segment_index = 0, .rowid = 0},
@@ -153,6 +153,19 @@ TEST(CloudDistributedCompactionTest, chooses_encoded_short_key_boundaries_with_l
             {.key = "bravo", .weight = 5, .segment_index = 1, .rowid = 100},
             {.key = "charlie", .weight = 5, .segment_index = 2, .rowid = 200}};
     EXPECT_EQ(cloud::choose_encoded_key_range_boundaries(hot_key, 4).size(), 1);
+
+    const std::vector<cloud::EncodedKeySample> duplicate_primary_keys = {
+            {.key = "delta", .weight = 40, .segment_index = 4, .rowid = 400},
+            {.key = "alpha", .weight = 20, .segment_index = 0, .rowid = 0},
+            {.key = "charlie", .weight = 10, .segment_index = 3, .rowid = 300},
+            {.key = "alpha", .weight = 20, .segment_index = 1, .rowid = 100},
+            {.key = "bravo", .weight = 10, .segment_index = 2, .rowid = 200}};
+    const auto duplicate_boundaries =
+            cloud::choose_encoded_key_range_boundaries(duplicate_primary_keys, 4);
+    ASSERT_EQ(duplicate_boundaries.size(), 3);
+    EXPECT_EQ(duplicate_boundaries[0].key, "bravo");
+    EXPECT_EQ(duplicate_boundaries[1].key, "charlie");
+    EXPECT_EQ(duplicate_boundaries[2].key, "delta");
 }
 
 TEST(CloudDistributedCompactionTest, distributed_single_rowset_compaction_builds_segment_slots) {
