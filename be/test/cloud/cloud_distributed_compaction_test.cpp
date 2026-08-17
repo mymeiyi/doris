@@ -294,7 +294,7 @@ TEST(CloudDistributedCompactionTest,
                                                     UniqueId(9, 10), TTabletType::TABLET_TYPE_DISK,
                                                     TCompressionType::LZ4F);
     auto tablet = std::make_shared<CloudTablet>(engine, tablet_meta);
-    auto worker = std::make_shared<cloud::DistributedCompactionWorker>(engine, tablet);
+    auto worker = std::make_shared<cloud::DistributedCompactionWorker>(engine, tablet, 0);
 
     PCloudDistributedCompactionTaskStatus task_status;
     worker->get_compaction_status(&task_status);
