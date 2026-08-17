@@ -56,6 +56,7 @@
 #include "runtime/thread_context.h"
 #include "service/backend_options.h"
 #include "storage/compaction/compaction.h"
+#include "storage/index/primary_key_index.h"
 #include "storage/index/short_key_index.h"
 #include "storage/merger.h"
 #include "storage/rowid_conversion.h"
@@ -860,6 +861,44 @@ Status read_key_samples(const segment_v2::SegmentSharedPtr& segment, const Table
     return Status::OK();
 }
 
+Status read_encoded_primary_key_samples(const segment_v2::SegmentSharedPtr& segment,
+                                        const std::vector<WeightedRowId>& samples,
+                                        OlapReaderStatistics* reader_stats,
+                                        std::vector<std::string>* keys) {
+    keys->clear();
+    keys->reserve(samples.size());
+    if (samples.empty()) {
+        return Status::OK();
+    }
+    const auto* primary_key_index = segment->get_primary_key_index();
+    DORIS_CHECK(primary_key_index != nullptr);
+    DORIS_CHECK_EQ(primary_key_index->num_rows(), segment->num_rows());
+    std::unique_ptr<segment_v2::IndexedColumnIterator> iterator;
+    StorageReadOptions read_options;
+    read_options.stats = reader_stats;
+    auto io_ctx = read_options.io_ctx;
+    io_ctx.reader_type = ReaderType::READER_BASE_COMPACTION;
+    io_ctx.file_cache_stats = &reader_stats->file_cache_stats;
+    RETURN_IF_ERROR(primary_key_index->new_iterator(&iterator, reader_stats, &io_ctx));
+    auto index_type =
+            DataTypeFactory::instance().create_data_type(primary_key_index->type(), 1, 0);
+    auto index_column = index_type->create_column();
+    rowid_t previous_rowid = 0;
+    for (size_t sample_index = 0; sample_index < samples.size(); ++sample_index) {
+        const rowid_t rowid = samples[sample_index].rowid;
+        DORIS_CHECK_LT(rowid, segment->num_rows());
+        DORIS_CHECK(sample_index == 0 || previous_rowid < rowid);
+        previous_rowid = rowid;
+        RETURN_IF_ERROR(iterator->seek_to_ordinal(rowid));
+        index_column->clear();
+        size_t num_read = 1;
+        RETURN_IF_ERROR(iterator->next_batch(&num_read, index_column));
+        DORIS_CHECK_EQ(num_read, 1);
+        keys->push_back(index_column->get_data_at(0).to_string());
+    }
+    return Status::OK();
+}
+
 Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& request) {
     const bool has_valid_input =
             request.compaction_type() == CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION
@@ -1631,11 +1670,22 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     }
 
     const size_t short_key_prefix_length = is_mow ? 0 : schema.num_short_key_columns();
+    // Cluster-key MOW is rejected above, so a PK-index ordinal is also the segment rowid.
+    const bool primary_key_fast_path_eligible =
+            is_mow && key_column_count == schema.num_key_columns();
+    const size_t primary_key_suffix_length =
+            primary_key_fast_path_eligible && schema.has_sequence_col()
+                    ? schema.column(schema.sequence_col_idx()).length() + 1
+                    : 0;
     bool short_key_fast_path_eligible = false;
     bool short_key_encoding_lossless = true;
     std::string short_key_fast_path_fallback_reason;
+    std::string primary_key_fast_path_fallback_reason = is_mow ? "none" : "not_mow";
     if (is_mow) {
         short_key_fast_path_fallback_reason = "mow";
+        if (!primary_key_fast_path_eligible) {
+            primary_key_fast_path_fallback_reason = "unsupported_primary_key";
+        }
     } else if (short_key_prefix_length > key_column_count) {
         short_key_fast_path_fallback_reason = "unsupported_short_key";
     } else {
@@ -1661,9 +1711,12 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     size_t sampled_row_count = 0;
     int64_t segment_load_time_us = 0;
     int64_t short_key_index_load_time_us = 0;
+    int64_t primary_key_index_load_time_us = 0;
+    int64_t primary_key_sample_read_time_us = 0;
     int64_t key_sample_read_time_us = 0;
     int64_t boundary_key_read_time_us = 0;
     io::FileCacheStatistics planning_io_stats;
+    io::FileCacheStatistics primary_key_sample_io_stats;
     io::FileCacheStatistics key_sample_io_stats;
     size_t segment_count = 0;
     for (const auto& rowset : input_rowsets) {
@@ -1679,17 +1732,28 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         segment_count += segments.size();
         for (const auto& segment : segments) {
             OlapReaderStatistics index_reader_stats;
-            if (!is_mow) {
+            if (!is_mow || primary_key_fast_path_eligible) {
                 const int64_t index_load_start_us = MonotonicMicros();
                 const Status index_load_status = segment->load_index(&index_reader_stats);
-                short_key_index_load_time_us += MonotonicMicros() - index_load_start_us;
+                const int64_t index_load_time_us = MonotonicMicros() - index_load_start_us;
+                if (is_mow) {
+                    primary_key_index_load_time_us += index_load_time_us;
+                } else {
+                    short_key_index_load_time_us += index_load_time_us;
+                }
                 RETURN_IF_ERROR(index_load_status);
                 planning_io_stats.merge_from(index_reader_stats.file_cache_stats);
             }
             const auto* short_key_index = is_mow ? nullptr : segment->get_short_key_index();
             DORIS_CHECK(is_mow || short_key_index != nullptr);
-            const uint64_t rows_per_block = is_mow ? schema.num_rows_per_row_block()
-                                                   : short_key_index->num_rows_per_block();
+            const auto* primary_key_index =
+                    primary_key_fast_path_eligible ? segment->get_primary_key_index() : nullptr;
+            DORIS_CHECK(!primary_key_fast_path_eligible || primary_key_index != nullptr);
+            const uint64_t rows_per_block =
+                    primary_key_fast_path_eligible
+                            ? 1
+                            : is_mow ? schema.num_rows_per_row_block()
+                                     : short_key_index->num_rows_per_block();
             DORIS_CHECK_GT(rows_per_block, 0);
             const size_t segment_sample_count = cast_set<size_t>(
                     (static_cast<uint128_t>(segment->num_rows()) * target_sample_count +
@@ -1699,7 +1763,31 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
                     segment->num_rows(), rows_per_block, segment_sample_count);
             sampled_row_count += weighted_rowids.size();
             const size_t segment_index = segment_samples.size();
-            if (short_key_fast_path_eligible) {
+            if (primary_key_fast_path_eligible) {
+                std::vector<std::string> primary_keys;
+                OlapReaderStatistics primary_key_reader_stats;
+                const int64_t primary_key_read_start_us = MonotonicMicros();
+                const Status primary_key_read_status = read_encoded_primary_key_samples(
+                        segment, weighted_rowids, &primary_key_reader_stats, &primary_keys);
+                primary_key_sample_read_time_us +=
+                        MonotonicMicros() - primary_key_read_start_us;
+                RETURN_IF_ERROR(primary_key_read_status);
+                planning_io_stats.merge_from(primary_key_reader_stats.file_cache_stats);
+                primary_key_sample_io_stats.merge_from(
+                        primary_key_reader_stats.file_cache_stats);
+                DORIS_CHECK_EQ(primary_keys.size(), weighted_rowids.size());
+                for (size_t sample_index = 0; sample_index < weighted_rowids.size();
+                    ++sample_index) {
+                    auto& primary_key = primary_keys[sample_index];
+                    DORIS_CHECK_GT(primary_key.size(), primary_key_suffix_length);
+                    primary_key.resize(primary_key.size() - primary_key_suffix_length);
+                    encoded_samples.push_back(
+                            {.key = std::move(primary_key),
+                             .weight = weighted_rowids[sample_index].weight,
+                             .segment_index = segment_index,
+                             .rowid = weighted_rowids[sample_index].rowid});
+                }
+            } else if (short_key_fast_path_eligible) {
                 for (const auto& sample : weighted_rowids) {
                     DORIS_CHECK_EQ(sample.rowid % rows_per_block, 0);
                     const size_t block_ordinal = sample.rowid / rows_per_block;
@@ -1719,20 +1807,26 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     CompositeKeyRangePlan key_plan;
     int64_t boundary_choose_time_us = 0;
     bool short_key_fast_path = false;
+    bool primary_key_fast_path = false;
     bool short_key_collision_refinement = false;
     size_t typed_sample_count = 0;
     size_t boundary_refinement_group_count = 0;
     size_t boundary_refinement_sample_count = 0;
     const size_t encoded_sample_count = encoded_samples.size();
-    if (short_key_fast_path_eligible && short_key_encoding_lossless) {
+    if (primary_key_fast_path_eligible ||
+        (short_key_fast_path_eligible && short_key_encoding_lossless)) {
         const int64_t boundary_choose_start_us = MonotonicMicros();
         const auto encoded_boundaries =
                 choose_encoded_key_range_boundaries(std::move(encoded_samples), range_count);
         boundary_choose_time_us += MonotonicMicros() - boundary_choose_start_us;
-        if (encoded_boundaries.size() + 1 >= range_count) {
-            short_key_fast_path = true;
-            short_key_fast_path_fallback_reason = "none";
-            key_plan.prefix_length = short_key_prefix_length;
+        if (primary_key_fast_path_eligible || encoded_boundaries.size() + 1 >= range_count) {
+            primary_key_fast_path = primary_key_fast_path_eligible;
+            short_key_fast_path = short_key_fast_path_eligible;
+            if (short_key_fast_path) {
+                short_key_fast_path_fallback_reason = "none";
+            }
+            key_plan.prefix_length =
+                    primary_key_fast_path ? key_column_count : short_key_prefix_length;
             key_plan.boundaries.reserve(encoded_boundaries.size());
             for (const auto& boundary : encoded_boundaries) {
                 DORIS_CHECK_LT(boundary.segment_index, segment_samples.size());
@@ -1742,7 +1836,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
                 const int64_t sample_read_start_us = MonotonicMicros();
                 const Status sample_read_status =
                         read_key_samples(segment_samples[boundary.segment_index].segment, schema,
-                                         short_key_prefix_length, rowids, &reader_stats, &keys);
+                                         key_plan.prefix_length, rowids, &reader_stats, &keys);
                 const int64_t sample_read_time_us = MonotonicMicros() - sample_read_start_us;
                 key_sample_read_time_us += sample_read_time_us;
                 boundary_key_read_time_us += sample_read_time_us;
@@ -1887,7 +1981,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     }
 
     std::vector<CompositeKeySample> samples;
-    if (!short_key_fast_path) {
+    if (!short_key_fast_path && !primary_key_fast_path) {
         samples.reserve(sampled_row_count);
         for (const auto& segment_sample : segment_samples) {
             std::vector<rowid_t> rowids;
@@ -2020,6 +2114,8 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             .tag("worker_discovery_time_us", worker_discovery_time_us)
             .tag("segment_load_time_us", segment_load_time_us)
             .tag("short_key_index_load_time_us", short_key_index_load_time_us)
+            .tag("primary_key_index_load_time_us", primary_key_index_load_time_us)
+            .tag("primary_key_sample_read_time_us", primary_key_sample_read_time_us)
             .tag("key_sample_read_time_us", key_sample_read_time_us)
             .tag("boundary_key_read_time_us", boundary_key_read_time_us)
             .tag("local_read_bytes", planning_io_stats.bytes_read_from_local)
@@ -2031,6 +2127,24 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             .tag("local_read_time_us", planning_io_stats.local_io_timer / 1000)
             .tag("remote_read_time_us", planning_io_stats.remote_io_timer / 1000)
             .tag("peer_read_time_us", planning_io_stats.peer_io_timer / 1000)
+            .tag("primary_key_sample_local_read_bytes",
+                 primary_key_sample_io_stats.bytes_read_from_local)
+            .tag("primary_key_sample_remote_read_bytes",
+                 primary_key_sample_io_stats.bytes_read_from_remote)
+            .tag("primary_key_sample_peer_read_bytes",
+                 primary_key_sample_io_stats.bytes_read_from_peer)
+            .tag("primary_key_sample_local_read_count",
+                 primary_key_sample_io_stats.num_local_io_total)
+            .tag("primary_key_sample_remote_read_count",
+                 primary_key_sample_io_stats.num_remote_io_total)
+            .tag("primary_key_sample_peer_read_count",
+                 primary_key_sample_io_stats.num_peer_io_total)
+            .tag("primary_key_sample_local_read_time_us",
+                 primary_key_sample_io_stats.local_io_timer / 1000)
+            .tag("primary_key_sample_remote_read_time_us",
+                 primary_key_sample_io_stats.remote_io_timer / 1000)
+            .tag("primary_key_sample_peer_read_time_us",
+                 primary_key_sample_io_stats.peer_io_timer / 1000)
             .tag("key_sample_local_read_bytes", key_sample_io_stats.bytes_read_from_local)
             .tag("key_sample_remote_read_bytes", key_sample_io_stats.bytes_read_from_remote)
             .tag("key_sample_peer_read_bytes", key_sample_io_stats.bytes_read_from_peer)
@@ -2047,6 +2161,9 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             .tag("typed_samples", typed_sample_count)
             .tag("boundary_candidate_rows", key_plan.boundaries.size())
             .tag("short_key_fast_path", short_key_fast_path)
+            .tag("primary_key_fast_path", primary_key_fast_path)
+            .tag("primary_key_fast_path_fallback_reason",
+                 primary_key_fast_path_fallback_reason)
             .tag("short_key_encoding_lossless", short_key_encoding_lossless)
             .tag("short_key_collision_refinement", short_key_collision_refinement)
             .tag("boundary_refinement_groups", boundary_refinement_group_count)

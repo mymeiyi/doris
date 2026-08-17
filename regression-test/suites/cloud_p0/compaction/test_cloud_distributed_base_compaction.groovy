@@ -94,7 +94,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                      "CAST(number + ROUND * 10000 AS BIGINT)",
              properties: ', "enable_unique_key_merge_on_write" = "true"' +
                      ', "function_column.sequence_col" = "seq"',
-             expectedFastPath: false, fallbackReason: "mow"]
+             expectedPrimaryKeyFastPath: true]
         ]
 
         keyCases.each { keyCase ->
@@ -249,14 +249,21 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             """))
 
             def newCoordinatorLogLines = readNewLog(coordinatorLog, logOffset)
-            if (keyCase.expectedFastPath != null) {
+            if (keyCase.expectedFastPath != null || keyCase.expectedPrimaryKeyFastPath) {
                 def rangePlanningLog = newCoordinatorLogLines.find { line ->
                     line.contains("finish distributed base compaction range planning") &&
                             line.contains("tablet_id=${tabletId}")
                 }
                 assertNotNull(rangePlanningLog,
                         "distributed Base range planning log not found for ${keyCase.name}")
-                if (keyCase.expectedFastPath) {
+                if (keyCase.expectedPrimaryKeyFastPath) {
+                    assertTrue(rangePlanningLog.contains("primary_key_fast_path=1"),
+                            rangePlanningLog)
+                    assertTrue(rangePlanningLog.contains(
+                            "typed_samples=${expectedTaskCount - 1}"), rangePlanningLog)
+                    assertTrue(rangePlanningLog.contains(
+                            "boundary_candidate_rows=${expectedTaskCount - 1}"), rangePlanningLog)
+                } else if (keyCase.expectedFastPath) {
                     assertTrue(rangePlanningLog.contains("short_key_fast_path=1"),
                             rangePlanningLog)
                     assertTrue(rangePlanningLog.contains(
