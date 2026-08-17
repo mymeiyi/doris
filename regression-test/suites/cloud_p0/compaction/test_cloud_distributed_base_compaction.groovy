@@ -29,6 +29,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         "cumulative_compaction_min_deltas=2",
         "compaction_promotion_min_size_mbytes=0",
         "disable_auto_compaction=true",
+        "report_tablet_interval_seconds=1",
         "enable_aggregate_non_mow_key_bounds=false",
         "enable_java_support=false"
     ]
@@ -161,13 +162,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                     parseJson(coordinator.Status.toString()).lastSuccessReportTabletsTime.toString()
             long inputSizeBytes = 0
             long reportDeadline = System.currentTimeMillis() + compactionTimeoutMs
-            long lastReportTrigger = 0
             while (System.currentTimeMillis() < reportDeadline) {
-                long now = System.currentTimeMillis()
-                if (now - lastReportTrigger >= 1000) {
-                    be_report_tablet(coordinator.Host, coordinator.HttpPort.toString().toInteger())
-                    lastReportTrigger = now
-                }
                 def refreshedBackends = sql_return_maparray "SHOW BACKENDS"
                 def refreshedCoordinator = refreshedBackends.find {
                     it.BackendId.toString() == coordinatorBackendId.toString()
