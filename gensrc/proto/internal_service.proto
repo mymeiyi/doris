@@ -1024,6 +1024,11 @@ message PCloudDistributedCompactionTaskResult {
     optional int64 bytes_read_from_peer = 16;
     optional int64 peer_read_time_us = 17;
     optional int64 task_elapsed_time_us = 18;
+    optional int64 cpu_time_us = 19;
+    // Includes merge, encoding/compression, and output write submission.
+    optional int64 merge_time_us = 20;
+    // Time spent finalizing the rowset and waiting for remote output writes.
+    optional int64 remote_output_write_time_us = 21;
 }
 
 message PCloudDistributedCompactionTaskStatus {

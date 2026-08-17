@@ -74,6 +74,7 @@
 #include "util/client_cache.h"
 #include "util/hash_util.hpp"
 #include "util/network_util.h"
+#include "util/stopwatch.hpp"
 #include "util/threadpool.h"
 #include "util/thrift_rpc_helper.h"
 #include "util/time.h"
@@ -1676,6 +1677,9 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
                 .tag("local_read_time_us", response.cloud_local_read_time())
                 .tag("remote_read_time_us", response.cloud_remote_read_time())
                 .tag("peer_read_time_us", response.peer_read_time_us())
+                .tag("cpu_time_us", response.cpu_time_us())
+                .tag("merge_time_us", response.merge_time_us())
+                .tag("remote_output_write_time_us", response.remote_output_write_time_us())
                 .tag("task_elapsed_time_us", response.task_elapsed_time_us());
 
         for (const auto segment : partial_meta.segments()) {
@@ -2031,10 +2035,13 @@ Status DistributedCompactionWorker::execute_compaction(
 
     PCloudDistributedCompactionTaskResult result;
     const auto start = std::chrono::steady_clock::now();
+    ThreadCpuStopWatch cpu_timer;
+    cpu_timer.start();
     const Status status = handle_compaction(request, task, &result);
     const auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - start);
     result.set_task_elapsed_time_us(elapsed_time.count());
+    result.set_cpu_time_us(cpu_timer.elapsed_time_microseconds());
     result.set_group_index(task->group_index());
     status.to_protobuf(result.mutable_status());
     {
@@ -2279,6 +2286,8 @@ Status DistributedCompactionWorker::handle_compaction(
     }
     const ReaderType reader_type =
             is_base ? ReaderType::READER_BASE_COMPACTION : ReaderType::READER_CUMULATIVE_COMPACTION;
+    MonotonicStopWatch merge_timer;
+    merge_timer.start();
     if (request->is_vertical()) {
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(
                 _tablet, reader_type, *output_meta.tablet_schema(), readers, writer.get(),
@@ -2289,8 +2298,14 @@ Status DistributedCompactionWorker::handle_compaction(
                                                readers, writer.get(), &stats, segment_range,
                                                _runtime_state.get(), merge_key_range));
     }
+    merge_timer.stop();
+    result->set_merge_time_us(merge_timer.elapsed_time_microseconds());
     RETURN_IF_CANCELLED(_runtime_state.get());
+    MonotonicStopWatch remote_output_write_timer;
+    remote_output_write_timer.start();
     RETURN_IF_ERROR(writer->build(_output_rowset));
+    remote_output_write_timer.stop();
+    result->set_remote_output_write_time_us(remote_output_write_timer.elapsed_time_microseconds());
     RETURN_IF_CANCELLED(_runtime_state.get());
 
     _output_segment_ids.clear();
