@@ -51,6 +51,7 @@
 #include "util/async_io.h"
 #include "util/bvar_windowed_adder.h"
 #include "util/debug_points.h"
+#include "util/time.h"
 
 namespace doris {
 #include "common/compile_check_avoid_begin.h"
@@ -1365,12 +1366,14 @@ void CloudInternalServiceImpl::cloud_distributed_compaction_submit(
         google::protobuf::RpcController* controller [[maybe_unused]],
         const PCloudDistributedCompactionSubmitRequest* request,
         PCloudDistributedCompactionSubmitResponse* response, google::protobuf::Closure* done) {
-    const bool offered = _heavy_work_pool.try_offer([this, request, response, done]() {
-        brpc::ClosureGuard closure_guard(done);
-        cloud::DistributedCompactionWorkerManager::instance()
-                ->submit(*request, _engine)
-                .to_protobuf(response->mutable_status());
-    });
+    const int64_t arrival_time_us = UnixMicros();
+    const bool offered =
+            _heavy_work_pool.try_offer([this, request, response, done, arrival_time_us]() {
+                brpc::ClosureGuard closure_guard(done);
+                cloud::DistributedCompactionWorkerManager::instance()
+                        ->submit(*request, _engine, arrival_time_us)
+                        .to_protobuf(response->mutable_status());
+            });
     if (!offered) {
         brpc::ClosureGuard closure_guard(done);
         Status::TooManyTasks("failed to offer distributed compaction submit task")

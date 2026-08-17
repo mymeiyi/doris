@@ -1029,6 +1029,12 @@ message PCloudDistributedCompactionTaskResult {
     optional int64 merge_time_us = 20;
     // Time spent finalizing the rowset and waiting for remote output writes.
     optional int64 remote_output_write_time_us = 21;
+    // Unix timestamps for correlating coordinator and worker events across BEs.
+    optional int64 worker_arrival_time_us = 22;
+    optional int64 worker_start_time_us = 23;
+    optional int64 merge_start_time_us = 24;
+    optional int64 merge_finish_time_us = 25;
+    optional int64 worker_finish_time_us = 26;
 }
 
 message PCloudDistributedCompactionTaskStatus {

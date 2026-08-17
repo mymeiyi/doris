@@ -265,7 +265,8 @@ private:
 
 class DistributedCompactionWorker {
 public:
-    DistributedCompactionWorker(CloudStorageEngine& engine, std::shared_ptr<CloudTablet> tablet);
+    DistributedCompactionWorker(CloudStorageEngine& engine, std::shared_ptr<CloudTablet> tablet,
+                                int64_t arrival_time_us);
     ~DistributedCompactionWorker();
 
     Status execute_compaction(const PCloudDistributedCompactionSubmitRequest* request,
@@ -298,6 +299,7 @@ private:
     std::shared_ptr<CloudTablet> _tablet;
     std::shared_ptr<MemTrackerLimiter> _mem_tracker;
     std::unique_ptr<RuntimeState> _runtime_state;
+    int64_t _arrival_time_us;
     std::mutex _mutex;
     mutable std::mutex _status_mutex;
     State _state = State::PENDING;
@@ -313,7 +315,7 @@ public:
     static DistributedCompactionWorkerManager* instance();
 
     Status submit(const PCloudDistributedCompactionSubmitRequest& request,
-                  CloudStorageEngine& engine);
+                  CloudStorageEngine& engine, int64_t arrival_time_us);
 
     Status calc_incremental_delete_bitmap(
             const PCloudDistributedCompactionCalcIncrementalDeleteBitmapRequest& request,

@@ -957,6 +957,7 @@ struct DistributedCompactionCoordinator::ExecutionPlan {
     std::vector<bool> task_completed;
     size_t remaining_workers = 0;
     int64_t expiration_time = 0;
+    int64_t input_rowsets_total_size = 0;
     bool is_mow = false;
     bool check_missed_rows = false;
     bool polling_completed = false;
@@ -1448,6 +1449,7 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
     _execution_plan->task_completed.assign(segment_ranges.size(), false);
     _execution_plan->remaining_workers = workers.size();
     _execution_plan->expiration_time = output_meta_pb.txn_expiration();
+    _execution_plan->input_rowsets_total_size = input_rowset->total_disk_size();
     _execution_plan->is_mow = is_mow;
     _execution_plan->check_missed_rows = check_missed_rows;
     *started = true;
@@ -1457,6 +1459,8 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
 Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         const std::vector<RowsetSharedPtr>& input_rowsets, RowsetWriter& output_rowset_writer,
         size_t range_count, bool is_vertical, uint32_t avg_segment_rows, bool* started) {
+    const int64_t prepare_start_time_us = UnixMicros();
+    const int64_t prepare_start_us = MonotonicMicros();
     *started = false;
     DORIS_CHECK_GT(input_rowsets.size(), 1);
     const auto& schema = *_tablet->tablet_schema();
@@ -1476,7 +1480,9 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     }
 
     std::vector<CompactionWorkerInfo> candidates;
+    const int64_t discovery_start_us = MonotonicMicros();
     const Status discovery_status = compaction_worker_cache()->get_workers(&candidates);
+    const int64_t worker_discovery_time_us = MonotonicMicros() - discovery_start_us;
     if (!discovery_status.ok()) {
         LOG(WARNING) << "failed to discover distributed base compaction workers from FE, "
                      << "fallback to local compaction: " << discovery_status;
@@ -1489,17 +1495,29 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     // ponytail: collect all index samples; switch to a streaming k-way merge if coordinator
     // memory becomes measurable for very large tablets.
     std::vector<CompositeKeySample> samples;
+    int64_t segment_load_time_us = 0;
+    int64_t short_key_index_load_time_us = 0;
+    int64_t key_sample_read_time_us = 0;
+    io::FileCacheStatistics planning_io_stats;
+    size_t segment_count = 0;
     for (const auto& rowset : input_rowsets) {
         auto beta_rowset = std::dynamic_pointer_cast<BetaRowset>(rowset);
         if (beta_rowset == nullptr) {
             return Status::InvalidArgument("distributed base compaction requires beta rowsets");
         }
         std::vector<segment_v2::SegmentSharedPtr> segments;
-        RETURN_IF_ERROR(beta_rowset->load_segments(&segments));
+        const int64_t segment_load_start_us = MonotonicMicros();
+        const Status segment_load_status = beta_rowset->load_segments(&segments);
+        segment_load_time_us += MonotonicMicros() - segment_load_start_us;
+        RETURN_IF_ERROR(segment_load_status);
+        segment_count += segments.size();
         for (const auto& segment : segments) {
             OlapReaderStatistics reader_stats;
             if (!is_mow) {
-                RETURN_IF_ERROR(segment->load_index(&reader_stats));
+                const int64_t index_load_start_us = MonotonicMicros();
+                const Status index_load_status = segment->load_index(&reader_stats);
+                short_key_index_load_time_us += MonotonicMicros() - index_load_start_us;
+                RETURN_IF_ERROR(index_load_status);
             }
             const auto* short_key_index = is_mow ? nullptr : segment->get_short_key_index();
             DORIS_CHECK(is_mow || short_key_index != nullptr);
@@ -1521,8 +1539,12 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
                                            cast_set<uint64_t>(segment->num_rows()) - row_start));
             }
             std::vector<CompositeKey> keys;
-            RETURN_IF_ERROR(read_key_samples(segment, schema, key_column_count, rowids,
-                                             &reader_stats, &keys));
+            const int64_t sample_read_start_us = MonotonicMicros();
+            const Status sample_read_status = read_key_samples(
+                    segment, schema, key_column_count, rowids, &reader_stats, &keys);
+            key_sample_read_time_us += MonotonicMicros() - sample_read_start_us;
+            RETURN_IF_ERROR(sample_read_status);
+            planning_io_stats.merge_from(reader_stats.file_cache_stats);
             DORIS_CHECK_EQ(keys.size(), weights.size());
             for (size_t sample_index = 0; sample_index < keys.size(); ++sample_index) {
                 samples.push_back(
@@ -1531,11 +1553,14 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
         }
     }
 
+    const int64_t boundary_choose_start_us = MonotonicMicros();
     const auto key_plan = choose_composite_key_range_boundaries(samples, range_count);
+    const int64_t boundary_choose_time_us = MonotonicMicros() - boundary_choose_start_us;
     const size_t group_count = key_plan.boundaries.size() + 1;
     if (group_count < 2) {
         return Status::OK();
     }
+    const int64_t task_build_start_us = MonotonicMicros();
     auto workers = select_compaction_workers_for_groups(
             candidates, BackendOptions::get_backend_id(), group_count, _execution_id);
     DORIS_CHECK_GE(workers.size(), 2);
@@ -1607,7 +1632,11 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
             key_range->set_upper_inclusive(group_index + 1 == group_count);
         }
     }
-    RETURN_IF_ERROR(submit_batches(workers, groups_by_worker, requests));
+    const int64_t task_build_time_us = MonotonicMicros() - task_build_start_us;
+    const int64_t submit_start_us = MonotonicMicros();
+    const Status submit_status = submit_batches(workers, groups_by_worker, requests);
+    const int64_t submit_rpc_time_us = MonotonicMicros() - submit_start_us;
+    RETURN_IF_ERROR(submit_status);
 
     _execution_plan = std::make_unique<ExecutionPlan>();
     _execution_plan->workers = std::move(workers);
@@ -1617,8 +1646,39 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     _execution_plan->task_completed.assign(group_count, false);
     _execution_plan->remaining_workers = _execution_plan->workers.size();
     _execution_plan->expiration_time = output_meta_pb.txn_expiration();
+    for (const auto& rowset : input_rowsets) {
+        _execution_plan->input_rowsets_total_size += rowset->total_disk_size();
+    }
     _execution_plan->is_mow = is_mow;
     _execution_plan->check_missed_rows = false;
+    const int64_t prepare_finish_time_us = UnixMicros();
+    LOG_INFO("finish distributed base compaction range planning")
+            .tag("job_id", _execution_id)
+            .tag("tablet_id", _tablet->tablet_id())
+            .tag("prepare_start_time_us", prepare_start_time_us)
+            .tag("prepare_finish_time_us", prepare_finish_time_us)
+            .tag("prepare_time_us", MonotonicMicros() - prepare_start_us)
+            .tag("worker_discovery_time_us", worker_discovery_time_us)
+            .tag("segment_load_time_us", segment_load_time_us)
+            .tag("short_key_index_load_time_us", short_key_index_load_time_us)
+            .tag("key_sample_read_time_us", key_sample_read_time_us)
+            .tag("local_read_bytes", planning_io_stats.bytes_read_from_local)
+            .tag("remote_read_bytes", planning_io_stats.bytes_read_from_remote)
+            .tag("peer_read_bytes", planning_io_stats.bytes_read_from_peer)
+            .tag("local_read_count", planning_io_stats.num_local_io_total)
+            .tag("remote_read_count", planning_io_stats.num_remote_io_total)
+            .tag("peer_read_count", planning_io_stats.num_peer_io_total)
+            .tag("local_read_time_us", planning_io_stats.local_io_timer / 1000)
+            .tag("remote_read_time_us", planning_io_stats.remote_io_timer / 1000)
+            .tag("peer_read_time_us", planning_io_stats.peer_io_timer / 1000)
+            .tag("boundary_choose_time_us", boundary_choose_time_us)
+            .tag("task_build_time_us", task_build_time_us)
+            .tag("submit_rpc_time_us", submit_rpc_time_us)
+            .tag("input_rowsets", input_rowsets.size())
+            .tag("segments", segment_count)
+            .tag("samples", samples.size())
+            .tag("requested_ranges", range_count)
+            .tag("actual_ranges", group_count);
     *started = true;
     return Status::OK();
 }
@@ -1643,6 +1703,9 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
     bool key_bounds_truncated = false;
     bool segment_file_sizes_available = true;
     int64_t missed_rows_count = 0;
+    int64_t first_merge_start_time_us = std::numeric_limits<int64_t>::max();
+    int64_t last_merge_finish_time_us = 0;
+    int64_t sum_task_merge_time_us = 0;
     std::unordered_set<int64_t> output_segment_id_set;
     std::vector<int64_t> output_segment_ids;
     std::vector<KeyBoundsPB> output_key_bounds;
@@ -1657,6 +1720,13 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
         ValidatedPartialRowset partial_rowset;
         RETURN_IF_ERROR(validate_partial_rowset(group_index, response, task, tablet_schema,
                                                 output_rowset_writer.rowset_id(), &partial_rowset));
+        DORIS_CHECK(response.has_merge_start_time_us());
+        DORIS_CHECK(response.has_merge_finish_time_us());
+        first_merge_start_time_us =
+                std::min(first_merge_start_time_us, response.merge_start_time_us());
+        last_merge_finish_time_us =
+                std::max(last_merge_finish_time_us, response.merge_finish_time_us());
+        sum_task_merge_time_us += response.merge_time_us();
         const auto& partial_meta = partial_rowset.meta;
         LOG_INFO("finish distributed compaction worker task")
                 .tag("job_id", _execution_id)
@@ -1680,6 +1750,15 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
                 .tag("cpu_time_us", response.cpu_time_us())
                 .tag("merge_time_us", response.merge_time_us())
                 .tag("remote_output_write_time_us", response.remote_output_write_time_us())
+                .tag("worker_arrival_time_us", response.worker_arrival_time_us())
+                .tag("worker_start_time_us", response.worker_start_time_us())
+                .tag("worker_queue_time_us",
+                     response.worker_start_time_us() - response.worker_arrival_time_us())
+                .tag("merge_start_time_us", response.merge_start_time_us())
+                .tag("merge_finish_time_us", response.merge_finish_time_us())
+                .tag("worker_finish_time_us", response.worker_finish_time_us())
+                .tag("worker_total_time_us",
+                     response.worker_finish_time_us() - response.worker_arrival_time_us())
                 .tag("task_elapsed_time_us", response.task_elapsed_time_us());
 
         for (const auto segment : partial_meta.segments()) {
@@ -1790,12 +1869,27 @@ Status DistributedCompactionCoordinator::assemble_single_rowset(
     }
 
     *output_rowset = _output_rowset;
+    const int64_t parallel_merge_time_us =
+            last_merge_finish_time_us - first_merge_start_time_us;
+    DORIS_CHECK_GT(parallel_merge_time_us, 0);
+    const double merge_throughput_mib_per_second =
+            cast_set<double>(_execution_plan->input_rowsets_total_size) * 1'000'000 /
+            parallel_merge_time_us / 1024 / 1024;
+    const double effective_merge_parallelism =
+            cast_set<double>(sum_task_merge_time_us) / parallel_merge_time_us;
     LOG_INFO("finish distributed single-rowset compaction merge, tablet_id={}",
              _tablet->tablet_id())
             .tag("job_id", _execution_id)
             .tag("groups", responses.size())
             .tag("workers", workers.size())
-            .tag("output_segments", output_segment_ids.size());
+            .tag("output_segments", output_segment_ids.size())
+            .tag("input_rowsets_total_size", _execution_plan->input_rowsets_total_size)
+            .tag("first_merge_start_time_us", first_merge_start_time_us)
+            .tag("last_merge_finish_time_us", last_merge_finish_time_us)
+            .tag("parallel_merge_time_us", parallel_merge_time_us)
+            .tag("sum_task_merge_time_us", sum_task_merge_time_us)
+            .tag("effective_merge_parallelism", effective_merge_parallelism)
+            .tag("merge_throughput_mib_per_second", merge_throughput_mib_per_second);
     return Status::OK();
 }
 
@@ -2006,13 +2100,15 @@ void DistributedCompactionCoordinator::finalize(bool preserve_output_files) {
 }
 
 DistributedCompactionWorker::DistributedCompactionWorker(CloudStorageEngine& engine,
-                                                         std::shared_ptr<CloudTablet> tablet)
+                                                         std::shared_ptr<CloudTablet> tablet,
+                                                         int64_t arrival_time_us)
         : _engine(engine),
           _tablet(std::move(tablet)),
           _mem_tracker(MemTrackerLimiter::create_shared(
                   MemTrackerLimiter::Type::COMPACTION,
                   fmt::format("distributed-compaction-tablet-{}", _tablet->tablet_id()))),
-          _runtime_state(RuntimeState::create_unique()) {}
+          _runtime_state(RuntimeState::create_unique()),
+          _arrival_time_us(arrival_time_us) {}
 
 DistributedCompactionWorker::~DistributedCompactionWorker() {
     SCOPED_INIT_THREAD_CONTEXT();
@@ -2034,6 +2130,8 @@ Status DistributedCompactionWorker::execute_compaction(
     }
 
     PCloudDistributedCompactionTaskResult result;
+    result.set_worker_arrival_time_us(_arrival_time_us);
+    result.set_worker_start_time_us(UnixMicros());
     const auto start = std::chrono::steady_clock::now();
     ThreadCpuStopWatch cpu_timer;
     cpu_timer.start();
@@ -2042,6 +2140,7 @@ Status DistributedCompactionWorker::execute_compaction(
             std::chrono::steady_clock::now() - start);
     result.set_task_elapsed_time_us(elapsed_time.count());
     result.set_cpu_time_us(cpu_timer.elapsed_time_microseconds());
+    result.set_worker_finish_time_us(UnixMicros());
     result.set_group_index(task->group_index());
     status.to_protobuf(result.mutable_status());
     {
@@ -2288,6 +2387,7 @@ Status DistributedCompactionWorker::handle_compaction(
             is_base ? ReaderType::READER_BASE_COMPACTION : ReaderType::READER_CUMULATIVE_COMPACTION;
     MonotonicStopWatch merge_timer;
     merge_timer.start();
+    result->set_merge_start_time_us(UnixMicros());
     if (request->is_vertical()) {
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(
                 _tablet, reader_type, *output_meta.tablet_schema(), readers, writer.get(),
@@ -2299,6 +2399,7 @@ Status DistributedCompactionWorker::handle_compaction(
                                                _runtime_state.get(), merge_key_range));
     }
     merge_timer.stop();
+    result->set_merge_finish_time_us(UnixMicros());
     result->set_merge_time_us(merge_timer.elapsed_time_microseconds());
     RETURN_IF_CANCELLED(_runtime_state.get());
     MonotonicStopWatch remote_output_write_timer;
@@ -2386,7 +2487,8 @@ DistributedCompactionWorkerManager* DistributedCompactionWorkerManager::instance
 }
 
 Status DistributedCompactionWorkerManager::submit(
-        const PCloudDistributedCompactionSubmitRequest& request, CloudStorageEngine& engine) {
+        const PCloudDistributedCompactionSubmitRequest& request, CloudStorageEngine& engine,
+        int64_t arrival_time_us) {
     struct CompactionJob {
         std::shared_ptr<DistributedCompactionWorker> worker;
         PCloudDistributedCompactionTask task;
@@ -2444,7 +2546,8 @@ Status DistributedCompactionWorkerManager::submit(
                                request.output_rowset_meta().txn_expiration());
                 continue;
             }
-            auto worker = std::make_shared<DistributedCompactionWorker>(engine, tablet);
+            auto worker = std::make_shared<DistributedCompactionWorker>(engine, tablet,
+                                                                        arrival_time_us);
             _workers.emplace(
                     worker_key,
                     WorkerEntry {.worker = worker,
