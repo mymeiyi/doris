@@ -150,9 +150,44 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             assertEquals(2, backends.size())
             def tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
             assertEquals(1, tablets.size())
-            int expectedTaskCount = 2 * backends.size()
-            long inputSizeBytes = tablets[0].RemoteDataSize.toString().toLong()
+            String tabletId = tablets[0].TabletId
+            String coordinatorBackendId = tablets[0].BackendId
+            def coordinator = backends.find {
+                it.BackendId.toString() == coordinatorBackendId.toString()
+            }
+            assertNotNull(coordinator)
+
+            String previousReportTime =
+                    parseJson(coordinator.Status.toString()).lastSuccessReportTabletsTime.toString()
+            long inputSizeBytes = 0
+            long reportDeadline = System.currentTimeMillis() + compactionTimeoutMs
+            long lastReportTrigger = 0
+            while (System.currentTimeMillis() < reportDeadline) {
+                long now = System.currentTimeMillis()
+                if (now - lastReportTrigger >= 1000) {
+                    be_report_tablet(coordinator.Host, coordinator.HttpPort.toString().toInteger())
+                    lastReportTrigger = now
+                }
+                def refreshedBackends = sql_return_maparray "SHOW BACKENDS"
+                def refreshedCoordinator = refreshedBackends.find {
+                    it.BackendId.toString() == coordinatorBackendId.toString()
+                }
+                assertNotNull(refreshedCoordinator)
+                def refreshedStatus = parseJson(refreshedCoordinator.Status.toString())
+                String currentReportTime = refreshedStatus.lastSuccessReportTabletsTime.toString()
+                if (currentReportTime != previousReportTime) {
+                    tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
+                    assertEquals(1, tablets.size())
+                    inputSizeBytes = tablets[0].RemoteDataSize.toString().toLong()
+                    if (inputSizeBytes > 0) {
+                        break
+                    }
+                }
+                Thread.sleep(100)
+            }
             assertTrue(inputSizeBytes > 0)
+
+            int expectedTaskCount = 2 * backends.size()
             long targetInputSizeBytes =
                     (inputSizeBytes + expectedTaskCount - 1) / expectedTaskCount
             backends.each { backend ->
@@ -165,12 +200,6 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 assertEquals(0, code)
                 assertTrue(out.contains("OK"))
             }
-            String tabletId = tablets[0].TabletId
-            String coordinatorBackendId = tablets[0].BackendId
-            def coordinator = backends.find {
-                it.BackendId.toString() == coordinatorBackendId.toString()
-            }
-            assertNotNull(coordinator)
 
             def coordinatorNode = cluster.getAllBackends().find {
                 it.backendId.toString() == coordinatorBackendId.toString()
