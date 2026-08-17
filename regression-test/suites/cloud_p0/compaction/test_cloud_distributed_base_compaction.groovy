@@ -218,12 +218,12 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             }
             assertNotNull(after)
             assertEquals("[OK]", after["last base status"])
-            def outputRowsets = after.rowsets.findAll { it =~ /\]\s+2\s+DATA\s+/ }
+            def outputRowsets = after.rowsets.findAll { it =~ /\]\s+${expectedTaskCount}\s+DATA\s+/ }
             assertEquals(1, outputRowsets.size())
             def outputMatcher =
                     outputRowsets[0] =~ /\[[0-9]+-[0-9]+\]\s+([0-9]+)\s+DATA\s+([A-Z_]+)/
             assertTrue(outputMatcher.find(), "unexpected output rowset: ${outputRowsets[0]}")
-            assertEquals(2, outputMatcher.group(1).toInteger())
+            assertEquals(expectedTaskCount, outputMatcher.group(1).toInteger())
             assertEquals("NONOVERLAPPING", outputMatcher.group(2))
 
             assertEquals(summaryBefore, sql("""
