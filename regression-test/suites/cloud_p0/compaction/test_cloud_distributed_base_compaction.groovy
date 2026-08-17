@@ -22,6 +22,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
     options.cloudMode = true
     options.setFeNum(1)
     options.setBeNum(2)
+    options.feConfigs += ["tablet_stat_update_interval_second=1"]
     options.beConfigs += [
         "enable_cloud_distributed_base_compaction=true",
         "cloud_distributed_compaction_status_poll_interval_ms=100",
@@ -29,7 +30,6 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         "cumulative_compaction_min_deltas=2",
         "compaction_promotion_min_size_mbytes=0",
         "disable_auto_compaction=true",
-        "report_tablet_interval_seconds=1",
         "enable_aggregate_non_mow_key_bounds=false",
         "enable_java_support=false"
     ]
@@ -149,6 +149,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
 
             def backends = sql_return_maparray "SHOW BACKENDS"
             assertEquals(2, backends.size())
+            sql "set cloud_force_sync_tablet_stats = true"
             def tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
             assertEquals(1, tablets.size())
             String tabletId = tablets[0].TabletId
@@ -158,28 +159,19 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             }
             assertNotNull(coordinator)
 
-            String previousReportTime =
-                    parseJson(coordinator.Status.toString()).lastSuccessReportTabletsTime.toString()
+            Thread.sleep(2000)
             long inputSizeBytes = 0
             long reportDeadline = System.currentTimeMillis() + compactionTimeoutMs
             while (System.currentTimeMillis() < reportDeadline) {
-                def refreshedBackends = sql_return_maparray "SHOW BACKENDS"
-                def refreshedCoordinator = refreshedBackends.find {
-                    it.BackendId.toString() == coordinatorBackendId.toString()
-                }
-                assertNotNull(refreshedCoordinator)
-                def refreshedStatus = parseJson(refreshedCoordinator.Status.toString())
-                String currentReportTime = refreshedStatus.lastSuccessReportTabletsTime.toString()
-                if (currentReportTime != previousReportTime) {
-                    tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
-                    assertEquals(1, tablets.size())
-                    inputSizeBytes = tablets[0].RemoteDataSize.toString().toLong()
-                    if (inputSizeBytes > 0) {
-                        break
-                    }
+                tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
+                assertEquals(1, tablets.size())
+                inputSizeBytes = tablets[0].RemoteDataSize.toString().toLong()
+                if (inputSizeBytes > 0) {
+                    break
                 }
                 Thread.sleep(100)
             }
+            sql "set cloud_force_sync_tablet_stats = false"
             assertTrue(inputSizeBytes > 0)
 
             int expectedTaskCount = 2 * backends.size()
