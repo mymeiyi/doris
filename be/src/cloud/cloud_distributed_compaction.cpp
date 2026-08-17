@@ -2244,8 +2244,9 @@ Status DistributedCompactionWorker::handle_compaction(
         }
     }
 
+    auto output_meta_pb = request->output_rowset_meta();
     RowsetMeta output_meta;
-    if (!output_meta.init_from_pb(request->output_rowset_meta())) {
+    if (!output_meta.init_from_pb(output_meta_pb)) {
         return Status::InvalidArgument("failed to initialize output rowset metadata");
     }
     if (output_meta.tablet_id() != request->tablet_id()) {
