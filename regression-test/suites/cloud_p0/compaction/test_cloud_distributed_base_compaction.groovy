@@ -63,7 +63,8 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         def keyCases = [
             [name: "tinyint", type: "TINYINT", keyExpr: "CAST(number % 128 - 64 AS TINYINT)"],
             [name: "smallint", type: "SMALLINT", keyExpr: "CAST(number - 4096 AS SMALLINT)"],
-            [name: "int", type: "INT", keyExpr: "CAST(number * 100000 - 409600000 AS INT)"],
+            [name: "int", type: "INT", keyExpr: "CAST(number * 100000 - 409600000 AS INT)",
+             expectedFastPath: true],
             [name: "bigint", type: "BIGINT",
              keyExpr: "CAST(number * 1000000000000 - 4096000000000000 AS BIGINT)"],
             [name: "largeint", type: "LARGEINT", keyExpr: """
@@ -75,7 +76,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             """],
             [name: "varchar", type: "VARCHAR(128)", keyExpr: """
                 CONCAT(LPAD(CAST(number AS STRING), 5, '0'), REPEAT('v', 123))
-            """],
+            """, expectedFastPath: false, fallbackReason: "lossy_short_key"],
             [name: "composite", keyColumns: "k INT NOT NULL, k2 VARCHAR(128) NOT NULL",
              keyExpr: "CAST(0 AS INT), CONCAT('key-', LPAD(CAST(number AS STRING), 5, '0'))",
              keyModelColumns: "k, k2", sampleKey: "k, k2"],
@@ -246,6 +247,29 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             """))
 
             def newCoordinatorLogLines = readNewLog(coordinatorLog, logOffset)
+            if (keyCase.expectedFastPath != null) {
+                def rangePlanningLog = newCoordinatorLogLines.find { line ->
+                    line.contains("finish distributed base compaction range planning") &&
+                            line.contains("tablet_id=${tabletId}")
+                }
+                assertNotNull(rangePlanningLog,
+                        "distributed Base range planning log not found for ${keyCase.name}")
+                if (keyCase.expectedFastPath) {
+                    assertTrue(rangePlanningLog.contains("short_key_fast_path=1"),
+                            rangePlanningLog)
+                    assertTrue(rangePlanningLog.contains("typed_samples=${expectedTaskCount - 1}"),
+                            rangePlanningLog)
+                    assertTrue(rangePlanningLog.contains(
+                            "boundary_candidate_rows=${expectedTaskCount - 1}"),
+                            rangePlanningLog)
+                } else {
+                    assertTrue(rangePlanningLog.contains("short_key_fast_path=0"),
+                            rangePlanningLog)
+                    assertTrue(rangePlanningLog.contains(
+                            "short_key_fast_path_fallback_reason=${keyCase.fallbackReason}"),
+                            rangePlanningLog)
+                }
+            }
             def submitLogs = newCoordinatorLogLines.findAll { line ->
                 line.contains("submit distributed single-rowset compaction batch") &&
                         line.contains("tasks=2")
