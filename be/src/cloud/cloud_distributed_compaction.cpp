@@ -2864,7 +2864,9 @@ Status DistributedCompactionWorker::handle_compaction(
               _tablet->enable_unique_key_merge_on_write();
     Merger::Statistics stats;
     if (_is_mow) {
-        _rowid_conversion = std::make_unique<RowIdConversion>();
+        const auto mode = is_base ? RowIdConversion::Mode::LAZY_CHUNKED
+                                  : RowIdConversion::Mode::DENSE;
+        _rowid_conversion = std::make_unique<RowIdConversion>(mode);
         stats.rowid_conversion = _rowid_conversion.get();
     }
 

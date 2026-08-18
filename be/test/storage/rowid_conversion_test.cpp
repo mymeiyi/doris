@@ -580,6 +580,33 @@ TEST_F(TestRowIdConversion, Basic) {
     EXPECT_EQ(res, -1);
 }
 
+TEST_F(TestRowIdConversion, LazyChunkedOnlyAllocatesTouchedRows) {
+    constexpr uint32_t NUM_ROWS = 1'000'000;
+    RowsetId src_rowset;
+    src_rowset.init(1);
+    RowsetId dst_rowset;
+    dst_rowset.init(2);
+
+    RowIdConversion rowid_conversion(RowIdConversion::Mode::LAZY_CHUNKED);
+    ASSERT_TRUE(rowid_conversion.init_segment_map(src_rowset, {10}, {NUM_ROWS}).ok());
+    rowid_conversion.set_dst_rowset_id(dst_rowset);
+    ASSERT_TRUE(rowid_conversion
+                        .add({RowLocation(src_rowset, 10, 0),
+                              RowLocation(src_rowset, 10, NUM_ROWS - 1)},
+                             {1, 1})
+                        .ok());
+
+    RowIdConversion::DestinationRowId dst;
+    ASSERT_EQ(rowid_conversion.get(RowLocation(src_rowset, 10, 0), &dst), 0);
+    EXPECT_EQ(dst.segment_pos, 0);
+    EXPECT_EQ(dst.row_id, 0);
+    ASSERT_EQ(rowid_conversion.get(RowLocation(src_rowset, 10, NUM_ROWS - 1), &dst), 0);
+    EXPECT_EQ(dst.segment_pos, 1);
+    EXPECT_EQ(dst.row_id, 0);
+    EXPECT_EQ(rowid_conversion.get(RowLocation(src_rowset, 10, NUM_ROWS / 2), &dst), -1);
+    EXPECT_LT(rowid_conversion.memory_usage(), 1024 * 1024);
+}
+
 TEST_F(TestRowIdConversion, SingleRowsetGroupedCompactionRowIdConversionIsComplete) {
     constexpr int64_t num_segments = 5;
     constexpr int64_t rows_per_segment = 1500;
@@ -1018,7 +1045,7 @@ TEST_F(TestRowIdConversion, SegmentRangeUsesExplicitOutputPhysicalSegmentIds) {
 
     RowsetReaderSharedPtr input_reader;
     ASSERT_TRUE(input_rowset->create_reader(&input_reader).ok());
-    RowIdConversion rowid_conversion;
+    RowIdConversion rowid_conversion(RowIdConversion::Mode::LAZY_CHUNKED);
     Merger::Statistics stats {.rowid_conversion = &rowid_conversion};
     auto tablet = create_tablet(*tablet_schema, true);
     ASSERT_TRUE(Merger::vmerge_rowsets(tablet, ReaderType::READER_CUMULATIVE_COMPACTION,
