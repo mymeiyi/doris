@@ -28,8 +28,10 @@
 #include "cloud/config.h"
 #include "common/cast_set.h"
 #include "common/config.h"
+#include "common/exception.h"
 #include "core/value/vdatetime_value.h"
 #include "cpp/sync_point.h"
+#include "runtime/thread_context.h"
 #include "service/backend_options.h"
 #include "storage/compaction/compaction.h"
 #include "storage/task/engine_checksum_task.h"
@@ -317,19 +319,12 @@ Status CloudBaseCompaction::do_merge_input_rowsets(
         return Compaction::do_merge_input_rowsets(input_rs_readers, result);
     }
 
-    const int64_t target_size = config::cloud_distributed_base_compaction_target_input_size_bytes;
-    const size_t range_count = cast_set<size_t>(1 + (_input_rowsets_total_size - 1) / target_size);
-    _distributed_compaction = std::make_shared<cloud::DistributedCompactionCoordinator>(
-            _engine, std::static_pointer_cast<CloudTablet>(_tablet), _uuid);
-
     std::mutex mutex;
     std::condition_variable cv;
     bool completed = false;
     Status remote_status;
     bool started = false;
-    RETURN_IF_ERROR(_distributed_compaction->start_base_key_ranges(
-            _input_rowsets, *_output_rs_writer, range_count, _is_vertical,
-            cast_set<uint32_t>(get_avg_segment_rows()),
+    RETURN_IF_ERROR(start_distributed_compaction(
             [&](Status status) {
                 {
                     std::lock_guard lock(mutex);
@@ -349,7 +344,21 @@ Status CloudBaseCompaction::do_merge_input_rowsets(
         cv.wait(lock, [&] { return completed; });
     }
     RETURN_IF_ERROR(remote_status);
+    return assemble_distributed_compaction(result);
+}
 
+Status CloudBaseCompaction::start_distributed_compaction(
+        std::function<void(Status)> remote_completion, bool* started) {
+    const int64_t target_size = config::cloud_distributed_base_compaction_target_input_size_bytes;
+    const size_t range_count = cast_set<size_t>(1 + (_input_rowsets_total_size - 1) / target_size);
+    _distributed_compaction = std::make_shared<cloud::DistributedCompactionCoordinator>(
+            _engine, std::static_pointer_cast<CloudTablet>(_tablet), _uuid);
+    return _distributed_compaction->start_base_key_ranges(
+            _input_rowsets, *_output_rs_writer, range_count, _is_vertical,
+            cast_set<uint32_t>(get_avg_segment_rows()), std::move(remote_completion), started);
+}
+
+Status CloudBaseCompaction::assemble_distributed_compaction(MergeInputRowsetsResult* result) {
     std::vector<int32_t> output_segment_group_sizes;
     RETURN_IF_ERROR(_distributed_compaction->assemble_single_rowset(
             *_output_rs_writer, *_cur_tablet_schema, &output_segment_group_sizes, &_output_rowset,
@@ -367,26 +376,150 @@ Status CloudBaseCompaction::execute_compact() {
 
     SCOPED_ATTACH_TASK(_mem_tracker);
 
-    using namespace std::chrono;
-    auto start = steady_clock::now();
-    Status st;
-    Defer defer_set_st([&] {
-        cloud_tablet()->set_last_base_compaction_status(st.to_string());
-        if (!st.ok()) {
-            cloud_tablet()->set_last_base_compaction_failure_time(UnixMillis());
-        } else {
-            cloud_tablet()->set_last_base_compaction_success_time(UnixMillis());
-        }
-    });
-    st = CloudCompactionMixin::execute_compact();
-    if (!st.ok()) {
-        LOG(WARNING) << "fail to do " << compaction_name() << ". res=" << st
-                     << ", tablet=" << _tablet->tablet_id()
-                     << ", output_version=" << _output_version;
-        return st;
+    const int64_t execution_start_time_us = MonotonicMicros();
+    Status status = CloudCompactionMixin::execute_compact();
+    if (!status.ok()) {
+        return finish_compaction_failure(std::move(status));
     }
+    finish_compaction_success(execution_start_time_us);
+    return Status::OK();
+}
+
+Status CloudBaseCompaction::execute_compact_async(
+        std::function<void(Status)> remote_completion, bool* suspended) {
+    DORIS_CHECK(remote_completion != nullptr);
+    *suspended = false;
+    TEST_INJECTION_POINT("Compaction::do_compaction");
+#ifndef __APPLE__
+    if (config::enable_base_compaction_idle_sched) {
+        Thread::set_idle_sched();
+    }
+#endif
+
+    SCOPED_ATTACH_TASK(_mem_tracker);
+    _async_profile_start_time_ms = UnixMillis();
+    _async_execution_start_time_us = MonotonicMicros();
+
+    Status status;
+    try {
+        doris::enable_thread_catch_bad_alloc++;
+        Defer restore_catch_bad_alloc {[&] { doris::enable_thread_catch_bad_alloc--; }};
+
+        status = prepare_execute_compact(get_compaction_permits());
+        if (!status.ok()) {
+            return fail_async_compaction(std::move(status));
+        }
+        _async_merge_context = std::make_unique<MergeInputRowsetsContext>();
+        status = prepare_merge_input_rowsets_execution(_async_merge_context.get());
+        if (!status.ok()) {
+            return fail_async_compaction(std::move(status));
+        }
+
+        if (_use_distributed_base_compaction) {
+            bool started = false;
+            status = start_distributed_compaction(std::move(remote_completion), &started);
+            if (!status.ok()) {
+                return fail_async_compaction(std::move(status));
+            }
+            if (started) {
+                _async_merge_context->input_rs_readers.clear();
+                *suspended = true;
+                LOG_INFO("suspend base compaction while waiting for distributed workers")
+                        .tag("job_id", _uuid)
+                        .tag("tablet_id", _tablet->tablet_id());
+                return Status::OK();
+            }
+            _distributed_compaction.reset();
+        }
+
+        status = Compaction::do_merge_input_rowsets(_async_merge_context->input_rs_readers,
+                                                    &_async_merge_context->result);
+        if (!status.ok()) {
+            return fail_async_compaction(std::move(status));
+        }
+        return finish_async_compaction();
+    } catch (const doris::Exception& exception) {
+        if (exception.code() == doris::ErrorCode::MEM_ALLOC_FAILED) {
+            status = Status::MemoryLimitExceeded(exception.to_string());
+        } else {
+            status = exception.to_status();
+        }
+        return fail_async_compaction(std::move(status));
+    }
+}
+
+Status CloudBaseCompaction::resume_compact(Status remote_status) {
+#ifndef __APPLE__
+    if (config::enable_base_compaction_idle_sched) {
+        Thread::set_idle_sched();
+    }
+#endif
+    DORIS_CHECK(_async_merge_context != nullptr);
+    DORIS_CHECK(_distributed_compaction != nullptr);
+    SCOPED_ATTACH_TASK(_mem_tracker);
+
+    if (!remote_status.ok()) {
+        return fail_async_compaction(std::move(remote_status));
+    }
+
+    Status status;
+    try {
+        doris::enable_thread_catch_bad_alloc++;
+        Defer restore_catch_bad_alloc {[&] { doris::enable_thread_catch_bad_alloc--; }};
+        status = assemble_distributed_compaction(&_async_merge_context->result);
+        if (!status.ok()) {
+            return fail_async_compaction(std::move(status));
+        }
+        return finish_async_compaction();
+    } catch (const doris::Exception& exception) {
+        if (exception.code() == doris::ErrorCode::MEM_ALLOC_FAILED) {
+            status = Status::MemoryLimitExceeded(exception.to_string());
+        } else {
+            status = exception.to_status();
+        }
+        return fail_async_compaction(std::move(status));
+    }
+}
+
+Status CloudBaseCompaction::finish_async_compaction() {
+    DORIS_CHECK(_async_merge_context != nullptr);
+    Status status = finish_merge_input_rowsets_execution(_async_merge_context.get());
+    if (status.ok()) {
+        status = finish_execute_compact(_async_execution_start_time_us);
+    }
+    if (!status.ok()) {
+        return fail_async_compaction(std::move(status));
+    }
+
+    DorisMetrics::instance()->remote_compaction_read_rows_total->increment(_input_row_num);
+    DorisMetrics::instance()->remote_compaction_write_rows_total->increment(
+            _output_rowset->num_rows());
+    DorisMetrics::instance()->remote_compaction_write_bytes_total->increment(
+            _output_rowset->total_disk_size());
+    _load_segment_to_cache();
+    submit_profile_record(true, _async_profile_start_time_ms);
+    finish_compaction_success(_async_execution_start_time_us);
+    _async_merge_context.reset();
+    return Status::OK();
+}
+
+Status CloudBaseCompaction::fail_async_compaction(Status status) {
+    const Status gc_status = garbage_collection();
+    if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
+        _tablet->enable_unique_key_merge_on_write() && !gc_status.ok()) {
+        _engine.meta_mgr().remove_delete_bitmap_update_lock(_tablet->table_id(),
+                                                            COMPACTION_DELETE_BITMAP_LOCK_ID,
+                                                            initiator(), _tablet->tablet_id());
+    }
+    submit_profile_record(false, _async_profile_start_time_ms, status.to_string());
+    _async_merge_context.reset();
+    return finish_compaction_failure(std::move(status));
+}
+
+void CloudBaseCompaction::finish_compaction_success(int64_t execution_start_time_us) {
+    DORIS_CHECK_GT(execution_start_time_us, 0);
     LOG_INFO("finish CloudBaseCompaction, tablet_id={}, cost={}ms range=[{}-{}]",
-             _tablet->tablet_id(), duration_cast<milliseconds>(steady_clock::now() - start).count(),
+             _tablet->tablet_id(), (MonotonicMicros() - execution_start_time_us) / 1000,
              _input_rowsets.front()->start_version(), _input_rowsets.back()->end_version())
             .tag("job_id", _uuid)
             .tag("input_rowsets", _input_rowsets.size())
@@ -413,9 +546,20 @@ Status CloudBaseCompaction::execute_compact() {
     DorisMetrics::instance()->base_compaction_deltas_total->increment(_input_rowsets.size());
     DorisMetrics::instance()->base_compaction_bytes_total->increment(_input_rowsets_total_size);
     base_output_size << _output_rowset->total_disk_size();
+    cloud_tablet()->set_last_base_compaction_status(Status::OK().to_string());
+    cloud_tablet()->set_last_base_compaction_success_time(UnixMillis());
+}
 
-    st = Status::OK();
-    return st;
+Status CloudBaseCompaction::finish_compaction_failure(Status status) {
+    cloud_tablet()->set_last_base_compaction_status(status.to_string());
+    cloud_tablet()->set_last_base_compaction_failure_time(UnixMillis());
+    LOG_WARNING("fail to do CloudBaseCompaction")
+            .tag("job_id", _uuid)
+            .tag("tablet_id", _tablet->tablet_id())
+            .tag("output_version",
+                 fmt::format("[{}-{}]", _output_version.first, _output_version.second))
+            .error(status);
+    return status;
 }
 
 Status CloudBaseCompaction::modify_rowsets() {

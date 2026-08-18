@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -38,6 +39,8 @@ public:
 
     Status prepare_compact() override;
     Status execute_compact() override;
+    Status execute_compact_async(std::function<void(Status)> remote_completion, bool* suspended);
+    Status resume_compact(Status remote_status);
     Status request_global_lock();
 
     std::optional<CompactionProfileType> profile_type() const override {
@@ -54,6 +57,14 @@ private:
 
     Status do_merge_input_rowsets(const std::vector<RowsetReaderSharedPtr>& input_rs_readers,
                                   MergeInputRowsetsResult* result) override;
+
+    Status start_distributed_compaction(std::function<void(Status)> remote_completion,
+                                        bool* started);
+    Status assemble_distributed_compaction(MergeInputRowsetsResult* result);
+    Status finish_async_compaction();
+    Status fail_async_compaction(Status status);
+    void finish_compaction_success(int64_t execution_start_time_us);
+    Status finish_compaction_failure(Status status);
 
     std::string_view compaction_name() const override { return "CloudBaseCompaction"; }
 
@@ -73,6 +84,9 @@ private:
     bool _use_distributed_base_compaction = false;
     std::shared_ptr<cloud::DistributedCompactionCoordinator> _distributed_compaction;
     bool _distributed_commit_started = false;
+    std::unique_ptr<MergeInputRowsetsContext> _async_merge_context;
+    int64_t _async_profile_start_time_ms = 0;
+    int64_t _async_execution_start_time_us = 0;
 };
 
 } // namespace doris

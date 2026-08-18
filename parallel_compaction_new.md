@@ -83,8 +83,8 @@ Coordinator 本地的 inverted index 文件，Distributed Base 会关闭 inverte
   Worker 的多个 task 可以并发，实际并发度受线程池大小限制。
 - Coordinator 使用独立 RPC 线程池并发执行 submit、status、incremental bitmap 和 finalize。
 - 所有 job 共享 Poll Scheduler timer；timer 只触发 poll，不执行 RPC。
-- Single-rowset CU 在远端执行期间 suspend，完成后重新进入 cumulative compaction 线程；
-  Base 当前在 compaction 线程中等待异步 poll callback。
+- Single-rowset CU 和 Distributed Base 在远端执行期间都会 suspend，完成后重新进入对应的
+  compaction 线程继续 assemble 和 commit。
 
 ## 5. Partial Rowset 与 MOW
 
@@ -157,7 +157,7 @@ incremental shard，合并后由 Coordinator 更新 Meta Service 并提交。
 | 模块 | 文件 |
 | --- | --- |
 | CU 选择、本地回退、suspend/resume 和提交 | `be/src/cloud/cloud_cumulative_compaction.cpp`、`be/src/cloud/cloud_cumulative_compaction_async.cpp` |
-| Base 选择和等待 | `be/src/cloud/cloud_base_compaction.cpp` |
+| Base 选择和 suspend/resume | `be/src/cloud/cloud_base_compaction.cpp` |
 | Coordinator、range planner、Poll Scheduler、Worker | `be/src/cloud/cloud_distributed_compaction.cpp` |
 | RPC 协议与入口 | `gensrc/proto/internal_service.proto`、`be/src/cloud/cloud_internal_service.cpp` |
 | 线程池 | `be/src/cloud/cloud_storage_engine.cpp` |

@@ -1019,25 +1019,72 @@ Status CloudStorageEngine::_submit_base_compaction_task(const CloudTabletSPtr& t
         std::lock_guard lock(_compaction_mtx);
         _submitted_base_compactions[tablet->tablet_id()] = compaction;
     }
-    st = _base_compaction_thread_pool->submit_func([=, this, compaction = std::move(compaction)]() {
+    auto task_finished = std::make_shared<std::atomic_bool>(false);
+    auto executing_registered = std::make_shared<std::atomic_bool>(false);
+    auto complete_task = [=, this](Status result) {
+        if (task_finished->exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        if (!result.ok()) {
+            tablet->set_last_base_compaction_failure_time(UnixMillis());
+        }
+        CompactionTaskTracker::instance()->remove_task(compaction_id);
+        {
+            std::lock_guard lock(_compaction_mtx);
+            if (executing_registered->load(std::memory_order_acquire)) {
+                _executing_base_compactions.erase(tablet->tablet_id());
+            }
+            _submitted_base_compactions.erase(tablet->tablet_id());
+        }
+        g_base_compaction_running_task_count << -1;
+        DorisMetrics::instance()->base_compaction_task_running_total->increment(-1);
+        DorisMetrics::instance()->base_compaction_task_pending_total->set_value(
+                _base_compaction_thread_pool->get_queue_size());
+    };
+
+    auto schedule_resume = std::make_shared<std::function<void(Status)>>();
+    std::weak_ptr<std::function<void(Status)>> weak_schedule_resume = schedule_resume;
+    *schedule_resume = [=, this](Status remote_status) mutable {
+        if (stopped()) {
+            Status result = compaction->resume_compact(std::move(remote_status));
+            complete_task(std::move(result));
+            return;
+        }
+        const Status submit_status = _base_compaction_thread_pool->submit_func([=]() mutable {
+            signal::tablet_id = tablet->tablet_id();
+            Status result = compaction->resume_compact(std::move(remote_status));
+            complete_task(std::move(result));
+        });
+        if (submit_status.ok()) {
+            return;
+        }
+        auto resume = weak_schedule_resume.lock();
+        DORIS_CHECK(resume != nullptr);
+        const Status retry_status = _distributed_compaction_poll_scheduler->schedule(
+                std::chrono::milliseconds(
+                        config::cloud_distributed_compaction_status_poll_interval_ms),
+                [resume = std::move(resume), remote_status]() mutable {
+                    (*resume)(std::move(remote_status));
+                });
+        if (!retry_status.ok()) {
+            Status result = compaction->resume_compact(retry_status);
+            complete_task(std::move(result));
+        }
+    };
+
+    st = _base_compaction_thread_pool->submit_func([=, this]() {
         DorisMetrics::instance()->base_compaction_task_running_total->increment(1);
         DorisMetrics::instance()->base_compaction_task_pending_total->set_value(
                 _base_compaction_thread_pool->get_queue_size());
         g_base_compaction_running_task_count << 1;
         signal::tablet_id = tablet->tablet_id();
-        Defer defer {[&]() {
-            // Idempotent cleanup: remove task from tracker
-            CompactionTaskTracker::instance()->remove_task(compaction_id);
-            g_base_compaction_running_task_count << -1;
-            std::lock_guard lock(_compaction_mtx);
-            _submitted_base_compactions.erase(tablet->tablet_id());
-            DorisMetrics::instance()->base_compaction_task_running_total->increment(-1);
-            DorisMetrics::instance()->base_compaction_task_pending_total->set_value(
-                    _base_compaction_thread_pool->get_queue_size());
-        }};
         auto st = _request_tablet_global_compaction_lock(ReaderType::READER_BASE_COMPACTION, tablet,
                                                          compaction);
-        if (!st.ok()) return;
+        if (!st.ok()) {
+            complete_task(std::move(st));
+            return;
+        }
+        executing_registered->store(true, std::memory_order_release);
         // Update tracker to RUNNING after acquiring global lock
         {
             RunningStats rs;
@@ -1045,14 +1092,15 @@ Status CloudStorageEngine::_submit_base_compaction_task(const CloudTabletSPtr& t
                     duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
             CompactionTaskTracker::instance()->update_to_running(compaction_id, rs);
         }
-        st = compaction->execute_compact();
-        if (!st.ok()) {
-            // Error log has been output in `execute_compact`
-            long now = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-            tablet->set_last_base_compaction_failure_time(now);
+        bool suspended = false;
+        st = compaction->execute_compact_async(
+                [schedule_resume](Status remote_status) mutable {
+                    (*schedule_resume)(std::move(remote_status));
+                },
+                &suspended);
+        if (!suspended) {
+            complete_task(std::move(st));
         }
-        std::lock_guard lock(_compaction_mtx);
-        _executing_base_compactions.erase(tablet->tablet_id());
     });
     DorisMetrics::instance()->base_compaction_task_pending_total->set_value(
             _base_compaction_thread_pool->get_queue_size());
