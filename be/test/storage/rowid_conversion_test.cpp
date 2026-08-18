@@ -536,7 +536,7 @@ TEST_F(TestRowIdConversion, Basic) {
     rowid_conversion.set_dst_rowset_id(dst_rowset);
 
     std::vector<uint32_t> dst_segment_num_rows = {4, 3, 4};
-    rowid_conversion.add(rss_row_ids, dst_segment_num_rows);
+    ASSERT_TRUE(rowid_conversion.add(rss_row_ids, dst_segment_num_rows).ok());
 
     int res = 0;
     src_rowset.init(0);
@@ -1009,7 +1009,7 @@ TEST_F(TestRowIdConversion, ConvertDestinationPositionToPhysicalSegmentId) {
     RowIdConversion rowid_conversion;
     ASSERT_TRUE(rowid_conversion.init_segment_map(input_rowset_id, {10}, {1}).ok());
     rowid_conversion.set_dst_rowset_id(output_rowset_id);
-    rowid_conversion.add({RowLocation(input_rowset_id, 10, 0)}, {1});
+    ASSERT_TRUE(rowid_conversion.add({RowLocation(input_rowset_id, 10, 0)}, {1}).ok());
 
     DeleteBitmap input_delete_bitmap(1);
     input_delete_bitmap.add({input_rowset_id, 10, 5}, 0);
