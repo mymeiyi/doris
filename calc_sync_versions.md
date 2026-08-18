@@ -1,34 +1,19 @@
-# `calc_sync_versions` 逻辑梳理
+# `calc_sync_versions` 当前逻辑
 
-核心思路：在原请求版本区间之外，补充因 Compaction 被重写、需要重新同步的版本区间，最后合并重叠或相邻区间。
+`calc_sync_versions` 根据 BE 请求携带的旧 Compaction 状态和 Meta Service 当前状态，补回可能已被 Compaction 重写的版本，再与请求区间合并。
 
-```mermaid
-flowchart TD
-    A["输入：BE 保存的 req_*、MS 当前的 *、请求区间 [start,end]"]
-    A --> B{"发生过 BC？<br/>req_bc_cnt < bc_cnt"}
-    B -- 是 --> B1["加入 [0, cp-1]"]
-    B -- 否 --> C
-    B1 --> C
+缩写：BC = Base Compaction，CC = Cumulative Compaction，FC = Full Compaction，CP = Cumulative Point。
 
-    C{"发生过 CC？<br/>req_cc_cnt < cc_cnt"}
-    C -- 否 --> D
-    C -- 是 --> C1{"仅发生 1 次 CC<br/>且 CP 前移<br/>且没有 FC？"}
-    C1 -- 是 --> C2["加入精确区间<br/>[req_cp, cp-1]"]
-    C1 -- 否 --> C3["无法精确判断<br/>加入 [req_cp, MAX]"]
-    C2 --> D
-    C3 --> D
+| 条件 | 补充区间 |
+| --- | --- |
+| `req_bc_cnt < bc_cnt` | `[0, cp - 1]` |
+| 仅新增一次 CC、`req_cp < cp`，且 FC 次数未变 | `[req_cp, cp - 1]` |
+| 发生 CC，但不满足上面的精确条件 | `[req_cp, INT64_MAX - 1]` |
 
-    D["加入原请求区间 [start,end]"]
-    D --> E["合并重叠/相邻区间"]
-    E --> F["按起始版本排序并返回"]
-```
+要点：
 
-关键规则：
-
-- **BC（Base Compaction）发生**：`cp` 之前的数据可能被整体重写，补 `[0, cp-1]`。
-- **CC（Cumulative Compaction）发生**：
-  - 仅一次 CC、`cp` 前移、且无 Full Compaction：可精确补 `[req_cp, cp-1]`。
-  - 其他情况无法确定影响边界：保守补 `[req_cp, MAX]`，避免漏版本。
-- 最终结果是：`压缩影响区间 ∪ 用户请求区间`。
-
-调用方在进入该函数前已校验 `req_* <= 当前值`；返回区间随后用于读取并返回对应的 rowset meta。
+- FC 不单独产生区间；FC 次数变化时不能使用单次 CC 的精确范围，必须保守返回到最大版本。
+- 始终加入原请求区间 `[start_version, end_version]`；负的 `end_version` 会先转成 `INT64_MAX - 1`。
+- 所有重叠或相邻区间会被合并，结果按起始版本排序。
+- 调用方先校验请求中的 BC、CC、FC 次数和 CP 不大于当前值。
+- 返回区间随后用于读取 rowset meta；普通 KV 和 versioned read 使用相同的版本计算结果。
