@@ -76,6 +76,93 @@ Coordinator 本地的 inverted index 文件，Distributed Base 会关闭 inverte
 
 ## 4. 调度与线程模型
 
+### 4.1 Coordinator 与 Worker 交互
+
+```mermaid
+sequenceDiagram
+    participant T as Base/CU Compaction Pool
+    participant C as Coordinator
+    participant FE as FE
+    participant R as Coordinator RPC Pool
+    participant W as Worker BEs
+    participant P as Poll Scheduler
+    participant MS as Meta Service
+
+    T->>C: 规划 tasks 和 segment slots
+    C->>FE: 查询同 Compute Group Workers
+    FE-->>C: Worker 列表（可包含 Coordinator）
+    par 按 Worker 并发 submit batch
+        C->>R: submit Worker 1 batch
+        R->>W: submit(tasks...)
+        W-->>R: accepted
+    and
+        C->>R: submit Worker N batch
+        R->>W: submit(tasks...)
+        W-->>R: accepted
+    end
+    R-->>C: batches accepted
+    C-->>T: suspend，释放 compaction 线程
+    W->>W: 每个 task 独立进入 Worker Pool 并发 merge
+
+    loop 直到全部 task 进入终态
+        P->>C: poll 到期
+        C->>R: 并发 get_status
+        R->>W: 查询未完成 tasks
+        W-->>R: PENDING / RUNNING / result
+        R-->>C: 本轮状态
+        C-->>P: 未完成则注册下一轮 poll
+    end
+
+    R-->>T: terminal callback，重新入队
+    T->>C: resume，校验并 assemble
+    opt MOW
+        C->>MS: 获取 delete bitmap lock 并同步版本
+        C->>W: 计算增量 delete bitmap shards
+        W-->>C: bitmap shards
+        C->>MS: 更新合并后的 delete bitmap
+    end
+    C->>MS: commit compaction job
+    C->>W: finalize
+```
+
+`submit` 成功只表示 Worker 接受 batch；最终结果由 Coordinator 主动 poll，Worker 不主动推送。
+
+### 4.2 线程模型
+
+```mermaid
+flowchart LR
+    subgraph CoordinatorBE[Coordinator BE]
+        CP[Base/CU Compaction Pool]
+        START[plan + submit]
+        SUSPEND[suspend<br/>释放线程]
+        TIMER[共享 Poll Scheduler<br/>只管理 deadline]
+        RPC[Distributed RPC Pool<br/>并发 control RPC]
+        CALLBACK[terminal callback]
+        FINISH[resume + assemble + commit]
+
+        CP --> START --> SUSPEND --> TIMER
+        START --> RPC
+        TIMER -->|poll 到期| RPC
+        RPC -->|未完成| TIMER
+        RPC -->|终态| CALLBACK
+        CALLBACK -->|重新提交 continuation| CP
+        CP --> FINISH
+    end
+
+    subgraph WorkerBE[Worker BE]
+        BRPC[BRPC Service]
+        HEAVY[Heavy Work Pool<br/>校验和注册状态]
+        WORKER[Distributed Worker Pool<br/>每个 task 独立并发]
+        STATE[WorkerManager 状态]
+
+        BRPC --> HEAVY --> WORKER --> STATE
+        HEAVY -->|status / finalize| STATE
+    end
+
+    RPC --> BRPC
+    STATE --> RPC
+```
+
 - FE Worker 列表按 job 稳定打散，Coordinator 优先保留，最多选择 `min(tasks, Workers)` 个
   BE。
 - task 按 group index round-robin 分配；一个 request 可以携带同一 Worker 的多个 task。
