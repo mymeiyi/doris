@@ -296,11 +296,6 @@ Status CloudBaseCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult*
     }
 
     const auto keys_type = _tablet->keys_type();
-    if (keys_type != KeysType::DUP_KEYS && keys_type != KeysType::AGG_KEYS &&
-        keys_type != KeysType::UNIQUE_KEYS) {
-        return Status::OK();
-    }
-
     const auto& schema = *_tablet->tablet_schema();
     if (schema.num_key_columns() == 0 ||
         !cloud::is_supported_distributed_base_key(schema.column(0).type()) ||
