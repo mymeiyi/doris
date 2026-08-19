@@ -175,6 +175,32 @@ flowchart LR
 
 ## 5. Partial Rowset 与 MOW
 
+```mermaid
+flowchart LR
+    C1[Coordinator<br/>规划有序 key ranges]
+
+    C1 --> T1["Task 1<br/>[startKey1, endKey1)"]
+    C1 --> T2["Task 2<br/>[startKey2, endKey2)"]
+    C1 --> TN["Task N<br/>[startKeyN, endKeyN]"]
+
+    subgraph Workers[Worker BEs 并发执行]
+        T1 --> W1[Worker A<br/>merge range 1]
+        T2 --> W2[Worker B<br/>merge range 2]
+        TN --> WN[Worker A/B/...<br/>merge range N]
+        W1 --> S1[partial segment group 1<br/>独立 segment slot]
+        W2 --> S2[partial segment group 2<br/>独立 segment slot]
+        WN --> SN[partial segment group N<br/>独立 segment slot]
+    end
+
+    S1 --> A[Coordinator<br/>按 task/group index 组装]
+    S2 --> A
+    SN --> A
+    A --> R[一个完整 output rowset<br/>segment group 1 ... segment group N]
+```
+
+一个 task 可能因 writer 切分产生多个物理 segment；它们都位于该 task 独立的 segment slot，
+整体作为一个有序 segment group 参与最终组装。
+
 每个 task 的 writer 使用：
 
 ```text
