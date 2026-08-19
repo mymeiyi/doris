@@ -284,31 +284,45 @@ Status CloudBaseCompaction::pick_rowsets_to_compact() {
 }
 
 Status CloudBaseCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
-    const int64_t target_size = config::cloud_distributed_base_compaction_target_input_size_bytes;
-    const auto& schema = *_tablet->tablet_schema();
-    const bool is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
-                        _tablet->enable_unique_key_merge_on_write();
-    // ponytail: range workers rescan source delete bitmaps independently; keep diagnostic modes
-    // local until row-id conversion can filter missed-row checks by key range.
-    const bool supported_mow = is_mow && schema.cluster_key_uids().empty() &&
-                               !config::enable_missing_rows_correctness_check &&
-                               !config::enable_mow_compaction_correctness_check_core &&
-                               !config::enable_mow_compaction_correctness_check_fail &&
-                               !config::enable_rowid_conversion_correctness_check;
-    const bool supported_keys_type =
-            _tablet->keys_type() == KeysType::DUP_KEYS ||
-            _tablet->keys_type() == KeysType::AGG_KEYS ||
-            (_tablet->keys_type() == KeysType::UNIQUE_KEYS && (!is_mow || supported_mow));
-    _use_distributed_base_compaction =
-            config::enable_cloud_distributed_base_compaction && target_size > 0 &&
-            _input_rowsets_total_size > target_size && supported_keys_type &&
-            !_tablet->is_row_binlog_tablet() && schema.num_key_columns() > 0 &&
-            cloud::is_supported_distributed_base_key(schema.column(0).type()) &&
-            !schema.column(0).is_nullable();
-    if (_use_distributed_base_compaction) {
-        // Partial writers cannot reuse coordinator-local inverted index files.
-        _enable_inverted_index_compaction = false;
+    if (!config::enable_cloud_distributed_base_compaction) {
+        return Status::OK();
     }
+    const int64_t target_size = config::cloud_distributed_base_compaction_target_input_size_bytes;
+    if (target_size <= 0 || _input_rowsets_total_size <= target_size) {
+        return Status::OK();
+    }
+    if (_tablet->is_row_binlog_tablet()) {
+        return Status::OK();
+    }
+
+    const auto keys_type = _tablet->keys_type();
+    if (keys_type != KeysType::DUP_KEYS && keys_type != KeysType::AGG_KEYS &&
+        keys_type != KeysType::UNIQUE_KEYS) {
+        return Status::OK();
+    }
+
+    const auto& schema = *_tablet->tablet_schema();
+    if (schema.num_key_columns() == 0 ||
+        !cloud::is_supported_distributed_base_key(schema.column(0).type()) ||
+        schema.column(0).is_nullable()) {
+        return Status::OK();
+    }
+
+    if (keys_type == KeysType::UNIQUE_KEYS && _tablet->enable_unique_key_merge_on_write()) {
+        // ponytail: range workers rescan source delete bitmaps independently; keep diagnostic modes
+        // local until row-id conversion can filter missed-row checks by key range.
+        if (!schema.cluster_key_uids().empty() ||
+            config::enable_missing_rows_correctness_check ||
+            config::enable_mow_compaction_correctness_check_core ||
+            config::enable_mow_compaction_correctness_check_fail ||
+            config::enable_rowid_conversion_correctness_check) {
+            return Status::OK();
+        }
+    }
+
+    _use_distributed_base_compaction = true;
+    // Partial writers cannot reuse coordinator-local inverted index files.
+    _enable_inverted_index_compaction = false;
     return Status::OK();
 }
 
