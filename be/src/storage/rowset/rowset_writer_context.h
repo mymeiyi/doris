@@ -113,6 +113,8 @@ struct RowsetWriterContext {
 
     /// begin file cache opts
     bool write_file_cache = false;
+    // Overrides explicit, adaptive, and global index-only cache write policies.
+    bool disable_file_cache = false;
     bool is_hot_data = false;
     uint64_t file_cache_ttl_sec = 0;
     uint64_t approximate_bytes_to_write = 0;
@@ -126,6 +128,11 @@ struct RowsetWriterContext {
     std::shared_ptr<PartialUpdateInfo> partial_update_info;
 
     bool is_transient_rowset_writer = false;
+
+    // A partial output writer produces only one shard of a rowset assembled by a coordinator.
+    // It must persist explicit physical segment ids and must not run writer-local segment
+    // compaction, even when its assigned segment-id slot starts at zero.
+    bool is_partial_output_writer = false;
 
     segment_v2::HistoricalRowRetrieverContext make_historical_row_retriever_context();
 
@@ -264,6 +271,13 @@ struct RowsetWriterContext {
                                     .is_cold_data = is_hot_data,
                                     .file_cache_expiration_time = file_cache_ttl_sec,
                                     .approximate_bytes_to_write = approximate_bytes_to_write};
+
+        if (disable_file_cache) {
+            opts.write_file_cache = false;
+            opts.allow_adaptive_file_cache_write = false;
+            opts.approximate_bytes_to_write = 0;
+            return opts;
+        }
 
         if (config::enable_file_cache_write_index_file_only) {
             opts.allow_adaptive_file_cache_write = false;

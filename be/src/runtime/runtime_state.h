@@ -117,6 +117,15 @@ public:
     // for ut and non-query.
     void set_exec_env(ExecEnv* exec_env) { _exec_env = exec_env; }
 
+    void set_preferred_file_cache_peer(const std::string& host, int32_t port) {
+        _preferred_file_cache_peer_host = host;
+        _preferred_file_cache_peer_port = port;
+    }
+    const std::string& preferred_file_cache_peer_host() const {
+        return _preferred_file_cache_peer_host;
+    }
+    int32_t preferred_file_cache_peer_port() const { return _preferred_file_cache_peer_port; }
+
     // for ut and non-query.
     void init_mem_trackers(const std::string& name = "ut", const TUniqueId& id = TUniqueId());
 
@@ -928,6 +937,8 @@ private:
     TUniqueId _fragment_instance_id;
     TQueryOptions _query_options;
     ExecEnv* _exec_env = nullptr;
+    std::string _preferred_file_cache_peer_host;
+    int32_t _preferred_file_cache_peer_port = 0;
 
     AtomicStatus _exec_status;
 

@@ -30,6 +30,7 @@
 #include "cloud/cloud_base_compaction.h"
 #include "cloud/cloud_cluster_info.h"
 #include "cloud/cloud_cumulative_compaction.h"
+#include "cloud/cloud_distributed_compaction.h"
 #include "cloud/cloud_rowset_builder.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
@@ -59,8 +60,8 @@ void expect_segment_group_merge_ranges(const std::vector<cloud::SegmentGroupMerg
                                        const std::vector<cloud::SegmentGroupMergeRange>& expected) {
     ASSERT_EQ(actual.size(), expected.size());
     for (size_t i = 0; i < expected.size(); ++i) {
-        EXPECT_EQ(actual[i].segment_start, expected[i].segment_start);
-        EXPECT_EQ(actual[i].segment_end, expected[i].segment_end);
+        EXPECT_EQ(actual[i].segment_pos_start, expected[i].segment_pos_start);
+        EXPECT_EQ(actual[i].segment_pos_end, expected[i].segment_pos_end);
         EXPECT_EQ(actual[i].merge_way_num, expected[i].merge_way_num);
     }
 }
@@ -1126,6 +1127,7 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     Compaction::MergeInputRowsetsResult result;
     ASSERT_TRUE(compaction.prepare_merge_input_rowsets(&result).ok());
     EXPECT_TRUE(compaction._single_rowset_compaction_segment_group_size.has_value());
+    EXPECT_TRUE(compaction.is_single_rowset_grouped_compaction());
     EXPECT_TRUE(result.is_segment_grouped);
     EXPECT_EQ(result.segment_group_size, config::cloud_single_rowset_compaction_segment_group_size);
 
@@ -1136,75 +1138,82 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     Compaction::MergeInputRowsetsResult time_series_result;
     ASSERT_TRUE(time_series_compaction.prepare_merge_input_rowsets(&time_series_result).ok());
     EXPECT_FALSE(time_series_compaction._single_rowset_compaction_segment_group_size.has_value());
+    EXPECT_FALSE(time_series_compaction.is_single_rowset_grouped_compaction());
     EXPECT_FALSE(time_series_result.is_segment_grouped);
 }
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_logical_group_ranges) {
     RowsetMeta overlapping_meta;
-    overlapping_meta.set_num_segments(5);
+    overlapping_meta.set_segment_ids({10, 20, 30, 40, 50});
     overlapping_meta.set_segments_overlap(OVERLAPPING);
 
     const auto overlapping_ranges = cloud::build_segment_group_merge_ranges(overlapping_meta, 2);
-    expect_segment_group_merge_ranges(overlapping_ranges,
-                                      {{.segment_start = 0, .segment_end = 2, .merge_way_num = 2},
-                                       {.segment_start = 2, .segment_end = 4, .merge_way_num = 2},
-                                       {.segment_start = 4, .segment_end = 5, .merge_way_num = 1}});
+    expect_segment_group_merge_ranges(
+            overlapping_ranges,
+            {{.segment_pos_start = 0, .segment_pos_end = 2, .merge_way_num = 2},
+             {.segment_pos_start = 2, .segment_pos_end = 4, .merge_way_num = 2},
+             {.segment_pos_start = 4, .segment_pos_end = 5, .merge_way_num = 1}});
 
     const auto single_overlapping_range =
             cloud::build_segment_group_merge_ranges(overlapping_meta, 10);
-    expect_segment_group_merge_ranges(single_overlapping_range,
-                                      {{.segment_start = 0, .segment_end = 5, .merge_way_num = 5}});
+    expect_segment_group_merge_ranges(
+            single_overlapping_range,
+            {{.segment_pos_start = 0, .segment_pos_end = 5, .merge_way_num = 5}});
 
     overlapping_meta.set_segments_overlap(NONOVERLAPPING);
     const auto nonoverlapping_ranges = cloud::build_segment_group_merge_ranges(overlapping_meta, 2);
-    expect_segment_group_merge_ranges(nonoverlapping_ranges,
-                                      {{.segment_start = 0, .segment_end = 2, .merge_way_num = 2},
-                                       {.segment_start = 2, .segment_end = 4, .merge_way_num = 2},
-                                       {.segment_start = 4, .segment_end = 5, .merge_way_num = 1}});
+    expect_segment_group_merge_ranges(
+            nonoverlapping_ranges,
+            {{.segment_pos_start = 0, .segment_pos_end = 2, .merge_way_num = 2},
+             {.segment_pos_start = 2, .segment_pos_end = 4, .merge_way_num = 2},
+             {.segment_pos_start = 4, .segment_pos_end = 5, .merge_way_num = 1}});
 
     overlapping_meta.set_segments_overlap(OVERLAP_UNKNOWN);
     const auto unknown_overlap_ranges =
             cloud::build_segment_group_merge_ranges(overlapping_meta, 2);
-    expect_segment_group_merge_ranges(unknown_overlap_ranges,
-                                      {{.segment_start = 0, .segment_end = 2, .merge_way_num = 2},
-                                       {.segment_start = 2, .segment_end = 4, .merge_way_num = 2},
-                                       {.segment_start = 4, .segment_end = 5, .merge_way_num = 1}});
+    expect_segment_group_merge_ranges(
+            unknown_overlap_ranges,
+            {{.segment_pos_start = 0, .segment_pos_end = 2, .merge_way_num = 2},
+             {.segment_pos_start = 2, .segment_pos_end = 4, .merge_way_num = 2},
+             {.segment_pos_start = 4, .segment_pos_end = 5, .merge_way_num = 1}});
 
     RowsetMeta grouped_meta;
-    grouped_meta.set_num_segments(5);
+    grouped_meta.set_segment_ids({10, 20, 30, 40, 50});
     grouped_meta.set_segments_overlap(NONOVERLAPPING_WITHIN_GROUP);
     grouped_meta.set_segment_group_sizes({2, 2, 1});
 
     const auto grouped_ranges = cloud::build_segment_group_merge_ranges(grouped_meta, 2);
-    expect_segment_group_merge_ranges(grouped_ranges,
-                                      {{.segment_start = 0, .segment_end = 4, .merge_way_num = 2},
-                                       {.segment_start = 4, .segment_end = 5, .merge_way_num = 1}});
+    expect_segment_group_merge_ranges(
+            grouped_ranges, {{.segment_pos_start = 0, .segment_pos_end = 4, .merge_way_num = 2},
+                             {.segment_pos_start = 4, .segment_pos_end = 5, .merge_way_num = 1}});
 }
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_group_range_boundaries) {
     RowsetMeta grouped_meta;
-    grouped_meta.set_num_segments(5);
+    grouped_meta.set_segment_ids({10, 20, 30, 40, 50});
     grouped_meta.set_segments_overlap(NONOVERLAPPING_WITHIN_GROUP);
     grouped_meta.set_segment_group_sizes({2, 2, 1});
 
     const auto single_range = cloud::build_segment_group_merge_ranges(grouped_meta, 10);
-    expect_segment_group_merge_ranges(single_range,
-                                      {{.segment_start = 0, .segment_end = 5, .merge_way_num = 3}});
+    expect_segment_group_merge_ranges(
+            single_range, {{.segment_pos_start = 0, .segment_pos_end = 5, .merge_way_num = 3}});
 
-    grouped_meta.set_num_segments(10);
+    grouped_meta.set_segment_ids({10, 20, 30, 40, 50, 60, 70, 80, 90, 100});
     grouped_meta.set_segment_group_sizes({1, 2, 3, 4});
     const auto exact_ranges = cloud::build_segment_group_merge_ranges(grouped_meta, 2);
     expect_segment_group_merge_ranges(
-            exact_ranges, {{.segment_start = 0, .segment_end = 3, .merge_way_num = 2},
-                           {.segment_start = 3, .segment_end = 10, .merge_way_num = 2}});
+            exact_ranges, {{.segment_pos_start = 0, .segment_pos_end = 3, .merge_way_num = 2},
+                           {.segment_pos_start = 3, .segment_pos_end = 10, .merge_way_num = 2}});
 
-    grouped_meta.set_num_segments(15);
+    grouped_meta.set_segment_ids(
+            {10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150});
     grouped_meta.set_segment_group_sizes({3, 1, 4, 2, 5});
     const auto irregular_ranges = cloud::build_segment_group_merge_ranges(grouped_meta, 2);
     expect_segment_group_merge_ranges(
-            irregular_ranges, {{.segment_start = 0, .segment_end = 4, .merge_way_num = 2},
-                               {.segment_start = 4, .segment_end = 10, .merge_way_num = 2},
-                               {.segment_start = 10, .segment_end = 15, .merge_way_num = 1}});
+            irregular_ranges,
+            {{.segment_pos_start = 0, .segment_pos_end = 4, .merge_way_num = 2},
+             {.segment_pos_start = 4, .segment_pos_end = 10, .merge_way_num = 2},
+             {.segment_pos_start = 10, .segment_pos_end = 15, .merge_way_num = 1}});
 }
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_rejects_invalid_range_input) {
@@ -1341,14 +1350,15 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_honors_notready_pol
     config::enable_empty_rowset_compaction = false;
 
     std::vector<RowsetSharedPtr> rowsets;
-    auto filtered_grouped_rowset = create_rowset(Version(2, 2), 4, true, 1024);
-    ASSERT_TRUE(filtered_grouped_rowset != nullptr);
-    rowsets.push_back(filtered_grouped_rowset);
-    for (int64_t version = 3; version <= 13; ++version) {
+    // Keep enough older inputs mergeable after the NOTREADY policy filters versions 11 through 20.
+    for (int64_t version = 2; version <= 19; ++version) {
         auto rowset = create_rowset(Version(version, version), 1, false, 1024);
         ASSERT_TRUE(rowset != nullptr);
         rowsets.push_back(std::move(rowset));
     }
+    auto filtered_grouped_rowset = create_rowset(Version(20, 20), 4, true, 1024);
+    ASSERT_TRUE(filtered_grouped_rowset != nullptr);
+    rowsets.push_back(filtered_grouped_rowset);
 
     TabletSchemaPB tablet_schema_pb;
     filtered_grouped_rowset->tablet_schema()->to_schema_pb(&tablet_schema_pb);
@@ -1364,9 +1374,10 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_honors_notready_pol
 
     CloudCumulativeCompaction compaction(_engine, tablet);
     ASSERT_TRUE(compaction.pick_rowsets_to_compact().ok());
-    ASSERT_EQ(compaction._input_rowsets.size(), 11);
-    EXPECT_EQ(compaction._input_rowsets.front()->version(), Version(3, 3));
-    EXPECT_EQ(compaction._input_rowsets.back()->version(), Version(13, 13));
+    ASSERT_EQ(compaction._input_rowsets.size(), 9);
+    EXPECT_EQ(compaction._input_rowsets.front()->version(), Version(2, 2));
+    EXPECT_EQ(compaction._input_rowsets.back()->version(), Version(10, 10));
+    EXPECT_FALSE(compaction._single_rowset_compaction_segment_group_size.has_value());
 }
 
 TEST_F(CloudCompactionTest, test_truncate_rowsets_by_txn_size_empty_input) {

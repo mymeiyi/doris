@@ -17,7 +17,10 @@
 
 #pragma once
 
+#include <algorithm>
 #include <map>
+#include <memory>
+#include <utility>
 #include <vector>
 
 #include "common/cast_set.h"
@@ -35,12 +38,14 @@ namespace doris {
 // destination rowset.
 class RowIdConversion {
 public:
+    enum class Mode { DENSE, LAZY_CHUNKED };
+
     struct DestinationRowId {
         uint32_t segment_pos;
         uint32_t row_id;
     };
 
-    RowIdConversion() = default;
+    explicit RowIdConversion(Mode mode = Mode::DENSE) : _mode(mode) {}
     ~RowIdConversion() { RELEASE_THREAD_MEM_TRACKER(_seg_rowid_map_mem_used); }
 
     Status init_segment_map(const RowsetId& src_rowset_id, const std::vector<uint32_t>& segment_ids,
@@ -49,44 +54,40 @@ public:
         for (size_t i = 0; i < num_rows.size(); i++) {
             auto src_segment = std::pair<RowsetId, uint32_t> {src_rowset_id, segment_ids[i]};
             auto iter = _segment_to_id_map.find(src_segment);
-            // Each segment-group reader initializes all source segments, so reuse existing maps.
+            // A segment-group reader can be reopened, so reuse existing source-segment maps.
             if (iter != _segment_to_id_map.end()) {
-                DORIS_CHECK_LT(iter->second, _segments_rowid_map.size());
-                DORIS_CHECK_EQ(_segments_rowid_map[iter->second].size(), num_rows[i]);
+                DORIS_CHECK_LT(iter->second, _segment_num_rows.size());
+                DORIS_CHECK_EQ(_segment_num_rows[iter->second], num_rows[i]);
                 continue;
             }
 
             constexpr size_t RESERVED_MEMORY = 10 * 1024 * 1024; // 10M
-            if (doris::GlobalMemoryArbitrator::is_exceed_hard_mem_limit(RESERVED_MEMORY)) {
-                return Status::MemoryLimitExceeded(fmt::format(
-                        "RowIdConversion init_segment_map failed, process memory exceed limit or "
-                        "sys available memory less than low water mark , {}, "
-                        "consuming "
-                        "tracker:<{}>, peak used {}, current used {}.",
-                        doris::GlobalMemoryArbitrator::process_mem_log_str(),
-                        doris::thread_context()
-                                ->thread_mem_tracker_mgr->limiter_mem_tracker()
-                                ->label(),
-                        doris::thread_context()
-                                ->thread_mem_tracker_mgr->limiter_mem_tracker()
-                                ->peak_consumption(),
-                        doris::thread_context()
-                                ->thread_mem_tracker_mgr->limiter_mem_tracker()
-                                ->consumption()));
-            }
+            RETURN_IF_ERROR(check_memory_limit(RESERVED_MEMORY));
 
-            uint32_t id = cast_set<uint32_t>(_segments_rowid_map.size());
+            uint32_t id = cast_set<uint32_t>(_segment_num_rows.size());
             auto insert_result = _segment_to_id_map.emplace(src_segment, id);
             DORIS_CHECK(insert_result.second);
             _id_to_segment_map.push_back(src_segment);
-            std::vector<std::pair<uint32_t, uint32_t>> vec(
-                    num_rows[i], std::pair<uint32_t, uint32_t>(UINT32_MAX, UINT32_MAX));
+            _segment_num_rows.push_back(num_rows[i]);
+            _segments_rowid_map.emplace_back();
+            _lazy_segments_rowid_map.emplace_back();
+            if (_mode == Mode::LAZY_CHUNKED) {
+                auto& lazy_map = _lazy_segments_rowid_map.back();
+                lazy_map.num_rows = num_rows[i];
+                lazy_map.chunks.resize((cast_set<size_t>(num_rows[i]) + ROWS_PER_CHUNK - 1) /
+                                       ROWS_PER_CHUNK);
+                track_lazy_mem_usage(lazy_map.chunks.capacity() *
+                                     sizeof(std::unique_ptr<RowIdPair[]>));
+                continue;
+            }
 
             //NOTE: manually count _segments_rowid_map's memory here, because _segments_rowid_map could be used by indexCompaction.
             // indexCompaction is a thridparty code, it's too complex to modify it.
             // refer compact_column.
+            std::vector<std::pair<uint32_t, uint32_t>> vec(
+                    num_rows[i], std::pair<uint32_t, uint32_t>(UINT32_MAX, UINT32_MAX));
             track_mem_usage(vec.capacity());
-            _segments_rowid_map.emplace_back(std::move(vec));
+            _segments_rowid_map.back() = std::move(vec);
         }
         return Status::OK();
     }
@@ -96,22 +97,25 @@ public:
     const RowsetId& get_dst_rowset_id() const { return _dst_rowst_id; }
 
     // add row id to the map
-    void add(const std::vector<RowLocation>& rss_row_ids,
-             const std::vector<uint32_t>& dst_segments_num_row) {
+    Status add(const std::vector<RowLocation>& rss_row_ids,
+               const std::vector<uint32_t>& dst_segments_num_row) {
         for (auto& item : rss_row_ids) {
             if (item.row_id == -1) {
                 continue;
             }
-            uint32_t id = _segment_to_id_map.at(
-                    std::pair<RowsetId, uint32_t> {item.rowset_id, item.segment_id});
             if (_cur_dst_segment_pos < dst_segments_num_row.size() &&
                 _cur_dst_segment_rowid >= dst_segments_num_row[_cur_dst_segment_pos]) {
                 _cur_dst_segment_pos++;
                 _cur_dst_segment_rowid = 0;
             }
-            _segments_rowid_map[id][item.row_id] =
-                    std::pair<uint32_t, uint32_t> {_cur_dst_segment_pos, _cur_dst_segment_rowid++};
+            const uint32_t destination_row_id = _cur_dst_segment_rowid++;
+            uint32_t id = _segment_to_id_map.at(
+                    std::pair<RowsetId, uint32_t> {item.rowset_id, item.segment_id});
+            RowIdPair* destination = nullptr;
+            RETURN_IF_ERROR(get_or_create_destination(id, item.row_id, &destination));
+            *destination = {_cur_dst_segment_pos, destination_row_id};
         }
+        return Status::OK();
     }
 
     // Get the destination segment position and row id. The physical destination segment id is
@@ -122,11 +126,15 @@ public:
         if (iter == _segment_to_id_map.end()) {
             return -1;
         }
-        const auto& rowid_map = _segments_rowid_map[iter->second];
-        if (src.row_id >= rowid_map.size()) {
+        const auto id = iter->second;
+        if (src.row_id >= _segment_num_rows[id]) {
             return -1;
         }
-        auto& [dst_segment_pos, dst_rowid] = rowid_map[src.row_id];
+        const auto* destination = get_destination(id, src.row_id);
+        if (destination == nullptr) {
+            return -1;
+        }
+        const auto& [dst_segment_pos, dst_rowid] = *destination;
         if (dst_segment_pos == UINT32_MAX && dst_rowid == UINT32_MAX) {
             return -1;
         }
@@ -138,10 +146,13 @@ public:
 
     const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>& get_rowid_conversion_map()
             const {
+        DORIS_CHECK(_mode == Mode::DENSE);
         return _segments_rowid_map;
     }
 
-    const std::map<std::pair<RowsetId, uint32_t>, uint32_t>& get_src_segment_to_id_map() {
+    size_t memory_usage() const { return _seg_rowid_map_mem_used; }
+
+    const std::map<std::pair<RowsetId, uint32_t>, uint32_t>& get_src_segment_to_id_map() const {
         return _segment_to_id_map;
     }
 
@@ -155,6 +166,65 @@ public:
     }
 
 private:
+    using RowIdPair = std::pair<uint32_t, uint32_t>;
+    static constexpr uint32_t ROWS_PER_CHUNK = 4096;
+
+    struct LazySegmentRowIdMap {
+        uint32_t num_rows = 0;
+        std::vector<std::unique_ptr<RowIdPair[]>> chunks;
+    };
+
+    Status check_memory_limit(size_t reserved_memory) const {
+        if (!doris::GlobalMemoryArbitrator::is_exceed_hard_mem_limit(reserved_memory)) {
+            return Status::OK();
+        }
+        return Status::MemoryLimitExceeded(fmt::format(
+                "RowIdConversion allocation failed, process memory exceed limit or sys available "
+                "memory less than low water mark, {}, consuming tracker:<{}>, peak used {}, "
+                "current used {}.",
+                doris::GlobalMemoryArbitrator::process_mem_log_str(),
+                doris::thread_context()->thread_mem_tracker_mgr->limiter_mem_tracker()->label(),
+                doris::thread_context()
+                        ->thread_mem_tracker_mgr->limiter_mem_tracker()
+                        ->peak_consumption(),
+                doris::thread_context()
+                        ->thread_mem_tracker_mgr->limiter_mem_tracker()
+                        ->consumption()));
+    }
+
+    Status get_or_create_destination(uint32_t segment_id, uint32_t row_id,
+                                     RowIdPair** destination) {
+        DORIS_CHECK_LT(segment_id, _segment_num_rows.size());
+        DORIS_CHECK_LT(row_id, _segment_num_rows[segment_id]);
+        if (_mode == Mode::DENSE) {
+            *destination = &_segments_rowid_map[segment_id][row_id];
+            return Status::OK();
+        }
+
+        auto& chunks = _lazy_segments_rowid_map[segment_id].chunks;
+        const size_t chunk_id = row_id / ROWS_PER_CHUNK;
+        auto& chunk = chunks[chunk_id];
+        if (chunk == nullptr) {
+            constexpr size_t CHUNK_BYTES = ROWS_PER_CHUNK * sizeof(RowIdPair);
+            RETURN_IF_ERROR(check_memory_limit(CHUNK_BYTES));
+            chunk = std::make_unique<RowIdPair[]>(ROWS_PER_CHUNK);
+            std::fill_n(chunk.get(), ROWS_PER_CHUNK,
+                        RowIdPair {UINT32_MAX, UINT32_MAX});
+            track_lazy_mem_usage(CHUNK_BYTES);
+        }
+        *destination = &chunk[row_id % ROWS_PER_CHUNK];
+        return Status::OK();
+    }
+
+    const RowIdPair* get_destination(uint32_t segment_id, uint32_t row_id) const {
+        if (_mode == Mode::DENSE) {
+            return &_segments_rowid_map[segment_id][row_id];
+        }
+        const auto& chunks = _lazy_segments_rowid_map[segment_id].chunks;
+        const auto& chunk = chunks[row_id / ROWS_PER_CHUNK];
+        return chunk == nullptr ? nullptr : &chunk[row_id % ROWS_PER_CHUNK];
+    }
+
     void track_mem_usage(size_t delta_std_pair_cap) {
         _std_pair_cap += delta_std_pair_cap;
 
@@ -165,14 +235,22 @@ private:
         _seg_rowid_map_mem_used = new_size;
     }
 
+    void track_lazy_mem_usage(size_t bytes) {
+        CONSUME_THREAD_MEM_TRACKER(bytes);
+        _seg_rowid_map_mem_used += bytes;
+    }
+
 private:
     // the first level vector: index indicates src segment.
     // the second level vector: index indicates row id of source segment,
     // value indicates destination segment position and row id.
     // <UINT32_MAX, UINT32_MAX> indicates current row not exist.
     std::vector<std::vector<std::pair<uint32_t, uint32_t>>> _segments_rowid_map;
+    std::vector<LazySegmentRowIdMap> _lazy_segments_rowid_map;
+    std::vector<uint32_t> _segment_num_rows;
     size_t _seg_rowid_map_mem_used {0};
     size_t _std_pair_cap {0};
+    Mode _mode;
 
     // Map source segment to 0 to n
     std::map<std::pair<RowsetId, uint32_t>, uint32_t> _segment_to_id_map;

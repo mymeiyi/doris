@@ -58,6 +58,35 @@ DEFINE_mInt64(compaction_txn_max_size_bytes, "7340032"); // 7MB
 DEFINE_mBool(enable_cloud_single_rowset_compaction, "false");
 DEFINE_mInt32(cloud_single_rowset_compaction_min_segments, "512");
 DEFINE_mInt32(cloud_single_rowset_compaction_segment_group_size, "64");
+// Run grouped single-rowset compaction on multiple remote BEs. The feature remains disabled
+// unless grouped single-rowset compaction is also enabled.
+DEFINE_mBool(enable_cloud_single_rowset_distributed_compaction, "false");
+// Run large DUP_KEYS base compactions on multiple BEs, split by the first INT key column.
+DEFINE_mBool(enable_cloud_distributed_base_compaction, "false");
+// Let remote distributed compaction workers read cache misses from the coordinator BE first.
+DEFINE_mBool(enable_cloud_distributed_compaction_peer_read, "false");
+// Target input bytes per distributed base compaction range. This is also the activation threshold.
+DEFINE_mInt64(cloud_distributed_base_compaction_target_input_size_bytes, "10737418240");
+// Target number of short-key samples read per distributed base compaction range.
+DEFINE_mInt32(cloud_distributed_base_compaction_samples_per_range, "4096");
+// TTL for the live same-compute-group BE snapshot fetched from FE.
+DEFINE_mInt32(cloud_distributed_compaction_worker_cache_ttl_ms, "10000");
+// Number of physical segment ids reserved for each remote group task.
+DEFINE_mInt32(cloud_distributed_compaction_segment_slot_capacity, "100");
+// Timeout for incremental DeleteBitmap RPCs.
+DEFINE_mInt32(cloud_distributed_compaction_incremental_bitmap_rpc_timeout_ms, "100000");
+// Timeout for submit and status RPCs, which do not wait for compaction execution.
+DEFINE_mInt32(cloud_distributed_compaction_control_rpc_timeout_ms, "10000");
+// Interval between coordinator status polls.
+DEFINE_mInt32(cloud_distributed_compaction_status_poll_interval_ms, "20000");
+// Maximum number of threads used by distributed compaction coordinator RPC tasks on this BE.
+DEFINE_Int32(cloud_distributed_compaction_thread_num, "32");
+// Maximum number of distributed compaction coordinator RPC tasks queued on this BE.
+DEFINE_Int32(cloud_distributed_compaction_queue_size, "4096");
+// Maximum number of distributed compaction tasks executed concurrently on a worker BE.
+DEFINE_Int32(cloud_distributed_compaction_worker_thread_num, "32");
+// Maximum number of distributed compaction tasks queued on a worker BE.
+DEFINE_Int32(cloud_distributed_compaction_worker_queue_size, "4096");
 
 DEFINE_mInt32(refresh_s3_info_interval_s, "60");
 DEFINE_mInt32(vacuum_stale_rowsets_interval_s, "300");

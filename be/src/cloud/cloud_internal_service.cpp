@@ -32,6 +32,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "cloud/cloud_distributed_compaction.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/cloud_tablet_mgr.h"
@@ -50,6 +51,7 @@
 #include "util/async_io.h"
 #include "util/bvar_windowed_adder.h"
 #include "util/debug_points.h"
+#include "util/time.h"
 
 namespace doris {
 #include "common/compile_check_avoid_begin.h"
@@ -1357,6 +1359,96 @@ void CloudInternalServiceImpl::recycle_cache(google::protobuf::RpcController* co
             file_cache->remove_if_cached_async(file_key);
             g_file_cache_recycle_cache_finished_index_num << 1;
         }
+    }
+}
+
+void CloudInternalServiceImpl::cloud_distributed_compaction_submit(
+        google::protobuf::RpcController* controller [[maybe_unused]],
+        const PCloudDistributedCompactionSubmitRequest* request,
+        PCloudDistributedCompactionSubmitResponse* response, google::protobuf::Closure* done) {
+    const int64_t arrival_time_us = UnixMicros();
+    const bool offered =
+            _heavy_work_pool.try_offer([this, request, response, done, arrival_time_us]() {
+                brpc::ClosureGuard closure_guard(done);
+                cloud::DistributedCompactionWorkerManager::instance()
+                        ->submit(*request, _engine, arrival_time_us)
+                        .to_protobuf(response->mutable_status());
+            });
+    if (!offered) {
+        brpc::ClosureGuard closure_guard(done);
+        Status::TooManyTasks("failed to offer distributed compaction submit task")
+                .to_protobuf(response->mutable_status());
+    }
+}
+
+void CloudInternalServiceImpl::cloud_distributed_compaction_get_status(
+        google::protobuf::RpcController* controller [[maybe_unused]],
+        const PCloudDistributedCompactionGetStatusRequest* request,
+        PCloudDistributedCompactionGetStatusResponse* response, google::protobuf::Closure* done) {
+    const bool offered = _heavy_work_pool.try_offer([request, response, done]() {
+        brpc::ClosureGuard closure_guard(done);
+        if (request->execution_id().empty() || request->tasks().empty()) {
+            Status::InvalidArgument("invalid distributed compaction status request")
+                    .to_protobuf(response->mutable_status());
+            return;
+        }
+        auto* manager = cloud::DistributedCompactionWorkerManager::instance();
+        for (const auto& task : request->tasks()) {
+            auto worker = manager->get(request->execution_id(), task.group_index());
+            if (worker == nullptr) {
+                Status::NotFound(
+                        "distributed compaction worker state not found: "
+                        "execution={}, group={}",
+                        request->execution_id(), task.group_index())
+                        .to_protobuf(response->mutable_status());
+                return;
+            }
+            auto* task_status = response->add_task_statuses();
+            task_status->set_group_index(task.group_index());
+            worker->get_compaction_status(task_status);
+        }
+        Status::OK().to_protobuf(response->mutable_status());
+    });
+    if (!offered) {
+        brpc::ClosureGuard closure_guard(done);
+        Status::TooManyTasks("failed to offer distributed compaction status task")
+                .to_protobuf(response->mutable_status());
+    }
+}
+
+void CloudInternalServiceImpl::cloud_distributed_compaction_calc_incremental_delete_bitmap(
+        google::protobuf::RpcController* controller [[maybe_unused]],
+        const PCloudDistributedCompactionCalcIncrementalDeleteBitmapRequest* request,
+        PCloudDistributedCompactionCalcIncrementalDeleteBitmapResponse* response,
+        google::protobuf::Closure* done) {
+    const Status submit_status = _engine.distributed_compaction_worker_thread_pool().submit_func(
+            [request, response, done]() {
+                brpc::ClosureGuard closure_guard(done);
+                cloud::DistributedCompactionWorkerManager::instance()
+                        ->calc_incremental_delete_bitmap(*request, response)
+                        .to_protobuf(response->mutable_status());
+            });
+    if (!submit_status.ok()) {
+        brpc::ClosureGuard closure_guard(done);
+        Status::TooManyTasks("failed to submit distributed compaction incremental bitmap task: {}",
+                             submit_status.to_string())
+                .to_protobuf(response->mutable_status());
+    }
+}
+
+void CloudInternalServiceImpl::cloud_distributed_compaction_finalize(
+        google::protobuf::RpcController* controller [[maybe_unused]],
+        const PCloudDistributedCompactionFinalizeRequest* request,
+        PCloudDistributedCompactionFinalizeResponse* response, google::protobuf::Closure* done) {
+    const bool offered = _heavy_work_pool.try_offer([request, response, done]() {
+        brpc::ClosureGuard closure_guard(done);
+        cloud::DistributedCompactionWorkerManager::instance()->finalize(*request).to_protobuf(
+                response->mutable_status());
+    });
+    if (!offered) {
+        brpc::ClosureGuard closure_guard(done);
+        Status::TooManyTasks("failed to offer distributed compaction finalize task")
+                .to_protobuf(response->mutable_status());
     }
 }
 

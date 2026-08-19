@@ -714,15 +714,6 @@ Status SegmentIterator::_get_row_ranges_by_keys() {
         return Status::OK();
     }
 
-    // Read & seek key columns is a waste of time when no key column in _schema
-    if (std::none_of(_schema->columns().begin(), _schema->columns().end(),
-                     [&](const TabletColumnPtr& col) {
-                         return col &&
-                                _opts.tablet_schema->column_by_uid(col->unique_id()).is_key();
-                     })) {
-        return Status::OK();
-    }
-
     RowRanges result_ranges;
     for (auto& key_range : _opts.key_ranges) {
         rowid_t lower_rowid = 0;

@@ -20,12 +20,14 @@
 #include <gen_cpp/cloud.pb.h>
 
 #include <boost/container_hash/hash.hpp>
+#include <mutex>
 
+#include "cloud/cloud_distributed_compaction.h"
 #include "cloud/cloud_meta_mgr.h"
 #include "cloud/config.h"
 #include "common/config.h"
 #include "core/value/vdatetime_value.h"
-#include "cpp/sync_point.h"
+#include "runtime/thread_context.h"
 #include "service/backend_options.h"
 #include "storage/compaction/compaction.h"
 #include "storage/task/engine_checksum_task.h"
@@ -278,6 +280,8 @@ Status CloudBaseCompaction::pick_rowsets_to_compact() {
 }
 
 Status CloudBaseCompaction::execute_compact() {
+    // Distributed Base is scheduled through execute_compact_async(); this synchronous path only
+    // runs local Base compaction.
 #ifndef __APPLE__
     if (config::enable_base_compaction_idle_sched) {
         Thread::set_idle_sched();
@@ -335,6 +339,52 @@ Status CloudBaseCompaction::execute_compact() {
     return st;
 }
 
+void CloudBaseCompaction::finish_compaction_success(int64_t execution_start_time_us) {
+    DORIS_CHECK_GT(execution_start_time_us, 0);
+    LOG_INFO("finish CloudBaseCompaction, tablet_id={}, cost={}ms range=[{}-{}]",
+             _tablet->tablet_id(), (MonotonicMicros() - execution_start_time_us) / 1000,
+             _input_rowsets.front()->start_version(), _input_rowsets.back()->end_version())
+            .tag("job_id", _uuid)
+            .tag("input_rowsets", _input_rowsets.size())
+            .tag("input_rows", _input_row_num)
+            .tag("input_segments", _input_segments)
+            .tag("input_rowsets_data_size", _input_rowsets_data_size)
+            .tag("input_rowsets_index_size", _input_rowsets_index_size)
+            .tag("input_rowsets_total", _input_rowsets_total_size)
+            .tag("output_rows", _output_rowset->num_rows())
+            .tag("output_segments", _output_rowset->num_segments())
+            .tag("output_rowset_data_size", _output_rowset->data_disk_size())
+            .tag("output_rowset_index_size", _output_rowset->index_disk_size())
+            .tag("output_rowset_total_size", _output_rowset->total_disk_size())
+            .tag("local_read_time_us", _stats.cloud_local_read_time)
+            .tag("remote_read_time_us", _stats.cloud_remote_read_time)
+            .tag("peer_read_time_us", _stats.peer_read_time_us)
+            .tag("local_read_bytes", _local_read_bytes_total)
+            .tag("remote_read_bytes", _remote_read_bytes_total)
+            .tag("peer_read_bytes", _stats.bytes_read_from_peer);
+
+    //_compaction_succeed = true;
+    _state = CompactionState::SUCCESS;
+
+    DorisMetrics::instance()->base_compaction_deltas_total->increment(_input_rowsets.size());
+    DorisMetrics::instance()->base_compaction_bytes_total->increment(_input_rowsets_total_size);
+    base_output_size << _output_rowset->total_disk_size();
+    cloud_tablet()->set_last_base_compaction_status(Status::OK().to_string());
+    cloud_tablet()->set_last_base_compaction_success_time(UnixMillis());
+}
+
+Status CloudBaseCompaction::finish_compaction_failure(Status status) {
+    cloud_tablet()->set_last_base_compaction_status(status.to_string());
+    cloud_tablet()->set_last_base_compaction_failure_time(UnixMillis());
+    LOG_WARNING("fail to do CloudBaseCompaction")
+            .tag("job_id", _uuid)
+            .tag("tablet_id", _tablet->tablet_id())
+            .tag("output_version",
+                 fmt::format("[{}-{}]", _output_version.first, _output_version.second))
+            .error(status);
+    return status;
+}
+
 Status CloudBaseCompaction::modify_rowsets() {
     // commit compaction job
     cloud::TabletJobInfoPB job;
@@ -373,10 +423,16 @@ Status CloudBaseCompaction::modify_rowsets() {
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
         int64_t initiator = this->initiator();
-        RETURN_IF_ERROR(cloud_tablet()->calc_delete_bitmap_for_compaction(
-                _input_rowsets, _output_rowset, *_rowid_conversion, compaction_type(),
-                _stats.merged_rows, _stats.filtered_rows, initiator, output_rowset_delete_bitmap,
-                _allow_delete_in_cumu_compaction, get_delete_bitmap_lock_start_time));
+        if (_distributed_compaction != nullptr) {
+            RETURN_IF_ERROR(_distributed_compaction->finish_mow_delete_bitmap(
+                    initiator, &output_rowset_delete_bitmap, &get_delete_bitmap_lock_start_time));
+        } else {
+            RETURN_IF_ERROR(cloud_tablet()->calc_delete_bitmap_for_compaction(
+                    _input_rowsets, _output_rowset, *_rowid_conversion, compaction_type(),
+                    _stats.merged_rows, _stats.filtered_rows, initiator,
+                    output_rowset_delete_bitmap, _allow_delete_in_cumu_compaction,
+                    get_delete_bitmap_lock_start_time));
+        }
         LOG_INFO("update delete bitmap in CloudBaseCompaction, tablet_id={}, range=[{}-{}]",
                  _tablet->tablet_id(), _input_rowsets.front()->start_version(),
                  _input_rowsets.back()->end_version())
@@ -390,6 +446,7 @@ Status CloudBaseCompaction::modify_rowsets() {
     }
 
     cloud::FinishTabletJobResponse resp;
+    _distributed_commit_rpc_started = _distributed_compaction != nullptr;
     auto st = _engine.meta_mgr().commit_tablet_job(job, &resp);
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
@@ -418,6 +475,10 @@ Status CloudBaseCompaction::modify_rowsets() {
             return Status::InternalError(msg);
         }
         return st;
+    }
+    if (_distributed_compaction != nullptr) {
+        _distributed_compaction->finalize(true);
+        _distributed_compaction.reset();
     }
     auto& stats = resp.stats();
     LOG(INFO) << "tablet stats=" << stats.ShortDebugString();
@@ -455,6 +516,10 @@ Status CloudBaseCompaction::modify_rowsets() {
 }
 
 Status CloudBaseCompaction::garbage_collection() {
+    if (_distributed_compaction != nullptr) {
+        _distributed_compaction->finalize(_distributed_commit_rpc_started);
+        _distributed_compaction.reset();
+    }
     RETURN_IF_ERROR(CloudCompactionMixin::garbage_collection());
     cloud::TabletJobInfoPB job;
     auto idx = job.mutable_idx();

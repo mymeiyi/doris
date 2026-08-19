@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -27,6 +28,10 @@
 
 namespace doris {
 
+namespace cloud {
+class DistributedCompactionCoordinator;
+}
+
 class CloudBaseCompaction : public CloudCompactionMixin {
 public:
     CloudBaseCompaction(CloudStorageEngine& engine, CloudTabletSPtr tablet);
@@ -34,6 +39,8 @@ public:
 
     Status prepare_compact() override;
     Status execute_compact() override;
+    Status execute_compact_async(std::function<void(Status)> remote_completion, bool* suspended);
+    Status resume_compact(Status remote_status);
     Status request_global_lock();
 
     std::optional<CompactionProfileType> profile_type() const override {
@@ -45,6 +52,13 @@ public:
 
 private:
     Status pick_rowsets_to_compact();
+
+    bool can_use_distributed_base_compaction() const;
+
+    Status finish_async_compaction();
+    Status fail_async_compaction(Status status);
+    void finish_compaction_success(int64_t execution_start_time_us);
+    Status finish_compaction_failure(Status status);
 
     std::string_view compaction_name() const override { return "CloudBaseCompaction"; }
 
@@ -61,6 +75,12 @@ private:
     int64_t _input_segments = 0;
     int64_t _base_compaction_cnt = 0;
     int64_t _cumulative_compaction_cnt = 0;
+    bool _use_distributed_base_compaction = false;
+    std::shared_ptr<cloud::DistributedCompactionCoordinator> _distributed_compaction;
+    bool _distributed_commit_rpc_started = false;
+    std::unique_ptr<MergeInputRowsetsContext> _async_merge_context;
+    int64_t _async_profile_start_time_ms = 0;
+    int64_t _async_execution_start_time_us = 0;
 };
 
 } // namespace doris

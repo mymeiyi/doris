@@ -931,6 +931,151 @@ message PGetFileCacheMetaResponse {
     repeated FileCacheBlockMeta file_cache_block_metas = 1;
 }
 
+// ---- Cross-BE distributed compaction (cloud) ----
+message PCloudDistributedCompactionKey {
+    // One PValues per key column. Each PValues contains exactly one logical value.
+    repeated PValues columns = 1;
+}
+
+message PCloudDistributedCompactionKeyRange {
+    // Missing lower_key/upper_key represents an unbounded endpoint.
+    optional PCloudDistributedCompactionKey lower_key = 1;
+    optional PCloudDistributedCompactionKey upper_key = 2;
+    optional bool lower_inclusive = 3 [default = true];
+    optional bool upper_inclusive = 4 [default = false];
+}
+
+message PCloudDistributedCompactionTask {
+    optional int32 group_index = 2;
+    optional int64 segment_pos_start = 3;
+    optional int64 segment_pos_end = 4;
+    optional int32 output_segment_start_id = 6;
+    optional int32 max_segment_num = 7;
+    optional int64 merge_way_num = 8;
+    optional PCloudDistributedCompactionKeyRange key_range = 9;
+}
+
+enum PCloudDistributedCompactionType {
+    CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION = 0;
+    CLOUD_DISTRIBUTED_BASE_COMPACTION = 1;
+}
+
+message PCloudDistributedCompactionSubmitRequest {
+    optional int64 tablet_id = 1;
+    optional string execution_id = 2;
+    optional RowsetMetaPB input_rowset_meta = 3;
+    optional RowsetMetaPB output_rowset_meta = 4;
+    optional bool is_vertical = 7;
+    optional uint32 avg_segment_rows = 8;
+    optional uint64 delete_bitmap_start_version = 10;
+    optional uint64 delete_bitmap_end_version = 11;
+    optional bool check_missed_rows = 12;
+    optional int64 target_backend_id = 13;
+    optional string target_cloud_unique_id = 14;
+    optional string target_compute_group_id = 15;
+    repeated PCloudDistributedCompactionTask tasks = 16;
+    optional PCloudDistributedCompactionType compaction_type = 17
+            [default = CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION];
+    // Base compaction consumes multiple rowsets. Field 3 remains for compatibility with the
+    // existing single-rowset cumulative protocol.
+    repeated RowsetMetaPB input_rowset_metas = 18;
+    // Whether the target worker runs on the coordinator BE.
+    optional bool is_coordinator = 19;
+    // Preferred peer cache endpoint for remote workers. Absent when peer read is disabled or the
+    // target worker is the coordinator.
+    optional string coordinator_host = 20;
+    optional int32 coordinator_brpc_port = 21;
+}
+
+message PCloudDistributedCompactionSubmitResponse {
+    optional PStatus status = 1;
+}
+
+message PCloudDistributedCompactionTaskKey {
+    optional int32 group_index = 2;
+}
+
+message PCloudDistributedCompactionGetStatusRequest {
+    optional string execution_id = 1;
+    repeated PCloudDistributedCompactionTaskKey tasks = 2;
+}
+
+enum PCloudDistributedCompactionTaskState {
+    CLOUD_DISTRIBUTED_COMPACTION_TASK_PENDING = 0;
+    CLOUD_DISTRIBUTED_COMPACTION_TASK_RUNNING = 1;
+    CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED = 2;
+    CLOUD_DISTRIBUTED_COMPACTION_TASK_FAILED = 3;
+}
+
+message PCloudDistributedCompactionTaskResult {
+    optional PStatus status = 1;
+    optional int32 group_index = 3;
+    optional RowsetMetaPB partial_rowset_meta = 5;
+    optional int64 output_rows = 6;
+    optional int64 merged_rows = 7;
+    optional int64 filtered_rows = 8;
+    optional int64 bytes_read_from_local = 9;
+    optional int64 bytes_read_from_remote = 10;
+    optional int64 cached_bytes_total = 11;
+    optional int64 cloud_local_read_time = 12;
+    optional int64 cloud_remote_read_time = 13;
+    optional DeleteBitmapPB output_delete_bitmap_shard = 14;
+    optional int64 missed_rows_count = 15;
+    optional int64 bytes_read_from_peer = 16;
+    optional int64 peer_read_time_us = 17;
+    optional int64 task_elapsed_time_us = 18;
+    optional int64 cpu_time_us = 19;
+    // Includes merge, encoding/compression, and output write submission.
+    optional int64 merge_time_us = 20;
+    // Time spent finalizing the rowset and waiting for remote output writes.
+    optional int64 remote_output_write_time_us = 21;
+    // Unix timestamps for correlating coordinator and worker events across BEs.
+    optional int64 worker_arrival_time_us = 22;
+    optional int64 worker_start_time_us = 23;
+    optional int64 merge_start_time_us = 24;
+    optional int64 merge_finish_time_us = 25;
+    optional int64 worker_finish_time_us = 26;
+}
+
+message PCloudDistributedCompactionTaskStatus {
+    optional int32 group_index = 2;
+    optional PCloudDistributedCompactionTaskState state = 3;
+    optional PCloudDistributedCompactionTaskResult result = 4;
+}
+
+message PCloudDistributedCompactionGetStatusResponse {
+    optional PStatus status = 1;
+    repeated PCloudDistributedCompactionTaskStatus task_statuses = 2;
+}
+
+message PCloudDistributedCompactionCalcIncrementalDeleteBitmapRequest {
+    optional int64 tablet_id = 1;
+    optional string execution_id = 2;
+    optional uint64 delete_bitmap_start_version = 3;
+    optional uint64 delete_bitmap_end_version = 4;
+    repeated PCloudDistributedCompactionTaskKey tasks = 5;
+}
+
+message PCloudDistributedCompactionCalcIncrementalDeleteBitmapResponse {
+    optional PStatus status = 1;
+    optional DeleteBitmapPB output_delete_bitmap_shard = 2;
+}
+
+enum PCloudDistributedCompactionFinalizeMode {
+    CLOUD_DISTRIBUTED_COMPACTION_PRESERVE_OUTPUT_FILES = 0;
+    CLOUD_DISTRIBUTED_COMPACTION_CANCEL_AND_RELEASE_STATE = 1;
+}
+
+message PCloudDistributedCompactionFinalizeRequest {
+    optional string execution_id = 1;
+    repeated PCloudDistributedCompactionTaskKey tasks = 2;
+    optional PCloudDistributedCompactionFinalizeMode mode = 3;
+}
+
+message PCloudDistributedCompactionFinalizeResponse {
+    optional PStatus status = 1;
+}
+
 message PWarmUpRowsetRequest {
     repeated RowsetMetaPB rowset_metas = 1;
     optional int64 unix_ts_us = 2;
@@ -1274,4 +1419,13 @@ service PBackendService {
     rpc get_tablet_rowsets(PGetTabletRowsetsRequest) returns (PGetTabletRowsetsResponse);
     rpc fetch_peer_data(PFetchPeerDataRequest) returns (PFetchPeerDataResponse);
     rpc request_cdc_client(PRequestCdcClientRequest) returns (PRequestCdcClientResult);
+    rpc cloud_distributed_compaction_submit(PCloudDistributedCompactionSubmitRequest)
+            returns (PCloudDistributedCompactionSubmitResponse);
+    rpc cloud_distributed_compaction_get_status(PCloudDistributedCompactionGetStatusRequest)
+            returns (PCloudDistributedCompactionGetStatusResponse);
+    rpc cloud_distributed_compaction_calc_incremental_delete_bitmap(
+            PCloudDistributedCompactionCalcIncrementalDeleteBitmapRequest)
+            returns (PCloudDistributedCompactionCalcIncrementalDeleteBitmapResponse);
+    rpc cloud_distributed_compaction_finalize(PCloudDistributedCompactionFinalizeRequest)
+            returns (PCloudDistributedCompactionFinalizeResponse);
 };
