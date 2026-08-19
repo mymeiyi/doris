@@ -83,7 +83,7 @@ private:
     int64_t _cumulative_compaction_cnt = 0;
     bool _use_distributed_base_compaction = false;
     std::shared_ptr<cloud::DistributedCompactionCoordinator> _distributed_compaction;
-    bool _distributed_commit_started = false;
+    bool _distributed_commit_rpc_started = false;
     std::unique_ptr<MergeInputRowsetsContext> _async_merge_context;
     int64_t _async_profile_start_time_ms = 0;
     int64_t _async_execution_start_time_us = 0;

@@ -115,7 +115,7 @@ private:
     Version _last_delete_version {-1, -1};
     std::optional<int64_t> _single_rowset_compaction_segment_group_size;
     std::shared_ptr<cloud::DistributedCompactionCoordinator> _distributed_compaction;
-    bool _distributed_commit_started = false;
+    bool _distributed_commit_rpc_started = false;
     std::unique_ptr<MergeInputRowsetsContext> _async_merge_context;
     int64_t _async_profile_start_time_ms = 0;
     int64_t _async_execution_start_time_us = 0;

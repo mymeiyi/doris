@@ -623,7 +623,7 @@ Status CloudBaseCompaction::modify_rowsets() {
     }
 
     cloud::FinishTabletJobResponse resp;
-    _distributed_commit_started = _distributed_compaction != nullptr;
+    _distributed_commit_rpc_started = _distributed_compaction != nullptr;
     auto st = _engine.meta_mgr().commit_tablet_job(job, &resp);
     if (_tablet->keys_type() == KeysType::UNIQUE_KEYS &&
         _tablet->enable_unique_key_merge_on_write()) {
@@ -694,7 +694,7 @@ Status CloudBaseCompaction::modify_rowsets() {
 
 Status CloudBaseCompaction::garbage_collection() {
     if (_distributed_compaction != nullptr) {
-        _distributed_compaction->finalize(_distributed_commit_started);
+        _distributed_compaction->finalize(_distributed_commit_rpc_started);
         _distributed_compaction.reset();
     }
     RETURN_IF_ERROR(CloudCompactionMixin::garbage_collection());
