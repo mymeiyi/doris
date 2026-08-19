@@ -15,32 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import org.apache.doris.regression.suite.ClusterOptions
-
 import java.util.Base64
 
-suite("test_cloud_single_rowset_grouped_compaction", "docker") {
-    def options = new ClusterOptions()
-    options.cloudMode = true
-    options.setFeNum(1)
-    options.setBeNum(1)
-    options.enableDebugPoints()
+suite("test_cloud_single_rowset_grouped_compaction", "nonConcurrent") {
     int initialInputSegmentsPerGroup = 2
     long compactionTimeoutMs = 90000L
-    options.beConfigs += [
-        "doris_scanner_row_bytes=1",
-        "enable_cloud_single_rowset_compaction=true",
-        "cloud_single_rowset_compaction_min_segments=2",
-        "cloud_single_rowset_compaction_segment_group_size=${initialInputSegmentsPerGroup}",
-        "cumulative_compaction_min_deltas=2",
-        "enable_aggregate_non_mow_key_bounds=false",
-        "disable_auto_compaction=true",
-        "enable_java_support=false"
+    def customBeConfig = [
+        doris_scanner_row_bytes: 1,
+        enable_cloud_single_rowset_compaction: true,
+        cloud_single_rowset_compaction_min_segments: 2,
+        cloud_single_rowset_compaction_segment_group_size: initialInputSegmentsPerGroup,
+        cumulative_compaction_min_deltas: 2,
+        enable_aggregate_non_mow_key_bounds: false,
+        disable_auto_compaction: true,
+        vertical_compaction_max_segment_size: 1073741824,
+        compaction_batch_size: -1,
+        enable_rowid_conversion_correctness_check: false
     ]
 
-    docker(options) {
-        def metaService = cluster.getAllMetaservices().get(0)
-        def metaServiceEndpoint = "${metaService.host}:${metaService.httpPort}"
+    setBeConfigTemporary(customBeConfig) {
+        def metaServiceEndpoint = context.config.metaServiceHttpAddress
 
         def getRowsetMeta = { tabletId, int version ->
             def rowsetMeta = null
@@ -260,9 +254,10 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
             }
         }
 
-        GetDebugPoint().clearDebugPointsForAllBEs()
-
+        def sqlCacheOrigValue = sql("select @@enable_sql_cache")[0][0]
         try {
+            sql "set enable_sql_cache=false"
+            GetDebugPoint().clearDebugPointsForAllBEs()
             GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
 
             // ====================================================
@@ -556,6 +551,7 @@ suite("test_cloud_single_rowset_grouped_compaction", "docker") {
                     readPointRows("test_cloud_grouped_compaction_schema_change")
             assertEquals([["100", "100"], ["100", "101"]], rewrittenPointRows)
         } finally {
+            sql "set enable_sql_cache=${sqlCacheOrigValue}"
             GetDebugPoint().clearDebugPointsForAllBEs()
         }
     }
