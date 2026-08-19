@@ -20,7 +20,6 @@
 #include <gen_cpp/cloud.pb.h>
 
 #include <boost/container_hash/hash.hpp>
-#include <condition_variable>
 #include <mutex>
 
 #include "cloud/cloud_distributed_compaction.h"
@@ -283,16 +282,16 @@ Status CloudBaseCompaction::pick_rowsets_to_compact() {
     return Status::Error<BE_NO_SUITABLE_VERSION>("no suitable versions for compaction");
 }
 
-Status CloudBaseCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
+bool CloudBaseCompaction::can_use_distributed_base_compaction() const {
     if (!config::enable_cloud_distributed_base_compaction) {
-        return Status::OK();
+        return false;
     }
     const int64_t target_size = config::cloud_distributed_base_compaction_target_input_size_bytes;
     if (target_size <= 0 || _input_rowsets_total_size <= target_size) {
-        return Status::OK();
+        return false;
     }
     if (_tablet->is_row_binlog_tablet()) {
-        return Status::OK();
+        return false;
     }
 
     const auto keys_type = _tablet->keys_type();
@@ -300,7 +299,7 @@ Status CloudBaseCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult*
     if (schema.num_key_columns() == 0 ||
         !cloud::is_supported_distributed_base_key(schema.column(0).type()) ||
         schema.column(0).is_nullable()) {
-        return Status::OK();
+        return false;
     }
 
     if (keys_type == KeysType::UNIQUE_KEYS && _tablet->enable_unique_key_merge_on_write()) {
@@ -311,49 +310,10 @@ Status CloudBaseCompaction::prepare_merge_input_rowsets(MergeInputRowsetsResult*
             config::enable_mow_compaction_correctness_check_core ||
             config::enable_mow_compaction_correctness_check_fail ||
             config::enable_rowid_conversion_correctness_check) {
-            return Status::OK();
+            return false;
         }
     }
-
-    _use_distributed_base_compaction = true;
-    // Partial writers cannot reuse coordinator-local inverted index files.
-    _enable_inverted_index_compaction = false;
-    return Status::OK();
-}
-
-Status CloudBaseCompaction::do_merge_input_rowsets(
-        const std::vector<RowsetReaderSharedPtr>& input_rs_readers,
-        MergeInputRowsetsResult* result) {
-    if (!_use_distributed_base_compaction) {
-        return Compaction::do_merge_input_rowsets(input_rs_readers, result);
-    }
-
-    std::mutex mutex;
-    std::condition_variable cv;
-    bool completed = false;
-    Status remote_status;
-    bool started = false;
-    RETURN_IF_ERROR(start_distributed_compaction(
-            [&](Status status) {
-                {
-                    std::lock_guard lock(mutex);
-                    remote_status = std::move(status);
-                    completed = true;
-                }
-                cv.notify_one();
-            },
-            &started));
-    if (!started) {
-        _distributed_compaction.reset();
-        return Compaction::do_merge_input_rowsets(input_rs_readers, result);
-    }
-
-    {
-        std::unique_lock lock(mutex);
-        cv.wait(lock, [&] { return completed; });
-    }
-    RETURN_IF_ERROR(remote_status);
-    return assemble_distributed_compaction(result);
+    return true;
 }
 
 Status CloudBaseCompaction::start_distributed_compaction(
@@ -377,6 +337,8 @@ Status CloudBaseCompaction::assemble_distributed_compaction(MergeInputRowsetsRes
 }
 
 Status CloudBaseCompaction::execute_compact() {
+    // Distributed Base is scheduled through execute_compact_async(); synchronous callers stay
+    // local.
 #ifndef __APPLE__
     if (config::enable_base_compaction_idle_sched) {
         Thread::set_idle_sched();
@@ -417,6 +379,11 @@ Status CloudBaseCompaction::execute_compact_async(
         status = prepare_execute_compact(get_compaction_permits());
         if (!status.ok()) {
             return fail_async_compaction(std::move(status));
+        }
+        _use_distributed_base_compaction = can_use_distributed_base_compaction();
+        if (_use_distributed_base_compaction) {
+            // Workers own the destination segment index writers and row-id conversion state.
+            _enable_inverted_index_compaction = false;
         }
         _async_merge_context = std::make_unique<MergeInputRowsetsContext>();
         status = prepare_merge_input_rowsets_execution(_async_merge_context.get());

@@ -53,10 +53,7 @@ public:
 private:
     Status pick_rowsets_to_compact();
 
-    Status prepare_merge_input_rowsets(MergeInputRowsetsResult* result) override;
-
-    Status do_merge_input_rowsets(const std::vector<RowsetReaderSharedPtr>& input_rs_readers,
-                                  MergeInputRowsetsResult* result) override;
+    bool can_use_distributed_base_compaction() const;
 
     Status start_distributed_compaction(std::function<void(Status)> remote_completion,
                                         bool* started);
