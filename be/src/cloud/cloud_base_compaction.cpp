@@ -337,8 +337,8 @@ Status CloudBaseCompaction::assemble_distributed_compaction(MergeInputRowsetsRes
 }
 
 Status CloudBaseCompaction::execute_compact() {
-    // Distributed Base is scheduled through execute_compact_async(); synchronous callers stay
-    // local.
+    // Distributed Base is scheduled through execute_compact_async(); this synchronous path only
+    // runs local Base compaction.
 #ifndef __APPLE__
     if (config::enable_base_compaction_idle_sched) {
         Thread::set_idle_sched();
@@ -347,13 +347,53 @@ Status CloudBaseCompaction::execute_compact() {
 
     SCOPED_ATTACH_TASK(_mem_tracker);
 
-    const int64_t execution_start_time_us = MonotonicMicros();
-    Status status = CloudCompactionMixin::execute_compact();
-    if (!status.ok()) {
-        return finish_compaction_failure(std::move(status));
+    using namespace std::chrono;
+    auto start = steady_clock::now();
+    Status st;
+    Defer defer_set_st([&] {
+        cloud_tablet()->set_last_base_compaction_status(st.to_string());
+        if (!st.ok()) {
+            cloud_tablet()->set_last_base_compaction_failure_time(UnixMillis());
+        } else {
+            cloud_tablet()->set_last_base_compaction_success_time(UnixMillis());
+        }
+    });
+    st = CloudCompactionMixin::execute_compact();
+    if (!st.ok()) {
+        LOG(WARNING) << "fail to do " << compaction_name() << ". res=" << st
+                     << ", tablet=" << _tablet->tablet_id()
+                     << ", output_version=" << _output_version;
+        return st;
     }
-    finish_compaction_success(execution_start_time_us);
-    return Status::OK();
+    LOG_INFO("finish CloudBaseCompaction, tablet_id={}, cost={}ms range=[{}-{}]",
+             _tablet->tablet_id(), duration_cast<milliseconds>(steady_clock::now() - start).count(),
+             _input_rowsets.front()->start_version(), _input_rowsets.back()->end_version())
+            .tag("job_id", _uuid)
+            .tag("input_rowsets", _input_rowsets.size())
+            .tag("input_rows", _input_row_num)
+            .tag("input_segments", _input_segments)
+            .tag("input_rowsets_data_size", _input_rowsets_data_size)
+            .tag("input_rowsets_index_size", _input_rowsets_index_size)
+            .tag("input_rowsets_total", _input_rowsets_total_size)
+            .tag("output_rows", _output_rowset->num_rows())
+            .tag("output_segments", _output_rowset->num_segments())
+            .tag("output_rowset_data_size", _output_rowset->data_disk_size())
+            .tag("output_rowset_index_size", _output_rowset->index_disk_size())
+            .tag("output_rowset_total_size", _output_rowset->total_disk_size())
+            .tag("local_read_time_us", _stats.cloud_local_read_time)
+            .tag("remote_read_time_us", _stats.cloud_remote_read_time)
+            .tag("local_read_bytes", _local_read_bytes_total)
+            .tag("remote_read_bytes", _remote_read_bytes_total);
+
+    //_compaction_succeed = true;
+    _state = CompactionState::SUCCESS;
+
+    DorisMetrics::instance()->base_compaction_deltas_total->increment(_input_rowsets.size());
+    DorisMetrics::instance()->base_compaction_bytes_total->increment(_input_rowsets_total_size);
+    base_output_size << _output_rowset->total_disk_size();
+
+    st = Status::OK();
+    return st;
 }
 
 Status CloudBaseCompaction::execute_compact_async(
