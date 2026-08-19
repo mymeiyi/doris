@@ -31,7 +31,8 @@ suite("test_mow_cumulative_compaction_random_segment_ids", "nonConcurrent") {
             "enable_rowid_conversion_correctness_check",
             "enable_vertical_compaction",
             "inverted_index_compaction_enable",
-            "vertical_compaction_max_segment_size"
+            "vertical_compaction_max_segment_size",
+            "enable_cloud_random_segment_id"
     ]
     def originalConfigs = [:]
 
