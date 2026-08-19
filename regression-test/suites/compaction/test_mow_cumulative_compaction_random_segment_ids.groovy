@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-suite("test_mow_cumulative_compaction_multi_output_segments", "nonConcurrent") {
+suite("test_mow_cumulative_compaction_random_segment_ids", "nonConcurrent") {
     if (!isCloudMode()) {
-        logger.info("skip test_mow_cumulative_compaction_multi_output_segments in non-cloud mode")
+        logger.info("skip test_mow_cumulative_compaction_random_segment_ids in non-cloud mode")
         return
     }
 
