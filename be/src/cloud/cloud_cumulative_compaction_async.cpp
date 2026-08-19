@@ -65,7 +65,7 @@ Status CloudCumulativeCompaction::execute_grouped_compact_async(
         _distributed_compaction = std::make_shared<cloud::DistributedCompactionCoordinator>(
                 _engine, std::static_pointer_cast<CloudTablet>(_tablet), _uuid);
         bool started = false;
-        status = _distributed_compaction->start_single_rowset(
+        status = _distributed_compaction->start_single_rowset_compaction(
                 _input_rowsets.front(), *_output_rs_writer,
                 _async_merge_context->result.segment_group_size, _allow_delete_in_cumu_compaction,
                 _is_vertical, cast_set<uint32_t>(get_avg_segment_rows()),
@@ -112,7 +112,7 @@ Status CloudCumulativeCompaction::resume_grouped_compact(Status remote_status) {
     try {
         doris::enable_thread_catch_bad_alloc++;
         Defer restore_catch_bad_alloc {[&] { doris::enable_thread_catch_bad_alloc--; }};
-        status = _distributed_compaction->assemble_single_rowset(
+        status = _distributed_compaction->assemble_output_rowset(
                 *_output_rs_writer, *_cur_tablet_schema,
                 &_async_merge_context->result.output_segment_group_sizes, &_output_rowset, &_stats);
         if (!status.ok()) {

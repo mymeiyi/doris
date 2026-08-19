@@ -1209,7 +1209,7 @@ Status DistributedCompactionCoordinator::submit_batches(
     return Status::OK();
 }
 
-Status DistributedCompactionCoordinator::start_single_rowset(
+Status DistributedCompactionCoordinator::start_single_rowset_compaction(
         const RowsetSharedPtr& input_rowset, RowsetWriter& output_rowset_writer,
         int64_t segment_group_size, bool allow_delete_in_cumu_compaction, bool is_vertical,
         uint32_t avg_segment_rows, CompletionCallback callback, bool* started) {
@@ -1226,7 +1226,7 @@ Status DistributedCompactionCoordinator::start_single_rowset(
             config::cloud_distributed_compaction_status_poll_interval_ms));
 }
 
-Status DistributedCompactionCoordinator::start_base_key_ranges(
+Status DistributedCompactionCoordinator::start_base_compaction(
         const std::vector<RowsetSharedPtr>& input_rowsets, RowsetWriter& output_rowset_writer,
         size_t range_count, bool is_vertical, uint32_t avg_segment_rows,
         CompletionCallback callback, bool* started) {
@@ -2176,7 +2176,7 @@ Status DistributedCompactionCoordinator::prepare_base_key_ranges(
     return Status::OK();
 }
 
-Status DistributedCompactionCoordinator::assemble_single_rowset(
+Status DistributedCompactionCoordinator::assemble_output_rowset(
         RowsetWriter& output_rowset_writer, const TabletSchema& tablet_schema,
         std::vector<int32_t>* output_segment_group_sizes, RowsetSharedPtr* output_rowset,
         Merger::Statistics* stats) {

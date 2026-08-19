@@ -224,18 +224,19 @@ public:
                                      std::shared_ptr<CloudTablet> tablet, std::string execution_id);
     ~DistributedCompactionCoordinator();
 
-    Status start_single_rowset(const RowsetSharedPtr& input_rowset,
-                               RowsetWriter& output_rowset_writer, int64_t segment_group_size,
-                               bool allow_delete_in_cumu_compaction, bool is_vertical,
-                               uint32_t avg_segment_rows, CompletionCallback callback,
-                               bool* started);
+    Status start_single_rowset_compaction(const RowsetSharedPtr& input_rowset,
+                                          RowsetWriter& output_rowset_writer,
+                                          int64_t segment_group_size,
+                                          bool allow_delete_in_cumu_compaction, bool is_vertical,
+                                          uint32_t avg_segment_rows, CompletionCallback callback,
+                                          bool* started);
 
-    Status start_base_key_ranges(const std::vector<RowsetSharedPtr>& input_rowsets,
+    Status start_base_compaction(const std::vector<RowsetSharedPtr>& input_rowsets,
                                  RowsetWriter& output_rowset_writer, size_t range_count,
                                  bool is_vertical, uint32_t avg_segment_rows,
                                  CompletionCallback callback, bool* started);
 
-    Status assemble_single_rowset(RowsetWriter& output_rowset_writer,
+    Status assemble_output_rowset(RowsetWriter& output_rowset_writer,
                                   const TabletSchema& tablet_schema,
                                   std::vector<int32_t>* output_segment_group_sizes,
                                   RowsetSharedPtr* output_rowset, Merger::Statistics* stats);

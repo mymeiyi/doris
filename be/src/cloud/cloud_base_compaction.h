@@ -57,7 +57,7 @@ private:
 
     Status start_distributed_compaction(std::function<void(Status)> remote_completion,
                                         bool* started);
-    Status assemble_distributed_compaction(MergeInputRowsetsResult* result);
+    Status assemble_distributed_output_rowset(MergeInputRowsetsResult* result);
     Status finish_async_compaction();
     Status fail_async_compaction(Status status);
     void finish_compaction_success(int64_t execution_start_time_us);

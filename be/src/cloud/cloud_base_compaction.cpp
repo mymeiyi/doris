@@ -322,14 +322,14 @@ Status CloudBaseCompaction::start_distributed_compaction(
     const size_t range_count = cast_set<size_t>(1 + (_input_rowsets_total_size - 1) / target_size);
     _distributed_compaction = std::make_shared<cloud::DistributedCompactionCoordinator>(
             _engine, std::static_pointer_cast<CloudTablet>(_tablet), _uuid);
-    return _distributed_compaction->start_base_key_ranges(
+    return _distributed_compaction->start_base_compaction(
             _input_rowsets, *_output_rs_writer, range_count, _is_vertical,
             cast_set<uint32_t>(get_avg_segment_rows()), std::move(remote_completion), started);
 }
 
-Status CloudBaseCompaction::assemble_distributed_compaction(MergeInputRowsetsResult* result) {
+Status CloudBaseCompaction::assemble_distributed_output_rowset(MergeInputRowsetsResult* result) {
     std::vector<int32_t> output_segment_group_sizes;
-    RETURN_IF_ERROR(_distributed_compaction->assemble_single_rowset(
+    RETURN_IF_ERROR(_distributed_compaction->assemble_output_rowset(
             *_output_rs_writer, *_cur_tablet_schema, &output_segment_group_sizes, &_output_rowset,
             &_stats));
     result->output_rowset_built = true;
@@ -482,7 +482,7 @@ Status CloudBaseCompaction::resume_compact(Status remote_status) {
     try {
         doris::enable_thread_catch_bad_alloc++;
         Defer restore_catch_bad_alloc {[&] { doris::enable_thread_catch_bad_alloc--; }};
-        status = assemble_distributed_compaction(&_async_merge_context->result);
+        status = assemble_distributed_output_rowset(&_async_merge_context->result);
         if (!status.ok()) {
             return fail_async_compaction(std::move(status));
         }
