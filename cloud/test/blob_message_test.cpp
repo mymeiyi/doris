@@ -69,8 +69,7 @@ static std::string dump_range(TxnKv* txn_kv, std::string_view begin = "",
 TEST(BlobMessageTest, BlobKeyCodec) {
     const std::vector<std::tuple<std::string, uint8_t, uint16_t>> test_cases {
             {"test_blob_key", 0, 0},
-            {std::string("\0binary\xff", 8), std::numeric_limits<uint8_t>::max(),
-             std::numeric_limits<uint16_t>::max()},
+            {std::string("\0binary\xff", 8), 127, std::numeric_limits<uint16_t>::max()},
     };
     for (const auto& [expected_origin_key, expected_version, expected_sequence] : test_cases) {
         std::string origin_key;

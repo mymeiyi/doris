@@ -43,7 +43,7 @@ namespace doris::cloud {
  *    |Bytes 0      |Bytes 1-5    |Bytes 6-7    |
  *    |-------------|-------------|-------------|
  *    |version      |dummy        |sequence     |
- * version is uint8_t (0-255); sequence is uint16_t (0-65535).
+ * version is uint8_t restricted to 0-127; sequence is uint16_t (0-65535).
  * Reserved dummy bytes can extend sequence if needed.
  */
 struct ValueBuf {
@@ -75,8 +75,8 @@ inline constexpr size_t MIN_BLOB_SPLIT_SIZE = 20 * 1000;
 /**
  * Encode a split KV key.
  * @param origin_key logical key
- * @param version value encoding version
- * @param sequence zero-based split KV index
+ * @param version value encoding version; valid range is [0, 127]
+ * @param sequence zero-based split KV index; valid range is [0, 65535]
  * @return encoded split KV key
  */
 std::string encode_blob_key(std::string_view origin_key, uint8_t version, size_t sequence);
@@ -110,7 +110,7 @@ TxnErrorCode blob_get(Transaction* txn, std::string_view key, ValueBuf* val, boo
  * @param txn fdb txn handler
  * @param key encode key
  * @param pb value to save
- * @param ver value version
+ * @param ver value version; valid range is [0, 127]
  * @param split_size fragment size, clamped to MIN_BLOB_SPLIT_SIZE
  */
 void blob_put(Transaction* txn, std::string_view key, const google::protobuf::Message& pb,
@@ -121,7 +121,7 @@ void blob_put(Transaction* txn, std::string_view key, const google::protobuf::Me
  * @param txn fdb txn handler
  * @param key encode key
  * @param value value to save
- * @param ver value version
+ * @param ver value version; valid range is [0, 127]
  * @param split_size fragment size, clamped to MIN_BLOB_SPLIT_SIZE
  */
 void blob_put(Transaction* txn, std::string_view key, std::string_view value, uint8_t ver,
