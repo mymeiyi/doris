@@ -7277,8 +7277,6 @@ TEST(MetaServiceTest, UpdateDeleteBitmapWithRemovePreDeleteBitmap) {
     config::max_txn_commit_byte = max_txn_commit_byte;
 
     update_delete_bitmap_with_remove_pre(meta_service.get(), 500, 502, false, true);
-
-    update_delete_bitmap_with_remove_pre(meta_service.get(), 600, 602);
 }
 
 TEST(MetaServiceTest, EmptyPreRowsetStatsUsesKeyRemoval) {

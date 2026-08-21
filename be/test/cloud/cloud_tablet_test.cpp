@@ -143,8 +143,8 @@ TEST_F(CloudTabletDeleteBitmapTest, AggDeleteBitmapForCompactionReturnsPreRowset
     _tablet->agg_delete_bitmap_for_compaction(
             5, 7, {rowset1, rowset2, rowset_without_delete_bitmap}, aggregated_without_stats,
             rowset_versions_without_stats, nullptr);
-    EXPECT_EQ(aggregated_without_stats->delete_bitmap.size(), 3);
-    EXPECT_EQ(rowset_versions_without_stats.size(), 2);
+    EXPECT_EQ(aggregated_without_stats->delete_bitmap, aggregated_delete_bitmap->delete_bitmap);
+    EXPECT_EQ(rowset_versions_without_stats, pre_rowset_to_versions);
 }
 
 // Test get_rowset_warmup_state for non-existent rowset
