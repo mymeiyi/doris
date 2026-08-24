@@ -226,7 +226,7 @@ protected:
     Block create_column_block(const TabletSchemaSPtr& tablet_schema,
                               const std::vector<uint32_t>& column_ids, int32_t row_count,
                               int32_t start_value) {
-        auto block = tablet_schema->create_block(column_ids);
+        auto block = tablet_schema->create_storage_block(column_ids);
         auto columns = std::move(block).mutate_columns();
         for (int32_t i = 0; i < row_count; ++i) {
             int32_t value = start_value + i;
