@@ -17,6 +17,10 @@
 
 #pragma once
 
+#ifdef EINTERNAL
+#undef EINTERNAL
+#endif
+
 #include <brpc/adaptive_connection_type.h>
 #include <brpc/adaptive_protocol_type.h>
 #include <brpc/channel.h>
