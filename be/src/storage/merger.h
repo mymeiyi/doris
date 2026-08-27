@@ -25,6 +25,7 @@
 #include "common/status.h"
 #include "io/io_common.h"
 #include "storage/iterators.h"
+#include "storage/olap_tuple.h"
 #include "storage/rowset/rowset_fwd.h"
 #include "storage/simple_rowid_conversion.h"
 #include "storage/tablet/tablet_fwd.h"
@@ -33,6 +34,7 @@ namespace doris {
 class KeyBoundsPB;
 class RowIdConversion;
 class RowsetWriter;
+class RuntimeState;
 
 namespace segment_v2 {
 class SegmentWriter;
@@ -48,9 +50,17 @@ using VerticalCompactionProgressCallback =
 
 class Merger {
 public:
+    struct KeyRange {
+        OlapTuple lower_key;
+        OlapTuple upper_key;
+        bool lower_inclusive;
+        bool upper_inclusive;
+    };
+
     struct Statistics {
         int64_t cloud_local_read_time = 0;
         int64_t cloud_remote_read_time = 0;
+        int64_t peer_read_time_us = 0;
         // number of rows written to the destination rowset after merge
         int64_t output_rows = 0;
         int64_t merged_rows = 0;
@@ -60,6 +70,7 @@ public:
         int64_t cached_bytes_total = 0;
         int64_t bytes_read_from_local = 0;
         int64_t bytes_read_from_remote = 0;
+        int64_t bytes_read_from_peer = 0;
     };
 
     // merge rows from `src_rowset_readers` and write into `dst_rowset_writer`.
@@ -70,13 +81,17 @@ public:
             BaseTabletSPtr tablet, ReaderType reader_type, const TabletSchema& cur_tablet_schema,
             const std::vector<RowsetReaderSharedPtr>& src_rowset_readers,
             RowsetWriter* dst_rowset_writer, Statistics* stats_output,
-            std::optional<std::pair<int64_t, int64_t>> segment_range = std::nullopt);
+            std::optional<std::pair<int64_t, int64_t>> segment_range = std::nullopt,
+            RuntimeState* runtime_state = nullptr,
+            std::optional<KeyRange> key_range = std::nullopt);
     static Status vertical_merge_rowsets(
             BaseTabletSPtr tablet, ReaderType reader_type, const TabletSchema& tablet_schema,
             const std::vector<RowsetReaderSharedPtr>& src_rowset_readers,
             RowsetWriter* dst_rowset_writer, uint32_t max_rows_per_segment, int64_t merge_way_num,
             Statistics* stats_output, VerticalCompactionProgressCallback progress_cb = nullptr,
-            std::optional<std::pair<int64_t, int64_t>> segment_range = std::nullopt);
+            std::optional<std::pair<int64_t, int64_t>> segment_range = std::nullopt,
+            RuntimeState* runtime_state = nullptr,
+            std::optional<KeyRange> key_range = std::nullopt);
 
     // for vertical compaction
     static void vertical_split_columns(const TabletSchema& tablet_schema,
@@ -92,7 +107,9 @@ public:
             Statistics* stats_output, std::vector<uint32_t> key_group_cluster_key_idxes,
             int64_t batch_size, CompactionSampleInfo* sample_info,
             VerticalCompactionContextStats* context_stats, bool enable_sparse_optimization = false,
-            std::optional<std::pair<int64_t, int64_t>> segment_range = std::nullopt);
+            std::optional<std::pair<int64_t, int64_t>> segment_range = std::nullopt,
+            RuntimeState* runtime_state = nullptr,
+            std::optional<KeyRange> key_range = std::nullopt);
 
     // for segcompaction
     static Status vertical_compact_one_group(

@@ -21,6 +21,9 @@ import org.apache.doris.catalog.Env;
 import org.apache.doris.cloud.CacheHotspotManager;
 import org.apache.doris.cloud.catalog.CloudEnv;
 import org.apache.doris.common.Config;
+import org.apache.doris.resource.Tag;
+import org.apache.doris.system.Backend;
+import org.apache.doris.thrift.TCloudCompactionBackend;
 import org.apache.doris.thrift.TGetTabletReplicaInfosRequest;
 import org.apache.doris.thrift.TGetTabletReplicaInfosResult;
 import org.apache.doris.thrift.TStatusCode;
@@ -31,6 +34,9 @@ import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 public class FrontendServiceImplCloudTest {
 
@@ -74,5 +80,46 @@ public class FrontendServiceImplCloudTest {
         } finally {
             Config.cloud_unique_id = originalCloudUniqueId;
         }
+    }
+
+    @Test
+    public void testSelectCloudCompactionBackends() {
+        Backend requester = createBackend(1, "cluster-a", true, false, 8060);
+        Backend live = createBackend(2, "cluster-a", true, false, 8061);
+        Backend dead = createBackend(3, "cluster-a", false, false, 8062);
+        Backend decommissioned = createBackend(4, "cluster-a", true, true, 8063);
+        Backend missingBrpc = createBackend(5, "cluster-a", true, false, 0);
+        Backend anotherComputeGroup = createBackend(6, "cluster-b", true, false, 8065);
+        Backend decommissioning = createBackend(7, "cluster-a", true, false, 8066);
+        decommissioning.setDecommissioning(true);
+
+        List<TCloudCompactionBackend> result = FrontendServiceImpl.selectCloudCompactionBackends(
+                requester, List.of(anotherComputeGroup, decommissioned, decommissioning,
+                        requester, dead, live, missingBrpc));
+
+        Assert.assertEquals(2, result.size());
+        Assert.assertEquals(1, result.get(0).getBackendId());
+        Assert.assertEquals("127.0.0.1", result.get(0).getHost());
+        Assert.assertEquals(8060, result.get(0).getBrpcPort());
+        Assert.assertEquals("cloud-1", result.get(0).getCloudUniqueId());
+        Assert.assertEquals("cluster-a", result.get(0).getCloudComputeGroupId());
+        Assert.assertEquals(2, result.get(1).getBackendId());
+        Assert.assertEquals("127.0.0.2", result.get(1).getHost());
+        Assert.assertEquals(8061, result.get(1).getBrpcPort());
+        Assert.assertEquals("cloud-2", result.get(1).getCloudUniqueId());
+        Assert.assertEquals("cluster-a", result.get(1).getCloudComputeGroupId());
+    }
+
+    private Backend createBackend(long id, String computeGroupId, boolean alive,
+            boolean decommissioned, int brpcPort) {
+        Backend backend = new Backend(id, "127.0.0." + id, 9050);
+        Map<String, String> tags = new HashMap<>(Tag.DEFAULT_BACKEND_TAG.toMap());
+        tags.put(Tag.CLOUD_CLUSTER_ID, computeGroupId);
+        tags.put(Tag.CLOUD_UNIQUE_ID, "cloud-" + id);
+        backend.setTagMap(tags);
+        backend.setAlive(alive);
+        backend.setDecommissioned(decommissioned);
+        backend.setBrpcPort(brpcPort);
+        return backend;
     }
 }
