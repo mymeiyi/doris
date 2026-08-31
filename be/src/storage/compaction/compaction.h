@@ -195,6 +195,9 @@ protected:
     CompactionState _state {CompactionState::INITED};
 
     bool _is_vertical;
+    bool _is_distributed {false};
+    int64_t _distributed_task_count {0};
+    int64_t _distributed_worker_count {0};
     bool _is_ordered_data_compaction {false};
     bool _trigger_quick_merge_by_binlog {false};
     bool _allow_delete_in_cumu_compaction;

@@ -262,6 +262,9 @@ void Compaction::submit_profile_record(bool success, int64_t start_time_ms,
     }
     stats.bytes_read_from_local = _stats.bytes_read_from_local;
     stats.bytes_read_from_remote = _stats.bytes_read_from_remote;
+    stats.is_distributed = _is_distributed;
+    stats.distributed_task_count = _distributed_task_count;
+    stats.distributed_worker_count = _distributed_worker_count;
     if (_mem_tracker) {
         stats.peak_memory_bytes = _mem_tracker->peak_consumption();
     }
