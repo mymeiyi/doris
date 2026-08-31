@@ -710,8 +710,9 @@ Status SegmentIterator::_get_row_ranges_by_keys() {
         return Status::OK();
     }
 
-    // Read & seek key columns is a waste of time when no key column in _schema
-    if (std::none_of(_schema->columns().begin(), _schema->columns().end(),
+    // Distributed Base compaction also applies key ranges to value-only vertical groups.
+    if (_opts.io_ctx.reader_type != ReaderType::READER_BASE_COMPACTION &&
+        std::none_of(_schema->columns().begin(), _schema->columns().end(),
                      [&](const TabletColumnPtr& col) {
                          return col &&
                                 _opts.tablet_schema->column_by_uid(col->unique_id()).is_key();

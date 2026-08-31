@@ -55,6 +55,14 @@ class CloudStorageEngine;
 
 static constexpr int COMPACTION_DELETE_BITMAP_LOCK_ID = -1;
 static constexpr int64_t INVALID_COMPACTION_INITIATOR_ID = -100;
+
+bool should_cache_cloud_cumulative_compaction_output();
+bool should_cache_cloud_base_compaction_output(int64_t input_rowsets_cached_size,
+                                               int64_t input_rowsets_total_size);
+bool should_enable_compaction_cache_index_only(bool write_file_cache, ReaderType compaction_type,
+                                               bool enable_base_index_only,
+                                               bool enable_cumu_index_only);
+
 // This class is a base class for compaction.
 // The entrance of this class is compact()
 // Any compaction should go through four procedures.
@@ -107,9 +115,20 @@ protected:
         bool is_segment_grouped = false;
         int64_t segment_group_size = 0;
         std::vector<int32_t> output_segment_group_sizes;
+        bool output_rowset_built = false;
+    };
+
+    struct MergeInputRowsetsContext {
+        MergeInputRowsetsResult result;
+        std::vector<RowsetReaderSharedPtr> input_rs_readers;
+        int64_t merge_start_time_ns = 0;
     };
 
     Status merge_input_rowsets();
+
+    Status prepare_merge_input_rowsets_execution(MergeInputRowsetsContext* context);
+
+    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context);
 
     virtual Status prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
         return Status::OK();
@@ -187,6 +206,9 @@ protected:
     CompactionState _state {CompactionState::INITED};
 
     bool _is_vertical;
+    bool _is_distributed {false};
+    int64_t _distributed_task_count {0};
+    int64_t _distributed_worker_count {0};
     bool _is_ordered_data_compaction {false};
     bool _trigger_quick_merge_by_binlog {false};
     bool _allow_delete_in_cumu_compaction;
@@ -292,6 +314,12 @@ protected:
     // Caller must hold the tablet header lock.
     bool should_apply_cumulative_compaction_result(int64_t response_cumulative_compaction_cnt);
 
+    Status prepare_execute_compact(int64_t permits);
+
+    Status finish_execute_compact(int64_t execution_start_time_us);
+
+    int64_t get_compaction_permits();
+
     CloudStorageEngine& _engine;
 
     std::string _uuid;
@@ -308,8 +336,6 @@ private:
     Status build_basic_info();
 
     virtual Status modify_rowsets();
-
-    int64_t get_compaction_permits();
 
     void update_compaction_level();
 

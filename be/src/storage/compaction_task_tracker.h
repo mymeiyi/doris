@@ -88,6 +88,9 @@ struct CompletionStats {
     int64_t bytes_read_from_local {0};
     int64_t bytes_read_from_remote {0};
     int64_t peak_memory_bytes {0};
+    bool is_distributed {false};
+    int64_t distributed_task_count {0};
+    int64_t distributed_worker_count {0};
 };
 
 // Unified metadata describing a compaction task across its full lifecycle.
@@ -142,6 +145,9 @@ struct CompactionTaskInfo {
     // ===== Resources =====
     int64_t peak_memory_bytes {0}; // peak memory usage (bytes)
     bool is_vertical {false};      // whether vertical merge is used
+    bool is_distributed {false};
+    int64_t distributed_task_count {0};
+    int64_t distributed_worker_count {0};
     int64_t permits {0};           // compaction permits used
 
     // ===== Vertical compaction progress =====

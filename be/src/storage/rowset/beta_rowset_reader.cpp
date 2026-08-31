@@ -115,11 +115,17 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
     _read_options.tablet_id = _rowset->rowset_meta()->tablet_id();
     _read_options.read_limit = _topn_limit;
     if (_read_context->lower_bound_keys != nullptr) {
+        DORIS_CHECK(_read_context->upper_bound_keys != nullptr);
+        DORIS_CHECK_EQ(_read_context->lower_bound_keys->size(),
+                       _read_context->upper_bound_keys->size());
         for (int i = 0; i < _read_context->lower_bound_keys->size(); ++i) {
-            _read_options.key_ranges.emplace_back(&_read_context->lower_bound_keys->at(i),
-                                                  _read_context->is_lower_keys_included->at(i),
-                                                  &_read_context->upper_bound_keys->at(i),
-                                                  _read_context->is_upper_keys_included->at(i));
+            const auto& lower_bound = _read_context->lower_bound_keys->at(i);
+            const auto& upper_bound = _read_context->upper_bound_keys->at(i);
+            const auto* lower_key = lower_bound.has_value() ? &*lower_bound : nullptr;
+            const auto* upper_key = upper_bound.has_value() ? &*upper_bound : nullptr;
+            _read_options.key_ranges.emplace_back(
+                    lower_key, _read_context->is_lower_keys_included->at(i), upper_key,
+                    _read_context->is_upper_keys_included->at(i));
         }
     }
 
@@ -257,12 +263,16 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
     }
     if (_read_context->record_rowids && _read_context->rowid_conversion) {
         // init segment rowid map for rowid conversion
-        std::vector<uint32_t> segment_rows;
-        RETURN_IF_ERROR(_rowset->get_segment_num_rows(&segment_rows, should_use_cache, _stats));
+        std::vector<uint32_t> all_segment_rows;
+        RETURN_IF_ERROR(_rowset->get_segment_num_rows(&all_segment_rows, should_use_cache, _stats));
         std::vector<uint32_t> segment_ids;
-        segment_ids.reserve(segment_rows.size());
-        for (auto seg : rowset()->segments()) {
-            segment_ids.push_back(cast_set<uint32_t>(seg.id()));
+        std::vector<uint32_t> segment_rows;
+        segment_ids.reserve(cast_set<size_t>(seg_end - seg_start));
+        segment_rows.reserve(cast_set<size_t>(seg_end - seg_start));
+        for (int64_t i = seg_start; i < seg_end; ++i) {
+            const auto pos = cast_set<size_t>(i);
+            segment_ids.push_back(cast_set<uint32_t>(rowset()->segment(pos).id()));
+            segment_rows.push_back(all_segment_rows[pos]);
         }
         RETURN_IF_ERROR(_read_context->rowid_conversion->init_segment_map(
                 rowset()->rowset_id(), segment_ids, segment_rows));
