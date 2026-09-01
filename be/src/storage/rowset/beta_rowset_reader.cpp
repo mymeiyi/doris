@@ -218,18 +218,20 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
     _read_options.target_cast_type_for_variants = _read_context->target_cast_type_for_variants;
     if (_read_context->runtime_state != nullptr) {
         _read_options.io_ctx.query_id = &_read_context->runtime_state->query_id();
-        _read_options.io_ctx.read_file_cache =
-                _read_context->runtime_state->query_options().enable_file_cache;
-        _read_options.io_ctx.is_disposable =
-                _read_context->runtime_state->query_options().disable_file_cache;
-        auto* query_ctx = _read_context->runtime_state->get_query_ctx();
-        if (_read_context->reader_type == ReaderType::READER_QUERY && query_ctx != nullptr) {
-            _read_options.io_ctx.remote_scan_cache_write_limiter =
-                    query_ctx->remote_scan_cache_write_limiter();
+        if (_read_context->reader_type == ReaderType::READER_QUERY) {
+            _read_options.io_ctx.read_file_cache =
+                    _read_context->runtime_state->query_options().enable_file_cache;
+            _read_options.io_ctx.is_disposable =
+                    _read_context->runtime_state->query_options().disable_file_cache;
+            if (auto* query_ctx = _read_context->runtime_state->get_query_ctx();
+                query_ctx != nullptr) {
+                _read_options.io_ctx.remote_scan_cache_write_limiter =
+                        query_ctx->remote_scan_cache_write_limiter();
+            }
+            _read_options.io_ctx.inverted_index_snii_read_no_write_file_cache =
+                    _read_context->runtime_state->query_options()
+                            .inverted_index_snii_read_no_write_file_cache;
         }
-        _read_options.io_ctx.inverted_index_snii_read_no_write_file_cache =
-                _read_context->runtime_state->query_options()
-                        .inverted_index_snii_read_no_write_file_cache;
     }
 
     if (_read_context->condition_cache_digest) {

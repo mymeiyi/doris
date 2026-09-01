@@ -63,6 +63,7 @@
 #include "storage/options.h"
 #include "storage/rowid_conversion.h"
 #include "storage/rowset/beta_rowset.h"
+#include "storage/rowset/beta_rowset_reader.h"
 #include "storage/rowset/rowset.h"
 #include "storage/rowset/rowset_factory.h"
 #include "storage/rowset/rowset_meta.h"
@@ -748,18 +749,28 @@ TEST_F(VerticalCompactionTest, MergeHonorsKeyRanges) {
         auto output_writer = std::move(writer_result).value();
 
         Merger::Statistics stats;
+        RuntimeState runtime_state;
+        TQueryOptions query_options;
+        query_options.__set_enable_file_cache(false);
+        query_options.__set_disable_file_cache(false);
+        runtime_state.set_query_options(query_options);
         Status status;
         if (is_vertical) {
-            status = Merger::vertical_merge_rowsets(tablet, ReaderType::READER_BASE_COMPACTION,
-                                                    *tablet_schema, input_readers,
-                                                    output_writer.get(), 100, 1, &stats, nullptr,
-                                                    std::nullopt, std::move(key_range));
+            status = Merger::vertical_merge_rowsets(
+                    tablet, ReaderType::READER_BASE_COMPACTION, *tablet_schema, input_readers,
+                    output_writer.get(), 100, 1, &stats, nullptr, std::nullopt,
+                    std::move(key_range), &runtime_state);
         } else {
             status = Merger::vmerge_rowsets(tablet, ReaderType::READER_BASE_COMPACTION,
                                             *tablet_schema, input_readers, output_writer.get(),
-                                            &stats, std::nullopt, std::move(key_range));
+                                            &stats, std::nullopt, std::move(key_range),
+                                            &runtime_state);
         }
         ASSERT_TRUE(status.ok()) << status;
+        const auto& read_options =
+                assert_cast<const BetaRowsetReader&>(*input_readers.front())._read_options;
+        EXPECT_TRUE(read_options.io_ctx.read_file_cache);
+        EXPECT_TRUE(read_options.io_ctx.is_disposable);
 
         RowsetSharedPtr output_rowset;
         ASSERT_EQ(Status::OK(), output_writer->build(output_rowset));
@@ -796,6 +807,32 @@ TEST_F(VerticalCompactionTest, MergeHonorsKeyRanges) {
         run_case(is_vertical, {std::nullopt, make_key(3), false, true}, 0, 4);
         run_case(is_vertical, {make_key(6), std::nullopt, false, false}, 7, num_rows);
     }
+
+    RowsetReaderSharedPtr input_reader;
+    ASSERT_TRUE(input_rowset->create_reader(&input_reader).ok());
+    std::vector<RowsetReaderSharedPtr> input_readers = {std::move(input_reader)};
+    auto writer_context = create_rowset_writer_context(tablet_schema, NONOVERLAPPING, 100, {0, 0});
+    auto writer_result = RowsetFactory::create_rowset_writer(*engine_ref, writer_context, false);
+    ASSERT_TRUE(writer_result.has_value()) << writer_result.error();
+    auto output_writer = std::move(writer_result).value();
+    Merger::Statistics stats;
+    auto expect_invalid = [&](const TabletSchema& schema, Merger::KeyRange key_range) {
+        auto status = Merger::vmerge_rowsets(tablet, ReaderType::READER_BASE_COMPACTION, schema,
+                                             input_readers, output_writer.get(), &stats,
+                                             std::nullopt, std::move(key_range));
+        EXPECT_TRUE(status.is<ErrorCode::INVALID_ARGUMENT>()) << status;
+    };
+
+    auto wide_key = make_key(2);
+    wide_key.add_field(Field::create_field<TYPE_INT>(3));
+    expect_invalid(*tablet_schema, {std::move(wide_key), std::nullopt, true, false});
+
+    TabletSchemaPB zorder_schema_pb;
+    tablet_schema->to_schema_pb(&zorder_schema_pb);
+    zorder_schema_pb.set_sort_type(SortType::ZORDER);
+    TabletSchema zorder_schema;
+    zorder_schema.init_from_pb(zorder_schema_pb);
+    expect_invalid(zorder_schema, {make_key(2), std::nullopt, true, false});
 }
 
 TEST_F(VerticalCompactionTest, TestDupWithoutKeyVerticalMerge) {

@@ -69,12 +69,31 @@ namespace doris {
 
 namespace {
 
-void set_key_range(TabletReader::ReaderParams* reader_params, const Merger::KeyRange& range) {
+Status set_key_range(TabletReader::ReaderParams* reader_params, const TabletSchema& tablet_schema,
+                     const Merger::KeyRange& range) {
     DORIS_CHECK(range.lower_key.has_value() || range.upper_key.has_value());
+    if (tablet_schema.sort_type() == SortType::ZORDER ||
+        !tablet_schema.cluster_key_uids().empty()) {
+        return Status::Error<ErrorCode::INVALID_ARGUMENT>(
+                "Key range is not supported for Z-order or cluster-key tablets");
+    }
+    auto validate_bound = [&](const std::optional<OlapTuple>& bound) -> Status {
+        if (bound.has_value() &&
+            (bound->size() == 0 || bound->size() > tablet_schema.num_key_columns())) {
+            return Status::Error<ErrorCode::INVALID_ARGUMENT>(
+                    "Key range bound must be a non-empty leading key prefix: bound columns={}, "
+                    "key columns={}",
+                    bound->size(), tablet_schema.num_key_columns());
+        }
+        return Status::OK();
+    };
+    RETURN_IF_ERROR(validate_bound(range.lower_key));
+    RETURN_IF_ERROR(validate_bound(range.upper_key));
     reader_params->start_key.push_back(range.lower_key);
     reader_params->end_key.push_back(range.upper_key);
     reader_params->start_key_include = range.lower_inclusive;
     reader_params->end_key_include = range.upper_inclusive;
+    return Status::OK();
 }
 
 } // namespace
@@ -96,7 +115,7 @@ Status Merger::vmerge_rowsets(BaseTabletSPtr tablet, ReaderType reader_type,
     reader_params.read_row_binlog = tablet->is_row_binlog_tablet();
     reader_params.runtime_state = runtime_state;
     if (key_range.has_value()) {
-        set_key_range(&reader_params, *key_range);
+        RETURN_IF_ERROR(set_key_range(&reader_params, cur_tablet_schema, *key_range));
     }
     if (reader_params.read_row_binlog) {
         // Row-binlog horizontal (non-vertical) compaction must produce a globally
@@ -295,7 +314,7 @@ Status Merger::vertical_compact_one_group(
     reader_params.runtime_state = runtime_state;
     reader_params.enable_sparse_optimization = enable_sparse_optimization;
     if (key_range.has_value()) {
-        set_key_range(&reader_params, *key_range);
+        RETURN_IF_ERROR(set_key_range(&reader_params, tablet_schema, *key_range));
     }
 
     TabletReadSource read_source;
@@ -533,6 +552,11 @@ Status Merger::vertical_merge_rowsets(
         Statistics* stats_output, VerticalCompactionProgressCallback progress_cb,
         std::optional<std::pair<int64_t, int64_t>> segment_range, std::optional<KeyRange> key_range,
         RuntimeState* runtime_state) {
+    if (key_range.has_value() && reader_type != ReaderType::READER_BASE_COMPACTION) {
+        return Status::Error<ErrorCode::INVALID_ARGUMENT>(
+                "Key range is only supported for base compaction, reader_type={}",
+                static_cast<int>(reader_type));
+    }
     LOG(INFO) << "Start to do vertical compaction, tablet_id: " << tablet->tablet_id();
     VerticalCompactionContextStats context_stats;
     Defer log_context_stats {[&] {
