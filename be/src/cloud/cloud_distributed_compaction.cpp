@@ -2496,11 +2496,11 @@ Status DistributedCompactionWorker::handle_compaction(
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(
                 _tablet, reader_type, *output_meta.tablet_schema(), readers, writer.get(),
                 request->avg_segment_rows(), task->merge_way_num(), &stats, nullptr, segment_range,
-                _runtime_state.get(), merge_key_range));
+                merge_key_range, _runtime_state.get()));
     } else {
         RETURN_IF_ERROR(Merger::vmerge_rowsets(_tablet, reader_type, *output_meta.tablet_schema(),
                                                readers, writer.get(), &stats, segment_range,
-                                               _runtime_state.get(), merge_key_range));
+                                               merge_key_range, _runtime_state.get()));
     }
     merge_timer.stop();
     result->set_merge_finish_time_us(UnixMicros());
