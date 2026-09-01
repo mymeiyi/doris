@@ -115,11 +115,17 @@ Status BetaRowsetReader::get_segment_iterators(RowsetReaderContext* read_context
     _read_options.tablet_id = _rowset->rowset_meta()->tablet_id();
     _read_options.read_limit = _topn_limit;
     if (_read_context->lower_bound_keys != nullptr) {
+        DORIS_CHECK(_read_context->upper_bound_keys != nullptr);
+        DORIS_CHECK_EQ(_read_context->lower_bound_keys->size(),
+                       _read_context->upper_bound_keys->size());
         for (int i = 0; i < _read_context->lower_bound_keys->size(); ++i) {
-            _read_options.key_ranges.emplace_back(&_read_context->lower_bound_keys->at(i),
-                                                  _read_context->is_lower_keys_included->at(i),
-                                                  &_read_context->upper_bound_keys->at(i),
-                                                  _read_context->is_upper_keys_included->at(i));
+            const auto& lower_bound = _read_context->lower_bound_keys->at(i);
+            const auto& upper_bound = _read_context->upper_bound_keys->at(i);
+            const auto* lower_key = lower_bound.has_value() ? &*lower_bound : nullptr;
+            const auto* upper_key = upper_bound.has_value() ? &*upper_bound : nullptr;
+            _read_options.key_ranges.emplace_back(
+                    lower_key, _read_context->is_lower_keys_included->at(i), upper_key,
+                    _read_context->is_upper_keys_included->at(i));
         }
     }
 
