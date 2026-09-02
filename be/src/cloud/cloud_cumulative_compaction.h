@@ -18,6 +18,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -32,24 +33,15 @@
 
 namespace doris {
 
-class RowsetMeta;
-
 namespace cloud {
 
-struct SegmentGroupMergeRange {
-    int64_t segment_start;
-    int64_t segment_end;
-    int64_t merge_way_num;
-};
+class DistributedCompactionCoordinator;
 
 bool is_single_rowset_compaction_candidate(const RowsetSharedPtr& rowset);
 
 bool should_use_single_rowset_grouped_compaction(const std::vector<RowsetSharedPtr>& input_rowsets,
                                                  const TabletSchema& tablet_schema,
                                                  std::string_view compaction_policy);
-
-std::vector<SegmentGroupMergeRange> build_segment_group_merge_ranges(const RowsetMeta& rowset_meta,
-                                                                     int64_t segment_group_size);
 
 } // namespace cloud
 
@@ -61,6 +53,9 @@ public:
 
     Status prepare_compact() override;
     Status execute_compact() override;
+    Status execute_distributed_compact_async(std::function<void(Status)> remote_completion,
+                                             bool* distributed_started);
+    Status complete_distributed_compaction(Status remote_status);
     Status request_global_lock();
 
     std::optional<CompactionProfileType> profile_type() const override {
@@ -72,6 +67,9 @@ public:
 
     int64_t get_input_rowsets_bytes() const { return _input_rowsets_total_size; }
     int64_t get_input_num_rows() const { return _input_row_num; }
+    bool is_single_rowset_grouped_compaction() const {
+        return _single_rowset_compaction_segment_group_size.has_value();
+    }
 
 private:
     Status advance_cumulative_point_before_pick(int64_t min_conflict_version);
@@ -83,6 +81,8 @@ private:
     Status do_merge_input_rowsets(const std::vector<RowsetReaderSharedPtr>& input_rs_readers,
                                   MergeInputRowsetsResult* result) override;
 
+    Status complete_prepared_compaction(bool build_output_rowset);
+    Status handle_prepared_compaction_failure(Status status);
     void record_compaction_success(std::chrono::steady_clock::time_point execution_start_time);
     Status record_compaction_failure(Status status);
 
@@ -113,6 +113,12 @@ private:
     int64_t _picked_cumulative_point = 0;
     Version _last_delete_version {-1, -1};
     std::optional<int64_t> _single_rowset_compaction_segment_group_size;
+    std::shared_ptr<cloud::DistributedCompactionCoordinator> _distributed_compaction;
+    bool _distributed_commit_attempted = false;
+    std::unique_ptr<MergeInputRowsetsContext> _merge_execution_context;
+    int64_t _async_profile_start_time_ms = 0;
+    std::chrono::steady_clock::time_point _async_execution_start_time;
+    int64_t _async_execution_start_time_us = 0;
 };
 
 } // namespace doris

@@ -128,7 +128,8 @@ protected:
 
     Status execute_merge_input_rowsets(MergeInputRowsetsContext* context);
 
-    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context);
+    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context,
+                                                bool build_output_rowset);
 
     virtual Status prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
         return Status::OK();
