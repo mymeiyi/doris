@@ -305,7 +305,7 @@ Status Compaction::merge_input_rowsets() {
     MergeInputRowsetsContext context;
     RETURN_IF_ERROR(prepare_merge_input_rowsets_execution(&context));
     RETURN_IF_ERROR(execute_merge_input_rowsets(&context));
-    return finish_merge_input_rowsets_execution(&context);
+    return finish_merge_input_rowsets_execution(&context, /*build_output_rowset=*/true);
 }
 
 Status Compaction::prepare_merge_input_rowsets_execution(MergeInputRowsetsContext* context) {
@@ -348,15 +348,21 @@ Status Compaction::execute_merge_input_rowsets(MergeInputRowsetsContext* context
     return Status::OK();
 }
 
-Status Compaction::finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context) {
+Status Compaction::finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context,
+                                                        bool build_output_rowset) {
     auto& result = context->result;
     COUNTER_UPDATE(_merged_rows_counter, _stats.merged_rows);
     COUNTER_UPDATE(_filtered_rows_counter, _stats.filtered_rows);
 
-    // 3. In the `build`, `_close_file_writers` is called to close the inverted index file writer and write the final compound index file.
-    RETURN_NOT_OK_STATUS_WITH_WARN(_output_rs_writer->build(_output_rowset),
-                                   fmt::format("rowset writer build failed. output_version: {}",
-                                               _output_version.to_string()));
+    if (build_output_rowset) {
+        // 3. In the `build`, `_close_file_writers` is called to close the inverted index file
+        // writer and write the final compound index file.
+        RETURN_NOT_OK_STATUS_WITH_WARN(_output_rs_writer->build(_output_rowset),
+                                       fmt::format("rowset writer build failed. output_version: {}",
+                                                   _output_version.to_string()));
+    } else {
+        DORIS_CHECK(_output_rowset != nullptr);
+    }
     _output_rowset->rowset_meta()->set_commit_tso(commit_tso_range(_input_rowsets));
 
     // When true, writers should remove variant extracted subcolumns from the
