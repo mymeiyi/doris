@@ -128,7 +128,8 @@ protected:
 
     Status execute_merge_input_rowsets(MergeInputRowsetsContext* context);
 
-    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context);
+    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context,
+                                                bool build_output_rowset);
 
     virtual Status prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
         return Status::OK();
@@ -300,6 +301,9 @@ public:
 
 protected:
     CloudTablet* cloud_tablet() { return static_cast<CloudTablet*>(_tablet.get()); }
+    const CloudTablet* cloud_tablet() const {
+        return static_cast<const CloudTablet*>(_tablet.get());
+    }
 
     Status update_delete_bitmap() override;
 
