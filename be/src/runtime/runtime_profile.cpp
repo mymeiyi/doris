@@ -177,13 +177,14 @@ void RuntimeProfile::update(const std::vector<TRuntimeProfileNode>& nodes, int* 
 
             if (j == _counter_map.end()) {
                 _counter_map[tcounter.name] =
-                        _pool->add(new Counter(tcounter.type, tcounter.value));
+                        _pool->add(new Counter(tcounter.type, tcounter.value, tcounter.level));
             } else {
                 if (j->second->type() != tcounter.type) {
                     LOG(ERROR) << "Cannot update counters with the same name (" << j->first
                                << ") but different types.";
                 } else {
                     j->second->set(tcounter.value);
+                    j->second->set_level(tcounter.level);
                 }
             }
         }
@@ -256,14 +257,15 @@ void RuntimeProfile::update(const google::protobuf::RepeatedPtrField<PRuntimePro
             auto j = _counter_map.find(name);
 
             if (j == _counter_map.end()) {
-                _counter_map[name] =
-                        _pool->add(new Counter(unit_to_thrift(pcounter.type()), pcounter.value()));
+                _counter_map[name] = _pool->add(new Counter(unit_to_thrift(pcounter.type()),
+                                                            pcounter.value(), pcounter.level()));
             } else {
                 if (unit_to_proto(j->second->type()) != pcounter.type()) {
                     LOG(ERROR) << "Cannot update counters with the same name (" << name
                                << ") but different types.";
                 } else {
                     j->second->set(pcounter.value());
+                    j->second->set_level(pcounter.level());
                 }
             }
         }
