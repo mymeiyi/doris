@@ -239,6 +239,9 @@ void CompactionProfileAction::handle(HttpRequest* req) {
         // Resources
         profile.AddMember("peak_memory_bytes", task.peak_memory_bytes, allocator);
         profile.AddMember("is_vertical", task.is_vertical, allocator);
+        profile.AddMember("is_distributed", task.is_distributed, allocator);
+        profile.AddMember("distributed_task_count", task.distributed_task_count, allocator);
+        profile.AddMember("distributed_worker_count", task.distributed_worker_count, allocator);
         profile.AddMember("permits", task.permits, allocator);
 
         // Vertical compaction progress

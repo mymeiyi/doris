@@ -27,6 +27,7 @@
 #include <rapidjson/stringbuffer.h>
 
 #include <algorithm>
+#include <ctime>
 #include <memory>
 #include <variant>
 
@@ -35,6 +36,7 @@
 #include "cloud/cloud_cumulative_compaction.h"
 #include "cloud/cloud_cumulative_compaction_binlog_policy.h"
 #include "cloud/cloud_cumulative_compaction_policy.h"
+#include "cloud/cloud_distributed_compaction.h"
 #include "cloud/cloud_full_compaction.h"
 #include "cloud/cloud_index_change_compaction.h"
 #include "cloud/cloud_meta_mgr.h"
@@ -305,6 +307,8 @@ void CloudStorageEngine::stop() {
         }
     }
 
+    cloud::stop_distributed_compaction();
+
     if (_base_compaction_thread_pool) {
         _base_compaction_thread_pool->shutdown();
     }
@@ -314,6 +318,7 @@ void CloudStorageEngine::stop() {
     if (_binlog_compaction_thread_pool) {
         _binlog_compaction_thread_pool->shutdown();
     }
+    cloud::shutdown_distributed_compaction();
     _adaptive_thread_controller.stop();
     LOG(INFO) << "Cloud storage engine is stopped.";
 
@@ -400,6 +405,9 @@ Status CloudStorageEngine::start_bg_threads(std::shared_ptr<WorkloadGroup> wg_sp
                             .set_min_threads(config::sync_delete_bitmap_task_max_thread)
                             .set_max_threads(config::sync_delete_bitmap_task_max_thread)
                             .build(&_sync_delete_bitmap_thread_pool));
+    if (cloud::distributed_compaction_available()) {
+        RETURN_IF_ERROR(cloud::start_distributed_compaction());
+    }
 
     // TODO(plat1ko): check_bucket_enable_versioning_thread
 
@@ -506,6 +514,7 @@ void CloudStorageEngine::_refresh_storage_vault_info_thread_callback() {
 void CloudStorageEngine::_vacuum_stale_rowsets_thread_callback() {
     while (!_stop_background_threads_latch.wait_for(
             std::chrono::seconds(config::vacuum_stale_rowsets_interval_s))) {
+        cloud::remove_expired_distributed_compactions(::time(nullptr));
         _tablet_mgr->vacuum_stale_rowsets(_stop_background_threads_latch);
     }
 }
@@ -1009,25 +1018,42 @@ Status CloudStorageEngine::_submit_base_compaction_task(const CloudTabletSPtr& t
         std::lock_guard lock(_compaction_mtx);
         _submitted_base_compactions[tablet->tablet_id()] = compaction;
     }
-    st = _base_compaction_thread_pool->submit_func([=, this, compaction = std::move(compaction)]() {
+    auto task_finished = std::make_shared<std::atomic_bool>(false);
+    auto executing_registered = std::make_shared<std::atomic_bool>(false);
+    auto complete_task = [=, this](Status result) {
+        if (task_finished->exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        if (!result.ok()) {
+            tablet->set_last_base_compaction_failure_time(UnixMillis());
+        }
+        CompactionTaskTracker::instance()->remove_task(compaction_id);
+        {
+            std::lock_guard lock(_compaction_mtx);
+            if (executing_registered->load(std::memory_order_acquire)) {
+                _executing_base_compactions.erase(tablet->tablet_id());
+            }
+            _submitted_base_compactions.erase(tablet->tablet_id());
+        }
+        g_base_compaction_running_task_count << -1;
+        DorisMetrics::instance()->base_compaction_task_running_total->increment(-1);
+        DorisMetrics::instance()->base_compaction_task_pending_total->set_value(
+                _base_compaction_thread_pool->get_queue_size());
+    };
+
+    st = _base_compaction_thread_pool->submit_func([=, this]() {
         DorisMetrics::instance()->base_compaction_task_running_total->increment(1);
         DorisMetrics::instance()->base_compaction_task_pending_total->set_value(
                 _base_compaction_thread_pool->get_queue_size());
         g_base_compaction_running_task_count << 1;
         signal::tablet_id = tablet->tablet_id();
-        Defer defer {[&]() {
-            // Idempotent cleanup: remove task from tracker
-            CompactionTaskTracker::instance()->remove_task(compaction_id);
-            g_base_compaction_running_task_count << -1;
-            std::lock_guard lock(_compaction_mtx);
-            _submitted_base_compactions.erase(tablet->tablet_id());
-            DorisMetrics::instance()->base_compaction_task_running_total->increment(-1);
-            DorisMetrics::instance()->base_compaction_task_pending_total->set_value(
-                    _base_compaction_thread_pool->get_queue_size());
-        }};
         auto st = _request_tablet_global_compaction_lock(ReaderType::READER_BASE_COMPACTION, tablet,
                                                          compaction);
-        if (!st.ok()) return;
+        if (!st.ok()) {
+            complete_task(std::move(st));
+            return;
+        }
+        executing_registered->store(true, std::memory_order_release);
         // Update tracker to RUNNING after acquiring global lock
         {
             RunningStats rs;
@@ -1035,14 +1061,7 @@ Status CloudStorageEngine::_submit_base_compaction_task(const CloudTabletSPtr& t
                     duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
             CompactionTaskTracker::instance()->update_to_running(compaction_id, rs);
         }
-        st = compaction->execute_compact();
-        if (!st.ok()) {
-            // Error log has been output in `execute_compact`
-            long now = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-            tablet->set_last_base_compaction_failure_time(now);
-        }
-        std::lock_guard lock(_compaction_mtx);
-        _executing_base_compactions.erase(tablet->tablet_id());
+        _execute_base_compaction_task(tablet, compaction, complete_task);
     });
     DorisMetrics::instance()->base_compaction_task_pending_total->set_value(
             _base_compaction_thread_pool->get_queue_size());
@@ -1165,6 +1184,15 @@ Status CloudStorageEngine::_submit_cumulative_compaction_task(const CloudTabletS
             tablet->last_cumu_no_suitable_version_ms = 0;
         }
     };
+    if (compaction_type == CompactionType::CUMULATIVE_COMPACTION) {
+        auto status = _try_submit_cumulative_compaction_task(
+                tablet, compaction, compaction_id, erase_submitted_cumu_compaction,
+                erase_executing_cumu_compaction);
+        if (status.has_value()) {
+            return std::move(*status);
+        }
+    }
+
     auto& submit_thread_pool = compaction_type == CompactionType::CUMU_BINLOG_COMPACTION
                                        ? _binlog_compaction_thread_pool
                                        : _cumu_compaction_thread_pool;
@@ -1187,7 +1215,6 @@ Status CloudStorageEngine::_submit_cumulative_compaction_task(const CloudTabletS
         Defer defer {[&]() {
             DBUG_EXECUTE_IF("CloudStorageEngine._submit_cumulative_compaction_task.sleep",
                             { sleep(5); })
-            // Idempotent cleanup: remove task from tracker
             CompactionTaskTracker::instance()->remove_task(compaction_id);
             if (cumu_thread_counted) {
                 std::lock_guard lock(_cumu_compaction_delay_mtx);
@@ -1210,7 +1237,9 @@ Status CloudStorageEngine::_submit_cumulative_compaction_task(const CloudTabletS
         }};
         auto st = _request_tablet_global_compaction_lock(ReaderType::READER_CUMULATIVE_COMPACTION,
                                                          tablet, compaction);
-        if (!st.ok()) return;
+        if (!st.ok()) {
+            return;
+        }
         // Update tracker to RUNNING after acquiring global lock
         {
             RunningStats rs;
