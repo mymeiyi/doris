@@ -31,6 +31,8 @@ suite("test_cloud_distributed_base_compaction", "docker") {
     options.beConfigs += [
         "enable_cloud_distributed_base_compaction=true",
         "cloud_distributed_compaction_status_poll_interval_ms=100",
+        "enable_mow_compaction_correctness_check_fail=true",
+        "enable_prune_delete_sign_when_base_compaction=false",
         "base_compaction_min_rowset_num=2",
         "cumulative_compaction_min_deltas=2",
         "compaction_promotion_min_size_mbytes=0",
