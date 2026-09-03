@@ -18,6 +18,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 
@@ -38,7 +39,7 @@
 namespace doris {
 namespace cloud {
 class CloudMetaMgr;
-}
+} // namespace cloud
 namespace io {
 class FileCacheBlockDownloader;
 }
@@ -101,7 +102,6 @@ public:
         return *_calc_tablet_delete_bitmap_task_thread_pool;
     }
     ThreadPool& sync_delete_bitmap_thread_pool() const { return *_sync_delete_bitmap_thread_pool; }
-
     std::optional<StorageResource> get_storage_resource(const std::string& vault_id) {
         VLOG_DEBUG << "Getting storage resource for vault_id: " << vault_id;
 
@@ -216,9 +216,19 @@ private:
                                                                   bool check_score);
     Status _adjust_compaction_thread_num();
     Status _submit_base_compaction_task(const CloudTabletSPtr& tablet, int trigger_method = 0);
+    void _execute_base_compaction_task(
+            const CloudTabletSPtr& tablet,
+            const std::shared_ptr<CloudBaseCompaction>& compaction,
+            std::function<void(Status)> complete_task);
+
     Status _submit_cumulative_compaction_task(
             const CloudTabletSPtr& tablet, int trigger_method = 0,
             CompactionType compaction_type = CompactionType::CUMULATIVE_COMPACTION);
+    std::optional<Status> _try_submit_cumulative_compaction_task(
+            const CloudTabletSPtr& tablet,
+            const std::shared_ptr<CloudCumulativeCompaction>& compaction, int64_t compaction_id,
+            std::function<void()> erase_submitted_cumu_compaction,
+            std::function<void()> erase_executing_cumu_compaction);
     Status _submit_binlog_compaction_task(const CloudTabletSPtr& tablet, int trigger_method = 0);
     Status _submit_full_compaction_task(const CloudTabletSPtr& tablet, int trigger_method = 0);
     Status _request_tablet_global_compaction_lock(ReaderType compaction_type,

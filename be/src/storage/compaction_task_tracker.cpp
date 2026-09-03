@@ -175,6 +175,9 @@ void CompactionTaskTracker::_apply_completion(CompactionTaskInfo& info,
     info.bytes_read_from_local = stats.bytes_read_from_local;
     info.bytes_read_from_remote = stats.bytes_read_from_remote;
     info.peak_memory_bytes = stats.peak_memory_bytes;
+    info.is_distributed = stats.is_distributed;
+    info.distributed_task_count = stats.distributed_task_count;
+    info.distributed_worker_count = stats.distributed_worker_count;
     // Backfill input stats if they were 0 at register time.
     // Local compaction populates _input_rowsets_data_size etc. in build_basic_info()
     // which runs inside execute_compact_impl(), after register_task().
