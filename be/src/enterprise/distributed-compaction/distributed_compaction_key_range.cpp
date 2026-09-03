@@ -187,7 +187,7 @@ bool is_supported_key_range_column_type(FieldType type) {
 
 namespace {
 
-bool has_lossless_short_key_encoding(const TabletColumn& column) {
+bool is_fully_encoded_in_short_key(const TabletColumn& column) {
     return column.type() == FieldType::OLAP_FIELD_TYPE_BOOL || is_integer_key(column.type()) ||
            column.type() == FieldType::OLAP_FIELD_TYPE_IPV4 ||
            column.type() == FieldType::OLAP_FIELD_TYPE_IPV6 ||
@@ -198,42 +198,44 @@ bool has_lossless_short_key_encoding(const TabletColumn& column) {
 KeyRangeSamplingPlan build_key_range_sampling_plan(const TabletSchema& schema, bool is_mow,
                                                    size_t key_column_count) {
     KeyRangeSamplingPlan plan;
-    plan.primary_key_fallback_reason = is_mow ? "none" : "not_mow";
+    plan.primary_key_skip_reason = is_mow ? "none" : "not_mow";
     if (is_mow) {
         // Cluster-key MOW is rejected before planning, so a PK-index ordinal is the segment rowid.
-        plan.short_key_fallback_reason = "mow";
+        plan.short_key_skip_reason = "mow";
         if (key_column_count != schema.num_key_columns()) {
-            plan.primary_key_fallback_reason = "unsupported_primary_key";
+            plan.primary_key_skip_reason = "unsupported_primary_key_type";
             return plan;
         }
         plan.candidate_mode = KeyRangeSamplingMode::PRIMARY_KEY;
-        plan.prefix_length = key_column_count;
+        plan.encoded_key_column_count = key_column_count;
         if (schema.has_sequence_col()) {
-            plan.encoded_key_suffix_length = schema.column(schema.sequence_col_idx()).length() + 1;
+            plan.encoded_primary_key_suffix_size =
+                    schema.column(schema.sequence_col_idx()).length() + 1;
         }
         return plan;
     }
 
-    plan.prefix_length = schema.num_short_key_columns();
-    if (plan.prefix_length > key_column_count) {
-        plan.short_key_fallback_reason = "unsupported_short_key";
+    plan.encoded_key_column_count = schema.num_short_key_columns();
+    if (plan.encoded_key_column_count > key_column_count) {
+        plan.short_key_skip_reason = "unsupported_short_key_type";
         return plan;
     }
 
-    plan.candidate_mode = KeyRangeSamplingMode::SHORT_KEY_LOSSLESS;
-    plan.short_key_fallback_reason = "none";
-    for (size_t column_index = 0; column_index < plan.prefix_length; ++column_index) {
-        if (has_lossless_short_key_encoding(schema.column(column_index))) {
+    plan.candidate_mode = KeyRangeSamplingMode::SHORT_KEY_DIRECT;
+    plan.short_key_skip_reason = "none";
+    for (size_t column_index = 0; column_index < plan.encoded_key_column_count; ++column_index) {
+        if (is_fully_encoded_in_short_key(schema.column(column_index))) {
             continue;
         }
-        plan.short_key_encoding_lossless = false;
-        if (column_index + 1 < plan.prefix_length) {
+        plan.short_key_fully_encoded = false;
+        if (column_index + 1 < plan.encoded_key_column_count) {
             // Current FE only permits VARCHAR as the last short-key column. Keep this typed
-            // fallback for schemas not produced by current FE and future lossy short-key types.
+            // fallback for schemas not produced by current FE and future partially encoded
+            // short-key types.
             plan.candidate_mode = KeyRangeSamplingMode::TYPED_KEY;
-            plan.short_key_fallback_reason = "non_terminal_lossy_short_key";
+            plan.short_key_skip_reason = "non_terminal_truncated_short_key";
         } else {
-            plan.candidate_mode = KeyRangeSamplingMode::SHORT_KEY_REFINEMENT;
+            plan.candidate_mode = KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT;
         }
         break;
     }
@@ -504,9 +506,10 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
                 for (size_t sample_index = 0; sample_index < weighted_rowids.size();
                      ++sample_index) {
                     auto& primary_key = primary_keys[sample_index];
-                    DORIS_CHECK_GT(primary_key.size(), key_sampling_plan.encoded_key_suffix_length);
+                    DORIS_CHECK_GT(primary_key.size(),
+                                   key_sampling_plan.encoded_primary_key_suffix_size);
                     primary_key.resize(primary_key.size() -
-                                       key_sampling_plan.encoded_key_suffix_length);
+                                       key_sampling_plan.encoded_primary_key_suffix_size);
                     encoded_samples.push_back({.key = std::move(primary_key),
                                                .weight = weighted_rowids[sample_index].weight,
                                                .segment_index = segment_index,
@@ -529,7 +532,7 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
         }
     }
 
-    CompositeKeyRangePlan key_plan;
+    CompositeKeyRangePlan key_range_plan;
     int64_t boundary_choose_time_us = 0;
     size_t typed_sample_count = 0;
     size_t boundary_refinement_group_count = 0;
@@ -543,8 +546,8 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
         if (key_sampling_plan.uses_primary_key_encoding() ||
             encoded_boundaries.size() + 1 >= range_count) {
             key_sampling_plan.selected_mode = key_sampling_plan.candidate_mode;
-            key_plan.prefix_length = key_sampling_plan.prefix_length;
-            key_plan.boundaries.reserve(encoded_boundaries.size());
+            key_range_plan.prefix_length = key_sampling_plan.encoded_key_column_count;
+            key_range_plan.boundaries.reserve(encoded_boundaries.size());
             for (const auto& boundary : encoded_boundaries) {
                 DORIS_CHECK_LT(boundary.segment_index, segment_samples.size());
                 std::vector<rowid_t> rowids {boundary.rowid};
@@ -553,7 +556,7 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
                 const int64_t sample_read_start_us = MonotonicMicros();
                 const Status sample_read_status =
                         read_key_samples(segment_samples[boundary.segment_index].segment, schema,
-                                         key_plan.prefix_length, rowids, &reader_stats, &keys);
+                                         key_range_plan.prefix_length, rowids, &reader_stats, &keys);
                 const int64_t sample_read_time_us = MonotonicMicros() - sample_read_start_us;
                 key_sample_read_time_us += sample_read_time_us;
                 boundary_key_read_time_us += sample_read_time_us;
@@ -561,18 +564,19 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
                 planning_io_stats.merge_from(reader_stats.file_cache_stats);
                 key_sample_io_stats.merge_from(reader_stats.file_cache_stats);
                 DORIS_CHECK_EQ(keys.size(), 1);
-                key_plan.boundaries.push_back(std::move(keys.front()));
+                key_range_plan.boundaries.push_back(std::move(keys.front()));
                 ++typed_sample_count;
             }
-            for (size_t boundary_index = 1; boundary_index < key_plan.boundaries.size();
+            for (size_t boundary_index = 1; boundary_index < key_range_plan.boundaries.size();
                  ++boundary_index) {
-                DORIS_CHECK(key_plan.boundaries[boundary_index - 1] <
-                            key_plan.boundaries[boundary_index]);
+                DORIS_CHECK(key_range_plan.boundaries[boundary_index - 1] <
+                            key_range_plan.boundaries[boundary_index]);
             }
         } else {
-            key_sampling_plan.short_key_fallback_reason = "insufficient_encoded_boundaries";
+            key_sampling_plan.short_key_skip_reason = "insufficient_encoded_boundaries";
         }
-    } else if (key_sampling_plan.candidate_mode == KeyRangeSamplingMode::SHORT_KEY_REFINEMENT) {
+    } else if (key_sampling_plan.candidate_mode ==
+               KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT) {
         key_sampling_plan.selected_mode = key_sampling_plan.candidate_mode;
         const int64_t encoded_group_start_us = MonotonicMicros();
         auto encoded_groups = group_encoded_key_samples(std::move(encoded_samples));
@@ -652,8 +656,8 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
         boundary_refinement_group_count = refined_groups.size();
 
         const int64_t refined_boundary_start_us = MonotonicMicros();
-        key_plan.prefix_length = key_column_count;
-        key_plan.boundaries.reserve(range_count - 1);
+        key_range_plan.prefix_length = key_column_count;
+        key_range_plan.boundaries.reserve(range_count - 1);
         for (size_t split = 1; split < range_count; ++split) {
             if (target_group_indices.empty()) {
                 break;
@@ -687,9 +691,11 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
                 }
             }
             if (best_key.has_value() &&
-                (key_plan.boundaries.empty() || key_plan.boundaries.back() != *best_key)) {
-                DORIS_CHECK(key_plan.boundaries.empty() || key_plan.boundaries.back() < *best_key);
-                key_plan.boundaries.push_back(std::move(*best_key));
+                (key_range_plan.boundaries.empty() ||
+                 key_range_plan.boundaries.back() != *best_key)) {
+                DORIS_CHECK(key_range_plan.boundaries.empty() ||
+                            key_range_plan.boundaries.back() < *best_key);
+                key_range_plan.boundaries.push_back(std::move(*best_key));
             }
         }
         boundary_choose_time_us += MonotonicMicros() - refined_boundary_start_us;
@@ -721,10 +727,10 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
         }
         typed_sample_count = samples.size();
         const int64_t boundary_choose_start_us = MonotonicMicros();
-        key_plan = choose_composite_key_range_boundaries(samples, range_count);
+        key_range_plan = choose_composite_key_range_boundaries(samples, range_count);
         boundary_choose_time_us += MonotonicMicros() - boundary_choose_start_us;
     }
-    *result = {.key_ranges = std::move(key_plan),
+    *result = {.key_ranges = std::move(key_range_plan),
                .sampling = key_sampling_plan,
                .target_sample_count = target_sample_count,
                .sampled_row_count = sampled_row_count,

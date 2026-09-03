@@ -1775,9 +1775,9 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
     BaseKeyRangePlanningResult key_range_planning;
     RETURN_IF_ERROR(build_base_key_range_plan(input_rowsets, schema, is_mow, range_count,
                                               total_input_rows, &key_range_planning));
-    const auto& key_plan = key_range_planning.key_ranges;
+    const auto& key_range_plan = key_range_planning.key_ranges;
     const auto& key_sampling_plan = key_range_planning.sampling;
-    const size_t group_count = key_plan.boundaries.size() + 1;
+    const size_t group_count = key_range_plan.boundaries.size() + 1;
     if (group_count < 2) {
         return Status::OK();
     }
@@ -1867,11 +1867,11 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             auto* key_range = request_task->mutable_key_range();
             if (group_index > 0) {
                 set_key_fields(key_range->mutable_lower_key(), schema,
-                               key_plan.boundaries[group_index - 1]);
+                               key_range_plan.boundaries[group_index - 1]);
             }
             if (group_index + 1 < group_count) {
                 set_key_fields(key_range->mutable_upper_key(), schema,
-                               key_plan.boundaries[group_index]);
+                               key_range_plan.boundaries[group_index]);
             }
         }
     }
@@ -1956,17 +1956,16 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             .tag("samples", key_range_planning.sampled_row_count)
             .tag("encoded_samples", key_range_planning.encoded_sample_count)
             .tag("typed_samples", key_range_planning.typed_sample_count)
-            .tag("boundary_candidate_rows", key_plan.boundaries.size())
-            .tag("short_key_fast_path", key_sampling_plan.selected_short_key_fast_path())
-            .tag("primary_key_fast_path", key_sampling_plan.selected_primary_key_fast_path())
-            .tag("primary_key_fast_path_fallback_reason",
-                 key_sampling_plan.primary_key_fallback_reason)
-            .tag("short_key_encoding_lossless", key_sampling_plan.short_key_encoding_lossless)
-            .tag("short_key_collision_refinement",
-                 key_sampling_plan.selected_short_key_refinement())
+            .tag("boundary_count", key_range_plan.boundaries.size())
+            .tag("short_key_fast_path", key_sampling_plan.is_short_key_fast_path_selected())
+            .tag("primary_key_fast_path", key_sampling_plan.is_primary_key_fast_path_selected())
+            .tag("primary_key_skip_reason", key_sampling_plan.primary_key_skip_reason)
+            .tag("short_key_fully_encoded", key_sampling_plan.short_key_fully_encoded)
+            .tag("short_key_boundary_refinement",
+                 key_sampling_plan.is_short_key_boundary_refinement_selected())
             .tag("boundary_refinement_groups", key_range_planning.boundary_refinement_group_count)
             .tag("boundary_refinement_samples", key_range_planning.boundary_refinement_sample_count)
-            .tag("short_key_fast_path_fallback_reason", key_sampling_plan.short_key_fallback_reason)
+            .tag("short_key_skip_reason", key_sampling_plan.short_key_skip_reason)
             .tag("target_samples", key_range_planning.target_sample_count)
             .tag("requested_ranges", range_count)
             .tag("actual_ranges", group_count);

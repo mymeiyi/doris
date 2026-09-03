@@ -25,8 +25,8 @@ namespace doris::cloud {
 enum class KeyRangeSamplingMode {
     TYPED_KEY,
     PRIMARY_KEY,
-    SHORT_KEY_LOSSLESS,
-    SHORT_KEY_REFINEMENT,
+    SHORT_KEY_DIRECT,
+    SHORT_KEY_BOUNDARY_REFINEMENT,
 };
 
 struct KeyRangeSamplingPlan {
@@ -35,35 +35,35 @@ struct KeyRangeSamplingPlan {
     }
 
     bool uses_short_key_encoding() const {
-        return candidate_mode == KeyRangeSamplingMode::SHORT_KEY_LOSSLESS ||
-               candidate_mode == KeyRangeSamplingMode::SHORT_KEY_REFINEMENT;
+        return candidate_mode == KeyRangeSamplingMode::SHORT_KEY_DIRECT ||
+               candidate_mode == KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT;
     }
 
     bool uses_direct_encoded_boundaries() const {
         return candidate_mode == KeyRangeSamplingMode::PRIMARY_KEY ||
-               candidate_mode == KeyRangeSamplingMode::SHORT_KEY_LOSSLESS;
+               candidate_mode == KeyRangeSamplingMode::SHORT_KEY_DIRECT;
     }
 
-    bool selected_short_key_fast_path() const {
-        return selected_mode == KeyRangeSamplingMode::SHORT_KEY_LOSSLESS ||
-               selected_mode == KeyRangeSamplingMode::SHORT_KEY_REFINEMENT;
+    bool is_short_key_fast_path_selected() const {
+        return selected_mode == KeyRangeSamplingMode::SHORT_KEY_DIRECT ||
+               selected_mode == KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT;
     }
 
-    bool selected_primary_key_fast_path() const {
+    bool is_primary_key_fast_path_selected() const {
         return selected_mode == KeyRangeSamplingMode::PRIMARY_KEY;
     }
 
-    bool selected_short_key_refinement() const {
-        return selected_mode == KeyRangeSamplingMode::SHORT_KEY_REFINEMENT;
+    bool is_short_key_boundary_refinement_selected() const {
+        return selected_mode == KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT;
     }
 
     KeyRangeSamplingMode candidate_mode = KeyRangeSamplingMode::TYPED_KEY;
     KeyRangeSamplingMode selected_mode = KeyRangeSamplingMode::TYPED_KEY;
-    size_t prefix_length = 0;
-    size_t encoded_key_suffix_length = 0;
-    bool short_key_encoding_lossless = true;
-    std::string_view short_key_fallback_reason;
-    std::string_view primary_key_fallback_reason;
+    size_t encoded_key_column_count = 0;
+    size_t encoded_primary_key_suffix_size = 0;
+    bool short_key_fully_encoded = true;
+    std::string_view short_key_skip_reason;
+    std::string_view primary_key_skip_reason;
 };
 
 struct BaseKeyRangePlanningResult {
