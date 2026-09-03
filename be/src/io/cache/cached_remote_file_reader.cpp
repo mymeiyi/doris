@@ -900,10 +900,14 @@ Status CachedRemoteFileReader::_read_remote_blocks_into_cache(
         }
     }
 
+    const bool skip_cache_write = !io_ctx->preferred_peer_host.empty();
+    if (skip_cache_write) {
+        stats.skip_cache = true;
+    }
     SCOPED_CONCURRENCY_COUNT(ConcurrencyStatsManager::instance().cached_remote_reader_write_back);
     for (size_t idx = 0; idx < empty_blocks.size(); ++idx) {
         auto& block = empty_blocks[idx];
-        if (block->state() == FileBlock::State::SKIP_CACHE) {
+        if (skip_cache_write || block->state() == FileBlock::State::SKIP_CACHE) {
             continue;
         }
 
@@ -1307,6 +1311,9 @@ Status CachedRemoteFileReader::read_at_impl(size_t offset, Slice result, size_t*
 }
 
 void CachedRemoteFileReader::prefetch_range(size_t offset, size_t size, const IOContext* io_ctx) {
+    if (io_ctx != nullptr && !io_ctx->preferred_peer_host.empty()) {
+        return;
+    }
     if (offset >= this->size() || size == 0) {
         return;
     }
@@ -1375,8 +1382,7 @@ void CachedRemoteFileReader::_update_stats(const ReadStatistics& read_stats,
         if (source_read_breakdown.peer_bytes != 0 || read_stats.from_peer_cache) {
             // Count peer IO whenever peer was used, even if its fetched blocks were entirely
             // outside the copy range (e.g., backward-aligned prefetch block before
-            // offset+already_read).  In that case peer_bytes==0 but the peer RPC did happen
-            // and wrote data into the local file cache.
+            // offset+already_read). In that case peer_bytes==0 but the peer RPC did happen.
             statis->num_peer_io_total++;
             statis->bytes_read_from_peer += source_read_breakdown.peer_bytes;
             statis->peer_io_timer += read_stats.peer_read_timer;

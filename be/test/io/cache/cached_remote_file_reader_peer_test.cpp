@@ -608,6 +608,7 @@ TEST_F(CachedRemoteFileReaderPeerTest, read_at_uses_preferred_peer_when_global_p
     EXPECT_EQ(cache_stats.peer_hosts.count("127.0.0.1"), 1);
     EXPECT_EQ(cache_stats.num_remote_io_total, 0);
     EXPECT_EQ(cache_stats.bytes_read_from_remote, 0);
+    EXPECT_EQ(cache_stats.bytes_write_into_cache, 0);
 }
 
 TEST_F(CachedRemoteFileReaderPeerTest, read_at_peer_dryrun_downloads_cache_without_copying_result) {
@@ -2176,6 +2177,7 @@ TEST_F(CachedRemoteFileReaderPeerTest,
     EXPECT_EQ(cache_stats.bytes_read_from_peer, 0);
     EXPECT_EQ(cache_stats.num_remote_io_total, 1);
     EXPECT_EQ(cache_stats.bytes_read_from_remote, 10);
+    EXPECT_EQ(cache_stats.bytes_write_into_cache, 0);
 }
 
 } // namespace doris::io
