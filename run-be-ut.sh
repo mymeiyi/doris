@@ -110,6 +110,18 @@ parse_extra_be_modules() {
     done
 }
 
+be_feature_enabled() {
+    local target_feature="$1"
+    local existing
+
+    for existing in "${BE_EXTRA_FEATURE_KEYS[@]}"; do
+        if [[ "${existing}" == "${target_feature}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Check args
 usage() {
     echo "
@@ -211,6 +223,13 @@ CMAKE_BUILD_TYPE="$(echo "${CMAKE_BUILD_TYPE}" | awk '{ print(toupper($0)) }')"
 
 EXTRA_BE_MODULES="${EXTRA_BE_MODULES:-}"
 parse_extra_be_modules "${EXTRA_BE_MODULES}"
+
+if [[ -d "${DORIS_HOME}/be/src/enterprise/distributed-compaction" ]] &&
+        ! be_feature_enabled "distributed-compaction"; then
+    BE_EXTRA_FEATURE_KEYS+=("distributed-compaction")
+    BE_EXTRA_MODULE_PATHS+=("enterprise/distributed-compaction")
+    EXTRA_BE_MODULES="${EXTRA_BE_MODULES:+${EXTRA_BE_MODULES},}distributed-compaction=enterprise/distributed-compaction"
+fi
 
 BE_EXTRA_CMAKE_ARGS=()
 for ((i = 0; i < ${#BE_EXTRA_FEATURE_KEYS[@]}; i++)); do
