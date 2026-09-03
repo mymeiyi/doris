@@ -128,7 +128,8 @@ protected:
 
     Status execute_merge_input_rowsets(MergeInputRowsetsContext* context);
 
-    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context);
+    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context,
+                                                bool build_output_rowset);
 
     virtual Status prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
         return Status::OK();
@@ -206,6 +207,9 @@ protected:
     CompactionState _state {CompactionState::INITED};
 
     bool _is_vertical;
+    bool _is_distributed {false};
+    int64_t _distributed_task_count {0};
+    int64_t _distributed_worker_count {0};
     bool _is_ordered_data_compaction {false};
     bool _trigger_quick_merge_by_binlog {false};
     bool _allow_delete_in_cumu_compaction;
@@ -297,6 +301,9 @@ public:
 
 protected:
     CloudTablet* cloud_tablet() { return static_cast<CloudTablet*>(_tablet.get()); }
+    const CloudTablet* cloud_tablet() const {
+        return static_cast<const CloudTablet*>(_tablet.get());
+    }
 
     Status update_delete_bitmap() override;
 

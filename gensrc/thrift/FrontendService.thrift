@@ -1296,6 +1296,23 @@ struct TGetTabletReplicaInfosResult {
     3: optional string token
 }
 
+struct TGetCloudCompactionBackendsRequest {
+    1: required i64 backend_id
+}
+
+struct TCloudCompactionBackend {
+    1: required i64 backend_id
+    2: required string host
+    3: required i32 brpc_port
+    4: required string cloud_unique_id
+    5: required string cloud_compute_group_id
+}
+
+struct TGetCloudCompactionBackendsResult {
+    1: required Status.TStatus status
+    2: optional list<TCloudCompactionBackend> backends
+}
+
 enum TSnapshotType {
     REMOTE = 0,
     LOCAL  = 1,
@@ -2048,6 +2065,9 @@ service FrontendService {
     TQueryStatsResult getQueryStats(1: TGetQueryStatsRequest request)
 
     TGetTabletReplicaInfosResult getTabletReplicaInfos(1: TGetTabletReplicaInfosRequest request)
+
+    TGetCloudCompactionBackendsResult getCloudCompactionBackends(
+        1: TGetCloudCompactionBackendsRequest request)
 
     TGetMasterTokenResult getMasterToken(1: TGetMasterTokenRequest request)
 
