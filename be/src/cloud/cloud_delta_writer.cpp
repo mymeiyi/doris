@@ -27,6 +27,7 @@
 #include "runtime/thread_context.h"
 #include "storage/adaptive_thread_pool_controller.h"
 #include "util/threadpool.h"
+#include "util/time.h"
 
 namespace doris {
 
@@ -36,6 +37,7 @@ bvar::Adder<int64_t> g_cloud_commit_empty_rowset_count("cloud_commit_empty_rowse
 CloudDeltaWriter::CloudDeltaWriter(CloudStorageEngine& engine, const WriteRequest& req,
                                    RuntimeProfile* profile, const UniqueId& load_id)
         : BaseDeltaWriter(req, profile, load_id) {
+    _init_write_profile();
     _rowset_builder = std::make_unique<CloudRowsetBuilder>(engine, req, profile);
     _resource_ctx = thread_context()->resource_ctx();
 }
@@ -45,6 +47,7 @@ CloudDeltaWriter::CloudDeltaWriter(CloudStorageEngine& engine, const WriteReques
                                    const WriteRequest& sub_row_binlog_req, RuntimeProfile* profile,
                                    const UniqueId& load_id)
         : BaseDeltaWriter(group_build_req, profile, load_id) {
+    _init_write_profile();
     DCHECK(group_build_req.write_req_type == WriteRequestType::GROUP &&
            sub_data_req.write_req_type == WriteRequestType::DATA &&
            sub_row_binlog_req.write_req_type == WriteRequestType::ROW_BINLOG);
@@ -54,6 +57,16 @@ CloudDeltaWriter::CloudDeltaWriter(CloudStorageEngine& engine, const WriteReques
 }
 
 CloudDeltaWriter::~CloudDeltaWriter() = default;
+
+void CloudDeltaWriter::_init_write_profile() {
+    if (_profile == nullptr) {
+        return;
+    }
+    _write_lock_wait_timer = ADD_TIMER(_profile, "WriteLockWaitTime");
+    _write_lock_hold_timer = ADD_TIMER(_profile, "WriteLockHoldTime");
+    _write_memtable_timer = ADD_TIMER(_profile, "WriteMemTableTime");
+    _write_count = ADD_COUNTER(_profile, "WriteCount", TUnit::UNIT);
+}
 
 Status CloudDeltaWriter::batch_init(std::vector<CloudDeltaWriter*> writers) {
     if (writers.empty()) {
@@ -97,7 +110,13 @@ Status CloudDeltaWriter::write(const Block* block, const TabletAddRowsPayload& r
                 },
                 table_id());
     }
+    const auto lock_wait_start_ns = MonotonicNanos();
     std::lock_guard lock(_mtx);
+    if (_write_lock_wait_timer != nullptr) {
+        COUNTER_UPDATE(_write_lock_wait_timer, MonotonicNanos() - lock_wait_start_ns);
+        COUNTER_UPDATE(_write_count, 1);
+    }
+    SCOPED_TIMER(_write_lock_hold_timer);
     CHECK(_is_init || _is_cancelled);
     {
         SCOPED_TIMER(_wait_flush_limit_timer);
@@ -118,6 +137,7 @@ Status CloudDeltaWriter::write(const Block* block, const TabletAddRowsPayload& r
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
+    SCOPED_TIMER(_write_memtable_timer);
     return _memtable_writer->write(block, rows, memtable_flushed);
 }
 
