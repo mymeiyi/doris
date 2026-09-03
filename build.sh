@@ -727,6 +727,13 @@ parse_extra_modules "FE_EXTRA" "${EXTRA_FE_MODULES}" "${DORIS_HOME}/fe" "fe"
 parse_extra_modules "BE_EXTRA" "${EXTRA_BE_MODULES}" "${DORIS_HOME}/be/src" "be"
 parse_extra_modules "CLOUD_EXTRA" "${EXTRA_CLOUD_MODULES}" "${DORIS_HOME}/cloud/src" "cloud"
 
+if [[ -d "${DORIS_HOME}/be/src/enterprise/distributed-compaction" ]] &&
+        ! feature_enabled "distributed-compaction"; then
+    BE_EXTRA_FEATURE_KEYS+=("distributed-compaction")
+    BE_EXTRA_MODULE_PATHS+=("enterprise/distributed-compaction")
+    EXTRA_BE_MODULES="${EXTRA_BE_MODULES:+${EXTRA_BE_MODULES},}distributed-compaction=enterprise/distributed-compaction"
+fi
+
 BE_EXTRA_CMAKE_ARGS=()
 COMPILE_BENCH_CMAKE_ARGS=()
 for ((i = 0; i < ${#BE_EXTRA_FEATURE_KEYS[@]}; i++)); do
@@ -795,6 +802,7 @@ FEAT=()
 FEAT+=($(feature_enabled "tde" && echo "+TDE" || echo "-TDE"))
 FEAT+=($(feature_enabled "tls" && echo "+TLS" || echo "-TLS"))
 FEAT+=($(feature_enabled "variant-nested-group" && echo "+VARIANT_NESTED_GROUP" || echo "-VARIANT_NESTED_GROUP"))
+FEAT+=($(feature_enabled "distributed-compaction" && echo "+DISTRIBUTED_COMPACTION" || echo "-DISTRIBUTED_COMPACTION"))
 FEAT+=($([[ "${ENABLE_HDFS_STORAGE_VAULT:-OFF}" == "ON" ]] && echo "+HDFS_STORAGE_VAULT" || echo "-HDFS_STORAGE_VAULT"))
 FEAT+=($([[ ${BUILD_UI} -eq 1 ]] && echo "+UI" || echo "-UI"))
 FEAT+=($([[ "${BUILD_AZURE}" == "ON" ]] && echo "+AZURE_BLOB,+AZURE_STORAGE_VAULT" || echo "-AZURE_BLOB,-AZURE_STORAGE_VAULT"))
