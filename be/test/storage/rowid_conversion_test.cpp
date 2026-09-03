@@ -1098,14 +1098,21 @@ TEST_F(TestRowIdConversion, SegmentRangeUsesExplicitOutputPhysicalSegmentIds) {
     input_delete_bitmap.add({input_rowset->rowset_id(), unselected_segment_id, 5}, 0);
     DeleteBitmap output_delete_bitmap(1);
     std::set<RowLocation> missed_rows;
+    const std::vector<RowsetSharedPtr> input_rowsets {input_rowset};
+    std::map<RowsetSharedPtr, RowLocationPairList> location_map;
     tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
             rowid_conversion, output_rowset->rowset_id(), {117, 119}, 0, 10, input_delete_bitmap,
-            &output_delete_bitmap, &missed_rows);
+            &output_delete_bitmap, &missed_rows, &input_rowsets, &location_map);
 
     EXPECT_TRUE(output_delete_bitmap.contains({output_rowset->rowset_id(), 117, 5}, 0));
     EXPECT_TRUE(output_delete_bitmap.contains({output_rowset->rowset_id(), 119, 5}, 0));
     EXPECT_FALSE(output_delete_bitmap.contains({output_rowset->rowset_id(), 117, 5}, 1));
     EXPECT_TRUE(missed_rows.empty());
+    ASSERT_EQ(location_map.size(), 1);
+    ASSERT_EQ(location_map.at(input_rowset).size(), 2);
+    auto location = location_map.at(input_rowset).begin();
+    EXPECT_EQ(location->second.segment_id, 117);
+    EXPECT_EQ((++location)->second.segment_id, 119);
 }
 
 INSTANTIATE_TEST_SUITE_P(

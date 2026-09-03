@@ -2680,6 +2680,10 @@ Status DistributedCompactionWorker::handle_compaction(
 
     _is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
               _tablet->enable_unique_key_merge_on_write();
+    if (_is_mow && config::enable_rowid_conversion_correctness_check &&
+        _tablet->tablet_schema()->cluster_key_uids().empty()) {
+        _input_rowsets_for_rowid_conversion_check = input_rowsets;
+    }
     Merger::Statistics stats;
     if (_is_mow) {
         const auto mode =
@@ -2764,10 +2768,18 @@ Status DistributedCompactionWorker::handle_compaction(
         if (request->check_missed_rows()) {
             missed_rows = std::make_unique<std::set<RowLocation>>();
         }
+        std::unique_ptr<std::map<RowsetSharedPtr, RowLocationPairList>> location_map;
+        if (!_input_rowsets_for_rowid_conversion_check.empty()) {
+            location_map = std::make_unique<std::map<RowsetSharedPtr, RowLocationPairList>>();
+        }
         _tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
                 *_rowid_conversion, _output_rowset->rowset_id(), _output_segment_ids, 0,
                 request->delete_bitmap_end_version(), _tablet->tablet_meta()->delete_bitmap(),
-                &shard, missed_rows.get());
+                &shard, missed_rows.get(), &_input_rowsets_for_rowid_conversion_check,
+                location_map.get());
+        if (location_map != nullptr) {
+            RETURN_IF_ERROR(_tablet->check_rowid_conversion(_output_rowset, *location_map));
+        }
         RETURN_IF_CANCELLED(_runtime_state.get());
         *result->mutable_output_delete_bitmap_shard() = shard.to_pb();
         result->set_missed_rows_count(
@@ -2784,9 +2796,17 @@ Status DistributedCompactionWorker::calc_incremental_delete_bitmap(
         return Status::InvalidArgument(
                 "incremental delete bitmap requested before a MoW group compaction");
     }
+    std::unique_ptr<std::map<RowsetSharedPtr, RowLocationPairList>> location_map;
+    if (!_input_rowsets_for_rowid_conversion_check.empty()) {
+        location_map = std::make_unique<std::map<RowsetSharedPtr, RowLocationPairList>>();
+    }
     _tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
             *_rowid_conversion, _output_rowset->rowset_id(), _output_segment_ids, start_version,
-            end_version, _tablet->tablet_meta()->delete_bitmap(), output_delete_bitmap, nullptr);
+            end_version, _tablet->tablet_meta()->delete_bitmap(), output_delete_bitmap, nullptr,
+            &_input_rowsets_for_rowid_conversion_check, location_map.get());
+    if (location_map != nullptr) {
+        RETURN_IF_ERROR(_tablet->check_rowid_conversion(_output_rowset, *location_map));
+    }
     return Status::OK();
 }
 
@@ -2802,6 +2822,7 @@ void DistributedCompactionWorker::reset_state() {
     _rowid_conversion.reset();
     _output_rowset.reset();
     std::vector<int64_t>().swap(_output_segment_ids);
+    std::vector<RowsetSharedPtr>().swap(_input_rowsets_for_rowid_conversion_check);
 }
 
 DistributedCompactionWorkerManager* DistributedCompactionWorkerManager::instance() {
@@ -3129,8 +3150,7 @@ bool can_use_distributed_base_compaction(const CloudTablet& tablet,
     }
 
     if (tablet.keys_type() == KeysType::UNIQUE_KEYS && tablet.enable_unique_key_merge_on_write()) {
-        if (!schema.cluster_key_uids().empty() ||
-            config::enable_rowid_conversion_correctness_check) {
+        if (!schema.cluster_key_uids().empty()) {
             return false;
         }
     }

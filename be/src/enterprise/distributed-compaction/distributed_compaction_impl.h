@@ -353,6 +353,7 @@ private:
     bool _is_mow = false;
     RowsetSharedPtr _output_rowset;
     std::vector<int64_t> _output_segment_ids;
+    std::vector<RowsetSharedPtr> _input_rowsets_for_rowid_conversion_check;
     std::unique_ptr<RowIdConversion> _rowid_conversion;
 };
 
