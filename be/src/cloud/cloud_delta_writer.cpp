@@ -62,10 +62,11 @@ void CloudDeltaWriter::_init_write_profile() {
     if (_profile == nullptr) {
         return;
     }
-    _write_lock_wait_timer = ADD_TIMER(_profile, "WriteLockWaitTime");
-    _write_lock_hold_timer = ADD_TIMER(_profile, "WriteLockHoldTime");
-    _write_memtable_timer = ADD_TIMER(_profile, "WriteMemTableTime");
-    _write_count = ADD_COUNTER(_profile, "WriteCount", TUnit::UNIT);
+    _wait_flush_limit_timer->set_level(2);
+    _write_lock_wait_timer = ADD_TIMER_WITH_LEVEL(_profile, "WriteLockWaitTime", 2);
+    _write_lock_hold_timer = ADD_TIMER_WITH_LEVEL(_profile, "WriteLockHoldTime", 2);
+    _write_memtable_timer = ADD_TIMER_WITH_LEVEL(_profile, "WriteMemTableTime", 2);
+    _write_count = ADD_COUNTER_WITH_LEVEL(_profile, "WriteCount", TUnit::UNIT, 2);
 }
 
 Status CloudDeltaWriter::batch_init(std::vector<CloudDeltaWriter*> writers) {
