@@ -229,10 +229,9 @@ KeyRangeSamplingPlan build_key_range_sampling_plan(const TabletSchema& schema, b
         }
         plan.short_key_fully_encoded = false;
         if (column_index + 1 < plan.encoded_key_column_count) {
-            // Current FE only permits VARCHAR as the last short-key column. Keep this typed
-            // fallback for schemas not produced by current FE and future partially encoded
-            // short-key types.
-            plan.candidate_mode = KeyRangeSamplingMode::TYPED_KEY;
+            // Current FE only permits VARCHAR as the last short-key column. Read key column values
+            // for schemas not produced by current FE and future partially encoded short-key types.
+            plan.candidate_mode = KeyRangeSamplingMode::KEY_COLUMN_VALUES;
             plan.short_key_skip_reason = "non_terminal_truncated_short_key";
         } else {
             plan.candidate_mode = KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT;
@@ -534,7 +533,7 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
 
     CompositeKeyRangePlan key_range_plan;
     int64_t boundary_choose_time_us = 0;
-    size_t typed_sample_count = 0;
+    size_t key_column_sample_count = 0;
     size_t boundary_refinement_group_count = 0;
     size_t boundary_refinement_sample_count = 0;
     const size_t encoded_sample_count = encoded_samples.size();
@@ -565,7 +564,7 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
                 key_sample_io_stats.merge_from(reader_stats.file_cache_stats);
                 DORIS_CHECK_EQ(keys.size(), 1);
                 key_range_plan.boundaries.push_back(std::move(keys.front()));
-                ++typed_sample_count;
+                ++key_column_sample_count;
             }
             for (size_t boundary_index = 1; boundary_index < key_range_plan.boundaries.size();
                  ++boundary_index) {
@@ -614,8 +613,8 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
                 DORIS_CHECK_LT(sample.segment_index, samples_by_segment.size());
                 samples_by_segment[sample.segment_index].push_back(&sample);
             }
-            std::vector<CompositeKeySample> typed_samples;
-            typed_samples.reserve(encoded_group.samples.size());
+            std::vector<CompositeKeySample> key_column_samples;
+            key_column_samples.reserve(encoded_group.samples.size());
             for (size_t segment_index = 0; segment_index < samples_by_segment.size();
                  ++segment_index) {
                 auto& segment_group_samples = samples_by_segment[segment_index];
@@ -643,15 +642,16 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
                 key_sample_io_stats.merge_from(reader_stats.file_cache_stats);
                 DORIS_CHECK_EQ(keys.size(), segment_group_samples.size());
                 for (size_t sample_index = 0; sample_index < keys.size(); ++sample_index) {
-                    typed_samples.push_back(
+                    key_column_samples.push_back(
                             {.key = std::move(keys[sample_index]),
                              .weight = segment_group_samples[sample_index]->weight});
                 }
             }
-            typed_sample_count += typed_samples.size();
-            boundary_refinement_sample_count += typed_samples.size();
-            refined_groups.emplace(group_index,
-                                   sort_and_merge_composite_key_samples(std::move(typed_samples)));
+            key_column_sample_count += key_column_samples.size();
+            boundary_refinement_sample_count += key_column_samples.size();
+            refined_groups.emplace(
+                    group_index,
+                    sort_and_merge_composite_key_samples(std::move(key_column_samples)));
         }
         boundary_refinement_group_count = refined_groups.size();
 
@@ -701,9 +701,9 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
         boundary_choose_time_us += MonotonicMicros() - refined_boundary_start_us;
     }
 
-    std::vector<CompositeKeySample> samples;
-    if (key_sampling_plan.selected_mode == KeyRangeSamplingMode::TYPED_KEY) {
-        samples.reserve(sampled_row_count);
+    std::vector<CompositeKeySample> key_column_samples;
+    if (key_sampling_plan.selected_mode == KeyRangeSamplingMode::KEY_COLUMN_VALUES) {
+        key_column_samples.reserve(sampled_row_count);
         for (const auto& segment_sample : segment_samples) {
             std::vector<rowid_t> rowids;
             rowids.reserve(segment_sample.weighted_rowids.size());
@@ -721,13 +721,14 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
             key_sample_io_stats.merge_from(reader_stats.file_cache_stats);
             DORIS_CHECK_EQ(keys.size(), segment_sample.weighted_rowids.size());
             for (size_t sample_index = 0; sample_index < keys.size(); ++sample_index) {
-                samples.push_back({.key = std::move(keys[sample_index]),
-                                   .weight = segment_sample.weighted_rowids[sample_index].weight});
+                key_column_samples.push_back(
+                        {.key = std::move(keys[sample_index]),
+                         .weight = segment_sample.weighted_rowids[sample_index].weight});
             }
         }
-        typed_sample_count = samples.size();
+        key_column_sample_count = key_column_samples.size();
         const int64_t boundary_choose_start_us = MonotonicMicros();
-        key_range_plan = choose_composite_key_range_boundaries(samples, range_count);
+        key_range_plan = choose_composite_key_range_boundaries(key_column_samples, range_count);
         boundary_choose_time_us += MonotonicMicros() - boundary_choose_start_us;
     }
     *result = {.key_ranges = std::move(key_range_plan),
@@ -745,7 +746,7 @@ Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowse
                .key_sample_io_stats = std::move(key_sample_io_stats),
                .segment_count = segment_count,
                .boundary_choose_time_us = boundary_choose_time_us,
-               .typed_sample_count = typed_sample_count,
+               .key_column_sample_count = key_column_sample_count,
                .boundary_refinement_group_count = boundary_refinement_group_count,
                .boundary_refinement_sample_count = boundary_refinement_sample_count,
                .encoded_sample_count = encoded_sample_count};

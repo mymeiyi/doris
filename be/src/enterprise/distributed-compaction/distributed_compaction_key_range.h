@@ -23,7 +23,7 @@
 namespace doris::cloud {
 
 enum class KeyRangeSamplingMode {
-    TYPED_KEY,
+    KEY_COLUMN_VALUES,
     PRIMARY_KEY,
     SHORT_KEY_DIRECT,
     SHORT_KEY_BOUNDARY_REFINEMENT,
@@ -57,8 +57,8 @@ struct KeyRangeSamplingPlan {
         return selected_mode == KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT;
     }
 
-    KeyRangeSamplingMode candidate_mode = KeyRangeSamplingMode::TYPED_KEY;
-    KeyRangeSamplingMode selected_mode = KeyRangeSamplingMode::TYPED_KEY;
+    KeyRangeSamplingMode candidate_mode = KeyRangeSamplingMode::KEY_COLUMN_VALUES;
+    KeyRangeSamplingMode selected_mode = KeyRangeSamplingMode::KEY_COLUMN_VALUES;
     size_t encoded_key_column_count = 0;
     size_t encoded_primary_key_suffix_size = 0;
     bool short_key_fully_encoded = true;
@@ -82,7 +82,7 @@ struct BaseKeyRangePlanningResult {
     io::FileCacheStatistics key_sample_io_stats;
     size_t segment_count = 0;
     int64_t boundary_choose_time_us = 0;
-    size_t typed_sample_count = 0;
+    size_t key_column_sample_count = 0;
     size_t boundary_refinement_group_count = 0;
     size_t boundary_refinement_sample_count = 0;
     size_t encoded_sample_count = 0;

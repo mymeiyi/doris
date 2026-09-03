@@ -1955,7 +1955,7 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             .tag("segments", key_range_planning.segment_count)
             .tag("samples", key_range_planning.sampled_row_count)
             .tag("encoded_samples", key_range_planning.encoded_sample_count)
-            .tag("typed_samples", key_range_planning.typed_sample_count)
+            .tag("key_column_samples", key_range_planning.key_column_sample_count)
             .tag("boundary_count", key_range_plan.boundaries.size())
             .tag("short_key_fast_path", key_sampling_plan.is_short_key_fast_path_selected())
             .tag("primary_key_fast_path", key_sampling_plan.is_primary_key_fast_path_selected())
