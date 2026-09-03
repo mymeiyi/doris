@@ -1833,6 +1833,57 @@ void BaseTablet::calc_compaction_output_rowset_delete_bitmap(
     }
 }
 
+void BaseTablet::calc_compaction_output_rowset_delete_bitmap_by_segments(
+        const RowIdConversion& rowid_conversion, const RowsetId& output_rowset_id,
+        const std::vector<int64_t>& output_segment_ids, uint64_t start_version,
+        uint64_t end_version, const DeleteBitmap& input_delete_bitmap,
+        DeleteBitmap* output_rowset_delete_bitmap, std::set<RowLocation>* missed_rows,
+        const std::vector<RowsetSharedPtr>* input_rowsets,
+        std::map<RowsetSharedPtr, RowLocationPairList>* location_map) {
+    for (const auto& [source_segment, _] : rowid_conversion.get_src_segment_to_id_map()) {
+        const auto& [rowset_id, segment_id] = source_segment;
+        RowsetSharedPtr input_rowset;
+        if (location_map != nullptr) {
+            DORIS_CHECK(input_rowsets != nullptr);
+            const auto it = std::find_if(input_rowsets->begin(), input_rowsets->end(),
+                                         [&](const RowsetSharedPtr& rowset) {
+                                             return rowset->rowset_id() == rowset_id;
+                                         });
+            DORIS_CHECK(it != input_rowsets->end());
+            input_rowset = *it;
+        }
+        RowLocation src;
+        src.rowset_id = rowset_id;
+        src.segment_id = segment_id;
+        DeleteBitmap subset_map(tablet_id());
+        input_delete_bitmap.subset({rowset_id, segment_id, start_version},
+                                   {rowset_id, segment_id, end_version}, &subset_map);
+        for (const auto& [key, bitmap] : subset_map.delete_bitmap) {
+            const auto version = std::get<2>(key);
+            for (const auto row_id : bitmap) {
+                src.row_id = row_id;
+                RowIdConversion::DestinationRowId converted_dst;
+                if (rowid_conversion.get(src, &converted_dst) != 0) {
+                    if (missed_rows != nullptr) {
+                        missed_rows->insert(src);
+                    }
+                    continue;
+                }
+                DORIS_CHECK_LT(converted_dst.segment_pos, output_segment_ids.size());
+                const RowLocation dst(
+                        output_rowset_id,
+                        cast_set<uint32_t>(output_segment_ids[converted_dst.segment_pos]),
+                        converted_dst.row_id);
+                if (location_map != nullptr) {
+                    (*location_map)[input_rowset].emplace_back(src, dst);
+                }
+                output_rowset_delete_bitmap->add({dst.rowset_id, dst.segment_id, version},
+                                                 dst.row_id);
+            }
+        }
+    }
+}
+
 Status BaseTablet::check_rowid_conversion(
         RowsetSharedPtr dst_rowset,
         const std::map<RowsetSharedPtr, std::list<std::pair<RowLocation, RowLocation>>>&
