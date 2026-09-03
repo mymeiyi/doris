@@ -1324,6 +1324,7 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     Compaction::MergeInputRowsetsResult result;
     ASSERT_TRUE(compaction.prepare_merge_input_rowsets(&result).ok());
     EXPECT_TRUE(compaction._single_rowset_compaction_segment_group_size.has_value());
+    EXPECT_TRUE(compaction.is_single_rowset_grouped_compaction());
     EXPECT_TRUE(result.is_segment_grouped);
     EXPECT_EQ(result.segment_group_size, config::cloud_single_rowset_compaction_segment_group_size);
 
@@ -1334,12 +1335,13 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_execution_path_cond
     Compaction::MergeInputRowsetsResult time_series_result;
     ASSERT_TRUE(time_series_compaction.prepare_merge_input_rowsets(&time_series_result).ok());
     EXPECT_FALSE(time_series_compaction._single_rowset_compaction_segment_group_size.has_value());
+    EXPECT_FALSE(time_series_compaction.is_single_rowset_grouped_compaction());
     EXPECT_FALSE(time_series_result.is_segment_grouped);
 }
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_logical_group_ranges) {
     RowsetMeta overlapping_meta;
-    overlapping_meta.set_num_segments(5);
+    overlapping_meta.set_segment_ids({10, 20, 30, 40, 50});
     overlapping_meta.set_segments_overlap(OVERLAPPING);
 
     const auto overlapping_ranges = cloud::build_segment_group_merge_ranges(overlapping_meta, 2);
@@ -1369,7 +1371,7 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_logical_grou
                                        {.segment_start = 4, .segment_end = 5, .merge_way_num = 1}});
 
     RowsetMeta grouped_meta;
-    grouped_meta.set_num_segments(5);
+    grouped_meta.set_segment_ids({10, 20, 30, 40, 50});
     grouped_meta.set_segments_overlap(NONOVERLAPPING_WITHIN_GROUP);
     grouped_meta.set_segment_group_sizes({2, 2, 1});
 
@@ -1381,7 +1383,7 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_logical_grou
 
 TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_group_range_boundaries) {
     RowsetMeta grouped_meta;
-    grouped_meta.set_num_segments(5);
+    grouped_meta.set_segment_ids({10, 20, 30, 40, 50});
     grouped_meta.set_segments_overlap(NONOVERLAPPING_WITHIN_GROUP);
     grouped_meta.set_segment_group_sizes({2, 2, 1});
 
@@ -1389,14 +1391,15 @@ TEST_F(CloudCompactionTest, single_rowset_grouped_compaction_builds_group_range_
     expect_segment_group_merge_ranges(single_range,
                                       {{.segment_start = 0, .segment_end = 5, .merge_way_num = 3}});
 
-    grouped_meta.set_num_segments(10);
+    grouped_meta.set_segment_ids({10, 20, 30, 40, 50, 60, 70, 80, 90, 100});
     grouped_meta.set_segment_group_sizes({1, 2, 3, 4});
     const auto exact_ranges = cloud::build_segment_group_merge_ranges(grouped_meta, 2);
     expect_segment_group_merge_ranges(
             exact_ranges, {{.segment_start = 0, .segment_end = 3, .merge_way_num = 2},
                            {.segment_start = 3, .segment_end = 10, .merge_way_num = 2}});
 
-    grouped_meta.set_num_segments(15);
+    grouped_meta.set_segment_ids(
+            {10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150});
     grouped_meta.set_segment_group_sizes({3, 1, 4, 2, 5});
     const auto irregular_ranges = cloud::build_segment_group_merge_ranges(grouped_meta, 2);
     expect_segment_group_merge_ranges(

@@ -19,6 +19,15 @@
 set(LIBRARY_OUTPUT_PATH "${BUILD_DIR}/src/cloud")
 
 file(GLOB_RECURSE SRC_FILES CONFIGURE_DEPENDS *.cpp)
+
+if (ENABLE_DISTRIBUTED_COMPACTION)
+    list(REMOVE_ITEM SRC_FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/cloud_distributed_compaction.cpp")
+    file(GLOB_RECURSE DISTRIBUTED_COMPACTION_SOURCES CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_SOURCE_DIR}/../${DISTRIBUTED_COMPACTION_MODULE_DIR}/*.cpp")
+    list(APPEND SRC_FILES ${DISTRIBUTED_COMPACTION_SOURCES})
+endif()
+
 add_library(Cloud STATIC ${SRC_FILES})
 
 pch_reuse(Cloud)
@@ -31,6 +40,9 @@ pch_reuse(Cloud)
 set(CLOUD_UNITY_SKIP
     ${CMAKE_CURRENT_SOURCE_DIR}/cloud_compaction_action.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/injection_point_action.cpp)
+if (ENABLE_DISTRIBUTED_COMPACTION)
+    list(APPEND CLOUD_UNITY_SKIP ${DISTRIBUTED_COMPACTION_SOURCES})
+endif()
 doris_skip_unity_inclusion(${CLOUD_UNITY_SKIP})
 set_target_properties(Cloud PROPERTIES UNITY_BUILD ${DORIS_UNITY_BUILD}
                                        UNITY_BUILD_BATCH_SIZE 12)

@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <set>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -203,7 +204,8 @@ protected:
 
     RowsetSharedPtr create_rowset(
             TabletSchemaSPtr tablet_schema, const SegmentsOverlapPB& overlap,
-            std::vector<std::vector<std::tuple<int64_t, int64_t>>> rowset_data, int64_t version) {
+            std::vector<std::vector<std::tuple<int64_t, int64_t>>> rowset_data, int64_t version,
+            int32_t segment_start_id = 0, DataWriteType write_type = DataWriteType::TYPE_DEFAULT) {
         if (overlap == NONOVERLAPPING) {
             for (auto i = 1; i < rowset_data.size(); i++) {
                 auto& last_seg_data = rowset_data[i - 1];
@@ -215,9 +217,11 @@ protected:
         }
         auto writer_context = create_rowset_writer_context(tablet_schema, overlap, UINT32_MAX,
                                                            {version, version});
+        writer_context.write_type = write_type;
         auto res = RowsetFactory::create_rowset_writer(*engine_ref, writer_context, false);
         EXPECT_TRUE(res.has_value()) << res.error();
         auto rowset_writer = std::move(res).value();
+        rowset_writer->set_segment_start_id(segment_start_id);
 
         uint32_t num_rows = 0;
         for (int i = 0; i < rowset_data.size(); ++i) {
@@ -1050,6 +1054,58 @@ TEST_F(TestRowIdConversion, SingleRowsetGroupedCompactionRowIdConversionIsComple
             EXPECT_EQ(second_output_data, output_data);
         }
     }
+}
+
+TEST_F(TestRowIdConversion, SegmentRangeUsesExplicitOutputPhysicalSegmentIds) {
+    auto tablet_schema = create_schema(UNIQUE_KEYS);
+    const std::vector<std::vector<std::tuple<int64_t, int64_t>>> input_data = {
+            {{0, 1}, {1, 2}}, {{2, 3}, {3, 4}, {4, 5}}, {{5, 6}, {6, 7}}};
+    auto input_rowset = create_rowset(tablet_schema, OVERLAPPING, input_data, 2, 10,
+                                      DataWriteType::TYPE_COMPACTION);
+    auto writer_context = create_rowset_writer_context(tablet_schema, NONOVERLAPPING, 2, {2, 2});
+    writer_context.enable_unique_key_merge_on_write = true;
+    writer_context.write_type = DataWriteType::TYPE_COMPACTION;
+    auto writer_result = RowsetFactory::create_rowset_writer(*engine_ref, writer_context, false);
+    ASSERT_TRUE(writer_result.has_value()) << writer_result.error();
+    auto output_writer = std::move(writer_result).value();
+
+    RowsetReaderSharedPtr input_reader;
+    ASSERT_TRUE(input_rowset->create_reader(&input_reader).ok());
+    RowIdConversion rowid_conversion(RowIdConversion::Mode::LAZY_CHUNKED);
+    Merger::Statistics stats {.rowid_conversion = &rowid_conversion};
+    auto tablet = create_tablet(*tablet_schema, true);
+    ASSERT_TRUE(Merger::vmerge_rowsets(tablet, ReaderType::READER_CUMULATIVE_COMPACTION,
+                                       *tablet_schema, {input_reader}, output_writer.get(), &stats,
+                                       std::pair<int64_t, int64_t> {1, 2})
+                        .ok());
+    RowsetSharedPtr output_rowset;
+    ASSERT_TRUE(output_writer->build(output_rowset).ok());
+    ASSERT_EQ(output_rowset->num_segments(), 2);
+
+    const auto selected_segment_id = cast_set<uint32_t>(input_rowset->segment(1).id());
+    const auto unselected_segment_id = cast_set<uint32_t>(input_rowset->segment(0).id());
+    ASSERT_EQ(rowid_conversion.get_src_segment_to_id_map().size(), 1);
+    EXPECT_TRUE(rowid_conversion.get_src_segment_to_id_map().contains(
+            {input_rowset->rowset_id(), selected_segment_id}));
+    RowIdConversion::DestinationRowId unselected_dst;
+    EXPECT_EQ(rowid_conversion.get(RowLocation(input_rowset->rowset_id(), unselected_segment_id, 0),
+                                   &unselected_dst),
+              -1);
+
+    DeleteBitmap input_delete_bitmap(1);
+    input_delete_bitmap.add({input_rowset->rowset_id(), selected_segment_id, 5}, 0);
+    input_delete_bitmap.add({input_rowset->rowset_id(), selected_segment_id, 5}, 2);
+    input_delete_bitmap.add({input_rowset->rowset_id(), unselected_segment_id, 5}, 0);
+    DeleteBitmap output_delete_bitmap(1);
+    std::set<RowLocation> missed_rows;
+    tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
+            rowid_conversion, output_rowset->rowset_id(), {117, 119}, 0, 10, input_delete_bitmap,
+            &output_delete_bitmap, &missed_rows);
+
+    EXPECT_TRUE(output_delete_bitmap.contains({output_rowset->rowset_id(), 117, 5}, 0));
+    EXPECT_TRUE(output_delete_bitmap.contains({output_rowset->rowset_id(), 119, 5}, 0));
+    EXPECT_FALSE(output_delete_bitmap.contains({output_rowset->rowset_id(), 117, 5}, 1));
+    EXPECT_TRUE(missed_rows.empty());
 }
 
 INSTANTIATE_TEST_SUITE_P(
