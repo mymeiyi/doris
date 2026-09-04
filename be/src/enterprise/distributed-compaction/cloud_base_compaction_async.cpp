@@ -37,6 +37,62 @@
 
 namespace doris {
 
+void CloudStorageEngine::_execute_base_compaction_task(
+        const CloudTabletSPtr& tablet, const std::shared_ptr<CloudBaseCompaction>& compaction,
+        std::function<void(Status)> complete_task) {
+    if (!compaction->can_use_distributed_base_compaction()) {
+        complete_task(compaction->execute_compact());
+        return;
+    }
+    auto schedule_resume = std::make_shared<std::function<void(Status)>>();
+    std::weak_ptr<std::function<void(Status)>> weak_schedule_resume = schedule_resume;
+    *schedule_resume = [this, tablet_id = tablet->tablet_id(), compaction, complete_task,
+                        weak_schedule_resume](Status remote_status) mutable {
+        if (stopped()) {
+            Status result = compaction->complete_distributed_compaction(std::move(remote_status));
+            complete_task(std::move(result));
+            return;
+        }
+        const Status submit_status = _base_compaction_thread_pool->submit_func(
+                [tablet_id, compaction, complete_task, remote_status]() mutable {
+                    signal::tablet_id = tablet_id;
+                    Status result =
+                            compaction->complete_distributed_compaction(std::move(remote_status));
+                    complete_task(std::move(result));
+                });
+        if (submit_status.ok()) {
+            return;
+        }
+        auto resume = weak_schedule_resume.lock();
+        DORIS_CHECK(resume != nullptr);
+        const Status retry_status = cloud::schedule_distributed_compaction(
+                [resume = std::move(resume), remote_status]() mutable {
+                    (*resume)(std::move(remote_status));
+                });
+        if (!retry_status.ok()) {
+            Status result = compaction->complete_distributed_compaction(retry_status);
+            complete_task(std::move(result));
+        }
+    };
+    TEST_SYNC_POINT_RETURN_WITH_VOID(
+            "CloudStorageEngine::_execute_base_compaction_task::before_execute", schedule_resume);
+    bool distributed_started = false;
+    Status status = compaction->execute_distributed_compact_async(
+            [schedule_resume](Status remote_status) mutable {
+                (*schedule_resume)(std::move(remote_status));
+            },
+            &distributed_started);
+    if (status.ok() && !distributed_started) {
+        status = compaction->execute_local_compact_after_distributed_fallback();
+    }
+    // No remote callback will follow in either case:
+    // 1. Distributed execution cannot start and the local fallback has completed.
+    // 2. Execution fails before distributed work starts.
+    if (!distributed_started) {
+        complete_task(std::move(status));
+    }
+}
+
 bool CloudBaseCompaction::can_use_distributed_base_compaction() const {
     return cloud::can_use_distributed_base_compaction(*cloud_tablet(), _input_rowsets_total_size);
 }
@@ -199,60 +255,6 @@ Status CloudBaseCompaction::handle_prepared_compaction_failure(Status status) {
     submit_profile_record(false, _async_profile_start_time_ms, status.to_string());
     _merge_execution_context.reset();
     return record_compaction_failure(std::move(status));
-}
-
-void CloudStorageEngine::_execute_base_compaction_task(
-        const CloudTabletSPtr& tablet, const std::shared_ptr<CloudBaseCompaction>& compaction,
-        std::function<void(Status)> complete_task) {
-    if (!compaction->can_use_distributed_base_compaction()) {
-        complete_task(compaction->execute_compact());
-        return;
-    }
-    auto schedule_resume = std::make_shared<std::function<void(Status)>>();
-    std::weak_ptr<std::function<void(Status)>> weak_schedule_resume = schedule_resume;
-    *schedule_resume = [this, tablet_id = tablet->tablet_id(), compaction, complete_task,
-                        weak_schedule_resume](Status remote_status) mutable {
-        if (stopped()) {
-            Status result = compaction->complete_distributed_compaction(std::move(remote_status));
-            complete_task(std::move(result));
-            return;
-        }
-        const Status submit_status = _base_compaction_thread_pool->submit_func(
-                [tablet_id, compaction, complete_task, remote_status]() mutable {
-                    signal::tablet_id = tablet_id;
-                    Status result =
-                            compaction->complete_distributed_compaction(std::move(remote_status));
-                    complete_task(std::move(result));
-                });
-        if (submit_status.ok()) {
-            return;
-        }
-        auto resume = weak_schedule_resume.lock();
-        DORIS_CHECK(resume != nullptr);
-        const Status retry_status = cloud::schedule_distributed_compaction(
-                [resume = std::move(resume), remote_status]() mutable {
-                    (*resume)(std::move(remote_status));
-                });
-        if (!retry_status.ok()) {
-            Status result = compaction->complete_distributed_compaction(retry_status);
-            complete_task(std::move(result));
-        }
-    };
-    bool distributed_started = false;
-    Status status = compaction->execute_distributed_compact_async(
-            [schedule_resume](Status remote_status) mutable {
-                (*schedule_resume)(std::move(remote_status));
-            },
-            &distributed_started);
-    if (status.ok() && !distributed_started) {
-        status = compaction->execute_local_compact_after_distributed_fallback();
-    }
-    // No remote callback will follow in either case:
-    // 1. Distributed execution cannot start and the local fallback has completed.
-    // 2. Execution fails before distributed work starts.
-    if (!distributed_started) {
-        complete_task(std::move(status));
-    }
 }
 
 } // namespace doris

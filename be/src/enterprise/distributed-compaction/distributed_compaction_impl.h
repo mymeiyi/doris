@@ -45,6 +45,7 @@ namespace doris {
 class CloudStorageEngine;
 class CloudTablet;
 class DeleteBitmap;
+class KeyBoundsPB;
 class MemTrackerLimiter;
 class PCloudDistributedCompactionFinalizeRequest;
 class PCloudDistributedCompactionFinalizeResponse;
@@ -58,6 +59,7 @@ class PCloudDistributedCompactionTask;
 class PCloudDistributedCompactionTaskResult;
 class PCloudDistributedCompactionTaskStatus;
 class RowIdConversion;
+class RowsetMeta;
 struct RowsetId;
 class RowsetWriter;
 class RuntimeState;
@@ -67,8 +69,6 @@ class TabletSchema;
 namespace cloud {
 
 using DistributedCompactionCompletion = std::function<void(Status)>;
-
-Status schedule_distributed_compaction(std::function<void()> callback);
 
 bool can_use_distributed_base_compaction(const CloudTablet& tablet,
                                          int64_t input_rowsets_total_size);
@@ -86,6 +86,9 @@ Status start_distributed_single_rowset_compaction(
         uint32_t avg_segment_rows, DistributedCompactionCompletion completion,
         std::shared_ptr<DistributedCompaction>* compaction);
 
+Status schedule_distributed_compaction(std::function<void()> callback);
+Status submit_distributed_compaction_worker_task(std::function<void()> task);
+
 struct OutputRowsetSegmentIdSlot {
     int32_t start_id;
     int32_t capacity;
@@ -97,12 +100,6 @@ struct CompactionWorkerInfo {
     std::string cloud_unique_id;
     std::string compute_group_id;
 };
-
-std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
-        const std::vector<CompactionWorkerInfo>& candidates, int64_t coordinator_backend_id,
-        size_t group_count, std::string_view execution_id);
-std::vector<std::vector<size_t>> assign_compaction_groups_round_robin(size_t group_count,
-                                                                      size_t worker_count);
 
 struct DistributedCompactionTask {
     std::string worker_endpoint;
@@ -117,14 +114,37 @@ struct DistributedCompactionState {
     std::shared_ptr<DeleteBitmap> output_delete_bitmap;
 };
 
+std::vector<CompactionWorkerInfo> select_compaction_workers_for_groups(
+        const std::vector<CompactionWorkerInfo>& candidates, int64_t coordinator_backend_id,
+        size_t group_count, std::string_view execution_id);
+std::vector<std::vector<size_t>> assign_compaction_groups_round_robin(size_t group_count,
+                                                                      size_t worker_count);
+Status build_output_rowset_segment_id_slots(int32_t base_segment_id, int32_t slot_capacity,
+                                            size_t group_count,
+                                            std::vector<OutputRowsetSegmentIdSlot>* slots);
+
+Status validate_distributed_compaction_submit_request(
+        const PCloudDistributedCompactionSubmitRequest& request);
+Status validate_distributed_compaction_task(const PCloudDistributedCompactionSubmitRequest& request,
+                                            const PCloudDistributedCompactionTask& task);
+Status validate_distributed_compaction_task_status(
+        int32_t expected_group_index, const PCloudDistributedCompactionTaskStatus& worker_status,
+        bool* completed, PCloudDistributedCompactionTaskResult* result);
+Status accumulate_distributed_compaction_missed_rows(
+        const PCloudDistributedCompactionTaskResult& response, bool is_base,
+        int64_t source_delete_rows, int64_t* missed_rows_count, int64_t* mapped_delete_rows);
+Status validate_distributed_compaction_partial_rowset(
+        size_t group_index, const PCloudDistributedCompactionTaskResult& response,
+        const OutputRowsetSegmentIdSlot& segment_id_slot, const TabletSchema& tablet_schema,
+        const RowsetId& output_rowset_id, RowsetMeta* partial_meta,
+        std::vector<KeyBoundsPB>* key_bounds, std::vector<uint32_t>* segment_rows);
+
 template <typename T>
 struct KeySample {
     T key;
     uint64_t weight;
 };
 
-using IntegerKeySample = KeySample<int128_t>;
-using StringKeySample = KeySample<std::string>;
 using CompositeKey = std::vector<Field>;
 using CompositeKeySample = KeySample<CompositeKey>;
 
@@ -150,24 +170,6 @@ struct CompositeKeyRangePlan {
     size_t prefix_length = 0;
     std::vector<CompositeKey> boundaries;
 };
-
-bool is_supported_key_range_column_type(FieldType type);
-
-std::vector<int128_t> choose_integer_key_range_boundaries(std::vector<IntegerKeySample> samples,
-                                                          size_t range_count);
-std::vector<std::string> choose_string_key_range_boundaries(std::vector<StringKeySample> samples,
-                                                            size_t range_count);
-CompositeKeyRangePlan choose_composite_key_range_boundaries(
-        const std::vector<CompositeKeySample>& samples, size_t range_count);
-std::vector<EncodedKeyBoundary> choose_encoded_key_range_boundaries(
-        std::vector<EncodedKeySample> samples, size_t range_count);
-std::vector<WeightedRowId> build_weighted_key_sample_rowids(uint64_t num_rows,
-                                                            uint64_t rows_per_block,
-                                                            size_t max_samples);
-
-Status build_output_rowset_segment_id_slots(int32_t base_segment_id, int32_t slot_capacity,
-                                            size_t group_count,
-                                            std::vector<OutputRowsetSegmentIdSlot>* slots);
 
 class CompactionWorkerCache {
 public:
@@ -229,8 +231,6 @@ Status distributed_compaction_finalize_rpc(
         const std::string& endpoint, const PCloudDistributedCompactionFinalizeRequest& request,
         PCloudDistributedCompactionFinalizeResponse* response);
 
-Status submit_distributed_compaction_worker_task(std::function<void()> task);
-
 class DistributedCompactionCoordinator final
         : public DistributedCompaction,
           public std::enable_shared_from_this<DistributedCompactionCoordinator> {
@@ -259,23 +259,18 @@ public:
                                   RowsetSharedPtr* output_rowset,
                                   Merger::Statistics* stats) override;
 
-    int64_t task_count() const override;
-    int64_t worker_count() const override;
-
     Status finish_mow_delete_bitmap(int64_t initiator,
                                     std::shared_ptr<DeleteBitmap>* output_delete_bitmap,
                                     int64_t* lock_start_time) override;
 
     void finalize(bool cancel_tasks) override;
+    int64_t task_count() const override;
+    int64_t worker_count() const override;
 
 private:
     struct ValidatedPartialRowset;
     struct ExecutionPlan;
     struct PollRoundContext;
-
-    Status submit_batches(const std::vector<CompactionWorkerInfo>& workers,
-                          const std::vector<std::vector<size_t>>& groups_by_worker,
-                          const std::vector<PCloudDistributedCompactionSubmitRequest>& requests);
 
     Status prepare_single_rowset(const RowsetSharedPtr& input_rowset,
                                  RowsetWriter& output_rowset_writer, int64_t segment_group_size,
@@ -286,6 +281,9 @@ private:
                                             RowsetWriter& output_rowset_writer, size_t range_count,
                                             bool is_vertical, uint32_t avg_segment_rows,
                                             bool* started);
+    Status submit_batches(const std::vector<CompactionWorkerInfo>& workers,
+                          const std::vector<std::vector<size_t>>& groups_by_worker,
+                          const std::vector<PCloudDistributedCompactionSubmitRequest>& requests);
 
     Status schedule_poll();
     void dispatch_poll();
@@ -353,6 +351,7 @@ private:
     bool _is_mow = false;
     RowsetSharedPtr _output_rowset;
     std::vector<int64_t> _output_segment_ids;
+    std::vector<RowsetSharedPtr> _input_rowsets_for_rowid_conversion_check;
     std::unique_ptr<RowIdConversion> _rowid_conversion;
 };
 

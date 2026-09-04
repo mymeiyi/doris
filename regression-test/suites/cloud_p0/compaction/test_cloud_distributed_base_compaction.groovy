@@ -31,6 +31,9 @@ suite("test_cloud_distributed_base_compaction", "docker") {
     options.beConfigs += [
         "enable_cloud_distributed_base_compaction=true",
         "cloud_distributed_compaction_status_poll_interval_ms=100",
+        "enable_mow_compaction_correctness_check_fail=true",
+        "enable_rowid_conversion_correctness_check=true",
+        "enable_prune_delete_sign_when_base_compaction=false",
         "base_compaction_min_rowset_num=2",
         "cumulative_compaction_min_deltas=2",
         "compaction_promotion_min_size_mbytes=0",
@@ -52,6 +55,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         }
 
         def keyCases = [
+            [name: "constant", type: "INT", keyExpr: "CAST(0 AS INT)", distributed: false],
             [name: "tinyint", type: "TINYINT", keyExpr: "CAST(number % 128 - 64 AS TINYINT)"],
             [name: "smallint", type: "SMALLINT", keyExpr: "CAST(number - 4096 AS SMALLINT)"],
             [name: "int", type: "INT", keyExpr: "CAST(number * 100000 - 409600000 AS INT)"],
@@ -204,6 +208,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             assertTrue(inputSizeBytes > 0)
 
             int expectedTaskCount = 2 * backends.size()
+            boolean expectDistributed = keyCase.distributed != false
             long targetInputSizeBytes =
                     (inputSizeBytes + expectedTaskCount - 1) / expectedTaskCount
             backends.each { backend ->
@@ -239,13 +244,16 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             }
             assertNotNull(after)
             assertEquals("[OK]", after["last base status"])
-            def outputRowsets = after.rowsets.findAll { it =~ /\]\s+${expectedTaskCount}\s+DATA\s+/ }
-            assertEquals(1, outputRowsets.size())
-            def outputMatcher =
-                    outputRowsets[0] =~ /\[[0-9]+-[0-9]+\]\s+([0-9]+)\s+DATA\s+([A-Z_]+)/
-            assertTrue(outputMatcher.find(), "unexpected output rowset: ${outputRowsets[0]}")
-            assertEquals(expectedTaskCount, outputMatcher.group(1).toInteger())
-            assertEquals("NONOVERLAPPING", outputMatcher.group(2))
+            if (expectDistributed) {
+                def outputRowsets =
+                        after.rowsets.findAll { it =~ /\]\s+${expectedTaskCount}\s+DATA\s+/ }
+                assertEquals(1, outputRowsets.size())
+                def outputMatcher =
+                        outputRowsets[0] =~ /\[[0-9]+-[0-9]+\]\s+([0-9]+)\s+DATA\s+([A-Z_]+)/
+                assertTrue(outputMatcher.find(), "unexpected output rowset: ${outputRowsets[0]}")
+                assertEquals(expectedTaskCount, outputMatcher.group(1).toInteger())
+                assertEquals("NONOVERLAPPING", outputMatcher.group(2))
+            }
 
             def profileUrl = "http://${coordinator.Host}:${coordinator.HttpPort}" +
                     "/api/compaction/profile?tablet_id=${tabletId}" +
@@ -259,10 +267,13 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             def profiles = profileResponse.compaction_profiles
             assertEquals(1, profiles.size())
             def profile = profiles[0]
-            assertTrue(profile.is_distributed)
-            assertEquals(expectedTaskCount, profile.distributed_task_count.toString().toInteger())
-            assertEquals(backends.size(),
-                    profile.distributed_worker_count.toString().toInteger())
+            assertEquals(expectDistributed, profile.is_distributed)
+            if (expectDistributed) {
+                assertEquals(expectedTaskCount,
+                        profile.distributed_task_count.toString().toInteger())
+                assertEquals(backends.size(),
+                        profile.distributed_worker_count.toString().toInteger())
+            }
 
             assertEquals(summaryBefore, sql("""
                 SELECT COUNT(*), SUM(v), MIN(k), MAX(k)
