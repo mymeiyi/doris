@@ -40,6 +40,7 @@
 #include "cloud/cloud_full_compaction.h"
 #include "cloud/cloud_index_change_compaction.h"
 #include "cloud/cloud_meta_mgr.h"
+#include "cloud/cloud_rowset_builder.h"
 #include "cloud/cloud_snapshot_mgr.h"
 #include "cloud/cloud_tablet_hotspot.h"
 #include "cloud/cloud_tablet_mgr.h"
@@ -119,6 +120,11 @@ CloudStorageEngine::CloudStorageEngine(const EngineOptions& options)
     _cumulative_compaction_policies[CUMULATIVE_BINLOG_POLICY] =
             std::make_shared<CloudBinlogCumulativeCompactionPolicy>();
     _startup_timepoint = std::chrono::system_clock::now();
+}
+
+std::unique_ptr<BaseRowsetBuilder> CloudStorageEngine::create_rowset_builder(
+        const WriteRequest& req, RuntimeProfile* profile) {
+    return std::make_unique<CloudRowsetBuilder>(*this, req, profile);
 }
 
 CloudStorageEngine::~CloudStorageEngine() {

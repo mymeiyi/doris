@@ -37,6 +37,7 @@
 #include "io/cache/file_cache_common.h"
 #include "runtime/exec_env.h"
 #include "runtime/workload_group/workload_group_fwd.h"
+#include "storage/rowset_builder.h"
 #include "storage/storage_engine.h"
 #include "storage/tablet/base_tablet.h"
 #include "util/slice.h"
@@ -144,6 +145,11 @@ public:
             *tablet_meta = tablet_res.value()->tablet_meta();
         }
         return Status::OK();
+    }
+
+    std::unique_ptr<BaseRowsetBuilder> create_rowset_builder(const WriteRequest& /*req*/,
+                                                             RuntimeProfile* /*profile*/) override {
+        return nullptr;
     }
 
     Status set_cluster_id(int32_t /*cluster_id*/) override { return Status::OK(); }

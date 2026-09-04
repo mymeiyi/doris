@@ -320,6 +320,9 @@ struct TOlapTableSink {
     // initial partition list is empty, so auto-partition tables whose first partitions arrive at
     // runtime still enter the correct mode from the start.
     25: optional bool enable_adaptive_random_bucket
+
+    // Used by BE to select model-specific load paths before opening tablet writers.
+    26: optional Types.TKeysType keys_type
 }
 
 struct THiveLocationParams {

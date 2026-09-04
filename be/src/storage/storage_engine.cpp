@@ -70,6 +70,7 @@
 #include "storage/rowset/rowset_meta.h"
 #include "storage/rowset/rowset_meta_manager.h"
 #include "storage/rowset/unique_rowset_id_generator.h"
+#include "storage/rowset_builder.h"
 #include "storage/snapshot/snapshot_manager.h"
 #include "storage/tablet/tablet_manager.h"
 #include "storage/tablet/tablet_meta.h"
@@ -254,6 +255,11 @@ StorageEngine::StorageEngine(const EngineOptions& options)
     });
 
     _broken_paths = options.broken_paths;
+}
+
+std::unique_ptr<BaseRowsetBuilder> StorageEngine::create_rowset_builder(const WriteRequest& req,
+                                                                        RuntimeProfile* profile) {
+    return std::make_unique<RowsetBuilder>(*this, req, profile);
 }
 
 StorageEngine::~StorageEngine() {

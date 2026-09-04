@@ -6,7 +6,7 @@
 tablet，但 MemTable 的聚合、排序、flush 和 Segment 构建改在各个 Sink BE 上执行。它不是
 迁移一个已经存在的 MemTable 对象。
 
-当前 Cloud 路径即使有多个 Sink instance，同一 tablet 的 Block 最终仍汇聚到一个
+改造前的 Cloud 路径即使有多个 Sink instance，同一 tablet 的 Block 最终仍汇聚到一个
 `CloudDeltaWriter`：
 
 ```text
@@ -26,9 +26,27 @@ tablet，但 MemTable 的聚合、排序、flush 和 Segment 构建改在各个 
 它不解决对象存储带宽、MetaService 提交、数据倾斜和小导入固定开销。多 bucket 已经能把
 写入分散到多个 writer，收益预计小于单 bucket 场景。
 
-## 2. 当前链路
+### 1.1 当前实现范围
 
-Cloud 模式目前显式跳过 `OlapTableSinkV2OperatorX`，继续发送 Block：
+当前先实现 DUP 表的第一阶段：Cloud 在满足现有 V2 Sink 限制时允许
+`enable_memtable_on_sink_node=true`，Sink BE 负责 MemTable、排序和 Segment 构建，再复用
+`LoadStream` 把 Segment 发送给 tablet 目标 BE；目标 BE 使用 `CloudRowsetBuilder` 写对象存储并
+提交 Rowset。该阶段已经移除目标 BE 上 `CloudDeltaWriter::write()` 的 Block 写入和单 writer
+锁竞争。
+
+Sink BE 直接上传 Segment、Coordinator 只汇总元数据仍是后续阶段。它需要先补齐共享 Rowset
+ID、Segment ID 区间分配、partial metadata 汇总及重试幂等协议，不能直接复用当前每个 Sink
+独立生成 Rowset ID 的实现。
+
+当前限制：
+
+- 仅支持 DUP 表；其他表模型回退到原 Cloud Sink；
+- 沿用 V2 Sink 的限制：不支持 partial update、row binlog 和 V1 inverted index；
+- 关闭 packed file，Segment 仍由目标 BE 上传到对象存储。
+
+## 2. 改造前链路
+
+改造前 Cloud 模式显式跳过 `OlapTableSinkV2OperatorX`，继续发送 Block：
 
 ```mermaid
 flowchart LR
@@ -53,10 +71,10 @@ flowchart LR
 - `LoadStream` 将 Segment 文件和统计信息发送到目标 BE；
 - 目标 BE 的 `LoadStreamWriter` 汇总并提交 Rowset。
 
-但 `LoadStreamWriter` 当前构造的是本地 `RowsetBuilder`，并且直接调用本地
+但改造前 `LoadStreamWriter` 构造的是本地 `RowsetBuilder`，并且直接调用本地
 `commit_txn()`，不能原样用于 Cloud。
 
-## 3. 初步方案
+## 3. 后续目标方案
 
 ### 3.1 总体原则
 
@@ -162,7 +180,7 @@ attempt 后创建新 Rowset，不能让两个 attempt 并发写同一 Segment �
 | 能力 | 现状 | 初步处理 |
 | --- | --- | --- |
 | Sink 侧 MemTable | `VTabletWriterV2` + `DeltaWriterV2` 已实现 | 复用写入、flush、内存限流和 profile |
-| Segment 流式协议 | `LoadStreamStub` 已有 open/close/EOS/失败传播 | 初版复用为控制和 metadata 通道，不再传文件内容 |
+| Segment 流式协议 | `LoadStreamStub` 已有 open/close/EOS/失败传播 | 后续复用为控制和 metadata 通道，不再传文件内容 |
 | Cloud Rowset 生命周期 | `CloudRowsetBuilder` 已实现 prepare/build/commit | 拆开 owner writer 与 partial writer；prepare/commit 只在 Coordinator |
 | 分段 ID 区间 | `set_segment_start_id()` 已实现 | 按 Sink 分配互斥区间 |
 | 不连续 Segment | `RowsetMeta.segment_ids` 及读取、回收路径已支持 | Coordinator 写入实际 ID 列表 |
