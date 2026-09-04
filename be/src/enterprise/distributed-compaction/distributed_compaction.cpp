@@ -46,8 +46,8 @@
 #include "common/check.h"
 #include "common/logging.h"
 #include "core/binary_cast.hpp"
-#include "core/value/vdatetime_value.h"
 #include "core/value/timestamptz_value.h"
+#include "core/value/vdatetime_value.h"
 #include "cpp/sync_point.h"
 #include "enterprise/distributed-compaction/distributed_compaction_config.h"
 #include "enterprise/distributed-compaction/distributed_compaction_impl.h"
@@ -71,6 +71,7 @@
 #include "storage/tablet/tablet_schema.h"
 #include "util/brpc_client_cache.h"
 #include "util/client_cache.h"
+#include "util/debug_points.h"
 #include "util/hash_util.hpp"
 #include "util/network_util.h"
 #include "util/stopwatch.hpp"
@@ -2823,6 +2824,8 @@ Status DistributedCompactionWorker::handle_compaction(
         *result->mutable_output_delete_bitmap_shard() = shard.to_pb();
         result->set_missed_rows_count(
                 missed_rows == nullptr ? 0 : cast_set<int64_t>(missed_rows->size()));
+        DBUG_EXECUTE_IF("DistributedCompactionWorker::handle_compaction.corrupt_missed_rows_count",
+                        { result->set_missed_rows_count(result->missed_rows_count() + 1); });
     }
     return Status::OK();
 }
