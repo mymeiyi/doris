@@ -57,11 +57,16 @@ bvar::LatencyRecorder g_load_stream_flush_wait_ms("load_stream_flush_wait_ms");
 bvar::Adder<int> g_load_stream_flush_running_threads("load_stream_flush_wait_threads");
 
 TabletStream::TabletStream(const PUniqueId& load_id, int64_t id, int64_t txn_id,
-                           LoadStreamMgr* load_stream_mgr, RuntimeProfile* profile)
+                           LoadStreamMgr* load_stream_mgr, RuntimeProfile* profile,
+                           int64_t txn_expiration, std::string storage_vault_id,
+                           bool write_file_cache)
         : _id(id),
           _next_segid(0),
           _load_id(load_id),
           _txn_id(txn_id),
+          _txn_expiration(txn_expiration),
+          _storage_vault_id(std::move(storage_vault_id)),
+          _write_file_cache(write_file_cache),
           _load_stream_mgr(load_stream_mgr) {
     load_stream_mgr->create_token(_flush_token);
     _profile = profile->create_child(fmt::format("TabletStream {}", id), true, true);
@@ -81,12 +86,14 @@ Status TabletStream::init(std::shared_ptr<OlapTableSchemaParam> schema, int64_t 
     WriteRequest req {
             .tablet_id = _id,
             .txn_id = _txn_id,
+            .txn_expiration = _txn_expiration,
             .index_id = index_id,
             .partition_id = partition_id,
             .load_id = _load_id,
             .table_schema_param = schema,
-            // TODO(plat1ko): write_file_cache
-            .storage_vault_id {},
+            .write_file_cache = _write_file_cache,
+            .memtable_on_sink = true,
+            .storage_vault_id = _storage_vault_id,
     };
 
     _load_stream_writer = std::make_shared<LoadStreamWriter>(&req, _profile);
@@ -346,10 +353,15 @@ Status TabletStream::close() {
 
 IndexStream::IndexStream(const PUniqueId& load_id, int64_t id, int64_t txn_id,
                          std::shared_ptr<OlapTableSchemaParam> schema,
-                         LoadStreamMgr* load_stream_mgr, RuntimeProfile* profile)
+                         LoadStreamMgr* load_stream_mgr, RuntimeProfile* profile,
+                         int64_t txn_expiration, std::string storage_vault_id,
+                         bool write_file_cache)
         : _id(id),
           _load_id(load_id),
           _txn_id(txn_id),
+          _txn_expiration(txn_expiration),
+          _storage_vault_id(std::move(storage_vault_id)),
+          _write_file_cache(write_file_cache),
           _schema(schema),
           _load_stream_mgr(load_stream_mgr) {
     _profile = profile->create_child(fmt::format("IndexStream {}", id), true, true);
@@ -386,8 +398,9 @@ Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data)
 
 void IndexStream::_init_tablet_stream(TabletStreamSharedPtr& tablet_stream, int64_t tablet_id,
                                       int64_t partition_id) {
-    tablet_stream = std::make_shared<TabletStream>(_load_id, tablet_id, _txn_id, _load_stream_mgr,
-                                                   _profile);
+    tablet_stream =
+            std::make_shared<TabletStream>(_load_id, tablet_id, _txn_id, _load_stream_mgr, _profile,
+                                           _txn_expiration, _storage_vault_id, _write_file_cache);
     _tablet_streams_map[tablet_id] = tablet_stream;
     auto st = tablet_stream->init(_schema, _id, partition_id);
     if (!st.ok()) {
@@ -489,7 +502,9 @@ Status LoadStream::init(const POpenLoadStreamRequest* request) {
     RETURN_IF_ERROR(_schema->init(request->schema()));
     for (auto& index : request->schema().indexes()) {
         _index_streams_map[index.id()] = std::make_shared<IndexStream>(
-                _load_id, index.id(), _txn_id, _schema, _load_stream_mgr, _profile.get());
+                _load_id, index.id(), _txn_id, _schema, _load_stream_mgr, _profile.get(),
+                request->txn_expiration(), request->storage_vault_id(),
+                request->write_file_cache());
     }
     LOG(INFO) << "succeed to init load stream " << *this;
     return Status::OK();

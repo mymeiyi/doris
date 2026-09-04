@@ -105,6 +105,7 @@ Status CloudRowsetBuilder::init() {
     context.write_type = DataWriteType::TYPE_DIRECT;
     context.mow_context = mow_context;
     context.write_file_cache = _req.write_file_cache;
+    context.allow_packed_file = !_req.memtable_on_sink;
     context.partial_update_info = _partial_update_info;
     context.write_binlog_opt().enable = _req.write_req_type == WriteRequestType::ROW_BINLOG;
     context.file_cache_ttl_sec = _tablet->ttl_seconds();
@@ -247,6 +248,14 @@ bool CloudRowsetBuilder::is_s3_storage() const {
 
 Status CloudRowsetBuilder::commit_rowset(const std::string& job_id, int64_t table_id) {
     return _engine.meta_mgr().commit_rowset(*rowset_meta(), job_id, table_id);
+}
+
+Status CloudRowsetBuilder::commit_txn() {
+    DCHECK(is_data_builder());
+    RETURN_IF_ERROR(commit_rowset("", _tablet->table_id()));
+    update_tablet_stats();
+    _is_committed = true;
+    return Status::OK();
 }
 
 Status CloudRowsetBuilder::set_txn_related_info() {

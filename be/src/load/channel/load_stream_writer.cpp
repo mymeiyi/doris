@@ -29,7 +29,6 @@
 #include <utility>
 
 #include "bvar/bvar.h"
-#include "cloud/config.h"
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/config.h"
 #include "common/logging.h"
@@ -75,9 +74,8 @@ bvar::Adder<int64_t> g_load_stream_file_writer_cnt("load_stream_file_writer_coun
 LoadStreamWriter::LoadStreamWriter(WriteRequest* context, RuntimeProfile* profile)
         : _req(*context), _rowset_writer(nullptr) {
     g_load_stream_writer_cnt << 1;
-    // TODO(plat1ko): CloudStorageEngine
-    _rowset_builder = std::make_unique<RowsetBuilder>(
-            ExecEnv::GetInstance()->storage_engine().to_local(), *context, profile);
+    _rowset_builder =
+            ExecEnv::GetInstance()->storage_engine().create_rowset_builder(*context, profile);
     _resource_ctx = thread_context()->resource_ctx(); // from load stream
 }
 
@@ -317,10 +315,7 @@ Status LoadStreamWriter::close() {
         RETURN_IF_ERROR(_pre_close());
     }
     RETURN_IF_ERROR(_rowset_builder->wait_calc_delete_bitmap());
-    // FIXME(plat1ko): No `commit_txn` operation in cloud mode, need better abstractions
-    RETURN_IF_ERROR(static_cast<RowsetBuilder*>(_rowset_builder.get())->commit_txn());
-
-    return Status::OK();
+    return _rowset_builder->commit_txn();
 }
 
 } // namespace doris

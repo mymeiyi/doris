@@ -84,6 +84,9 @@ public:
     Status get_tablet_meta(int64_t tablet_id, TabletMetaSharedPtr* tablet_meta,
                            bool force_use_only_cached = false) override;
 
+    std::unique_ptr<BaseRowsetBuilder> create_rowset_builder(const WriteRequest& req,
+                                                             RuntimeProfile* profile) override;
+
     Status start_bg_threads(std::shared_ptr<WorkloadGroup> wg_sptr = nullptr) override;
 
     Status set_cluster_id(int32_t cluster_id) override;

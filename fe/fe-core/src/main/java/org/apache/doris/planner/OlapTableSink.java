@@ -181,6 +181,7 @@ public class OlapTableSink extends DataSink {
             tSink.setEnableAdaptiveRandomBucket(true);
         }
         tSink.setTxnTimeoutS(txnExpirationS);
+        tSink.setKeysType(dstTable.getKeysType().toThrift());
         String vaultId = dstTable.getStorageVaultId();
         if (vaultId != null && !vaultId.isEmpty()) {
             tSink.setStorageVaultId(vaultId);
