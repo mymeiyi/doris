@@ -1059,6 +1059,8 @@ Status CloudStorageEngine::_submit_base_compaction_task(const CloudTabletSPtr& t
             RunningStats rs;
             rs.start_time_ms =
                     duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+            rs.is_vertical = compaction->is_vertical();
+            rs.permits = compaction->get_compaction_permits();
             CompactionTaskTracker::instance()->update_to_running(compaction_id, rs);
         }
         _execute_base_compaction_task(tablet, compaction, complete_task);
@@ -1245,6 +1247,8 @@ Status CloudStorageEngine::_submit_cumulative_compaction_task(const CloudTabletS
             RunningStats rs;
             rs.start_time_ms =
                     duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+            rs.is_vertical = compaction->is_vertical();
+            rs.permits = compaction->get_compaction_permits();
             CompactionTaskTracker::instance()->update_to_running(compaction_id, rs);
         }
         do {
@@ -1392,6 +1396,8 @@ Status CloudStorageEngine::_submit_full_compaction_task(const CloudTabletSPtr& t
             RunningStats rs;
             rs.start_time_ms =
                     duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+            rs.is_vertical = compaction->is_vertical();
+            rs.permits = compaction->get_compaction_permits();
             CompactionTaskTracker::instance()->update_to_running(compaction_id, rs);
         }
         st = compaction->execute_compact();

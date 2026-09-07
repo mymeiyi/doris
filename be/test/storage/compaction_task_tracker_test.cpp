@@ -88,6 +88,7 @@ protected:
         stats.merge_latency_ms = 200;
         stats.bytes_read_from_local = 10000000;
         stats.bytes_read_from_remote = 0;
+        stats.bytes_read_from_peer = 4096;
         stats.peak_memory_bytes = 33554432;
         return stats;
     }
@@ -191,6 +192,7 @@ TEST_F(CompactionTaskTrackerTest, FullLifecycle_PendingToRunningToFinished) {
         EXPECT_EQ(task->merge_latency_ms, 200);
         EXPECT_EQ(task->bytes_read_from_local, 10000000);
         EXPECT_EQ(task->bytes_read_from_remote, 0);
+        EXPECT_EQ(task->bytes_read_from_peer, 4096);
         EXPECT_EQ(task->peak_memory_bytes, 33554432);
         // Identity preserved through full lifecycle.
         EXPECT_EQ(task->compaction_id, id);

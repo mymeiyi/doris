@@ -2186,6 +2186,9 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
                 .tag("peer_read_time_us", response.peer_read_time_us())
                 .tag("cpu_time_us", response.cpu_time_us())
                 .tag("merge_time_us", response.merge_time_us())
+                .tag("peak_memory_bytes", response.peak_memory_bytes())
+                .tag("vertical_total_groups", response.vertical_total_groups())
+                .tag("vertical_completed_groups", response.vertical_completed_groups())
                 .tag("remote_output_write_time_us", response.remote_output_write_time_us())
                 .tag("worker_arrival_time_us", response.worker_arrival_time_us())
                 .tag("worker_start_time_us", response.worker_start_time_us())
@@ -2246,6 +2249,9 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
         stats->cloud_local_read_time += response.cloud_local_read_time();
         stats->cloud_remote_read_time += response.cloud_remote_read_time();
         stats->peer_read_time_us += response.peer_read_time_us();
+        stats->peak_memory_bytes = std::max(stats->peak_memory_bytes, response.peak_memory_bytes());
+        stats->vertical_total_groups += response.vertical_total_groups();
+        stats->vertical_completed_groups += response.vertical_completed_groups();
         if (is_mow && response.has_output_delete_bitmap_shard()) {
             _state->output_delete_bitmap->merge(DeleteBitmap::from_pb(
                     response.output_delete_bitmap_shard(), _tablet->tablet_id()));
@@ -2323,6 +2329,7 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
     *output_rowset = _output_rowset;
     const int64_t parallel_merge_time_us = last_merge_finish_time_us - first_merge_start_time_us;
     DORIS_CHECK_GT(parallel_merge_time_us, 0);
+    stats->merge_time_us = parallel_merge_time_us;
     const double merge_throughput_mib_per_second =
             cast_set<double>(_execution_plan->input_rowsets_total_size) * 1'000'000 /
             parallel_merge_time_us / 1024 / 1024;
@@ -2587,6 +2594,8 @@ Status DistributedCompactionWorker::execute_compaction(
             std::chrono::steady_clock::now() - start);
     result.set_task_elapsed_time_us(elapsed_time.count());
     result.set_cpu_time_us(cpu_timer.elapsed_time_microseconds());
+    // handle_compaction() has detached the memory tracker and flushed pending consumption.
+    result.set_peak_memory_bytes(_mem_tracker->peak_consumption());
     result.set_worker_finish_time_us(UnixMicros());
     status.to_protobuf(result.mutable_status());
     {
@@ -2840,10 +2849,14 @@ Status DistributedCompactionWorker::handle_compaction(
     merge_timer.start();
     result->set_merge_start_time_us(UnixMicros());
     if (request->is_vertical()) {
+        auto progress_cb = [result](int64_t total, int64_t completed) {
+            result->set_vertical_total_groups(total);
+            result->set_vertical_completed_groups(completed);
+        };
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(
                 _tablet, reader_type, *output_meta.tablet_schema(), readers, writer.get(),
-                request->avg_segment_rows(), task->merge_way_num(), &stats, nullptr, segment_range,
-                merge_key_range, _runtime_state.get()));
+                request->avg_segment_rows(), task->merge_way_num(), &stats, progress_cb,
+                segment_range, merge_key_range, _runtime_state.get()));
     } else {
         RETURN_IF_ERROR(Merger::vmerge_rowsets(_tablet, reader_type, *output_meta.tablet_schema(),
                                                readers, writer.get(), &stats, segment_range,

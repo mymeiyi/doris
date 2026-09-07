@@ -174,6 +174,7 @@ void CompactionTaskTracker::_apply_completion(CompactionTaskInfo& info,
     info.merge_latency_ms = stats.merge_latency_ms;
     info.bytes_read_from_local = stats.bytes_read_from_local;
     info.bytes_read_from_remote = stats.bytes_read_from_remote;
+    info.bytes_read_from_peer = stats.bytes_read_from_peer;
     info.peak_memory_bytes = stats.peak_memory_bytes;
     info.is_distributed = stats.is_distributed;
     info.distributed_task_count = stats.distributed_task_count;

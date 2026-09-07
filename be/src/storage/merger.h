@@ -71,6 +71,12 @@ public:
         int64_t bytes_read_from_local = 0;
         int64_t bytes_read_from_remote = 0;
         int64_t bytes_read_from_peer = 0;
+        // Distributed merge span from the earliest merge start to the latest merge finish.
+        int64_t merge_time_us = 0;
+        // Largest individual worker task peak, not the sum of peaks at different times.
+        int64_t peak_memory_bytes = 0;
+        int64_t vertical_total_groups = 0;
+        int64_t vertical_completed_groups = 0;
     };
 
     // merge rows from `src_rowset_readers` and write into `dst_rowset_writer`.

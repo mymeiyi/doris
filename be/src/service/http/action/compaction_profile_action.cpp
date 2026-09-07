@@ -235,6 +235,7 @@ void CompactionProfileAction::handle(HttpRequest* req) {
         // IO statistics
         profile.AddMember("bytes_read_from_local", task.bytes_read_from_local, allocator);
         profile.AddMember("bytes_read_from_remote", task.bytes_read_from_remote, allocator);
+        profile.AddMember("bytes_read_from_peer", task.bytes_read_from_peer, allocator);
 
         // Resources
         profile.AddMember("peak_memory_bytes", task.peak_memory_bytes, allocator);

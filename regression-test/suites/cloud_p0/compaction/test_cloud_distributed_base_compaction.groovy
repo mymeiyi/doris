@@ -327,6 +327,14 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             assertEquals(1, profiles.size())
             def profile = profiles[0]
             assertEquals(expectDistributed, profile.is_distributed)
+            assertTrue(profile.is_vertical)
+            assertTrue(profile.permits.toString().toLong() > 0)
+            assertTrue(profile.merge_latency_ms.toString().toLong() > 0)
+            assertTrue(profile.peak_memory_bytes.toString().toLong() > 0)
+            assertTrue(profile.bytes_read_from_peer.toString().toLong() >= 0)
+            long totalGroups = profile.vertical_total_groups.toString().toLong()
+            assertEquals(totalGroups, profile.vertical_completed_groups.toString().toLong())
+            assertTrue(totalGroups >= (expectDistributed ? expectedTaskCount : 1))
             if (expectDistributed) {
                 assertEquals(expectedTaskCount,
                         profile.distributed_task_count.toString().toInteger())

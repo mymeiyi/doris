@@ -97,6 +97,8 @@ suite("test_cloud_distributed_single_rowset_compaction", "docker") {
             assertEquals(1, response.compaction_profiles.size())
             def profile = response.compaction_profiles[0]
             assertTrue(profile.success)
+            assertTrue(profile.is_vertical)
+            assertTrue(profile.permits.toString().toLong() > 0)
             return profile
         }
 
