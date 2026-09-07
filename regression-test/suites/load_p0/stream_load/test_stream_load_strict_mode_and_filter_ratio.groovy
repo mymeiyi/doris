@@ -624,4 +624,33 @@ suite("test_stream_load_strict_mode_and_filter_ratio", "p0") {
         }
     }
     qt_sql_string_exceed_len_strict1 "select * from test_stream_load_strict_mode_and_filter_ratio order by 1"
+
+    // CIR-21831: all destination columns are expressions, so the direct slot map is unset.
+    // An invalid cast produces NULL and used to make strict mode access the empty slot map.
+    sql """ drop table if exists test_stream_load_strict_mode_and_filter_ratio """
+    sql """
+        create table test_stream_load_strict_mode_and_filter_ratio (
+            k00 DECIMALV3(10, 0) NOT NULL
+        ) properties ('replication_num' = '1');
+    """
+    streamLoad {
+        table "test_stream_load_strict_mode_and_filter_ratio"
+        file "test_not_number.csv"
+        set 'column_separator', '|'
+        set 'columns', 'src, k00=cast(src as bigint)'
+        set 'strict_mode', 'true'
+        set 'max_filter_ratio', '0.3'
+
+        check { result, exception, startTime, endTime ->
+            if (exception != null) {
+                throw exception
+            }
+            def json = parseJson(result)
+            assertEquals("success", json.Status.toLowerCase())
+            assertEquals(10, json.NumberTotalRows)
+            assertEquals(7, json.NumberLoadedRows)
+            assertEquals(3, json.NumberFilteredRows)
+            assertTrue(result.contains("ErrorURL"))
+        }
+    }
 }
