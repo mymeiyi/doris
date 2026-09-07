@@ -88,7 +88,15 @@ protected:
         stats.merge_latency_ms = 200;
         stats.bytes_read_from_local = 10000000;
         stats.bytes_read_from_remote = 0;
+        stats.bytes_read_from_peer = 4096;
         stats.peak_memory_bytes = 33554432;
+        stats.distributed_job_id = "test-job";
+        stats.distributed_plan_time_us = 1200;
+        stats.distributed_submit_rpc_time_us = 2300;
+        stats.distributed_worker_cpu_time_us = 4500;
+        stats.local_read_time_us = 600;
+        stats.remote_read_time_us = 700;
+        stats.peer_read_time_us = 800;
         return stats;
     }
 
@@ -191,7 +199,15 @@ TEST_F(CompactionTaskTrackerTest, FullLifecycle_PendingToRunningToFinished) {
         EXPECT_EQ(task->merge_latency_ms, 200);
         EXPECT_EQ(task->bytes_read_from_local, 10000000);
         EXPECT_EQ(task->bytes_read_from_remote, 0);
+        EXPECT_EQ(task->bytes_read_from_peer, 4096);
         EXPECT_EQ(task->peak_memory_bytes, 33554432);
+        EXPECT_EQ(task->distributed_job_id, "test-job");
+        EXPECT_EQ(task->distributed_plan_time_us, 1200);
+        EXPECT_EQ(task->distributed_submit_rpc_time_us, 2300);
+        EXPECT_EQ(task->distributed_worker_cpu_time_us, 4500);
+        EXPECT_EQ(task->local_read_time_us, 600);
+        EXPECT_EQ(task->remote_read_time_us, 700);
+        EXPECT_EQ(task->peer_read_time_us, 800);
         // Identity preserved through full lifecycle.
         EXPECT_EQ(task->compaction_id, id);
         EXPECT_EQ(task->tablet_id, 1001);

@@ -262,11 +262,21 @@ void Compaction::submit_profile_record(bool success, int64_t start_time_ms,
     }
     stats.bytes_read_from_local = _stats.bytes_read_from_local;
     stats.bytes_read_from_remote = _stats.bytes_read_from_remote;
+    stats.bytes_read_from_peer = _stats.bytes_read_from_peer;
     stats.is_distributed = _is_distributed;
     stats.distributed_task_count = _distributed_task_count;
     stats.distributed_worker_count = _distributed_worker_count;
+    stats.distributed_job_id = _stats.distributed_job_id;
+    stats.distributed_plan_time_us = _stats.plan_time_us;
+    stats.distributed_submit_rpc_time_us = _stats.submit_rpc_time_us;
+    stats.distributed_worker_cpu_time_us = _stats.worker_cpu_time_us;
+    stats.local_read_time_us = _stats.cloud_local_read_time;
+    stats.remote_read_time_us = _stats.cloud_remote_read_time;
+    stats.peer_read_time_us = _stats.peer_read_time_us;
+    stats.peak_memory_bytes = _stats.peak_memory_bytes;
     if (_mem_tracker) {
-        stats.peak_memory_bytes = _mem_tracker->peak_consumption();
+        stats.peak_memory_bytes =
+                std::max(stats.peak_memory_bytes, _mem_tracker->peak_consumption());
     }
     if (success) {
         tracker->complete(_compaction_id, stats);
@@ -351,6 +361,11 @@ Status Compaction::execute_merge_input_rowsets(MergeInputRowsetsContext* context
 Status Compaction::finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context,
                                                         bool build_output_rowset) {
     auto& result = context->result;
+    if (_is_distributed) {
+        COUNTER_SET(_merge_rowsets_latency_timer, _stats.merge_time_us * 1000);
+        CompactionTaskTracker::instance()->update_progress(
+                _compaction_id, _stats.vertical_total_groups, _stats.vertical_completed_groups);
+    }
     COUNTER_UPDATE(_merged_rows_counter, _stats.merged_rows);
     COUNTER_UPDATE(_filtered_rows_counter, _stats.filtered_rows);
 
@@ -2176,6 +2191,7 @@ bool CloudCompactionMixin::should_apply_cumulative_compaction_result(
 }
 
 Status CloudCompactionMixin::prepare_execute_compact(int64_t permits) {
+    _stats.distributed_job_id = _uuid;
     RETURN_IF_ERROR(build_basic_info());
 
     LOG(INFO) << "start " << compaction_name() << ". tablet=" << _tablet->tablet_id()

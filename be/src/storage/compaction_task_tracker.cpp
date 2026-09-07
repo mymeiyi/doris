@@ -174,10 +174,18 @@ void CompactionTaskTracker::_apply_completion(CompactionTaskInfo& info,
     info.merge_latency_ms = stats.merge_latency_ms;
     info.bytes_read_from_local = stats.bytes_read_from_local;
     info.bytes_read_from_remote = stats.bytes_read_from_remote;
+    info.bytes_read_from_peer = stats.bytes_read_from_peer;
     info.peak_memory_bytes = stats.peak_memory_bytes;
     info.is_distributed = stats.is_distributed;
     info.distributed_task_count = stats.distributed_task_count;
     info.distributed_worker_count = stats.distributed_worker_count;
+    info.distributed_job_id = stats.distributed_job_id;
+    info.distributed_plan_time_us = stats.distributed_plan_time_us;
+    info.distributed_submit_rpc_time_us = stats.distributed_submit_rpc_time_us;
+    info.distributed_worker_cpu_time_us = stats.distributed_worker_cpu_time_us;
+    info.local_read_time_us = stats.local_read_time_us;
+    info.remote_read_time_us = stats.remote_read_time_us;
+    info.peer_read_time_us = stats.peer_read_time_us;
     // Backfill input stats if they were 0 at register time.
     // Local compaction populates _input_rowsets_data_size etc. in build_basic_info()
     // which runs inside execute_compact_impl(), after register_task().

@@ -55,7 +55,7 @@ FROM ${JDK_IMAGE}
 # set environment variables
 ENV JACOCO_VERSION=0.8.8
 
-RUN sed -i -e s@/deb.debian.org/@/mirrors.aliyun.com/@g -e s@/security.debian.org/@/mirrors.aliyun.com/@g /etc/apt/sources.list \
+RUN sed -i -e s@/deb.debian.org/@/mirrors.aliyun.com/@g /etc/apt/sources.list \
     && apt-get clean \
     && apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -87,10 +87,18 @@ struct CompletionStats {
     int64_t merge_latency_ms {0}; // _merge_rowsets_latency_timer (converted to ms)
     int64_t bytes_read_from_local {0};
     int64_t bytes_read_from_remote {0};
+    int64_t bytes_read_from_peer {0};
     int64_t peak_memory_bytes {0};
     bool is_distributed {false};
     int64_t distributed_task_count {0};
     int64_t distributed_worker_count {0};
+    std::string distributed_job_id;
+    int64_t distributed_plan_time_us {0}; // excludes submit RPCs
+    int64_t distributed_submit_rpc_time_us {0};
+    int64_t distributed_worker_cpu_time_us {0}; // sum across worker tasks
+    int64_t local_read_time_us {0};
+    int64_t remote_read_time_us {0};
+    int64_t peer_read_time_us {0};
 };
 
 // Unified metadata describing a compaction task across its full lifecycle.
@@ -141,19 +149,28 @@ struct CompactionTaskInfo {
     // ===== IO statistics (written at complete/fail) =====
     int64_t bytes_read_from_local {0};
     int64_t bytes_read_from_remote {0};
+    int64_t bytes_read_from_peer {0};
 
     // ===== Resources =====
+    // Maximum of coordinator and individual worker task peaks for distributed compaction.
     int64_t peak_memory_bytes {0}; // peak memory usage (bytes)
     bool is_vertical {false};      // whether vertical merge is used
     int64_t permits {0};           // compaction permits used
     bool is_distributed {false};
     int64_t distributed_task_count {0};
     int64_t distributed_worker_count {0};
+    std::string distributed_job_id;
+    int64_t distributed_plan_time_us {0}; // excludes submit RPCs
+    int64_t distributed_submit_rpc_time_us {0};
+    int64_t distributed_worker_cpu_time_us {0}; // sum across worker tasks
+    int64_t local_read_time_us {0};
+    int64_t remote_read_time_us {0};
+    int64_t peer_read_time_us {0};
 
     // ===== Vertical compaction progress =====
-    int64_t vertical_total_groups {0}; // total column groups (0 for horizontal)
-    int64_t vertical_completed_groups {
-            0}; // completed column groups (updated in real-time during RUNNING)
+    // Distributed compaction sums worker column groups when assembling the output rowset.
+    int64_t vertical_total_groups {0};     // total column groups (0 for horizontal)
+    int64_t vertical_completed_groups {0}; // local compaction also updates these during RUNNING
 
     // ===== Error =====
     std::string status_msg; // failure message (empty on success)
