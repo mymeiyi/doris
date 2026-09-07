@@ -332,6 +332,9 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                         profile.distributed_task_count.toString().toInteger())
                 assertEquals(backends.size(),
                         profile.distributed_worker_count.toString().toInteger())
+            } else {
+                assertFalse(profile.containsKey("distributed_task_count"))
+                assertFalse(profile.containsKey("distributed_worker_count"))
             }
 
             assertEquals(summaryBefore, sql("""
