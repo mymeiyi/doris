@@ -2364,6 +2364,8 @@ Status CloudMetaMgr::get_delete_bitmap_update_lock(const CloudTablet& tablet, in
 
 void CloudMetaMgr::remove_delete_bitmap_update_lock(int64_t table_id, int64_t lock_id,
                                                     int64_t initiator, int64_t tablet_id) {
+    TEST_SYNC_POINT_RETURN_WITH_VOID("CloudMetaMgr::remove_delete_bitmap_update_lock", table_id,
+                                     lock_id, initiator, tablet_id);
     LOG(INFO) << "remove_delete_bitmap_update_lock ,table_id: " << table_id
               << ",lock_id:" << lock_id << ",initiator:" << initiator << ",tablet_id:" << tablet_id;
     RemoveDeleteBitmapUpdateLockRequest req;

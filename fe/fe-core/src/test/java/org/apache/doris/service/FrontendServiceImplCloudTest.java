@@ -96,17 +96,17 @@ public class FrontendServiceImplCloudTest {
                 requester, List.of(anotherComputeGroup, decommissioned, decommissioning,
                         requester, dead, live, missingBrpc));
 
-        Assert.assertEquals(2, result.size());
-        Assert.assertEquals(1, result.get(0).getBackendId());
-        Assert.assertEquals("127.0.0.1", result.get(0).getHost());
-        Assert.assertEquals(8060, result.get(0).getBrpcPort());
-        Assert.assertEquals("cloud-1", result.get(0).getCloudUniqueId());
-        Assert.assertEquals("cluster-a", result.get(0).getCloudComputeGroupId());
-        Assert.assertEquals(2, result.get(1).getBackendId());
-        Assert.assertEquals("127.0.0.2", result.get(1).getHost());
-        Assert.assertEquals(8061, result.get(1).getBrpcPort());
-        Assert.assertEquals("cloud-2", result.get(1).getCloudUniqueId());
-        Assert.assertEquals("cluster-a", result.get(1).getCloudComputeGroupId());
+        Assertions.assertEquals(2, result.size());
+        Assertions.assertEquals(1, result.get(0).getBackendId());
+        Assertions.assertEquals("127.0.0.1", result.get(0).getHost());
+        Assertions.assertEquals(8060, result.get(0).getBrpcPort());
+        Assertions.assertEquals("cloud-1", result.get(0).getCloudUniqueId());
+        Assertions.assertEquals("cluster-a", result.get(0).getCloudComputeGroupId());
+        Assertions.assertEquals(2, result.get(1).getBackendId());
+        Assertions.assertEquals("127.0.0.2", result.get(1).getHost());
+        Assertions.assertEquals(8061, result.get(1).getBrpcPort());
+        Assertions.assertEquals("cloud-2", result.get(1).getCloudUniqueId());
+        Assertions.assertEquals("cluster-a", result.get(1).getCloudComputeGroupId());
     }
 
     private Backend createBackend(long id, String computeGroupId, boolean alive,

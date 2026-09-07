@@ -1443,9 +1443,13 @@ void CloudInternalServiceImpl::cloud_distributed_compaction_submit(
     const bool offered =
             _heavy_work_pool.try_offer([this, request, response, done, arrival_time_us]() {
                 brpc::ClosureGuard closure_guard(done);
-                cloud::DistributedCompactionWorkerManager::instance()
-                        ->submit(*request, _engine, arrival_time_us)
-                        .to_protobuf(response->mutable_status());
+                Status status = cloud::DistributedCompactionWorkerManager::instance()->submit(
+                        *request, _engine, arrival_time_us);
+                DBUG_EXECUTE_IF(
+                        "CloudInternalServiceImpl::cloud_distributed_compaction_submit."
+                        "too_many_tasks_after_accept",
+                        { status = Status::TooManyTasks("injected error after accepting tasks"); });
+                status.to_protobuf(response->mutable_status());
             });
     if (!offered) {
         brpc::ClosureGuard closure_guard(done);

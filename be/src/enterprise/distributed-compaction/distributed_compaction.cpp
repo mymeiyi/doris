@@ -46,8 +46,8 @@
 #include "common/check.h"
 #include "common/logging.h"
 #include "core/binary_cast.hpp"
-#include "core/value/vdatetime_value.h"
 #include "core/value/timestamptz_value.h"
+#include "core/value/vdatetime_value.h"
 #include "cpp/sync_point.h"
 #include "enterprise/distributed-compaction/distributed_compaction_config.h"
 #include "enterprise/distributed-compaction/distributed_compaction_impl.h"
@@ -60,6 +60,7 @@
 #include "service/backend_options.h"
 #include "storage/compaction/compaction.h"
 #include "storage/merger.h"
+#include "storage/row_cursor.h"
 #include "storage/rowid_conversion.h"
 #include "storage/rowset/rowset_factory.h"
 #include "storage/rowset/rowset_meta.h"
@@ -71,6 +72,7 @@
 #include "storage/tablet/tablet_schema.h"
 #include "util/brpc_client_cache.h"
 #include "util/client_cache.h"
+#include "util/debug_points.h"
 #include "util/hash_util.hpp"
 #include "util/network_util.h"
 #include "util/stopwatch.hpp"
@@ -145,6 +147,8 @@ void shutdown_distributed_compaction() {
 }
 
 Status schedule_distributed_compaction(std::function<void()> callback) {
+    TEST_SYNC_POINT_RETURN_WITH_VALUE("cloud::schedule_distributed_compaction", Status::OK(),
+                                      &callback);
     DORIS_CHECK(poll_scheduler != nullptr);
     return poll_scheduler->schedule(std::move(callback));
 }
@@ -978,6 +982,15 @@ void set_key_fields(PCloudDistributedCompactionKey* key, const TabletSchema& sch
     }
 }
 
+Status encode_key_range_boundary(const TabletSchemaSPtr& schema, const CompositeKey& fields,
+                                 std::string* encoded_key) {
+    RowCursor cursor;
+    RETURN_IF_ERROR(cursor.init_scan_key(schema, fields));
+    encoded_key->clear();
+    cursor.encode_key_with_padding<true>(encoded_key, schema->num_key_columns(), true);
+    return Status::OK();
+}
+
 bool extract_key_tuple(const PCloudDistributedCompactionKey& key, const TabletSchema& schema,
                        OlapTuple* tuple) {
     std::vector<PGenericType_TypeId> types;
@@ -999,7 +1012,10 @@ bool extract_key_tuple(const PCloudDistributedCompactionKey& key, const TabletSc
     return true;
 }
 
-Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& request) {
+} // namespace
+
+Status validate_distributed_compaction_submit_request(
+        const PCloudDistributedCompactionSubmitRequest& request) {
     const bool has_valid_input =
             request.compaction_type() == CLOUD_DISTRIBUTED_CUMULATIVE_COMPACTION
                     ? request.input_rowset_metas_size() == 1
@@ -1031,8 +1047,8 @@ Status validate_submit_request(const PCloudDistributedCompactionSubmitRequest& r
     return Status::OK();
 }
 
-Status validate_compaction_task(const PCloudDistributedCompactionSubmitRequest& request,
-                                const PCloudDistributedCompactionTask& task) {
+Status validate_distributed_compaction_task(const PCloudDistributedCompactionSubmitRequest& request,
+                                            const PCloudDistributedCompactionTask& task) {
     const auto& key_range = task.key_range();
     std::vector<PGenericType_TypeId> lower_types;
     std::vector<PGenericType_TypeId> upper_types;
@@ -1062,7 +1078,75 @@ Status validate_compaction_task(const PCloudDistributedCompactionSubmitRequest& 
     return Status::OK();
 }
 
-} // namespace
+Status validate_distributed_compaction_task_status(
+        int32_t expected_group_index, const PCloudDistributedCompactionTaskStatus& worker_status,
+        bool* completed, PCloudDistributedCompactionTaskResult* result) {
+    DORIS_CHECK(completed != nullptr);
+    DORIS_CHECK(result != nullptr);
+    *completed = false;
+    if (!worker_status.has_state() || worker_status.group_index() != expected_group_index) {
+        return Status::InvalidArgument(
+                "mismatched distributed single-rowset compaction status for group {}",
+                expected_group_index);
+    }
+    if (worker_status.state() == CLOUD_DISTRIBUTED_COMPACTION_TASK_PENDING ||
+        worker_status.state() == CLOUD_DISTRIBUTED_COMPACTION_TASK_RUNNING) {
+        return Status::OK();
+    }
+    if (worker_status.state() != CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED &&
+        worker_status.state() != CLOUD_DISTRIBUTED_COMPACTION_TASK_FAILED) {
+        return Status::InvalidArgument(
+                "invalid distributed single-rowset compaction state for group {}",
+                expected_group_index);
+    }
+    if (!worker_status.has_result()) {
+        return Status::InvalidArgument(
+                "terminal distributed single-rowset compaction status has no result for group {}",
+                expected_group_index);
+    }
+    const auto& task_result = worker_status.result();
+    if (!task_result.has_status()) {
+        return Status::InvalidArgument(
+                "distributed single-rowset compaction result has no status for group {}",
+                expected_group_index);
+    }
+    const Status result_status = Status::create(task_result.status());
+    if ((worker_status.state() == CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED) !=
+        result_status.ok()) {
+        return Status::InvalidArgument(
+                "distributed single-rowset compaction state and result disagree for group {}",
+                expected_group_index);
+    }
+    RETURN_IF_ERROR(result_status);
+    *completed = true;
+    *result = task_result;
+    return Status::OK();
+}
+
+Status accumulate_distributed_compaction_missed_rows(
+        const PCloudDistributedCompactionTaskResult& response, bool is_base,
+        int64_t source_delete_rows, int64_t* missed_rows_count, int64_t* mapped_delete_rows) {
+    DORIS_CHECK(missed_rows_count != nullptr);
+    DORIS_CHECK(mapped_delete_rows != nullptr);
+    if (!response.has_missed_rows_count() || response.missed_rows_count() < 0) {
+        return Status::InvalidArgument("invalid worker missed rows count");
+    }
+    if (!is_base) {
+        *missed_rows_count += response.missed_rows_count();
+        return Status::OK();
+    }
+    if (response.missed_rows_count() > source_delete_rows) {
+        return Status::InvalidArgument("worker missed rows count {} exceeds source delete rows {}",
+                                       response.missed_rows_count(), source_delete_rows);
+    }
+    const int64_t task_mapped_delete_rows = source_delete_rows - response.missed_rows_count();
+    if (*mapped_delete_rows > source_delete_rows - task_mapped_delete_rows) {
+        return Status::InternalError(
+                "distributed base compaction key ranges produced overlapping row-id mappings");
+    }
+    *mapped_delete_rows += task_mapped_delete_rows;
+    return Status::OK();
+}
 
 CompactionWorkerCache::CompactionWorkerCache(Fetcher fetcher) : _fetcher(std::move(fetcher)) {}
 
@@ -1227,7 +1311,9 @@ struct DistributedCompactionCoordinator::ExecutionPlan {
     size_t remaining_workers = 0;
     int64_t expiration_time = 0;
     int64_t input_rowsets_total_size = 0;
+    int64_t source_delete_rows = 0;
     bool is_mow = false;
+    bool is_base = false;
     bool check_missed_rows = false;
     bool polling_completed = false;
     CompletionCallback completion_callback;
@@ -1471,53 +1557,19 @@ void DistributedCompactionCoordinator::finish_poll_round(std::shared_ptr<PollRou
             const size_t group_index = group_indexes[task_index];
             const auto& distributed_task = _state->tasks[group_index];
             const auto& worker_status = status_response.task_statuses(cast_set<int>(task_index));
-            if (!worker_status.has_state() ||
-                worker_status.group_index() != distributed_task.group_index) {
-                complete_polling(Status::InvalidArgument(
-                        "mismatched distributed single-rowset compaction status for group {}",
-                        group_index));
+            bool task_completed = false;
+            PCloudDistributedCompactionTaskResult task_result;
+            const Status task_status = validate_distributed_compaction_task_status(
+                    distributed_task.group_index, worker_status, &task_completed, &task_result);
+            if (!task_status.ok()) {
+                complete_polling(task_status);
                 return;
             }
-            if (worker_status.state() == CLOUD_DISTRIBUTED_COMPACTION_TASK_PENDING ||
-                worker_status.state() == CLOUD_DISTRIBUTED_COMPACTION_TASK_RUNNING) {
+            if (!task_completed) {
                 batch_completed = false;
                 continue;
             }
-            if (worker_status.state() != CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED &&
-                worker_status.state() != CLOUD_DISTRIBUTED_COMPACTION_TASK_FAILED) {
-                complete_polling(Status::InvalidArgument(
-                        "invalid distributed single-rowset compaction state for group {}",
-                        group_index));
-                return;
-            }
-            if (!worker_status.has_result()) {
-                complete_polling(Status::InvalidArgument(
-                        "terminal distributed single-rowset compaction status has no result for "
-                        "group {}",
-                        group_index));
-                return;
-            }
-            const auto& task_result = worker_status.result();
-            if (!task_result.has_status()) {
-                complete_polling(Status::InvalidArgument(
-                        "distributed single-rowset compaction result has no status for group {}",
-                        group_index));
-                return;
-            }
-            const Status result_status = Status::create(task_result.status());
-            if ((worker_status.state() == CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED) !=
-                result_status.ok()) {
-                complete_polling(Status::InvalidArgument(
-                        "distributed single-rowset compaction state and result disagree for group "
-                        "{}",
-                        group_index));
-                return;
-            }
-            if (!result_status.ok()) {
-                complete_polling(result_status);
-                return;
-            }
-            _execution_plan->responses[group_index] = task_result;
+            _execution_plan->responses[group_index] = std::move(task_result);
             _execution_plan->task_completed[group_index] = true;
         }
         if (batch_completed) {
@@ -1552,25 +1604,78 @@ void DistributedCompactionCoordinator::complete_polling(Status status) {
     callback(std::move(status));
 }
 
-Status DistributedCompactionCoordinator::validate_partial_rowset(
+namespace {
+
+Status validate_distributed_compaction_segment_key_bounds(
+        const std::vector<KeyBoundsPB>& key_bounds, bool key_bounds_truncated) {
+    for (size_t segment_index = 0; segment_index < key_bounds.size(); ++segment_index) {
+        const auto& current = key_bounds[segment_index];
+        if (Slice(current.max_key()).compare(Slice(current.min_key())) < 0) {
+            return Status::InvalidArgument("segment {} has an invalid key range", segment_index);
+        }
+        if (segment_index == 0) {
+            continue;
+        }
+
+        const auto& previous = key_bounds[segment_index - 1];
+        if (!key_bounds_truncated) {
+            if (!Slice::lhs_is_strictly_less_than_rhs(Slice(previous.max_key()), false,
+                                                      Slice(current.min_key()), false)) {
+                return Status::InvalidArgument("segments {} and {} have overlapping key ranges",
+                                               segment_index - 1, segment_index);
+            }
+        } else if (Slice::lhs_is_strictly_less_than_rhs(Slice(current.min_key()), true,
+                                                        Slice(previous.max_key()), true)) {
+            // Equal truncated prefixes are inconclusive and remain valid for rolling upgrades.
+            return Status::InvalidArgument("segments {} and {} have reversed key ranges",
+                                           segment_index - 1, segment_index);
+        }
+    }
+    return Status::OK();
+}
+
+Status validate_distributed_compaction_task_key_bounds(size_t group_index,
+                                                       const std::vector<KeyBoundsPB>& key_bounds,
+                                                       bool key_bounds_truncated,
+                                                       const DistributedCompactionTask& task) {
+    if (key_bounds.empty()) {
+        return Status::OK();
+    }
+    if (task.encoded_lower_key.has_value() &&
+        Slice::lhs_is_strictly_less_than_rhs(Slice(key_bounds.front().min_key()),
+                                             key_bounds_truncated, Slice(*task.encoded_lower_key),
+                                             false)) {
+        return Status::InvalidArgument("group {} output is below its lower key bound", group_index);
+    }
+    if (task.encoded_upper_key.has_value()) {
+        const Slice output_max(key_bounds.back().max_key());
+        const Slice upper_key(*task.encoded_upper_key);
+        if (output_max.compare(upper_key) >= 0) {
+            return Status::InvalidArgument("group {} output reaches or exceeds its upper key bound",
+                                           group_index);
+        }
+    }
+    return Status::OK();
+}
+
+} // namespace
+
+Status validate_distributed_compaction_partial_rowset(
         size_t group_index, const PCloudDistributedCompactionTaskResult& response,
         const DistributedCompactionTask& task, const TabletSchema& tablet_schema,
-        const RowsetId& output_rowset_id, ValidatedPartialRowset* partial_rowset) const {
+        const RowsetId& output_rowset_id, RowsetMeta* partial_meta,
+        std::vector<KeyBoundsPB>* key_bounds, std::vector<uint32_t>* segment_rows) {
+    DORIS_CHECK(partial_meta != nullptr);
+    DORIS_CHECK(key_bounds != nullptr);
+    DORIS_CHECK(segment_rows != nullptr);
     if (!response.has_partial_rowset_meta()) {
         return Status::InvalidArgument(
                 "distributed single-rowset compaction result has no partial "
                 "rowset metadata for group {}",
                 group_index);
     }
-    auto& partial_meta = partial_rowset->meta;
-    if (!partial_meta.init_from_pb(response.partial_rowset_meta())) {
-        return Status::InvalidArgument("failed to initialize partial rowset metadata for group {}",
-                                       group_index);
-    }
-    if (partial_meta.rowset_id() != output_rowset_id) {
-        return Status::InvalidArgument("partial rowset id mismatch for group {}", group_index);
-    }
-    const int64_t num_segments = partial_meta.num_segments();
+    const auto& partial_meta_pb = response.partial_rowset_meta();
+    const int64_t num_segments = partial_meta_pb.num_segments();
     if (num_segments < 0) {
         return Status::InvalidArgument("partial rowset has negative segment count for group {}",
                                        group_index);
@@ -1581,41 +1686,69 @@ Status DistributedCompactionCoordinator::validate_partial_rowset(
                 task.segment_id_slot.capacity);
     }
     const size_t expected_num_segments = cast_set<size_t>(num_segments);
-    if (partial_meta.segment_ids().size() != expected_num_segments) {
+    if (cast_set<size_t>(partial_meta_pb.segment_ids_size()) != expected_num_segments) {
         return Status::InvalidArgument(
                 "partial rowset does not contain an explicit segment id list for group {}",
                 group_index);
     }
-    for (const auto segment : partial_meta.segments()) {
-        if (segment.id() < task.segment_id_slot.start_id ||
-            segment.id() >= cast_set<int64_t>(task.segment_id_slot.start_id) +
-                                    task.segment_id_slot.capacity) {
+    int64_t previous_segment_id = -1;
+    for (const int64_t segment_id : partial_meta_pb.segment_ids()) {
+        if (segment_id < 0 || segment_id <= previous_segment_id) {
             return Status::InvalidArgument(
-                    "output segment {} is outside slot [{}, {}) for group {}", segment.id(),
+                    "partial rowset segment ids are not strictly increasing for group {}",
+                    group_index);
+        }
+        if (segment_id < task.segment_id_slot.start_id ||
+            segment_id >= cast_set<int64_t>(task.segment_id_slot.start_id) +
+                                  task.segment_id_slot.capacity) {
+            return Status::InvalidArgument(
+                    "output segment {} is outside slot [{}, {}) for group {}", segment_id,
                     task.segment_id_slot.start_id,
                     cast_set<int64_t>(task.segment_id_slot.start_id) +
                             task.segment_id_slot.capacity,
                     group_index);
         }
+        previous_segment_id = segment_id;
     }
 
-    partial_meta.get_segments_key_bounds(&partial_rowset->key_bounds);
-    if (partial_rowset->key_bounds.size() != expected_num_segments) {
+    if (!partial_meta->init_from_pb(partial_meta_pb)) {
+        return Status::InvalidArgument("failed to initialize partial rowset metadata for group {}",
+                                       group_index);
+    }
+    if (partial_meta->rowset_id() != output_rowset_id) {
+        return Status::InvalidArgument("partial rowset id mismatch for group {}", group_index);
+    }
+
+    partial_meta->get_segments_key_bounds(key_bounds);
+    if (key_bounds->size() != expected_num_segments) {
         return Status::InvalidArgument("partial key bounds are not position-aligned for group {}",
                                        group_index);
     }
-    partial_meta.get_num_segment_rows(&partial_rowset->segment_rows);
-    if (partial_rowset->segment_rows.size() != expected_num_segments) {
+    partial_meta->get_num_segment_rows(segment_rows);
+    if (segment_rows->size() != expected_num_segments) {
         return Status::InvalidArgument(
                 "partial segment row counts are not position-aligned for group {}", group_index);
     }
     if ((tablet_schema.has_inverted_index() || tablet_schema.has_ann_index()) &&
-        partial_meta.inverted_index_file_info().size() != expected_num_segments) {
+        partial_meta->inverted_index_file_info().size() != expected_num_segments) {
         return Status::InvalidArgument(
                 "partial inverted-index metadata is not position-aligned for group {}",
                 group_index);
     }
-    return Status::OK();
+    const bool key_bounds_truncated = partial_meta->is_segments_key_bounds_truncated();
+    RETURN_IF_ERROR(
+            validate_distributed_compaction_segment_key_bounds(*key_bounds, key_bounds_truncated));
+    return validate_distributed_compaction_task_key_bounds(group_index, *key_bounds,
+                                                           key_bounds_truncated, task);
+}
+
+Status DistributedCompactionCoordinator::validate_partial_rowset(
+        size_t group_index, const PCloudDistributedCompactionTaskResult& response,
+        const DistributedCompactionTask& task, const TabletSchema& tablet_schema,
+        const RowsetId& output_rowset_id, ValidatedPartialRowset* partial_rowset) const {
+    return validate_distributed_compaction_partial_rowset(
+            group_index, response, task, tablet_schema, output_rowset_id, &partial_rowset->meta,
+            &partial_rowset->key_bounds, &partial_rowset->segment_rows);
 }
 
 Status DistributedCompactionCoordinator::prepare_single_rowset(
@@ -1770,12 +1903,12 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
         return Status::OK();
     }
 
-    BaseKeyRangePlanningResult key_range_planning;
-    RETURN_IF_ERROR(build_base_key_range_plan(input_rowsets, schema, is_mow, range_count,
-                                              total_input_rows, &key_range_planning));
-    const auto& key_plan = key_range_planning.key_ranges;
+    KeyRangePlanningResult key_range_planning;
+    RETURN_IF_ERROR(build_key_range_plan(input_rowsets, schema, is_mow, range_count,
+                                         total_input_rows, &key_range_planning));
+    const auto& key_range_plan = key_range_planning.key_ranges;
     const auto& key_sampling_plan = key_range_planning.sampling;
-    const size_t group_count = key_plan.boundaries.size() + 1;
+    const size_t group_count = key_range_plan.boundaries.size() + 1;
     if (group_count < 2) {
         return Status::OK();
     }
@@ -1791,18 +1924,57 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             &segment_slots));
 
     _state = std::make_unique<DistributedCompactionState>();
+    const bool check_missed_rows =
+            is_mow && !config::enable_prune_delete_sign_when_base_compaction &&
+            (config::enable_missing_rows_correctness_check ||
+             config::enable_mow_compaction_correctness_check_core ||
+             config::enable_mow_compaction_correctness_check_fail);
+    int64_t source_delete_rows = 0;
     if (is_mow) {
         RETURN_IF_ERROR(_engine.meta_mgr().sync_tablet_rowsets(_tablet.get()));
         _state->phase1_end_version = _tablet->max_version().second;
         _state->output_delete_bitmap = std::make_shared<DeleteBitmap>(_tablet->tablet_id());
+        if (check_missed_rows) {
+            std::vector<DeleteBitmap::RowsetIdWithSegmentIds> input_segments;
+            input_segments.reserve(input_rowsets.size());
+            for (const auto& rowset : input_rowsets) {
+                std::vector<DeleteBitmap::SegmentId> segment_ids;
+                segment_ids.reserve(cast_set<size_t>(rowset->num_segments()));
+                for (const auto segment : rowset->segments()) {
+                    segment_ids.push_back(cast_set<DeleteBitmap::SegmentId>(segment.id()));
+                }
+                input_segments.emplace_back(rowset->rowset_id(), std::move(segment_ids));
+            }
+            DeleteBitmap aggregated_source_delete_bitmap(_tablet->tablet_id());
+            // Each key-range task reports misses from this same phase-1 source-row universe.
+            _tablet->tablet_meta()->delete_bitmap().subset_and_agg(
+                    input_segments, 0, _state->phase1_end_version,
+                    &aggregated_source_delete_bitmap);
+            source_delete_rows =
+                    cast_set<int64_t>(aggregated_source_delete_bitmap.cardinality());
+        }
     }
     _state->tasks.reserve(group_count);
+    std::vector<std::string> encoded_range_boundaries;
+    encoded_range_boundaries.reserve(key_range_plan.boundaries.size());
+    for (const auto& boundary : key_range_plan.boundaries) {
+        encoded_range_boundaries.emplace_back();
+        RETURN_IF_ERROR(encode_key_range_boundary(_tablet->tablet_schema(), boundary,
+                                                  &encoded_range_boundaries.back()));
+    }
     auto groups_by_worker = assign_compaction_groups_round_robin(group_count, workers.size());
     for (size_t group_index = 0; group_index < group_count; ++group_index) {
         const size_t worker_index = group_index % workers.size();
-        _state->tasks.push_back({.worker_endpoint = workers[worker_index].endpoint,
-                                 .group_index = cast_set<int32_t>(group_index),
-                                 .segment_id_slot = segment_slots[group_index]});
+        DistributedCompactionTask task {.worker_endpoint = workers[worker_index].endpoint,
+                                        .group_index = cast_set<int32_t>(group_index),
+                                        .segment_id_slot = segment_slots[group_index]};
+        if (group_index > 0) {
+            task.encoded_lower_key = encoded_range_boundaries[group_index - 1];
+        }
+        if (group_index + 1 < group_count) {
+            task.encoded_upper_key = encoded_range_boundaries[group_index];
+        }
+        _state->tasks.push_back(std::move(task));
     }
 
     int64_t merge_way_num = 0;
@@ -1823,7 +1995,7 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
         request.set_is_vertical(is_vertical);
         request.set_avg_segment_rows(avg_segment_rows);
         request.set_delete_bitmap_end_version(_state->phase1_end_version + 1);
-        request.set_check_missed_rows(false);
+        request.set_check_missed_rows(check_missed_rows);
         request.set_target_backend_id(worker.backend_id);
         request.set_target_cloud_unique_id(worker.cloud_unique_id);
         request.set_target_compute_group_id(worker.compute_group_id);
@@ -1840,11 +2012,11 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             auto* key_range = request_task->mutable_key_range();
             if (group_index > 0) {
                 set_key_fields(key_range->mutable_lower_key(), schema,
-                               key_plan.boundaries[group_index - 1]);
+                               key_range_plan.boundaries[group_index - 1]);
             }
             if (group_index + 1 < group_count) {
                 set_key_fields(key_range->mutable_upper_key(), schema,
-                               key_plan.boundaries[group_index]);
+                               key_range_plan.boundaries[group_index]);
             }
         }
     }
@@ -1862,8 +2034,10 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
     _execution_plan->task_completed.assign(group_count, false);
     _execution_plan->remaining_workers = _execution_plan->workers.size();
     _execution_plan->expiration_time = output_meta_pb.txn_expiration();
+    _execution_plan->source_delete_rows = source_delete_rows;
     _execution_plan->is_mow = is_mow;
-    _execution_plan->check_missed_rows = false;
+    _execution_plan->is_base = true;
+    _execution_plan->check_missed_rows = check_missed_rows;
     const int64_t prepare_finish_time_us = UnixMicros();
     LOG_INFO("finish distributed base compaction range planning")
             .tag("job_id", _execution_id)
@@ -1926,18 +2100,17 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             .tag("segments", key_range_planning.segment_count)
             .tag("samples", key_range_planning.sampled_row_count)
             .tag("encoded_samples", key_range_planning.encoded_sample_count)
-            .tag("typed_samples", key_range_planning.typed_sample_count)
-            .tag("boundary_candidate_rows", key_plan.boundaries.size())
-            .tag("short_key_fast_path", key_sampling_plan.selected_short_key_fast_path())
-            .tag("primary_key_fast_path", key_sampling_plan.selected_primary_key_fast_path())
-            .tag("primary_key_fast_path_fallback_reason",
-                 key_sampling_plan.primary_key_fallback_reason)
-            .tag("short_key_encoding_lossless", key_sampling_plan.short_key_encoding_lossless)
-            .tag("short_key_collision_refinement",
-                 key_sampling_plan.selected_short_key_refinement())
+            .tag("key_column_samples", key_range_planning.key_column_sample_count)
+            .tag("boundary_count", key_range_plan.boundaries.size())
+            .tag("short_key_fast_path", key_sampling_plan.uses_short_key_encoding())
+            .tag("primary_key_fast_path", key_sampling_plan.uses_primary_key_encoding())
+            .tag("primary_key_skip_reason", key_sampling_plan.primary_key_skip_reason)
+            .tag("short_key_fully_encoded", key_sampling_plan.short_key_fully_encoded)
+            .tag("short_key_boundary_refinement",
+                 key_sampling_plan.uses_short_key_boundary_refinement())
             .tag("boundary_refinement_groups", key_range_planning.boundary_refinement_group_count)
             .tag("boundary_refinement_samples", key_range_planning.boundary_refinement_sample_count)
-            .tag("short_key_fast_path_fallback_reason", key_sampling_plan.short_key_fallback_reason)
+            .tag("short_key_skip_reason", key_sampling_plan.short_key_skip_reason)
             .tag("target_samples", key_range_planning.target_sample_count)
             .tag("requested_ranges", range_count)
             .tag("actual_ranges", group_count);
@@ -1954,6 +2127,7 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
     const auto& workers = _execution_plan->workers;
     const auto& responses = _execution_plan->responses;
     const bool is_mow = _execution_plan->is_mow;
+    const bool is_base = _execution_plan->is_base;
     const bool check_missed_rows = _execution_plan->check_missed_rows;
 
     // Step 4 (assemble): validate every partial rowset and merge its metadata, statistics, and the
@@ -1965,6 +2139,7 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
     bool key_bounds_truncated = false;
     bool segment_file_sizes_available = true;
     int64_t missed_rows_count = 0;
+    int64_t mapped_delete_rows = 0;
     int64_t first_merge_start_time_us = std::numeric_limits<int64_t>::max();
     int64_t last_merge_finish_time_us = 0;
     int64_t sum_task_merge_time_us = 0;
@@ -2054,7 +2229,14 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
         output_index_size += partial_meta.index_disk_size();
         output_total_size += partial_meta.total_disk_size();
         key_bounds_truncated |= partial_meta.is_segments_key_bounds_truncated();
-        missed_rows_count += response.missed_rows_count();
+        if (check_missed_rows) {
+            // Base key ranges partition mapped rows, while every task counts misses against the
+            // same source-delete-row universe. Subtract each task's misses to recover its mapped
+            // rows, then subtract their disjoint union from the source total.
+            RETURN_IF_ERROR(accumulate_distributed_compaction_missed_rows(
+                    response, is_base, _execution_plan->source_delete_rows, &missed_rows_count,
+                    &mapped_delete_rows));
+        }
         stats->merged_rows += response.merged_rows();
         stats->filtered_rows += response.filtered_rows();
         stats->bytes_read_from_local += response.bytes_read_from_local();
@@ -2070,6 +2252,9 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
         }
     }
     stats->output_rows = output_num_rows;
+    if (check_missed_rows && is_base) {
+        missed_rows_count = _execution_plan->source_delete_rows - mapped_delete_rows;
+    }
 
     if (!segment_file_sizes_available) {
         output_segment_file_sizes.clear();
@@ -2078,20 +2263,25 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
     DORIS_CHECK_EQ(output_segment_ids.size(), output_key_bounds.size());
     DORIS_CHECK(output_index_file_info.empty() ||
                 output_index_file_info.size() == output_segment_ids.size());
+    if (is_base) {
+        RETURN_IF_ERROR(validate_distributed_compaction_segment_key_bounds(output_key_bounds,
+                                                                           key_bounds_truncated));
+    }
     if (check_missed_rows && _tablet->tablet_state() == TABLET_RUNNING &&
         stats->merged_rows + stats->filtered_rows >= 0 &&
         stats->merged_rows + stats->filtered_rows != missed_rows_count) {
         const Status status = Status::InternalError(
-                "distributed single-rowset compaction merged rows ({}) plus filtered rows ({}) "
+                "distributed {} compaction merged rows ({}) plus filtered rows ({}) "
                 "does not equal missed rows ({})",
-                stats->merged_rows, stats->filtered_rows, missed_rows_count);
+                is_base ? "base" : "single-rowset", stats->merged_rows, stats->filtered_rows,
+                missed_rows_count);
         if (config::enable_mow_compaction_correctness_check_core) {
             CHECK(false) << status;
-        }
-        if (config::enable_mow_compaction_correctness_check_fail) {
+        } else if (config::enable_mow_compaction_correctness_check_fail) {
             return status;
+        } else {
+            DCHECK(false) << status;
         }
-        DCHECK(false) << status;
     }
 
     auto final_meta = std::make_shared<RowsetMeta>();
@@ -2620,6 +2810,10 @@ Status DistributedCompactionWorker::handle_compaction(
 
     _is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
               _tablet->enable_unique_key_merge_on_write();
+    if (_is_mow && config::enable_rowid_conversion_correctness_check &&
+        _tablet->tablet_schema()->cluster_key_uids().empty()) {
+        _input_rowsets_for_rowid_conversion_check = input_rowsets;
+    }
     Merger::Statistics stats;
     if (_is_mow) {
         const auto mode =
@@ -2691,19 +2885,37 @@ Status DistributedCompactionWorker::handle_compaction(
     if (_is_mow) {
         RETURN_IF_CANCELLED(_runtime_state.get());
         RETURN_IF_ERROR(_engine.meta_mgr().sync_tablet_rowsets(_tablet.get()));
+        if (request->check_missed_rows() && is_base) {
+            size_t input_segment_count = 0;
+            for (const auto& input_rowset : input_rowsets) {
+                input_segment_count += cast_set<size_t>(input_rowset->num_segments());
+            }
+            DORIS_CHECK_EQ(_rowid_conversion->get_src_segment_to_id_map().size(),
+                           input_segment_count);
+        }
         DeleteBitmap shard(_tablet->tablet_id());
         std::unique_ptr<std::set<RowLocation>> missed_rows;
         if (request->check_missed_rows()) {
             missed_rows = std::make_unique<std::set<RowLocation>>();
         }
+        std::unique_ptr<std::map<RowsetSharedPtr, RowLocationPairList>> location_map;
+        if (!_input_rowsets_for_rowid_conversion_check.empty()) {
+            location_map = std::make_unique<std::map<RowsetSharedPtr, RowLocationPairList>>();
+        }
         _tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
                 *_rowid_conversion, _output_rowset->rowset_id(), _output_segment_ids, 0,
                 request->delete_bitmap_end_version(), _tablet->tablet_meta()->delete_bitmap(),
-                &shard, missed_rows.get());
+                &shard, missed_rows.get(), &_input_rowsets_for_rowid_conversion_check,
+                location_map.get());
+        if (location_map != nullptr) {
+            RETURN_IF_ERROR(_tablet->check_rowid_conversion(_output_rowset, *location_map));
+        }
         RETURN_IF_CANCELLED(_runtime_state.get());
         *result->mutable_output_delete_bitmap_shard() = shard.to_pb();
         result->set_missed_rows_count(
                 missed_rows == nullptr ? 0 : cast_set<int64_t>(missed_rows->size()));
+        DBUG_EXECUTE_IF("DistributedCompactionWorker::handle_compaction.corrupt_missed_rows_count",
+                        { result->set_missed_rows_count(result->missed_rows_count() + 1); });
     }
     return Status::OK();
 }
@@ -2716,9 +2928,17 @@ Status DistributedCompactionWorker::calc_incremental_delete_bitmap(
         return Status::InvalidArgument(
                 "incremental delete bitmap requested before a MoW group compaction");
     }
+    std::unique_ptr<std::map<RowsetSharedPtr, RowLocationPairList>> location_map;
+    if (!_input_rowsets_for_rowid_conversion_check.empty()) {
+        location_map = std::make_unique<std::map<RowsetSharedPtr, RowLocationPairList>>();
+    }
     _tablet->calc_compaction_output_rowset_delete_bitmap_by_segments(
             *_rowid_conversion, _output_rowset->rowset_id(), _output_segment_ids, start_version,
-            end_version, _tablet->tablet_meta()->delete_bitmap(), output_delete_bitmap, nullptr);
+            end_version, _tablet->tablet_meta()->delete_bitmap(), output_delete_bitmap, nullptr,
+            &_input_rowsets_for_rowid_conversion_check, location_map.get());
+    if (location_map != nullptr) {
+        RETURN_IF_ERROR(_tablet->check_rowid_conversion(_output_rowset, *location_map));
+    }
     return Status::OK();
 }
 
@@ -2734,6 +2954,7 @@ void DistributedCompactionWorker::reset_state() {
     _rowid_conversion.reset();
     _output_rowset.reset();
     std::vector<int64_t>().swap(_output_segment_ids);
+    std::vector<RowsetSharedPtr>().swap(_input_rowsets_for_rowid_conversion_check);
 }
 
 DistributedCompactionWorkerManager* DistributedCompactionWorkerManager::instance() {
@@ -2768,7 +2989,7 @@ Status DistributedCompactionWorkerManager::submit(
     if (request.tasks().empty()) {
         return Status::InvalidArgument("distributed compaction batch has no tasks");
     }
-    RETURN_IF_ERROR(validate_submit_request(request));
+    RETURN_IF_ERROR(validate_distributed_compaction_submit_request(request));
     auto tablet =
             DORIS_TRY(engine.tablet_mgr().get_tablet(request.output_rowset_meta().tablet_id()));
     if (tablet->keys_type() == KeysType::UNIQUE_KEYS &&
@@ -2791,7 +3012,7 @@ Status DistributedCompactionWorkerManager::submit(
     std::unordered_set<std::string> request_keys;
     request_keys.reserve(cast_set<size_t>(request.tasks_size()));
     for (const auto& task : request.tasks()) {
-        RETURN_IF_ERROR(validate_compaction_task(request, task));
+        RETURN_IF_ERROR(validate_distributed_compaction_task(request, task));
         const std::string worker_key = key(request.execution_id(), task.group_index());
         if (!request_keys.emplace(worker_key).second) {
             return Status::InvalidArgument(
@@ -3061,12 +3282,7 @@ bool can_use_distributed_base_compaction(const CloudTablet& tablet,
     }
 
     if (tablet.keys_type() == KeysType::UNIQUE_KEYS && tablet.enable_unique_key_merge_on_write()) {
-        // ponytail: range workers rescan source delete bitmaps independently; keep diagnostic modes
-        // local until row-id conversion can filter missed-row checks by key range.
-        if (!schema.cluster_key_uids().empty() || config::enable_missing_rows_correctness_check ||
-            config::enable_mow_compaction_correctness_check_core ||
-            config::enable_mow_compaction_correctness_check_fail ||
-            config::enable_rowid_conversion_correctness_check) {
+        if (!schema.cluster_key_uids().empty()) {
             return false;
         }
     }

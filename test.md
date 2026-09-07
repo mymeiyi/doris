@@ -120,7 +120,7 @@ enable_rowid_conversion_correctness_check
 从 coordinator/worker 日志按 `job_id` 汇总：
 
 - range planning：`prepare_time_us`、`segment_load_time_us`、`short_key_index_load_time_us`、`primary_key_index_load_time_us`、`key_sample_read_time_us`、`boundary_key_read_time_us`。
-- range 结果：`requested_ranges`、`actual_ranges`、`samples`、`typed_samples`、`encoded_samples`。
+- range 结果：`requested_ranges`、`actual_ranges`、`samples`、`key_column_samples`、`encoded_samples`。
 - fast path：`short_key_fast_path`、`primary_key_fast_path`、fallback reason、boundary refinement 统计。
 - 每个 task：`output_rows`、`output_rowset_total_size`、`merge_time_us`、`task_elapsed_time_us`、`worker_queue_time_us`、`cpu_time_us`。
 - IO：`local_read_bytes`、`remote_read_bytes`、`peer_read_bytes`、`remote_output_write_time_us`。
@@ -202,7 +202,7 @@ target_range_size = ceil(S / R)
 | 类别 | 用例 | 造数要点 |
 | --- | --- | --- |
 | 整数 | TINYINT、SMALLINT、INT、BIGINT、LARGEINT | 正负值；TINYINT 的 range 数不要超过有效 distinct key 数 |
-| 字符串 | CHAR、短 VARCHAR、长 VARCHAR | 长 VARCHAR 使用超过 short-key 长度的公共前缀，触发冲突 refinement/typed boundary |
+| 字符串 | CHAR、短 VARCHAR、长 VARCHAR | 长 VARCHAR 使用超过 short-key 长度的公共前缀，触发 short-key boundary refinement |
 | 日期 | DATEV2、DATETIMEV2(6) | 覆盖不同日期和微秒值 |
 | DecimalV3 | DECIMALV3(9,2)、(18,2)、(38,2)、(76,2) | 分别落到 Decimal32/64/128I/256；Decimal256 会话开启 `enable_decimal256=true` |
 | 兼容类型 | legacy DATE、DATETIME、DECIMALV2(27,9) | 仅专用集群执行，见下方配置 |

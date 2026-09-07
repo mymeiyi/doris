@@ -45,6 +45,172 @@ namespace doris {
 
 extern bvar::Adder<uint64_t> g_cumu_compaction_running_task_count;
 
+std::optional<Status> CloudStorageEngine::_try_submit_cumulative_compaction_task(
+        const CloudTabletSPtr& tablet, const std::shared_ptr<CloudCumulativeCompaction>& compaction,
+        int64_t compaction_id, std::function<void()> erase_submitted_cumu_compaction,
+        std::function<void()> erase_executing_cumu_compaction) {
+    if (!compaction->is_single_rowset_grouped_compaction()) {
+        return std::nullopt;
+    }
+    using namespace std::chrono;
+
+    auto task_finished = std::make_shared<std::atomic_bool>(false);
+    auto executing_registered = std::make_shared<std::atomic_bool>(false);
+    auto is_large_task = std::make_shared<bool>(true);
+    auto complete_task = [=, this](Status result) {
+        if (task_finished->exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+        DBUG_EXECUTE_IF("CloudStorageEngine._submit_cumulative_compaction_task.sleep",
+                        { sleep(5); })
+        if (!result.ok()) {
+            tablet->set_last_cumu_compaction_failure_time(UnixMillis());
+        }
+        CompactionTaskTracker::instance()->remove_task(compaction_id);
+        if (executing_registered->load(std::memory_order_acquire)) {
+            erase_executing_cumu_compaction();
+        }
+        erase_submitted_cumu_compaction();
+        g_cumu_compaction_running_task_count << -1;
+        DorisMetrics::instance()->cumulative_compaction_task_running_total->increment(-1);
+        DorisMetrics::instance()->cumulative_compaction_task_pending_total->set_value(
+                _cumu_compaction_thread_pool->get_queue_size());
+    };
+    auto acquire_cumu_thread = [=, this] {
+        std::lock_guard lock(_cumu_compaction_delay_mtx);
+        _cumu_compaction_thread_pool_used_threads++;
+        if (!*is_large_task) {
+            _cumu_compaction_thread_pool_small_tasks_running++;
+        }
+    };
+    auto release_cumu_thread = [=, this] {
+        std::lock_guard lock(_cumu_compaction_delay_mtx);
+        _cumu_compaction_thread_pool_used_threads--;
+        if (!*is_large_task) {
+            _cumu_compaction_thread_pool_small_tasks_running--;
+        }
+    };
+
+    auto schedule_resume = std::make_shared<std::function<void(Status)>>();
+    std::weak_ptr<std::function<void(Status)>> weak_schedule_resume = schedule_resume;
+    *schedule_resume = [=, this](Status remote_status) mutable {
+        if (stopped()) {
+            Status result = compaction->complete_distributed_compaction(std::move(remote_status));
+            complete_task(std::move(result));
+            return;
+        }
+        const Status submit_status = _cumu_compaction_thread_pool->submit_func([=]() mutable {
+            signal::tablet_id = tablet->tablet_id();
+            acquire_cumu_thread();
+            Status result = compaction->complete_distributed_compaction(std::move(remote_status));
+            release_cumu_thread();
+            complete_task(std::move(result));
+        });
+        if (submit_status.ok()) {
+            return;
+        }
+        auto resume = weak_schedule_resume.lock();
+        DORIS_CHECK(resume != nullptr);
+        const Status retry_status = cloud::schedule_distributed_compaction(
+                [resume = std::move(resume), remote_status]() mutable {
+                    (*resume)(std::move(remote_status));
+                });
+        if (!retry_status.ok()) {
+            Status result = compaction->complete_distributed_compaction(retry_status);
+            complete_task(std::move(result));
+        }
+    };
+
+    Status st = _cumu_compaction_thread_pool->submit_func([=, this]() {
+        DorisMetrics::instance()->cumulative_compaction_task_running_total->increment(1);
+        DorisMetrics::instance()->cumulative_compaction_task_pending_total->set_value(
+                _cumu_compaction_thread_pool->get_queue_size());
+        DBUG_EXECUTE_IF("CloudStorageEngine._submit_cumulative_compaction_task.wait_in_line",
+                        { sleep(5); })
+        signal::tablet_id = tablet->tablet_id();
+        g_cumu_compaction_running_task_count << 1;
+        TEST_SYNC_POINT_RETURN_WITH_VOID(
+                "CloudStorageEngine::_try_submit_cumulative_compaction_task::before_global_lock",
+                schedule_resume);
+        auto st = _request_tablet_global_compaction_lock(ReaderType::READER_CUMULATIVE_COMPACTION,
+                                                         tablet, compaction);
+        if (!st.ok()) {
+            complete_task(std::move(st));
+            return;
+        }
+        executing_registered->store(true, std::memory_order_release);
+        // Update tracker to RUNNING after acquiring global lock
+        {
+            RunningStats rs;
+            rs.start_time_ms =
+                    duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+            CompactionTaskTracker::instance()->update_to_running(compaction_id, rs);
+        }
+        bool delayed = false;
+        {
+            std::lock_guard lock(_cumu_compaction_delay_mtx);
+            _cumu_compaction_thread_pool_used_threads++;
+            if (config::large_cumu_compaction_task_min_thread_num > 1 &&
+                _cumu_compaction_thread_pool->max_threads() >=
+                        config::large_cumu_compaction_task_min_thread_num) {
+                // Determine if this is a small task based on configured thresholds
+                *is_large_task = (compaction->get_input_rowsets_bytes() >
+                                          config::large_cumu_compaction_task_bytes_threshold ||
+                                  compaction->get_input_num_rows() >
+                                          config::large_cumu_compaction_task_row_num_threshold);
+                // Small task. No delay needed
+                if (!*is_large_task) {
+                    _cumu_compaction_thread_pool_small_tasks_running++;
+                } else if (_should_delay_large_task()) {
+                    long now = duration_cast<milliseconds>(system_clock::now().time_since_epoch())
+                                       .count();
+                    // sleep 5s for this tablet
+                    tablet->set_last_cumu_compaction_failure_time(now);
+                    LOG_WARNING(
+                            "failed to do CloudCumulativeCompaction, cumu thread pool is "
+                            "intensive, delay large task.")
+                            .tag("tablet_id", tablet->tablet_id())
+                            .tag("input_rows", compaction->get_input_num_rows())
+                            .tag("input_rowsets_total_size", compaction->get_input_rowsets_bytes())
+                            .tag("config::large_cumu_compaction_task_bytes_threshold",
+                                 config::large_cumu_compaction_task_bytes_threshold)
+                            .tag("config::large_cumu_compaction_task_row_num_threshold",
+                                 config::large_cumu_compaction_task_row_num_threshold)
+                            .tag("remaining threads", _cumu_compaction_thread_pool_used_threads)
+                            .tag("small_tasks_running",
+                                 _cumu_compaction_thread_pool_small_tasks_running);
+                    _cumu_compaction_thread_pool_used_threads--;
+                    delayed = true;
+                }
+            }
+        }
+        if (delayed) {
+            complete_task(Status::InternalError(
+                    "cumulative compaction delayed because thread pool is intensive"));
+            return;
+        }
+        bool distributed_started = false;
+        st = compaction->execute_distributed_compact_async(
+                [schedule_resume](Status remote_status) mutable {
+                    (*schedule_resume)(std::move(remote_status));
+                },
+                &distributed_started);
+        release_cumu_thread();
+        if (!distributed_started) {
+            complete_task(std::move(st));
+        }
+    });
+    DorisMetrics::instance()->cumulative_compaction_task_pending_total->set_value(
+            _cumu_compaction_thread_pool->get_queue_size());
+    if (!st.ok()) {
+        CompactionTaskTracker::instance()->remove_task(compaction_id);
+        erase_submitted_cumu_compaction();
+        return Status::InternalError("failed to submit grouped cumu compaction, tablet_id={}",
+                                     tablet->tablet_id());
+    }
+    return st;
+}
+
 Status CloudCumulativeCompaction::execute_distributed_compact_async(
         std::function<void(Status)> remote_completion, bool* distributed_started) {
     DORIS_CHECK(remote_completion != nullptr);
@@ -180,169 +346,6 @@ Status CloudCumulativeCompaction::handle_prepared_compaction_failure(Status stat
     submit_profile_record(false, _async_profile_start_time_ms, status.to_string());
     _merge_execution_context.reset();
     return record_compaction_failure(std::move(status));
-}
-
-std::optional<Status> CloudStorageEngine::_try_submit_cumulative_compaction_task(
-        const CloudTabletSPtr& tablet, const std::shared_ptr<CloudCumulativeCompaction>& compaction,
-        int64_t compaction_id, std::function<void()> erase_submitted_cumu_compaction,
-        std::function<void()> erase_executing_cumu_compaction) {
-    if (!compaction->is_single_rowset_grouped_compaction()) {
-        return std::nullopt;
-    }
-    using namespace std::chrono;
-
-    auto task_finished = std::make_shared<std::atomic_bool>(false);
-    auto executing_registered = std::make_shared<std::atomic_bool>(false);
-    auto is_large_task = std::make_shared<bool>(true);
-    auto complete_task = [=, this](Status result) {
-        if (task_finished->exchange(true, std::memory_order_acq_rel)) {
-            return;
-        }
-        DBUG_EXECUTE_IF("CloudStorageEngine._submit_cumulative_compaction_task.sleep",
-                        { sleep(5); })
-        if (!result.ok()) {
-            tablet->set_last_cumu_compaction_failure_time(UnixMillis());
-        }
-        CompactionTaskTracker::instance()->remove_task(compaction_id);
-        if (executing_registered->load(std::memory_order_acquire)) {
-            erase_executing_cumu_compaction();
-        }
-        erase_submitted_cumu_compaction();
-        g_cumu_compaction_running_task_count << -1;
-        DorisMetrics::instance()->cumulative_compaction_task_running_total->increment(-1);
-        DorisMetrics::instance()->cumulative_compaction_task_pending_total->set_value(
-                _cumu_compaction_thread_pool->get_queue_size());
-    };
-    auto acquire_cumu_thread = [=, this] {
-        std::lock_guard lock(_cumu_compaction_delay_mtx);
-        _cumu_compaction_thread_pool_used_threads++;
-        if (!*is_large_task) {
-            _cumu_compaction_thread_pool_small_tasks_running++;
-        }
-    };
-    auto release_cumu_thread = [=, this] {
-        std::lock_guard lock(_cumu_compaction_delay_mtx);
-        _cumu_compaction_thread_pool_used_threads--;
-        if (!*is_large_task) {
-            _cumu_compaction_thread_pool_small_tasks_running--;
-        }
-    };
-
-    auto schedule_resume = std::make_shared<std::function<void(Status)>>();
-    std::weak_ptr<std::function<void(Status)>> weak_schedule_resume = schedule_resume;
-    *schedule_resume = [=, this](Status remote_status) mutable {
-        if (stopped()) {
-            Status result = compaction->complete_distributed_compaction(std::move(remote_status));
-            complete_task(std::move(result));
-            return;
-        }
-        const Status submit_status = _cumu_compaction_thread_pool->submit_func([=]() mutable {
-            signal::tablet_id = tablet->tablet_id();
-            acquire_cumu_thread();
-            Status result = compaction->complete_distributed_compaction(std::move(remote_status));
-            release_cumu_thread();
-            complete_task(std::move(result));
-        });
-        if (submit_status.ok()) {
-            return;
-        }
-        auto resume = weak_schedule_resume.lock();
-        DORIS_CHECK(resume != nullptr);
-        const Status retry_status = cloud::schedule_distributed_compaction(
-                [resume = std::move(resume), remote_status]() mutable {
-                    (*resume)(std::move(remote_status));
-                });
-        if (!retry_status.ok()) {
-            Status result = compaction->complete_distributed_compaction(retry_status);
-            complete_task(std::move(result));
-        }
-    };
-
-    Status st = _cumu_compaction_thread_pool->submit_func([=, this]() {
-        DorisMetrics::instance()->cumulative_compaction_task_running_total->increment(1);
-        DorisMetrics::instance()->cumulative_compaction_task_pending_total->set_value(
-                _cumu_compaction_thread_pool->get_queue_size());
-        DBUG_EXECUTE_IF("CloudStorageEngine._submit_cumulative_compaction_task.wait_in_line",
-                        { sleep(5); })
-        signal::tablet_id = tablet->tablet_id();
-        g_cumu_compaction_running_task_count << 1;
-        auto st = _request_tablet_global_compaction_lock(ReaderType::READER_CUMULATIVE_COMPACTION,
-                                                         tablet, compaction);
-        if (!st.ok()) {
-            complete_task(std::move(st));
-            return;
-        }
-        executing_registered->store(true, std::memory_order_release);
-        // Update tracker to RUNNING after acquiring global lock
-        {
-            RunningStats rs;
-            rs.start_time_ms =
-                    duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
-            CompactionTaskTracker::instance()->update_to_running(compaction_id, rs);
-        }
-        bool delayed = false;
-        {
-            std::lock_guard lock(_cumu_compaction_delay_mtx);
-            _cumu_compaction_thread_pool_used_threads++;
-            if (config::large_cumu_compaction_task_min_thread_num > 1 &&
-                _cumu_compaction_thread_pool->max_threads() >=
-                        config::large_cumu_compaction_task_min_thread_num) {
-                // Determine if this is a small task based on configured thresholds
-                *is_large_task = (compaction->get_input_rowsets_bytes() >
-                                          config::large_cumu_compaction_task_bytes_threshold ||
-                                  compaction->get_input_num_rows() >
-                                          config::large_cumu_compaction_task_row_num_threshold);
-                // Small task. No delay needed
-                if (!*is_large_task) {
-                    _cumu_compaction_thread_pool_small_tasks_running++;
-                } else if (_should_delay_large_task()) {
-                    long now = duration_cast<milliseconds>(system_clock::now().time_since_epoch())
-                                       .count();
-                    // sleep 5s for this tablet
-                    tablet->set_last_cumu_compaction_failure_time(now);
-                    LOG_WARNING(
-                            "failed to do CloudCumulativeCompaction, cumu thread pool is "
-                            "intensive, delay large task.")
-                            .tag("tablet_id", tablet->tablet_id())
-                            .tag("input_rows", compaction->get_input_num_rows())
-                            .tag("input_rowsets_total_size", compaction->get_input_rowsets_bytes())
-                            .tag("config::large_cumu_compaction_task_bytes_threshold",
-                                 config::large_cumu_compaction_task_bytes_threshold)
-                            .tag("config::large_cumu_compaction_task_row_num_threshold",
-                                 config::large_cumu_compaction_task_row_num_threshold)
-                            .tag("remaining threads", _cumu_compaction_thread_pool_used_threads)
-                            .tag("small_tasks_running",
-                                 _cumu_compaction_thread_pool_small_tasks_running);
-                    _cumu_compaction_thread_pool_used_threads--;
-                    delayed = true;
-                }
-            }
-        }
-        if (delayed) {
-            complete_task(Status::InternalError(
-                    "cumulative compaction delayed because thread pool is intensive"));
-            return;
-        }
-        bool distributed_started = false;
-        st = compaction->execute_distributed_compact_async(
-                [schedule_resume](Status remote_status) mutable {
-                    (*schedule_resume)(std::move(remote_status));
-                },
-                &distributed_started);
-        release_cumu_thread();
-        if (!distributed_started) {
-            complete_task(std::move(st));
-        }
-    });
-    DorisMetrics::instance()->cumulative_compaction_task_pending_total->set_value(
-            _cumu_compaction_thread_pool->get_queue_size());
-    if (!st.ok()) {
-        CompactionTaskTracker::instance()->remove_task(compaction_id);
-        erase_submitted_cumu_compaction();
-        return Status::InternalError("failed to submit grouped cumu compaction, tablet_id={}",
-                                     tablet->tablet_id());
-    }
-    return st;
 }
 
 } // namespace doris

@@ -22,6 +22,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
     options.cloudMode = true
     options.setFeNum(1)
     options.setBeNum(2)
+    options.enableDebugPoints()
     options.feConfigs += [
         "tablet_stat_update_interval_second=1",
         "enable_date_conversion=false",
@@ -31,6 +32,9 @@ suite("test_cloud_distributed_base_compaction", "docker") {
     options.beConfigs += [
         "enable_cloud_distributed_base_compaction=true",
         "cloud_distributed_compaction_status_poll_interval_ms=100",
+        "enable_mow_compaction_correctness_check_fail=true",
+        "enable_rowid_conversion_correctness_check=true",
+        "enable_prune_delete_sign_when_base_compaction=false",
         "base_compaction_min_rowset_num=2",
         "cumulative_compaction_min_deltas=2",
         "compaction_promotion_min_size_mbytes=0",
@@ -43,6 +47,10 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         sql "set enable_decimal256 = true"
 
         long compactionTimeoutMs = 90000L
+        String submitRetryDebugPoint = "CloudInternalServiceImpl::" +
+                "cloud_distributed_compaction_submit.too_many_tasks_after_accept"
+        String missedRowsMismatchDebugPoint =
+                "DistributedCompactionWorker::handle_compaction.corrupt_missed_rows_count"
 
         def showTablet = { String beHost, String bePort, String tabletId ->
             def (code, out, err) = be_show_tablet_status(beHost, bePort, tabletId)
@@ -52,9 +60,12 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         }
 
         def keyCases = [
+            [name: "constant", type: "INT", keyExpr: "CAST(0 AS INT)", distributed: false],
             [name: "tinyint", type: "TINYINT", keyExpr: "CAST(number % 128 - 64 AS TINYINT)"],
             [name: "smallint", type: "SMALLINT", keyExpr: "CAST(number - 4096 AS SMALLINT)"],
-            [name: "int", type: "INT", keyExpr: "CAST(number * 100000 - 409600000 AS INT)"],
+            [name: "sparse_short_key", type: "INT",
+             keyExpr: "CAST((number - number % 2048) * 100000 AS INT)",
+             injectSubmitRetry: true],
             [name: "bigint", type: "BIGINT",
              keyExpr: "CAST(number * 1000000000000 - 4096000000000000 AS BIGINT)"],
             [name: "largeint", type: "LARGEINT", keyExpr: """
@@ -102,9 +113,11 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                     SECONDS_ADD(CAST('2000-01-01 00:00:00 +00:00' AS TIMESTAMPTZ(6)),
                         CAST(number AS INT))), CAST(number AS INT)
             """, keyModelColumns: "k, k2", sampleKey: "k, k2"],
-            [name: "composite", keyColumns: "k INT NOT NULL, k2 VARCHAR(128) NOT NULL",
+            [name: "repeated_sk_fallback",
+             keyColumns: "k INT NOT NULL, k2 VARCHAR(128) NOT NULL",
              keyExpr: "CAST(0 AS INT), CONCAT('key-', LPAD(CAST(number AS STRING), 5, '0'))",
-             keyModelColumns: "k, k2", sampleKey: "k, k2"],
+             keyModelColumns: "k, k2", sampleKey: "k, k2",
+             properties: ', "short_key" = "1"'],
             [name: "nullable_composite", keyColumns: "k INT NULL, k2 INT NOT NULL",
              keyExpr: "CAST(NULL AS INT), CAST(number AS INT)",
              keyModelColumns: "k, k2", sampleKey: "k, k2"],
@@ -119,10 +132,12 @@ suite("test_cloud_distributed_base_compaction", "docker") {
              keyModel: "UNIQUE KEY", valueColumn: "v INT NOT NULL, seq BIGINT NOT NULL",
              valueExpr: "CAST(number + ROUND * 10000 AS INT), " +
                      "CAST(number + ROUND * 10000 AS BIGINT)",
+             injectMissedRowsMismatch: true,
              properties: ', "enable_unique_key_merge_on_write" = "true"' +
                      ', "function_column.sequence_col" = "seq"']
         ]
 
+        GetDebugPoint().clearDebugPointsForAllBEs()
         keyCases.each { keyCase ->
             String tableName = "test_cloud_distributed_base_compaction_${keyCase.name}"
             String keyModel = keyCase.keyModel ?: "DUPLICATE KEY"
@@ -204,6 +219,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             assertTrue(inputSizeBytes > 0)
 
             int expectedTaskCount = 2 * backends.size()
+            boolean expectDistributed = keyCase.distributed != false
             long targetInputSizeBytes =
                     (inputSizeBytes + expectedTaskCount - 1) / expectedTaskCount
             backends.each { backend ->
@@ -221,31 +237,82 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             int inputRowsetCount = before.rowsets.count { it.contains(" DATA ") }
             assertTrue(inputRowsetCount >= 4, "expected at least four input rowsets: ${before.rowsets}")
 
-            def (code, out, err) =
-                    be_run_base_compaction(coordinator.Host, coordinator.HttpPort, tabletId)
-            logger.info("Run base compaction: code=${code}, out=${out}, err=${err}")
-            assertEquals(0, code)
-            assertEquals("success", parseJson(out.trim()).status.toLowerCase())
-
             def after = null
-            long deadline = System.currentTimeMillis() + compactionTimeoutMs
-            while (System.currentTimeMillis() < deadline) {
-                after = showTablet(coordinator.Host, coordinator.HttpPort, tabletId)
-                if (after.rowsets.count { it.contains(" DATA ") } < inputRowsetCount &&
-                        after["last base status"] == "[OK]") {
-                    break
+            boolean injectSubmitRetry = keyCase.injectSubmitRetry == true
+            boolean injectMissedRowsMismatch = keyCase.injectMissedRowsMismatch == true
+            try {
+                if (injectSubmitRetry) {
+                    GetDebugPoint().enableDebugPointForAllBEs(
+                            submitRetryDebugPoint, [execute: 1])
                 }
-                Thread.sleep(1000)
+                if (injectMissedRowsMismatch) {
+                    GetDebugPoint().enableDebugPointForAllBEs(
+                            missedRowsMismatchDebugPoint, [execute: 1])
+                }
+
+                def (code, out, err) =
+                        be_run_base_compaction(coordinator.Host, coordinator.HttpPort, tabletId)
+                logger.info("Run base compaction: code=${code}, out=${out}, err=${err}")
+                assertEquals(0, code)
+                assertEquals("success", parseJson(out.trim()).status.toLowerCase())
+
+                if (injectMissedRowsMismatch) {
+                    def failed = null
+                    long failureDeadline = System.currentTimeMillis() + compactionTimeoutMs
+                    while (System.currentTimeMillis() < failureDeadline) {
+                        failed = showTablet(coordinator.Host, coordinator.HttpPort, tabletId)
+                        if (failed["last base status"].toString()
+                                .contains("missed rows")) {
+                            break
+                        }
+                        Thread.sleep(1000)
+                    }
+                    assertNotNull(failed)
+                    String failureStatus = failed["last base status"].toString()
+                    assertTrue(failureStatus.contains("missed rows"),
+                            "unexpected injected failure status: ${failureStatus}")
+                    assertEquals(inputRowsetCount,
+                            failed.rowsets.count { it.contains(" DATA ") })
+                    assertEquals(summaryBefore, sql("""
+                        SELECT COUNT(*), SUM(v), MIN(k), MAX(k)
+                        FROM ${tableName}
+                    """))
+
+                    GetDebugPoint().disableDebugPointForAllBEs(missedRowsMismatchDebugPoint)
+                    def (retryCode, retryOut, retryErr) =
+                            be_run_base_compaction(coordinator.Host, coordinator.HttpPort, tabletId)
+                    logger.info("Retry base compaction: code=${retryCode}, out=${retryOut}, " +
+                            "err=${retryErr}")
+                    assertEquals(0, retryCode)
+                    assertEquals("success", parseJson(retryOut.trim()).status.toLowerCase())
+                }
+
+                long deadline = System.currentTimeMillis() + compactionTimeoutMs
+                while (System.currentTimeMillis() < deadline) {
+                    after = showTablet(coordinator.Host, coordinator.HttpPort, tabletId)
+                    if (after.rowsets.count { it.contains(" DATA ") } < inputRowsetCount &&
+                            after["last base status"] == "[OK]") {
+                        break
+                    }
+                    Thread.sleep(1000)
+                }
+            } finally {
+                if (injectSubmitRetry || injectMissedRowsMismatch) {
+                    GetDebugPoint().clearDebugPointsForAllBEs()
+                }
             }
             assertNotNull(after)
             assertEquals("[OK]", after["last base status"])
-            def outputRowsets = after.rowsets.findAll { it =~ /\]\s+${expectedTaskCount}\s+DATA\s+/ }
-            assertEquals(1, outputRowsets.size())
-            def outputMatcher =
-                    outputRowsets[0] =~ /\[[0-9]+-[0-9]+\]\s+([0-9]+)\s+DATA\s+([A-Z_]+)/
-            assertTrue(outputMatcher.find(), "unexpected output rowset: ${outputRowsets[0]}")
-            assertEquals(expectedTaskCount, outputMatcher.group(1).toInteger())
-            assertEquals("NONOVERLAPPING", outputMatcher.group(2))
+            if (expectDistributed) {
+                def outputRowsets =
+                        after.rowsets.findAll { it =~ /\]\s+${expectedTaskCount}\s+DATA\s+/ }
+                assertEquals(1, outputRowsets.size())
+                def outputMatcher =
+                        outputRowsets[0] =~ /\[[0-9]+-[0-9]+\]\s+([0-9]+)\s+DATA\s+([A-Z_]+)/
+                assertTrue(outputMatcher.find(), "unexpected output rowset: ${outputRowsets[0]}")
+                assertEquals(expectedTaskCount, outputMatcher.group(1).toInteger())
+                assertEquals("NONOVERLAPPING", outputMatcher.group(2))
+            }
 
             def profileUrl = "http://${coordinator.Host}:${coordinator.HttpPort}" +
                     "/api/compaction/profile?tablet_id=${tabletId}" +
@@ -259,10 +326,13 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             def profiles = profileResponse.compaction_profiles
             assertEquals(1, profiles.size())
             def profile = profiles[0]
-            assertTrue(profile.is_distributed)
-            assertEquals(expectedTaskCount, profile.distributed_task_count.toString().toInteger())
-            assertEquals(backends.size(),
-                    profile.distributed_worker_count.toString().toInteger())
+            assertEquals(expectDistributed, profile.is_distributed)
+            if (expectDistributed) {
+                assertEquals(expectedTaskCount,
+                        profile.distributed_task_count.toString().toInteger())
+                assertEquals(backends.size(),
+                        profile.distributed_worker_count.toString().toInteger())
+            }
 
             assertEquals(summaryBefore, sql("""
                 SELECT COUNT(*), SUM(v), MIN(k), MAX(k)

@@ -1837,9 +1837,21 @@ void BaseTablet::calc_compaction_output_rowset_delete_bitmap_by_segments(
         const RowIdConversion& rowid_conversion, const RowsetId& output_rowset_id,
         const std::vector<int64_t>& output_segment_ids, uint64_t start_version,
         uint64_t end_version, const DeleteBitmap& input_delete_bitmap,
-        DeleteBitmap* output_rowset_delete_bitmap, std::set<RowLocation>* missed_rows) {
+        DeleteBitmap* output_rowset_delete_bitmap, std::set<RowLocation>* missed_rows,
+        const std::vector<RowsetSharedPtr>* input_rowsets,
+        std::map<RowsetSharedPtr, RowLocationPairList>* location_map) {
     for (const auto& [source_segment, _] : rowid_conversion.get_src_segment_to_id_map()) {
         const auto& [rowset_id, segment_id] = source_segment;
+        RowsetSharedPtr input_rowset;
+        if (location_map != nullptr) {
+            DORIS_CHECK(input_rowsets != nullptr);
+            const auto it = std::find_if(input_rowsets->begin(), input_rowsets->end(),
+                                         [&](const RowsetSharedPtr& rowset) {
+                                             return rowset->rowset_id() == rowset_id;
+                                         });
+            DORIS_CHECK(it != input_rowsets->end());
+            input_rowset = *it;
+        }
         RowLocation src;
         src.rowset_id = rowset_id;
         src.segment_id = segment_id;
@@ -1862,6 +1874,9 @@ void BaseTablet::calc_compaction_output_rowset_delete_bitmap_by_segments(
                         output_rowset_id,
                         cast_set<uint32_t>(output_segment_ids[converted_dst.segment_pos]),
                         converted_dst.row_id);
+                if (location_map != nullptr) {
+                    (*location_map)[input_rowset].emplace_back(src, dst);
+                }
                 output_rowset_delete_bitmap->add({dst.rowset_id, dst.segment_id, version},
                                                  dst.row_id);
             }

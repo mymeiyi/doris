@@ -486,6 +486,107 @@ TEST_F(CloudCompactionTest, cumulative_global_lock_failure_keeps_thread_count_ba
     EXPECT_EQ(_engine._cumu_compaction_thread_pool_used_threads, 0);
 }
 
+TEST_F(CloudCompactionTest, grouped_cumulative_global_lock_failure_cleans_up_task) {
+    auto tablet_meta = std::make_shared<TabletMeta>(*_tablet_meta);
+    tablet_meta->_tablet_id = 12001;
+    auto tablet = std::make_shared<CloudTablet>(_engine, tablet_meta);
+    auto compaction = std::make_shared<CloudCumulativeCompaction>(_engine, tablet);
+    compaction->_input_rowsets = {create_rowset(Version(2, 2), 4, true, 1024)};
+    ASSERT_NE(compaction->_input_rowsets.front(), nullptr);
+    compaction->_single_rowset_compaction_segment_group_size = 2;
+
+    ASSERT_TRUE(ThreadPoolBuilder("GroupedCumuCompactionGlobalLockTest")
+                        .set_min_threads(1)
+                        .set_max_threads(1)
+                        .build(&_engine._cumu_compaction_thread_pool)
+                        .ok());
+
+    auto* sync_point = SyncPoint::get_instance();
+    sync_point->set_call_back("CloudMetaMgr::prepare_tablet_job", [](auto&& outcome) {
+        auto* result = try_any_cast_ret<Status>(outcome);
+        result->first = Status::InternalError<false>("mock global compaction lock failure");
+        result->second = true;
+    });
+    sync_point->enable_processing();
+    Defer clear_sync_point {[&] {
+        sync_point->clear_all_call_backs();
+        sync_point->disable_processing();
+    }};
+
+    int erase_submitted_calls = 0;
+    int erase_executing_calls = 0;
+    auto status = _engine._try_submit_cumulative_compaction_task(
+            tablet, compaction, compaction->compaction_id(), [&] { ++erase_submitted_calls; },
+            [&] { ++erase_executing_calls; });
+    ASSERT_TRUE(status.has_value());
+    ASSERT_TRUE(status->ok()) << status->to_string();
+    ASSERT_TRUE(_engine._cumu_compaction_thread_pool->wait_for(std::chrono::seconds(5)));
+
+    EXPECT_EQ(erase_submitted_calls, 1);
+    EXPECT_EQ(erase_executing_calls, 0);
+    EXPECT_EQ(_engine._cumu_compaction_thread_pool_used_threads, 0);
+    EXPECT_GT(tablet->last_cumu_compaction_failure_time(), 0);
+}
+
+TEST_F(CloudCompactionTest, grouped_cumulative_large_task_delay_keeps_counts_balanced) {
+    const auto old_min_threads = config::large_cumu_compaction_task_min_thread_num;
+    const auto old_bytes_threshold = config::large_cumu_compaction_task_bytes_threshold;
+    Defer restore_config {[&] {
+        config::large_cumu_compaction_task_min_thread_num = old_min_threads;
+        config::large_cumu_compaction_task_bytes_threshold = old_bytes_threshold;
+        _engine._cumu_compaction_thread_pool_used_threads = 0;
+    }};
+    config::large_cumu_compaction_task_min_thread_num = 2;
+    config::large_cumu_compaction_task_bytes_threshold = 1;
+
+    auto tablet_meta = std::make_shared<TabletMeta>(*_tablet_meta);
+    tablet_meta->_tablet_id = 12002;
+    auto tablet = std::make_shared<CloudTablet>(_engine, tablet_meta);
+    auto compaction = std::make_shared<CloudCumulativeCompaction>(_engine, tablet);
+    compaction->_input_rowsets = {create_rowset(Version(2, 2), 4, true, 1024)};
+    ASSERT_NE(compaction->_input_rowsets.front(), nullptr);
+    compaction->_input_rowsets_total_size = 2;
+    compaction->_single_rowset_compaction_segment_group_size = 2;
+
+    ASSERT_TRUE(ThreadPoolBuilder("GroupedCumuCompactionDelayTest")
+                        .set_min_threads(1)
+                        .set_max_threads(2)
+                        .build(&_engine._cumu_compaction_thread_pool)
+                        .ok());
+    _engine._cumu_compaction_thread_pool_used_threads = 1;
+
+    auto* sync_point = SyncPoint::get_instance();
+    sync_point->set_call_back("CloudMetaMgr::prepare_tablet_job", [](auto&& outcome) {
+        auto* result = try_any_cast_ret<Status>(outcome);
+        result->first = Status::OK();
+        result->second = true;
+    });
+    sync_point->enable_processing();
+    Defer clear_sync_point {[&] {
+        sync_point->clear_all_call_backs();
+        sync_point->disable_processing();
+    }};
+
+    int erase_submitted_calls = 0;
+    int erase_executing_calls = 0;
+    auto status = _engine._try_submit_cumulative_compaction_task(
+            tablet, compaction, compaction->compaction_id(), [&] { ++erase_submitted_calls; },
+            [&] {
+                std::lock_guard lock(_engine._compaction_mtx);
+                _engine._executing_cumu_compactions.erase(tablet->tablet_id());
+                ++erase_executing_calls;
+            });
+    ASSERT_TRUE(status.has_value());
+    ASSERT_TRUE(status->ok()) << status->to_string();
+    ASSERT_TRUE(_engine._cumu_compaction_thread_pool->wait_for(std::chrono::seconds(5)));
+
+    EXPECT_EQ(erase_submitted_calls, 1);
+    EXPECT_EQ(erase_executing_calls, 1);
+    EXPECT_EQ(_engine._cumu_compaction_thread_pool_used_threads, 1);
+    EXPECT_EQ(_engine._cumu_compaction_thread_pool_small_tasks_running, 0);
+    EXPECT_GT(tablet->last_cumu_compaction_failure_time(), 0);
+}
+
 static RowsetSharedPtr create_delete_rowset(Version version) {
     auto rowset = create_rowset(version, 0, false, 0);
     DORIS_CHECK(rowset != nullptr);

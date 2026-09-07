@@ -23,50 +23,38 @@
 namespace doris::cloud {
 
 enum class KeyRangeSamplingMode {
-    TYPED_KEY,
+    KEY_COLUMN_VALUES,
     PRIMARY_KEY,
-    SHORT_KEY_LOSSLESS,
-    SHORT_KEY_REFINEMENT,
+    SHORT_KEY_DIRECT,
+    SHORT_KEY_BOUNDARY_REFINEMENT,
 };
 
 struct KeyRangeSamplingPlan {
-    bool uses_primary_key_encoding() const {
-        return candidate_mode == KeyRangeSamplingMode::PRIMARY_KEY;
-    }
+    bool uses_primary_key_encoding() const { return mode == KeyRangeSamplingMode::PRIMARY_KEY; }
 
     bool uses_short_key_encoding() const {
-        return candidate_mode == KeyRangeSamplingMode::SHORT_KEY_LOSSLESS ||
-               candidate_mode == KeyRangeSamplingMode::SHORT_KEY_REFINEMENT;
+        return mode == KeyRangeSamplingMode::SHORT_KEY_DIRECT ||
+               mode == KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT;
     }
 
     bool uses_direct_encoded_boundaries() const {
-        return candidate_mode == KeyRangeSamplingMode::PRIMARY_KEY ||
-               candidate_mode == KeyRangeSamplingMode::SHORT_KEY_LOSSLESS;
+        return mode == KeyRangeSamplingMode::PRIMARY_KEY ||
+               mode == KeyRangeSamplingMode::SHORT_KEY_DIRECT;
     }
 
-    bool selected_short_key_fast_path() const {
-        return selected_mode == KeyRangeSamplingMode::SHORT_KEY_LOSSLESS ||
-               selected_mode == KeyRangeSamplingMode::SHORT_KEY_REFINEMENT;
+    bool uses_short_key_boundary_refinement() const {
+        return mode == KeyRangeSamplingMode::SHORT_KEY_BOUNDARY_REFINEMENT;
     }
 
-    bool selected_primary_key_fast_path() const {
-        return selected_mode == KeyRangeSamplingMode::PRIMARY_KEY;
-    }
-
-    bool selected_short_key_refinement() const {
-        return selected_mode == KeyRangeSamplingMode::SHORT_KEY_REFINEMENT;
-    }
-
-    KeyRangeSamplingMode candidate_mode = KeyRangeSamplingMode::TYPED_KEY;
-    KeyRangeSamplingMode selected_mode = KeyRangeSamplingMode::TYPED_KEY;
-    size_t prefix_length = 0;
-    size_t encoded_key_suffix_length = 0;
-    bool short_key_encoding_lossless = true;
-    std::string_view short_key_fallback_reason;
-    std::string_view primary_key_fallback_reason;
+    KeyRangeSamplingMode mode = KeyRangeSamplingMode::KEY_COLUMN_VALUES;
+    size_t encoded_key_column_count = 0;
+    size_t encoded_primary_key_suffix_size = 0;
+    bool short_key_fully_encoded = true;
+    std::string_view short_key_skip_reason;
+    std::string_view primary_key_skip_reason;
 };
 
-struct BaseKeyRangePlanningResult {
+struct KeyRangePlanningResult {
     CompositeKeyRangePlan key_ranges;
     KeyRangeSamplingPlan sampling;
     uint64_t target_sample_count = 0;
@@ -82,7 +70,7 @@ struct BaseKeyRangePlanningResult {
     io::FileCacheStatistics key_sample_io_stats;
     size_t segment_count = 0;
     int64_t boundary_choose_time_us = 0;
-    size_t typed_sample_count = 0;
+    size_t key_column_sample_count = 0;
     size_t boundary_refinement_group_count = 0;
     size_t boundary_refinement_sample_count = 0;
     size_t encoded_sample_count = 0;
@@ -92,9 +80,18 @@ bool is_integer_key(FieldType type);
 bool is_string_key(FieldType type);
 bool is_date_key(FieldType type);
 bool is_decimal_key(FieldType type);
+bool is_supported_key_range_column_type(FieldType type);
 
-Status build_base_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowsets,
-                                 const TabletSchema& schema, bool is_mow, size_t range_count,
-                                 uint64_t total_input_rows, BaseKeyRangePlanningResult* result);
+std::vector<WeightedRowId> build_weighted_key_sample_rowids(uint64_t num_rows,
+                                                            uint64_t rows_per_block,
+                                                            size_t max_samples);
+CompositeKeyRangePlan choose_composite_key_range_boundaries(
+        const std::vector<CompositeKeySample>& samples, size_t range_count);
+std::vector<EncodedKeyBoundary> choose_encoded_key_range_boundaries(
+        std::vector<EncodedKeySample> samples, size_t range_count);
+
+Status build_key_range_plan(const std::vector<RowsetSharedPtr>& input_rowsets,
+                            const TabletSchema& schema, bool is_mow, size_t range_count,
+                            uint64_t total_input_rows, KeyRangePlanningResult* result);
 
 } // namespace doris::cloud
