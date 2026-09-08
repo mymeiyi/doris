@@ -65,6 +65,7 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
                     sleep(500)
                 }
                 check { profileString, exception ->
+                    logger.info("memtable-on-sink profile:\n{}", profileString)
                     if (exception != null) {
                         throw exception
                     }
