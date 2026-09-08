@@ -27,6 +27,7 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
     options.feConfigs += ['min_bytes_per_broker_scanner = 100']
 
     docker(options) {
+        sql "SET enable_sql_cache = false"
         sql "DROP TABLE IF EXISTS test_cloud_duplicate_memtable_on_sink_source"
         sql "DROP TABLE IF EXISTS test_cloud_duplicate_memtable_on_sink"
 
