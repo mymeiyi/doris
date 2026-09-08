@@ -42,7 +42,9 @@ ID、Segment ID 区间分配、partial metadata 汇总及重试幂等协议，�
 
 - 仅支持 DUP 表；其他表模型回退到原 Cloud Sink；
 - 沿用 V2 Sink 的限制：不支持 partial update、row binlog 和 V1 inverted index；
-- 关闭 packed file，Segment 仍由目标 BE 上传到对象存储。
+- 支持目标 BE 使用现有 packed file 策略上传 Segment：仅 Rowset 首个 Segment 及其 V2
+  索引参与合包，超过小文件阈值后仍独立上传。接收端在文件关闭并上传成功后，将实际文件路径
+  对应的 packed slice 映射写入 RowsetMeta；Segment 仍由目标 BE 上传到对象存储。
 
 ## 2. 改造前链路
 

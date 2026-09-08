@@ -105,7 +105,6 @@ Status CloudRowsetBuilder::init() {
     context.write_type = DataWriteType::TYPE_DIRECT;
     context.mow_context = mow_context;
     context.write_file_cache = _req.write_file_cache;
-    context.allow_packed_file = !_req.memtable_on_sink;
     context.partial_update_info = _partial_update_info;
     context.write_binlog_opt().enable = _req.write_req_type == WriteRequestType::ROW_BINLOG;
     context.file_cache_ttl_sec = _tablet->ttl_seconds();

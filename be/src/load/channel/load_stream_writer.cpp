@@ -176,7 +176,14 @@ Status LoadStreamWriter::close_writer(uint32_t segid, FileType file_type) {
         return Status::Corruption("file {} closed with 0 bytes, file type is {}",
                                   file_writer->path().native(), file_type);
     }
-    return Status::OK();
+    // Streamed writers are owned here, outside the RowsetWriter's file collections.
+    // Use the logical path used at creation, not file_writer->path(), which may be an S3 URI.
+    auto file_path = _rowset_writer->context().segment_path(segid);
+    if (file_type == FileType::INVERTED_INDEX_FILE) {
+        auto prefix = InvertedIndexDescriptor::get_index_file_path_prefix(file_path);
+        file_path = InvertedIndexDescriptor::get_index_file_path_v2(std::string(prefix));
+    }
+    return _rowset_writer->rowset_meta()->collect_packed_slice_location(*file_writer, file_path);
 }
 
 Status LoadStreamWriter::add_segment(uint32_t segid, const SegmentStatistics& stat) {

@@ -20,8 +20,7 @@
 #include "common/logging.h"
 #include "common/status.h"
 #include "io/cache/block_file_cache_factory.h"
-#include "io/fs/packed_file_manager.h"
-#include "io/fs/packed_file_writer.h"
+#include "io/fs/file_writer.h"
 #include "storage/rowset/rowset_factory.h"
 
 namespace doris {
@@ -186,9 +185,8 @@ Status CloudRowsetWriter::_collect_all_packed_slice_locations(RowsetMeta* rowset
     // Collect segment file packed indices
     const auto& file_writers = _seg_files.get_file_writers();
     for (const auto& [seg_id, writer_ptr] : file_writers) {
-        auto segment_path = _context.segment_path(seg_id);
-        RETURN_IF_ERROR(
-                _collect_packed_slice_location(writer_ptr.get(), segment_path, rowset_meta));
+        RETURN_IF_ERROR(rowset_meta->collect_packed_slice_location(*writer_ptr,
+                                                                   _context.segment_path(seg_id)));
     }
 
     // Collect inverted index file packed indices
@@ -196,45 +194,14 @@ Status CloudRowsetWriter::_collect_all_packed_slice_locations(RowsetMeta* rowset
     for (const auto& [seg_id, idx_writer_ptr] : idx_file_writers) {
         if (idx_writer_ptr != nullptr && idx_writer_ptr->get_file_writer() != nullptr) {
             auto segment_path = _context.segment_path(seg_id);
-            auto index_prefix_view =
-                    InvertedIndexDescriptor::get_index_file_path_prefix(segment_path);
-            std::string index_path =
-                    InvertedIndexDescriptor::get_index_file_path_v2(std::string(index_prefix_view));
-            RETURN_IF_ERROR(_collect_packed_slice_location(idx_writer_ptr->get_file_writer(),
-                                                           index_path, rowset_meta));
+            auto index_prefix = InvertedIndexDescriptor::get_index_file_path_prefix(segment_path);
+            auto index_path =
+                    InvertedIndexDescriptor::get_index_file_path_v2(std::string(index_prefix));
+            RETURN_IF_ERROR(rowset_meta->collect_packed_slice_location(
+                    *idx_writer_ptr->get_file_writer(), index_path));
         }
     }
 
-    return Status::OK();
-}
-
-Status CloudRowsetWriter::_collect_packed_slice_location(io::FileWriter* file_writer,
-                                                         const std::string& file_path,
-                                                         RowsetMeta* rowset_meta) {
-    VLOG_NOTICE << "collect packed slice location for file: " << file_path;
-    // Check if file writer is closed
-    if (file_writer->state() != io::FileWriter::State::CLOSED) {
-        // Writer is still open; index will be collected after it is closed.
-        return Status::OK();
-    }
-
-    // Check if file is actually in packed file (not direct write for large files)
-    if (!file_writer->is_in_packed_file()) {
-        return Status::OK();
-    }
-
-    // Get packed slice location directly from PackedFileManager
-    io::PackedSliceLocation index;
-    RETURN_IF_ERROR(
-            io::PackedFileManager::instance()->get_packed_slice_location(file_path, &index));
-    if (index.packed_file_path.empty()) {
-        return Status::OK(); // File not in packed file, skip
-    }
-
-    rowset_meta->add_packed_slice_location(file_path, index.packed_file_path, index.offset,
-                                           index.size, index.packed_file_size);
-    LOG(INFO) << "collect packed file index: " << file_path << " -> " << index.packed_file_path
-              << ", offset: " << index.offset << ", size: " << index.size;
     return Status::OK();
 }
 

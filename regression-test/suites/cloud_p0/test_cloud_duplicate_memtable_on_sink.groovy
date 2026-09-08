@@ -26,6 +26,7 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
     options.enableDebugPoints()
     // Split the small S3 CSV across all three BEs with load_parallelism = 1.
     options.feConfigs += ['min_bytes_per_broker_scanner = 100']
+    options.beConfigs += ['enable_packed_file=true', 'small_file_threshold_bytes=1048576']
 
     docker(options) {
         sql "SET enable_sql_cache = false"
@@ -94,12 +95,14 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
         sql """
             CREATE TABLE test_cloud_duplicate_memtable_on_sink_s3 (
                 k BIGINT NOT NULL,
-                v BIGINT NOT NULL
+                v BIGINT NOT NULL,
+                INDEX idx_v (v) USING INVERTED
             )
             DUPLICATE KEY(k)
             DISTRIBUTED BY HASH(k) BUCKETS 1
             PROPERTIES (
                 "replication_num" = "1",
+                "inverted_index_storage_format" = "V2",
                 "disable_auto_compaction" = "true"
             )
         """
@@ -160,11 +163,14 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
             sql "SET enable_memtable_on_sink_node = false"
         }
 
-        sql """
-            SELECT assert_true(
-                COUNT(*) = 20 AND SUM(k) = 1133 AND SUM(v) = 2266,
-                'cloud duplicate S3 memtable-on-sink result mismatch')
+        // Read both segment data and V2 indexes without the uploader's file cache.
+        sql "SET enable_file_cache = false"
+        order_qt_s3_rows """
+            SELECT COUNT(*), SUM(k), SUM(v)
             FROM test_cloud_duplicate_memtable_on_sink_s3
+        """
+        order_qt_s3_index """
+            SELECT k, v FROM test_cloud_duplicate_memtable_on_sink_s3 WHERE v IN (62, 100, 114)
         """
         def tablet = sql_return_maparray("SHOW TABLETS FROM test_cloud_duplicate_memtable_on_sink_s3")[0]
         def partition = sql_return_maparray("SHOW PARTITIONS FROM test_cloud_duplicate_memtable_on_sink_s3")[0]
@@ -174,10 +180,14 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
                 assertEquals(200, responseCode)
                 logger.info("S3 memtable-on-sink rowset meta: {}", body)
                 def rowsetMeta = parseJson(body)
-                sql """
-                    SELECT assert_true(
-                        ${rowsetMeta.num_segments as int} = 6 AND ${rowsetMeta.num_rows as long} = 20,
-                        'S3 load should commit two segments from each of the three sink BEs')
+                def locations = rowsetMeta.packed_slice_locations
+                // Only the destination rowset's first segment and its V2 index are packed.
+                // The other five segments retain independent files.
+                order_qt_s3_packed_meta """
+                    SELECT ${rowsetMeta.num_segments as int}, ${rowsetMeta.num_rows as long},
+                        ${locations.size()},
+                        ${locations.keySet().count { it.endsWith('_0.dat') }},
+                        ${locations.keySet().count { it.endsWith('_0.idx') }}
                 """
         }
     }

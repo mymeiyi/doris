@@ -31,9 +31,12 @@
 #include "common/status.h"
 #include "cpp/sync_point.h"
 #include "gtest/gtest_pred_impl.h"
+#include "io/fs/file_writer.h"
+#include "io/fs/packed_file_manager.h"
 #include "storage/olap_common.h"
 #include "storage/olap_meta.h"
 #include "storage/tablet/tablet_schema.h"
+#include "util/defer_op.h"
 
 using ::testing::_;
 using ::testing::Return;
@@ -41,6 +44,95 @@ using ::testing::SetArgPointee;
 using std::string;
 
 namespace doris {
+
+namespace {
+
+class PackedLocationWriter : public io::FileWriter {
+public:
+    explicit PackedLocationWriter(std::string path) : _path(std::move(path)) {}
+
+    Status close(bool non_block = false) override {
+        _state = non_block ? State::ASYNC_CLOSING : State::CLOSED;
+        return Status::OK();
+    }
+    Status appendv(const Slice*, size_t) override { return Status::NotSupported("test writer"); }
+    const io::Path& path() const override { return _path; }
+    size_t bytes_appended() const override { return 10; }
+    State state() const override { return _state; }
+    bool is_in_packed_file() const override { return packed; }
+
+    bool packed = true;
+
+private:
+    io::Path _path;
+    State _state = State::OPENED;
+};
+
+} // namespace
+
+TEST(RowsetMetaPackedFileTest, CollectCompletedSegmentAndIndex) {
+    RowsetMeta meta;
+    RowsetId rowset_id;
+    rowset_id.init(1);
+    meta.set_rowset_id(rowset_id);
+    auto* manager = io::PackedFileManager::instance();
+    // Use destination paths with a nonzero segment ID, including the V2 index file.
+    for (const auto* suffix : {".dat", ".idx"}) {
+        std::string path = std::string("data/123/packed_location_test_7") + suffix;
+        PackedLocationWriter writer("s3://bucket/prefix/" + path);
+        io::PackedSliceLocation location;
+        location.packed_file_path = "data/packed_file/test.bin";
+        location.offset = 20;
+        location.size = 10;
+        location.packed_file_size = 100;
+        {
+            std::lock_guard lock(manager->_global_index_mutex);
+            manager->_global_slice_locations[path] = location;
+        }
+        Defer cleanup([&] {
+            std::lock_guard lock(manager->_global_index_mutex);
+            manager->_global_slice_locations.erase(path);
+        });
+
+        ASSERT_TRUE(meta.collect_packed_slice_location(writer, path).ok());
+        EXPECT_EQ(meta.get_rowset_pb().packed_slice_locations().count(path), 0);
+        ASSERT_TRUE(writer.close(true).ok());
+        ASSERT_TRUE(meta.collect_packed_slice_location(writer, path).ok());
+        EXPECT_EQ(meta.get_rowset_pb().packed_slice_locations().count(path), 0);
+        ASSERT_TRUE(writer.close().ok());
+        ASSERT_TRUE(meta.collect_packed_slice_location(writer, path).ok());
+        // Repeated collection must not duplicate the mapping.
+        ASSERT_TRUE(meta.collect_packed_slice_location(writer, path).ok());
+        auto pb = meta.get_rowset_pb();
+        const auto& stored = pb.packed_slice_locations().at(path);
+        EXPECT_EQ(stored.packed_file_path(), location.packed_file_path);
+        EXPECT_EQ(stored.offset(), location.offset);
+        EXPECT_EQ(stored.size(), location.size);
+        EXPECT_EQ(stored.packed_file_size(), location.packed_file_size);
+    }
+    RowsetMeta restored;
+    std::string serialized;
+    ASSERT_TRUE(meta.serialize(&serialized));
+    ASSERT_TRUE(restored.init(serialized));
+    EXPECT_EQ(restored.get_rowset_pb().packed_slice_locations_size(), 2);
+}
+
+TEST(RowsetMetaPackedFileTest, DirectFileNeedsNoPackedLocation) {
+    RowsetMeta meta;
+    PackedLocationWriter writer("direct_file.dat");
+    writer.packed = false;
+    ASSERT_TRUE(writer.close().ok());
+    EXPECT_TRUE(meta.collect_packed_slice_location(writer, "direct_file.dat").ok());
+    EXPECT_EQ(meta.get_rowset_pb().packed_slice_locations_size(), 0);
+}
+
+TEST(RowsetMetaPackedFileTest, MissingPackedLocationFails) {
+    RowsetMeta meta;
+    PackedLocationWriter writer("missing_packed_location.dat");
+    ASSERT_TRUE(writer.close().ok());
+    EXPECT_FALSE(meta.collect_packed_slice_location(writer, "missing_packed_location.dat").ok());
+    EXPECT_EQ(meta.get_rowset_pb().packed_slice_locations_size(), 0);
+}
 
 const std::string rowset_meta_path = "./be/test/storage/test_data/rowset.json";
 
