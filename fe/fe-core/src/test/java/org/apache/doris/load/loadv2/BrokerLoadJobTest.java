@@ -21,10 +21,12 @@ import org.apache.doris.analysis.BrokerDesc;
 import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.TableProperty;
 import org.apache.doris.cloud.load.CloudBrokerLoadJob;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.LabelAlreadyUsedException;
 import org.apache.doris.common.MetaNotFoundException;
 import org.apache.doris.common.Status;
@@ -58,6 +60,8 @@ import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.MockedConstruction;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
@@ -206,8 +210,20 @@ public class BrokerLoadJobTest {
         Assertions.assertEquals(0, idToTasks.size());
     }
 
-    @Test
-    public void testPendingTaskOnFinished() throws Exception {
+    @ParameterizedTest
+    @CsvSource({
+            "false, DUP_KEYS, false, false, false",
+            "false, DUP_KEYS, true, true, true",
+            "false, UNIQUE_KEYS, true, true, true",
+            "false, AGG_KEYS, true, true, true",
+            "true, DUP_KEYS, true, true, true",
+            "true, DUP_KEYS, false, true, false",
+            "true, DUP_KEYS, true, false, false",
+            "true, UNIQUE_KEYS, true, true, false",
+            "true, AGG_KEYS, true, true, false"
+    })
+    public void testPendingTaskOnFinished(boolean cloudMode, KeysType keysType,
+            boolean enableMemtableOnSink, boolean lightSchemaChange, boolean expectedMemtableOnSink) throws Exception {
         BrokerPendingTaskAttachment attachment = Mockito.mock(BrokerPendingTaskAttachment.class);
         Env env = Mockito.mock(Env.class);
         InternalCatalog catalog = Mockito.mock(InternalCatalog.class);
@@ -230,9 +246,11 @@ public class BrokerLoadJobTest {
         ComputeGroupMgr computeGroupMgr = Mockito.mock(ComputeGroupMgr.class);
         TableProperty tableProperty = Mockito.mock(TableProperty.class);
 
-        try (MockedStatic<Env> envMockedStatic = Mockito.mockStatic(Env.class);
+        try (MockedStatic<Config> configMockedStatic = Mockito.mockStatic(Config.class, Mockito.CALLS_REAL_METHODS);
+                MockedStatic<Env> envMockedStatic = Mockito.mockStatic(Env.class);
                 MockedConstruction<NereidsLoadingTaskPlanner> ignored =
                         Mockito.mockConstruction(NereidsLoadingTaskPlanner.class)) {
+            configMockedStatic.when(Config::isCloudMode).thenReturn(cloudMode);
             envMockedStatic.when(Env::getCurrentEnv).thenReturn(env);
             envMockedStatic.when(Env::getCurrentInternalCatalog).thenReturn(catalog);
             envMockedStatic.when(Env::getCurrentProgressManager).thenReturn(progressManager);
@@ -240,6 +258,7 @@ public class BrokerLoadJobTest {
 
             BrokerLoadJob brokerLoadJob = new BrokerLoadJob();
             Deencapsulation.setField(brokerLoadJob, "state", JobState.LOADING);
+            Deencapsulation.setField(brokerLoadJob, "enableMemTableOnSinkNode", enableMemtableOnSink);
             BrokerDesc brokerDesc = Mockito.mock(BrokerDesc.class);
             Deencapsulation.setField(brokerLoadJob, "brokerDesc", brokerDesc);
             long taskId = 1L;
@@ -274,7 +293,8 @@ public class BrokerLoadJobTest {
             Mockito.doReturn(olapTable).when(database).getTableNullable(Mockito.anyLong());
             Mockito.when(olapTable.isTemporary()).thenReturn(false);
             Mockito.when(olapTable.getTableProperty()).thenReturn(tableProperty);
-            Mockito.when(tableProperty.getUseSchemaLightChange()).thenReturn(false);
+            Mockito.when(tableProperty.getUseSchemaLightChange()).thenReturn(lightSchemaChange);
+            Mockito.when(olapTable.getKeysType()).thenReturn(keysType);
             Mockito.when(olapTable.getIndexes()).thenReturn(null);
             List<List<TBrokerFileStatus>> fileStatuses1 =
                     Collections.singletonList(Collections.singletonList(new TBrokerFileStatus()));
@@ -306,6 +326,10 @@ public class BrokerLoadJobTest {
             Assertions.assertEquals(true, finishedTaskIds.contains(taskId));
             Map<Long, LoadTask> idToTasks = Deencapsulation.getField(brokerLoadJob, "idToTasks");
             Assertions.assertEquals(3, idToTasks.size());
+            for (LoadTask task : idToTasks.values()) {
+                boolean actualMemtableOnSink = Deencapsulation.getField(task, "enableMemTableOnSinkNode");
+                Assertions.assertEquals(expectedMemtableOnSink, actualMemtableOnSink);
+            }
         }
     }
 

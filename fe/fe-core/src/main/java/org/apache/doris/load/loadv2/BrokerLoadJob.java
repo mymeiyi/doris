@@ -22,6 +22,7 @@ import org.apache.doris.analysis.StorageBackend;
 import org.apache.doris.analysis.UserIdentity;
 import org.apache.doris.catalog.Database;
 import org.apache.doris.catalog.Env;
+import org.apache.doris.catalog.KeysType;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.Table;
 import org.apache.doris.catalog.info.IndexType;
@@ -379,7 +380,8 @@ public class BrokerLoadJob extends BulkLoadJob {
                         }
                     }
                 }
-                if (isPartialUpdate() || hasInvertedIndexV1 || Config.isCloudMode()) {
+                if (isPartialUpdate() || hasInvertedIndexV1
+                        || (Config.isCloudMode() && table.getKeysType() != KeysType.DUP_KEYS)) {
                     isEnableMemtableOnSinkNode = false;
                 }
 
