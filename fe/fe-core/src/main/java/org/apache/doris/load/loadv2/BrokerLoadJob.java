@@ -381,7 +381,8 @@ public class BrokerLoadJob extends BulkLoadJob {
                     }
                 }
                 if (isPartialUpdate() || hasInvertedIndexV1
-                        || (Config.isCloudMode() && table.getKeysType() != KeysType.DUP_KEYS)) {
+                        || (Config.isCloudMode() && table.getKeysType() == KeysType.UNIQUE_KEYS
+                            && table.getEnableUniqueKeyMergeOnWrite())) {
                     isEnableMemtableOnSinkNode = false;
                 }
 

@@ -145,13 +145,13 @@ Status LoadStreamWriter::get_write_context(const std::string& writer_id,
     // Control messages run synchronously in LoadStream::_dispatch, which attaches the load.
     std::lock_guard lock(_lock);
     const auto& ctx = _rowset_writer->context();
-    if (!config::is_cloud_mode() || ctx.tablet_schema->keys_type() != DUP_KEYS ||
+    if (!config::is_cloud_mode() || ctx.tablet->enable_unique_key_merge_on_write() ||
         ctx.partial_update_info->is_partial_update() || ctx.write_binlog_opt().enable ||
         (ctx.tablet_schema->has_inverted_index() &&
          ctx.tablet_schema->get_inverted_index_storage_format() ==
                  InvertedIndexStorageFormatPB::V1)) {
         return Status::NotSupported(
-                "direct upload requires cloud DUP full-row load with V2 indexes");
+                "direct upload requires cloud DUP/AGG/MOR full-row load with V2 indexes");
     }
     if (_pre_closed || writer_id.empty()) {
         return Status::InvalidArgument("invalid direct writer registration for tablet {}",

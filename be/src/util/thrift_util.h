@@ -179,5 +179,6 @@ std::string to_string(const TUniqueId& id);
 
 bool _has_inverted_index_v1_or_partial_update(TOlapTableSink sink);
 bool _has_row_binlog(const TOlapTableSink& sink);
+bool supports_cloud_memtable_on_sink(const TOlapTableSink& sink);
 
 } // namespace doris

@@ -212,17 +212,19 @@ public class BrokerLoadJobTest {
 
     @ParameterizedTest
     @CsvSource({
-            "false, DUP_KEYS, false, false, false",
-            "false, DUP_KEYS, true, true, true",
-            "false, UNIQUE_KEYS, true, true, true",
-            "false, AGG_KEYS, true, true, true",
-            "true, DUP_KEYS, true, true, true",
-            "true, DUP_KEYS, false, true, false",
-            "true, DUP_KEYS, true, false, false",
-            "true, UNIQUE_KEYS, true, true, false",
-            "true, AGG_KEYS, true, true, false"
+            "false, DUP_KEYS, false, false, false, false",
+            "false, DUP_KEYS, false, true, true, true",
+            "false, UNIQUE_KEYS, false, true, true, true",
+            "false, UNIQUE_KEYS, true, true, true, true",
+            "false, AGG_KEYS, false, true, true, true",
+            "true, DUP_KEYS, false, true, true, true",
+            "true, DUP_KEYS, false, false, true, false",
+            "true, DUP_KEYS, false, true, false, false",
+            "true, UNIQUE_KEYS, false, true, true, true",
+            "true, UNIQUE_KEYS, true, true, true, false",
+            "true, AGG_KEYS, false, true, true, true"
     })
-    public void testPendingTaskOnFinished(boolean cloudMode, KeysType keysType,
+    public void testPendingTaskOnFinished(boolean cloudMode, KeysType keysType, boolean mergeOnWrite,
             boolean enableMemtableOnSink, boolean lightSchemaChange, boolean expectedMemtableOnSink) throws Exception {
         BrokerPendingTaskAttachment attachment = Mockito.mock(BrokerPendingTaskAttachment.class);
         Env env = Mockito.mock(Env.class);
@@ -298,6 +300,7 @@ public class BrokerLoadJobTest {
             Mockito.when(olapTable.getTableProperty()).thenReturn(tableProperty);
             Mockito.when(tableProperty.getUseSchemaLightChange()).thenReturn(lightSchemaChange);
             Mockito.when(olapTable.getKeysType()).thenReturn(keysType);
+            Mockito.when(olapTable.getEnableUniqueKeyMergeOnWrite()).thenReturn(mergeOnWrite);
             Mockito.when(olapTable.getIndexes()).thenReturn(null);
             List<List<TBrokerFileStatus>> fileStatuses1 =
                     Collections.singletonList(Collections.singletonList(new TBrokerFileStatus()));

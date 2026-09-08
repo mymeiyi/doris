@@ -323,6 +323,8 @@ struct TOlapTableSink {
 
     // Used by BE to select model-specific load paths before opening tablet writers.
     26: optional Types.TKeysType keys_type
+    // Explicit presence lets BE distinguish MOR from unknown UNIQUE mode on older FEs.
+    27: optional bool enable_unique_key_merge_on_write
 }
 
 struct THiveLocationParams {

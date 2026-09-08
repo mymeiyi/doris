@@ -50,6 +50,7 @@
 #include "storage/tablet_info.h"
 #include "storage/txn/txn_manager.h"
 #include "util/debug/leakcheck_disabler.h"
+#include "util/thrift_util.h"
 
 using namespace brpc;
 
@@ -1547,6 +1548,40 @@ TEST_F(CloudDirectUploadMetaTest, EmptyWriter) {
                     .ok());
     EXPECT_EQ(0, merged.num_segments());
     EXPECT_TRUE(merged.empty());
+}
+
+TEST(CloudMemtableModelTest, RequireExplicitMorMode) {
+    TOlapTableSink sink;
+    EXPECT_FALSE(supports_cloud_memtable_on_sink(sink));
+    sink.__set_keys_type(TKeysType::DUP_KEYS);
+    EXPECT_TRUE(supports_cloud_memtable_on_sink(sink));
+    sink.__set_keys_type(TKeysType::AGG_KEYS);
+    EXPECT_TRUE(supports_cloud_memtable_on_sink(sink));
+    sink.__set_keys_type(TKeysType::UNIQUE_KEYS);
+    EXPECT_FALSE(supports_cloud_memtable_on_sink(sink));
+    sink.__set_enable_unique_key_merge_on_write(false);
+    EXPECT_TRUE(supports_cloud_memtable_on_sink(sink));
+    sink.__set_enable_unique_key_merge_on_write(true);
+    EXPECT_FALSE(supports_cloud_memtable_on_sink(sink));
+}
+
+TEST_F(CloudDirectUploadMetaTest, PreserveAggregateAndMorOverlappingLayout) {
+    for (auto type : {AGG_KEYS, UNIQUE_KEYS}) {
+        auto base = base_meta();
+        base.mutable_tablet_schema()->set_keys_type(type);
+        auto first = partial(0);
+        auto second = partial(100);
+        first.mutable_tablet_schema()->set_keys_type(type);
+        second.mutable_tablet_schema()->set_keys_type(type);
+        RowsetMetaPB merged;
+        ASSERT_TRUE(LoadStreamWriter::assemble_direct_rowset(base, {{0, first}, {100, second}}, 100,
+                                                             &merged)
+                            .ok());
+        EXPECT_EQ(type, merged.tablet_schema().keys_type());
+        EXPECT_EQ(OVERLAPPING, merged.segments_overlap_pb());
+        EXPECT_EQ(100, merged.segment_ids(1));
+        EXPECT_EQ(102, merged.num_rows());
+    }
 }
 
 } // namespace doris

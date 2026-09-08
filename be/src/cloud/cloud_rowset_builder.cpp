@@ -251,7 +251,7 @@ Status CloudRowsetBuilder::commit_rowset(const std::string& job_id, int64_t tabl
 }
 
 Status CloudRowsetBuilder::build_rowset_from_meta(const RowsetMetaPB& meta) {
-    DCHECK_EQ(_tablet_schema->keys_type(), DUP_KEYS);
+    DCHECK(!_tablet->enable_unique_key_merge_on_write());
     return static_cast<CloudRowsetWriter*>(_rowset_writer.get())->build_from_meta(meta, _rowset);
 }
 

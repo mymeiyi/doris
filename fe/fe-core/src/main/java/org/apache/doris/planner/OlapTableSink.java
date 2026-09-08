@@ -182,6 +182,7 @@ public class OlapTableSink extends DataSink {
         }
         tSink.setTxnTimeoutS(txnExpirationS);
         tSink.setKeysType(dstTable.getKeysType().toThrift());
+        tSink.setEnableUniqueKeyMergeOnWrite(dstTable.getEnableUniqueKeyMergeOnWrite());
         String vaultId = dstTable.getStorageVaultId();
         if (vaultId != null && !vaultId.isEmpty()) {
             tSink.setStorageVaultId(vaultId);

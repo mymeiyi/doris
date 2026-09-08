@@ -28,8 +28,13 @@ tablet，但 MemTable 的聚合、排序、flush 和 Segment 构建改在各个 
 
 ### 1.1 当前实现范围
 
-Cloud MemTable 前移支持 DUP 表全列导入，沿用 V2 Sink 对 partial update、row binlog 和
-V1 inverted index 的限制。不支持的表模型继续走原 Cloud Sink。
+Cloud MemTable 前移支持 DUP、AGG 和 UNIQUE MOR 表全列导入，沿用 V2 Sink 对 partial update、
+row binlog 和 V1 inverted index 的限制。UNIQUE MOW 继续走原 Cloud Sink。
+
+FE 显式下发 UNIQUE 表的 MOW 标志；旧 FE 缺少此标志时，UNIQUE 表继续走原路径。
+AGG 在 sink 内聚合，跨 Segment/Rowset 的聚合与 MOR 去重仍由现有读取和 compaction 完成。
+Segment ID 是物理文件身份，不代表业务更新顺序；MOR 保留原有版本、Sequence 和相同值
+冲突处理规则。需要表达业务更新先后时使用 Sequence，不能依赖并行导入的文件行顺序。
 
 支持两条路径：
 
@@ -37,6 +42,9 @@ V1 inverted index 的限制。不支持的表模型继续走原 Cloud Sink。
 转发：Sink BE 构建 Segment -> LoadStream 传文件 -> 目标 BE 上传对象存储并提交 Rowset
 直传：Sink BE 构建并上传 Segment -> LoadStream 传部分元数据 -> 目标 BE 汇总并提交 Rowset
 ```
+
+文件转发路径要求保留默认的 `share_delta_writers=true`：接收端按源 BE 与本地 Segment ID
+映射文件，同一 BE 的独立 writer 会重复使用本地 ID。直传通过独立 writer 区间支持关闭共享。
 
 SQL 会话开关默认关闭：
 
@@ -125,3 +133,7 @@ V2 索引及 packed 映射持久化、关闭文件缓存读取、重复 partial 
 
 `CloudDirectUploadMetaTest` 及 LoadStream 单测覆盖稀疏 ID 元数据汇总、序列化、越界/错位/统计
 异常、空 writer、重复结果和缺失结果。性能默认开启与否应另行通过 RELEASE benchmark 决定。
+
+`test_cloud_memtable_agg_mor` 对照转发与直传，覆盖 AGG 聚合状态、REPLACE/REPLACE_IF_NOT_NULL、
+MOR 带/不带 Sequence、跨 sink 重复 key、低 Sequence 后写、空输入、索引读取、packed 布局、
+Broker Load、Stream Load、delete sign、重插入和 compaction 前后结果，以及 MOW 保留原路径。
