@@ -326,12 +326,35 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             def profiles = profileResponse.compaction_profiles
             assertEquals(1, profiles.size())
             def profile = profiles[0]
-            assertEquals(expectDistributed, profile.is_distributed)
+            assertFalse(profile.containsKey("is_distributed"))
+            assertFalse(profile.containsKey("distributed_task_count"))
+            assertFalse(profile.containsKey("distributed_worker_count"))
+            assertTrue(profile.is_vertical)
+            assertTrue(profile.permits.toString().toLong() > 0)
+            assertTrue(profile.merge_latency_ms.toString().toLong() > 0)
+            assertTrue(profile.peak_memory_bytes.toString().toLong() > 0)
+            assertFalse(profile.containsKey("bytes_read_from_peer"))
+            long totalGroups = profile.vertical_total_groups.toString().toLong()
+            assertEquals(totalGroups, profile.vertical_completed_groups.toString().toLong())
+            assertTrue(totalGroups >= (expectDistributed ? expectedTaskCount : 1))
             if (expectDistributed) {
+                def distributed = profile.distributed_compaction
+                assertTrue(distributed.is_distributed)
+                assertTrue(distributed.job_id instanceof String && !distributed.job_id.isEmpty())
+                assertTrue(distributed.plan_time_us.toString().toLong() >= 0)
+                assertTrue(distributed.submit_rpc_time_us.toString().toLong() >= 0)
+                assertTrue(distributed.local_read_time_us.toString().toLong() >= 0)
+                assertTrue(distributed.remote_read_time_us.toString().toLong() >= 0)
+                assertTrue(distributed.peer_read_time_us.toString().toLong() >= 0)
+                assertTrue(distributed.bytes_read_from_peer.toString().toLong() >= 0)
+                assertTrue(distributed.worker_cpu_time_us.toString().toLong() > 0)
+                assertFalse(distributed.containsKey("effective_merge_parallelism"))
                 assertEquals(expectedTaskCount,
-                        profile.distributed_task_count.toString().toInteger())
+                        distributed.task_count.toString().toInteger())
                 assertEquals(backends.size(),
-                        profile.distributed_worker_count.toString().toInteger())
+                        distributed.worker_count.toString().toInteger())
+            } else {
+                assertFalse(profile.containsKey("distributed_compaction"))
             }
 
             assertEquals(summaryBefore, sql("""

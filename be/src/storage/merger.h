@@ -19,6 +19,7 @@
 
 #include <functional>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -71,6 +72,16 @@ public:
         int64_t bytes_read_from_local = 0;
         int64_t bytes_read_from_remote = 0;
         int64_t bytes_read_from_peer = 0;
+        // Distributed merge span from the earliest merge start to the latest merge finish.
+        int64_t merge_time_us = 0;
+        std::string distributed_job_id;
+        int64_t plan_time_us = 0; // planning and request construction, excluding submit RPCs
+        int64_t submit_rpc_time_us = 0;
+        int64_t worker_cpu_time_us = 0; // sum across worker tasks
+        // Largest individual worker task peak, not the sum of peaks at different times.
+        int64_t peak_memory_bytes = 0;
+        int64_t vertical_total_groups = 0;
+        int64_t vertical_completed_groups = 0;
     };
 
     // merge rows from `src_rowset_readers` and write into `dst_rowset_writer`.

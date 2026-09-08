@@ -1042,6 +1042,9 @@ message PCloudDistributedCompactionTaskResult {
     optional int64 merge_start_time_us = 20;
     optional int64 merge_finish_time_us = 21;
     optional int64 worker_finish_time_us = 22;
+    optional int64 peak_memory_bytes = 23;
+    optional int64 vertical_total_groups = 24;
+    optional int64 vertical_completed_groups = 25;
 }
 
 message PCloudDistributedCompactionTaskStatus {
