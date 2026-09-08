@@ -1179,6 +1179,18 @@ message PTabletSchemaWithIndex {
     optional bool enable_unique_key_merge_on_write = 3;
 }
 
+// All writers of one MOW load compare against the same rowsets and deletion state.
+message PCloudLoadMowSnapshot {
+    optional int64 version = 1;
+    repeated RowsetMetaPB rowsets = 2;
+    optional DeleteBitmapPB delete_bitmap = 3;
+}
+
+message PCloudLoadMowResult {
+    optional int64 snapshot_version = 1;
+    optional DeleteBitmapPB delete_bitmap = 2;
+}
+
 // A writer owns one stable segment range for the lifetime of a load attempt.
 message PCloudLoadWriteContext {
     optional string writer_id = 1;
@@ -1188,6 +1200,7 @@ message PCloudLoadWriteContext {
     optional EncryptionAlgorithmPB encrypt_algorithm = 5;
     optional int64 file_cache_ttl_sec = 6;
     optional bool write_file_cache = 7;
+    optional PCloudLoadMowSnapshot mow_snapshot = 8;
 }
 
 message POpenLoadStreamResponse {
@@ -1238,6 +1251,7 @@ message PStreamHeader {
     optional int64 num_incremental_streams = 14;
     optional string writer_id = 15;
     optional RowsetMetaPB partial_rowset_meta = 16;
+    optional PCloudLoadMowResult mow_result = 17;
 }
 
 message PGetWalQueueSizeRequest{

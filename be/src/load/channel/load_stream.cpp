@@ -128,8 +128,9 @@ Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data
     if (header.opcode() == PStreamHeader::ADD_ROWSET) {
         std::lock_guard lock(_lock);
         int64_t added_segments = 0;
-        auto st = _load_stream_writer->add_rowset(header.writer_id(), header.partial_rowset_meta(),
-                                                  &added_segments);
+        auto st = _load_stream_writer->add_rowset(
+                header.writer_id(), header.partial_rowset_meta(), &added_segments,
+                header.has_mow_result() ? &header.mow_result() : nullptr);
         _next_segid += cast_set<uint32_t>(added_segments);
         _status.update(st);
         return st;

@@ -145,13 +145,12 @@ Status LoadStreamWriter::get_write_context(const std::string& writer_id,
     // Control messages run synchronously in LoadStream::_dispatch, which attaches the load.
     std::lock_guard lock(_lock);
     const auto& ctx = _rowset_writer->context();
-    if (!config::is_cloud_mode() || ctx.tablet->enable_unique_key_merge_on_write() ||
-        ctx.partial_update_info->is_partial_update() || ctx.write_binlog_opt().enable ||
+    if (!config::is_cloud_mode() || ctx.partial_update_info->is_partial_update() ||
+        ctx.write_binlog_opt().enable ||
         (ctx.tablet_schema->has_inverted_index() &&
          ctx.tablet_schema->get_inverted_index_storage_format() ==
                  InvertedIndexStorageFormatPB::V1)) {
-        return Status::NotSupported(
-                "direct upload requires cloud DUP/AGG/MOR full-row load with V2 indexes");
+        return Status::NotSupported("direct upload requires cloud full-row load with V2 indexes");
     }
     if (_pre_closed || writer_id.empty()) {
         return Status::InvalidArgument("invalid direct writer registration for tablet {}",
@@ -170,6 +169,10 @@ Status LoadStreamWriter::get_write_context(const std::string& writer_id,
         }
         it = _writer_ranges.emplace(writer_id, static_cast<int32_t>(start)).first;
     }
+    if (ctx.tablet->enable_unique_key_merge_on_write()) {
+        RETURN_IF_ERROR(static_cast<CloudRowsetBuilder*>(_rowset_builder.get())
+                                ->get_direct_mow_snapshot(context->mutable_mow_snapshot()));
+    }
     context->set_writer_id(writer_id);
     *context->mutable_rowset_meta() = _rowset_writer->rowset_meta()->get_rowset_pb();
     context->mutable_rowset_meta()->set_newest_write_timestamp(ctx.newest_write_timestamp);
@@ -182,7 +185,8 @@ Status LoadStreamWriter::get_write_context(const std::string& writer_id,
 }
 
 Status LoadStreamWriter::add_rowset(const std::string& writer_id, const RowsetMetaPB& meta,
-                                    int64_t* added_segments) {
+                                    int64_t* added_segments,
+                                    const PCloudLoadMowResult* mow_result) {
     // Control messages run synchronously in LoadStream::_dispatch, which attaches the load.
     std::lock_guard lock(_lock);
     *added_segments = 0;
@@ -191,10 +195,19 @@ Status LoadStreamWriter::add_rowset(const std::string& writer_id, const RowsetMe
         return Status::InvalidArgument("unknown or closed direct writer {} for tablet {}",
                                        writer_id, _req.tablet_id);
     }
+    const bool is_mow = _rowset_builder->tablet()->enable_unique_key_merge_on_write();
+    if (is_mow != (mow_result != nullptr)) {
+        return Status::InvalidArgument("direct upload MOW result does not match tablet {}",
+                                       _req.tablet_id);
+    }
     auto previous = _partial_rowsets.find(it->second);
     if (previous != _partial_rowsets.end()) {
         if (!google::protobuf::util::MessageDifferencer::Equals(previous->second, meta)) {
             return Status::InvalidArgument("conflicting direct writer result {}", writer_id);
+        }
+        if (is_mow && !google::protobuf::util::MessageDifferencer::Equals(
+                              _mow_results.at(it->second), *mow_result)) {
+            return Status::InvalidArgument("conflicting direct MOW result {}", writer_id);
         }
         return Status::OK();
     }
@@ -213,6 +226,11 @@ Status LoadStreamWriter::add_rowset(const std::string& writer_id, const RowsetMe
             location.packed_file_path().empty()) {
             return Status::InvalidArgument("invalid direct upload packed slice {}", path);
         }
+    }
+    if (is_mow) {
+        RETURN_IF_ERROR(static_cast<CloudRowsetBuilder*>(_rowset_builder.get())
+                                ->merge_direct_mow_bitmap(*mow_result));
+        _mow_results.emplace(it->second, *mow_result);
     }
     _partial_rowsets.emplace(it->second, meta);
     *added_segments = meta.num_segments();

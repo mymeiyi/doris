@@ -29,9 +29,11 @@ tablet，但 MemTable 的聚合、排序、flush 和 Segment 构建改在各个 
 ### 1.1 当前实现范围
 
 Cloud MemTable 前移支持 DUP、AGG 和 UNIQUE MOR 表全列导入，沿用 V2 Sink 对 partial update、
-row binlog 和 V1 inverted index 的限制。UNIQUE MOW 继续走原 Cloud Sink。
+row binlog 和 V1 inverted index 的限制。UNIQUE MOW 全列写入在开启直传时使用前移路径；
+关闭直传时继续走原 Cloud MOW Sink。
 
 FE 显式下发 UNIQUE 表的 MOW 标志；旧 FE 缺少此标志时，UNIQUE 表继续走原路径。
+MOW 直传要求目标 BE 返回统一快照；旧目标不支持时，在上传前报错。
 AGG 在 sink 内聚合，跨 Segment/Rowset 的聚合与 MOR 去重仍由现有读取和 compaction 完成。
 Segment ID 是物理文件身份，不代表业务更新顺序；MOR 保留原有版本、Sequence 和相同值
 冲突处理规则。需要表达业务更新先后时使用 Sequence，不能依赖并行导入的文件行顺序。
@@ -137,3 +139,26 @@ V2 索引及 packed 映射持久化、关闭文件缓存读取、重复 partial 
 `test_cloud_memtable_agg_mor` 对照转发与直传，覆盖 AGG 聚合状态、REPLACE/REPLACE_IF_NOT_NULL、
 MOR 带/不带 Sequence、跨 sink 重复 key、低 Sequence 后写、空输入、索引读取、packed 布局、
 Broker Load、Stream Load、delete sign、重插入和 compaction 前后结果，以及 MOW 保留原路径。
+
+## 7. MOW 直传
+
+目标 BE 为同一 tablet 的全部 writer 固定一个存量快照：可见版本、Rowset 元数据和对应
+Segment 在该版本聚合后的 delete bitmap。快照在元数据同步锁和 tablet header 锁下取得，
+存量 Rowset 引用保留到导入结束；writer 注册沿用已有有序 LoadStream。
+
+各 Sink 生成 MOW Segment 和主键索引，上传完成后，用已有 `calc_delete_bitmap()` 比较
+自己的新 Segment 与统一存量快照，返回 `PCloudLoadMowResult`，不转发 Segment 内容。
+目标校验快照版本和 bitmap 完整性，相同结果重发不重复计数，冲突结果使导入失败。
+
+目标汇总 partial Rowset 和 bitmap，再计算跨 Sink Segment 的重复 key，并用现有提交阶段
+逻辑补算存量 Rowset 集合的变化。完成后登记 Cloud 事务 bitmap 缓存，沿用 FE 的 MOW 锁、
+发布版本分配和 bitmap 持久化流程。存量比较使用 Sequence；bitmap 始终引用实际物理
+Segment ID。目标统一处理跨 Sink 去重，因此不需要重新 shuffle 相同 key。
+
+Sink 只保留到上传和初始 bitmap 计算完成，发布阶段的增量由目标 BE 处理。快照下发及
+存量主键索引读取带来额外开销，收益需要按存量规模和导入大小测量。当前不支持 partial
+update、row binlog、V1 索引，以及在取得快照时正处于 schema change 的 tablet。
+
+`test_cloud_memtable_mow` 覆盖不共享 writer、存量删除状态、稀疏 ID、Sequence、跨 Sink
+重复 key、packed、V2 索引、Stream/Broker Load、删除后低 Sequence 写入、compaction，
+以及固定快照后并发写入并替换存量 Rowset、bitmap 计算失败事务不可见。

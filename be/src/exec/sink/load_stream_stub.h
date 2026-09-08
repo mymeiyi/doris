@@ -180,7 +180,8 @@ public:
     Status get_write_context(int64_t partition_id, int64_t index_id, int64_t tablet_id,
                              const std::string& writer_id, PCloudLoadWriteContext* context);
     Status add_rowset(int64_t partition_id, int64_t index_id, int64_t tablet_id,
-                      const std::string& writer_id, const RowsetMetaPB& meta);
+                      const std::string& writer_id, const RowsetMetaPB& meta,
+                      const PCloudLoadMowResult* mow_result = nullptr);
 
     Status wait_for_schema(int64_t partition_id, int64_t index_id, int64_t tablet_id,
                            int64_t timeout_ms = 60000);

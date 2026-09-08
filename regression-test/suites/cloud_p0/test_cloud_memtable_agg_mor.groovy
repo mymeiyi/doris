@@ -216,7 +216,8 @@ suite("test_cloud_memtable_agg_mor", "p0, docker") {
         trigger_and_wait_compaction("cloud_memtable_mor_seq", "full")
         order_qt_mor_final_compacted seqQuery
 
-        // MOW must keep the established CloudDeltaWriter path even with both switches enabled.
+        // MOW without direct upload keeps the established CloudDeltaWriter path.
+        sql "SET enable_cloud_memtable_direct_upload=false"
         sql "DROP TABLE IF EXISTS cloud_memtable_mow_fallback"
         sql """
             CREATE TABLE cloud_memtable_mow_fallback (k BIGINT NOT NULL, v BIGINT)

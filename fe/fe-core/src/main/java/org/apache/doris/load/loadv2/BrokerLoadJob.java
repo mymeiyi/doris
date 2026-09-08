@@ -368,6 +368,8 @@ public class BrokerLoadJob extends BulkLoadJob {
                 }
                 boolean isEnableMemtableOnSinkNode =
                         table.getTableProperty().getUseSchemaLightChange() && this.enableMemTableOnSinkNode;
+                boolean directUpload = Boolean.parseBoolean(sessionVariables.getOrDefault(
+                        SessionVariable.ENABLE_CLOUD_MEMTABLE_DIRECT_UPLOAD, "false"));
                 boolean hasInvertedIndexV1 = false;
                 if (table.getIndexes() != null) {
                     for (org.apache.doris.catalog.Index index : table.getIndexes()) {
@@ -382,7 +384,7 @@ public class BrokerLoadJob extends BulkLoadJob {
                 }
                 if (isPartialUpdate() || hasInvertedIndexV1
                         || (Config.isCloudMode() && table.getKeysType() == KeysType.UNIQUE_KEYS
-                            && table.getEnableUniqueKeyMergeOnWrite())) {
+                            && table.getEnableUniqueKeyMergeOnWrite() && !directUpload)) {
                     isEnableMemtableOnSinkNode = false;
                 }
 
@@ -390,8 +392,7 @@ public class BrokerLoadJob extends BulkLoadJob {
                 LoadLoadingTask task = createTask(db, table, brokerFileGroups,
                         isEnableMemtableOnSinkNode, batchSize, aggKey, attachment);
                 // Both local and cloud jobs create their task through this path.
-                task.setCloudMemtableDirectUpload(Boolean.parseBoolean(
-                        sessionVariables.getOrDefault(SessionVariable.ENABLE_CLOUD_MEMTABLE_DIRECT_UPLOAD, "false")));
+                task.setCloudMemtableDirectUpload(directUpload);
                 idToTasks.put(task.getSignature(), task);
                 // idToTasks contains previous LoadPendingTasks, so idToTasks is just used to save all tasks.
                 // use newLoadingTasks to save new created loading tasks and submit them later.

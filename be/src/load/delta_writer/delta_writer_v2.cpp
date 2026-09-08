@@ -143,6 +143,13 @@ Status DeltaWriterV2::init() {
         PCloudLoadWriteContext remote;
         RETURN_IF_ERROR(_streams[0]->get_write_context(_req.partition_id, _req.index_id,
                                                        _req.tablet_id, _direct_writer_id, &remote));
+        if (context.enable_unique_key_merge_on_write) {
+            if (!remote.has_mow_snapshot() || !remote.mow_snapshot().has_version() ||
+                !remote.mow_snapshot().has_delete_bitmap()) {
+                return Status::NotSupported("target BE does not support direct MOW upload");
+            }
+            _direct_mow_snapshot = std::make_unique<PCloudLoadMowSnapshot>(remote.mow_snapshot());
+        }
         const auto& meta = remote.rowset_meta();
         context.rowset_id.init(meta.rowset_id_v2());
         context.tablet_schema_hash = meta.tablet_schema_hash();
@@ -239,6 +246,37 @@ Status DeltaWriterV2::close() {
     return _memtable_writer->close();
 }
 
+Status DeltaWriterV2::_calc_direct_mow_bitmap(const RowsetSharedPtr& partial,
+                                              PCloudLoadMowResult* result) {
+    auto& engine = static_cast<CloudStorageEngine&>(ExecEnv::GetInstance()->storage_engine());
+    auto tablet = DORIS_TRY(engine.get_tablet(_req.tablet_id));
+    std::vector<RowsetSharedPtr> rowsets;
+    for (const auto& meta : _direct_mow_snapshot->rowsets()) {
+        auto rowset_meta = std::make_shared<RowsetMeta>();
+        if (!rowset_meta->init_from_pb(meta)) {
+            return Status::InvalidArgument("invalid direct MOW snapshot rowset");
+        }
+        RowsetSharedPtr rowset;
+        RETURN_IF_ERROR(RowsetFactory::create_rowset(rowset_meta->tablet_schema(), "", rowset_meta,
+                                                     &rowset));
+        rowsets.push_back(std::move(rowset));
+    }
+    auto snapshot_bitmap = std::make_shared<DeleteBitmap>(
+            DeleteBitmap::from_pb(_direct_mow_snapshot->delete_bitmap(), _req.tablet_id));
+    auto bitmap = std::make_shared<DeleteBitmap>(_req.tablet_id);
+    std::vector<segment_v2::SegmentSharedPtr> segments;
+    RETURN_IF_ERROR(static_cast<BetaRowset*>(partial.get())->load_segments(&segments));
+    RETURN_IF_ERROR(BaseTablet::calc_delete_bitmap(tablet, partial, segments, rowsets, bitmap,
+                                                   _direct_mow_snapshot->version(), nullptr,
+                                                   nullptr, snapshot_bitmap));
+    result->set_snapshot_version(_direct_mow_snapshot->version());
+    *result->mutable_delete_bitmap() = bitmap->to_pb();
+    DBUG_EXECUTE_IF("DeltaWriterV2.direct_mow.after_bitmap_failure", {
+        return Status::InternalError("injected failure after direct MOW bitmap calculation");
+    });
+    return Status::OK();
+}
+
 Status DeltaWriterV2::close_wait(int32_t& num_segments, RuntimeProfile* profile) {
     SCOPED_RAW_TIMER(&_close_wait_time);
     std::lock_guard<std::mutex> l(_lock);
@@ -258,13 +296,21 @@ Status DeltaWriterV2::close_wait(int32_t& num_segments, RuntimeProfile* profile)
         }
         DBUG_EXECUTE_IF("DeltaWriterV2.direct_upload.after_upload_failure",
                         { return Status::InternalError("injected failure after direct upload"); });
+        PCloudLoadMowResult mow_result;
+        if (_direct_mow_snapshot != nullptr) {
+            RETURN_IF_ERROR(_calc_direct_mow_bitmap(partial, &mow_result));
+            if (profile != nullptr) {
+                profile->add_info_string("CloudMemtableMowBitmap", "true");
+            }
+        }
+        const auto* result = _direct_mow_snapshot != nullptr ? &mow_result : nullptr;
         RETURN_IF_ERROR(_streams[0]->add_rowset(_req.partition_id, _req.index_id, _req.tablet_id,
                                                 _direct_writer_id,
-                                                partial->rowset_meta()->get_rowset_pb()));
+                                                partial->rowset_meta()->get_rowset_pb(), result));
         DBUG_EXECUTE_IF("DeltaWriterV2.direct_upload.duplicate_result", {
-            RETURN_IF_ERROR(_streams[0]->add_rowset(_req.partition_id, _req.index_id,
-                                                    _req.tablet_id, _direct_writer_id,
-                                                    partial->rowset_meta()->get_rowset_pb()));
+            RETURN_IF_ERROR(_streams[0]->add_rowset(
+                    _req.partition_id, _req.index_id, _req.tablet_id, _direct_writer_id,
+                    partial->rowset_meta()->get_rowset_pb(), result));
         });
         if (profile != nullptr) {
             profile->add_info_string("CloudMemtableDirectUpload", "true");

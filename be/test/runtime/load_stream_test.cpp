@@ -33,6 +33,7 @@
 #include <functional>
 #include <memory>
 
+#include "cloud/cloud_rowset_builder.h"
 #include "common/config.h"
 #include "common/status.h"
 #include "gtest/gtest_pred_impl.h"
@@ -1426,6 +1427,7 @@ TEST_F(LoadStreamMgrTest, DirectUploadDuplicateAndMissingWriterResults) {
     req.tablet_id = NORMAL_TABLET_ID;
     RuntimeProfile profile("direct-upload-test");
     LoadStreamWriter writer(&req, &profile);
+    writer._rowset_builder->_tablet = engine_ref->tablet_manager()->get_tablet(NORMAL_TABLET_ID);
     writer._writer_ranges.emplace("writer", 100);
     RowsetMetaPB meta;
     meta.set_num_segments(1);
@@ -1559,10 +1561,12 @@ TEST(CloudMemtableModelTest, RequireExplicitMorMode) {
     EXPECT_TRUE(supports_cloud_memtable_on_sink(sink));
     sink.__set_keys_type(TKeysType::UNIQUE_KEYS);
     EXPECT_FALSE(supports_cloud_memtable_on_sink(sink));
+    EXPECT_FALSE(supports_cloud_memtable_on_sink(sink, true));
     sink.__set_enable_unique_key_merge_on_write(false);
     EXPECT_TRUE(supports_cloud_memtable_on_sink(sink));
     sink.__set_enable_unique_key_merge_on_write(true);
     EXPECT_FALSE(supports_cloud_memtable_on_sink(sink));
+    EXPECT_TRUE(supports_cloud_memtable_on_sink(sink, true));
 }
 
 TEST_F(CloudDirectUploadMetaTest, PreserveAggregateAndMorOverlappingLayout) {
@@ -1582,6 +1586,37 @@ TEST_F(CloudDirectUploadMetaTest, PreserveAggregateAndMorOverlappingLayout) {
         EXPECT_EQ(100, merged.segment_ids(1));
         EXPECT_EQ(102, merged.num_rows());
     }
+}
+
+TEST(CloudDirectMowTest, RequireMatchingSnapshotAndCompleteBitmap) {
+    PCloudLoadMowResult result;
+    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    result.set_snapshot_version(5);
+    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    auto* bitmap = result.mutable_delete_bitmap();
+    EXPECT_TRUE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 6).ok());
+    bitmap->add_rowset_ids("020000000000000100000000000000020000000000000003");
+    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    bitmap->add_segment_ids(1000);
+    bitmap->add_versions(0);
+    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    roaring::Roaring rows;
+    rows.add(7);
+    std::string bytes(rows.getSizeInBytes(), '\0');
+    rows.write(bytes.data());
+    bitmap->add_segment_delete_bitmaps(bytes);
+    ASSERT_TRUE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    auto decoded = DeleteBitmap::from_pb(*bitmap, 1);
+    RowsetId rowset_id;
+    rowset_id.init(bitmap->rowset_ids(0));
+    EXPECT_TRUE(decoded.contains({rowset_id, 1000, 0}, 7));
+    EXPECT_FALSE(decoded.contains({rowset_id, 0, 0}, 7));
+    bitmap->set_versions(0, 5);
+    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    bitmap->set_versions(0, 0);
+    bitmap->set_segment_delete_bitmaps(0, "invalid");
+    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
 }
 
 } // namespace doris

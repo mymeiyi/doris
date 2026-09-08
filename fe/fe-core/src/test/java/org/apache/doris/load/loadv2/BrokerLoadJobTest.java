@@ -212,20 +212,22 @@ public class BrokerLoadJobTest {
 
     @ParameterizedTest
     @CsvSource({
-            "false, DUP_KEYS, false, false, false, false",
-            "false, DUP_KEYS, false, true, true, true",
-            "false, UNIQUE_KEYS, false, true, true, true",
-            "false, UNIQUE_KEYS, true, true, true, true",
-            "false, AGG_KEYS, false, true, true, true",
-            "true, DUP_KEYS, false, true, true, true",
-            "true, DUP_KEYS, false, false, true, false",
-            "true, DUP_KEYS, false, true, false, false",
-            "true, UNIQUE_KEYS, false, true, true, true",
-            "true, UNIQUE_KEYS, true, true, true, false",
-            "true, AGG_KEYS, false, true, true, true"
+            "false, DUP_KEYS, false, false, false, false, false",
+            "false, DUP_KEYS, false, true, true, true, true",
+            "false, UNIQUE_KEYS, false, true, true, true, true",
+            "false, UNIQUE_KEYS, true, true, true, true, true",
+            "false, AGG_KEYS, false, true, true, true, true",
+            "true, DUP_KEYS, false, true, true, true, true",
+            "true, DUP_KEYS, false, false, true, false, false",
+            "true, DUP_KEYS, false, true, false, true, false",
+            "true, UNIQUE_KEYS, false, true, true, true, true",
+            "true, UNIQUE_KEYS, true, true, true, true, true",
+            "true, UNIQUE_KEYS, true, true, true, false, false",
+            "true, AGG_KEYS, false, true, true, true, true"
     })
     public void testPendingTaskOnFinished(boolean cloudMode, KeysType keysType, boolean mergeOnWrite,
-            boolean enableMemtableOnSink, boolean lightSchemaChange, boolean expectedMemtableOnSink) throws Exception {
+            boolean enableMemtableOnSink, boolean lightSchemaChange, boolean directUpload,
+            boolean expectedMemtableOnSink) throws Exception {
         BrokerPendingTaskAttachment attachment = Mockito.mock(BrokerPendingTaskAttachment.class);
         Env env = Mockito.mock(Env.class);
         InternalCatalog catalog = Mockito.mock(InternalCatalog.class);
@@ -261,7 +263,7 @@ public class BrokerLoadJobTest {
             BrokerLoadJob brokerLoadJob = new BrokerLoadJob();
             Deencapsulation.setField(brokerLoadJob, "state", JobState.LOADING);
             Deencapsulation.setField(brokerLoadJob, "enableMemTableOnSinkNode", enableMemtableOnSink);
-            if (enableMemtableOnSink) {
+            if (directUpload) {
                 brokerLoadJob.sessionVariables.put("enable_cloud_memtable_direct_upload", "true");
             }
             BrokerDesc brokerDesc = Mockito.mock(BrokerDesc.class);
@@ -336,7 +338,7 @@ public class BrokerLoadJobTest {
                 boolean actualMemtableOnSink = Deencapsulation.getField(task, "enableMemTableOnSinkNode");
                 Assertions.assertEquals(expectedMemtableOnSink, actualMemtableOnSink);
                 boolean actualDirectUpload = Deencapsulation.getField(task, "cloudMemtableDirectUpload");
-                Assertions.assertEquals(enableMemtableOnSink, actualDirectUpload);
+                Assertions.assertEquals(directUpload, actualDirectUpload);
             }
         }
     }

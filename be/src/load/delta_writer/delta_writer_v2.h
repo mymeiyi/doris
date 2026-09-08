@@ -88,6 +88,7 @@ private:
                                         const OlapTableSchemaParam* table_schema_param,
                                         const TabletSchema& ori_tablet_schema);
     int64_t _table_id() const;
+    Status _calc_direct_mow_bitmap(const RowsetSharedPtr& partial, PCloudLoadMowResult* result);
 
     void _update_profile(RuntimeProfile* profile);
 
@@ -97,6 +98,7 @@ private:
     std::shared_ptr<WorkloadGroup> _workload_group;
     std::shared_ptr<RowsetWriter> _rowset_writer;
     std::string _direct_writer_id;
+    std::unique_ptr<PCloudLoadMowSnapshot> _direct_mow_snapshot;
     int32_t _segment_start_id = 0;
     TabletSchemaSPtr _tablet_schema;
     bool _delta_written_success = false;

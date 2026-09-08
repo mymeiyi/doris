@@ -55,7 +55,7 @@ public:
     Status init();
     Status get_write_context(const std::string& writer_id, PCloudLoadWriteContext* context);
     Status add_rowset(const std::string& writer_id, const RowsetMetaPB& meta,
-                      int64_t* added_segments);
+                      int64_t* added_segments, const PCloudLoadMowResult* mow_result = nullptr);
     bool is_direct_upload() { return _direct_upload.load(); }
 
     static Status assemble_direct_rowset(const RowsetMetaPB& base,
@@ -87,6 +87,7 @@ private:
     int32_t _segment_capacity = 0;
     std::unordered_map<std::string, int32_t> _writer_ranges;
     std::map<int32_t, RowsetMetaPB> _partial_rowsets;
+    std::map<int32_t, PCloudLoadMowResult> _mow_results;
     bool _is_init = false;
     bool _is_canceled = false;
     bool _pre_closed = false;

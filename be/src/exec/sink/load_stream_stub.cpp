@@ -351,7 +351,8 @@ Status LoadStreamStub::get_write_context(int64_t partition_id, int64_t index_id,
 }
 
 Status LoadStreamStub::add_rowset(int64_t partition_id, int64_t index_id, int64_t tablet_id,
-                                  const std::string& writer_id, const RowsetMetaPB& meta) {
+                                  const std::string& writer_id, const RowsetMetaPB& meta,
+                                  const PCloudLoadMowResult* mow_result) {
     RETURN_IF_ERROR(check_cancel());
     PStreamHeader header;
     *header.mutable_load_id() = _load_id;
@@ -362,6 +363,9 @@ Status LoadStreamStub::add_rowset(int64_t partition_id, int64_t index_id, int64_
     header.set_writer_id(writer_id);
     header.set_opcode(PStreamHeader::ADD_ROWSET);
     *header.mutable_partial_rowset_meta() = meta;
+    if (mow_result != nullptr) {
+        *header.mutable_mow_result() = *mow_result;
+    }
     return _encode_and_send(header);
 }
 
