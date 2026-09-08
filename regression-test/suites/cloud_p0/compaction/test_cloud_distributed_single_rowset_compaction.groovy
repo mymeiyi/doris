@@ -97,6 +97,8 @@ suite("test_cloud_distributed_single_rowset_compaction", "docker") {
             assertEquals(1, response.compaction_profiles.size())
             def profile = response.compaction_profiles[0]
             assertTrue(profile.success)
+            assertTrue(profile.is_vertical)
+            assertTrue(profile.permits.toString().toLong() > 0)
             return profile
         }
 
@@ -209,9 +211,14 @@ suite("test_cloud_distributed_single_rowset_compaction", "docker") {
 
             def profile = latestCumulativeProfile(
                     coordinator.Host, coordinator.HttpPort, tabletId)
-            assertTrue(profile.is_distributed)
-            assertEquals(outputInfo.segments, profile.distributed_task_count.toString().toInteger())
-            assertEquals(backends.size(), profile.distributed_worker_count.toString().toInteger())
+            def distributed = profile.distributed_compaction
+            assertTrue(distributed.is_distributed)
+            assertTrue(distributed.job_id instanceof String && !distributed.job_id.isEmpty())
+            assertTrue(distributed.plan_time_us.toString().toLong() >= 0)
+            assertTrue(distributed.submit_rpc_time_us.toString().toLong() >= 0)
+            assertTrue(distributed.worker_cpu_time_us.toString().toLong() > 0)
+            assertEquals(outputInfo.segments, distributed.task_count.toString().toInteger())
+            assertEquals(backends.size(), distributed.worker_count.toString().toInteger())
 
             def backendsAfterCompaction = sql_return_maparray "SHOW BACKENDS"
             assertEquals(2, backendsAfterCompaction.size())
@@ -242,11 +249,12 @@ suite("test_cloud_distributed_single_rowset_compaction", "docker") {
                 def incrementalProfile = latestCumulativeProfile(
                         coordinator.Host, coordinator.HttpPort, tabletId)
                 assertTrue(incrementalProfile.compaction_id > profile.compaction_id)
-                assertTrue(incrementalProfile.is_distributed)
+                def incrementalDistributed = incrementalProfile.distributed_compaction
+                assertTrue(incrementalDistributed.is_distributed)
                 assertEquals((outputInfo.segments + 1).intdiv(2),
-                        incrementalProfile.distributed_task_count.toString().toInteger())
+                        incrementalDistributed.task_count.toString().toInteger())
                 assertEquals(backends.size(),
-                        incrementalProfile.distributed_worker_count.toString().toInteger())
+                        incrementalDistributed.worker_count.toString().toInteger())
                 assertEquals(rowsAfterIncrementalLoad,
                         sql("SELECT v FROM ${tableName} WHERE k = 42"))
             }
