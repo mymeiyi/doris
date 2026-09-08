@@ -515,6 +515,11 @@ public class GlobalTransactionMgr implements GlobalTransactionMgrIface {
     public static List<TransactionState> checkFailedTxns(List<TransactionState> conflictTxns) {
         List<TransactionState> failedTxns = new ArrayList<>();
         for (TransactionState txn : conflictTxns) {
+            // Committed transactions can still publish after their coordinator restarts.
+            TransactionStatus status = txn.getTransactionStatus();
+            if (status == TransactionStatus.COMMITTED || status.isFinalStatus()) {
+                continue;
+            }
             if (checkFailedTxnsByCoordinator(txn)) {
                 failedTxns.add(txn);
             }
