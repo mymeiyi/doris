@@ -299,6 +299,8 @@ public:
 
     int64_t num_input_rowsets() const;
 
+    int64_t get_compaction_permits();
+
 protected:
     CloudTablet* cloud_tablet() { return static_cast<CloudTablet*>(_tablet.get()); }
     const CloudTablet* cloud_tablet() const {
@@ -321,8 +323,6 @@ protected:
     Status prepare_execute_compact(int64_t permits);
 
     Status finish_execute_compact(int64_t execution_start_time_us);
-
-    int64_t get_compaction_permits();
 
     CloudStorageEngine& _engine;
 
