@@ -657,6 +657,8 @@ public class SessionVariable implements Serializable, Writable {
     public static final String ENABLE_MEMTABLE_ON_SINK_NODE =
             "enable_memtable_on_sink_node";
 
+    public static final String ENABLE_CLOUD_MEMTABLE_DIRECT_UPLOAD = "enable_cloud_memtable_direct_upload";
+
     public static final String LOAD_STREAM_PER_NODE = "load_stream_per_node";
 
     public static final String ENABLE_UNIQUE_KEY_PARTIAL_UPDATE = "enable_unique_key_partial_update";
@@ -2700,6 +2702,9 @@ public class SessionVariable implements Serializable, Writable {
 
     @VarAttrDef.VarAttr(name = ENABLE_MEMTABLE_ON_SINK_NODE, needForward = true)
     public boolean enableMemtableOnSinkNode = true;
+
+    @VarAttrDef.VarAttr(name = ENABLE_CLOUD_MEMTABLE_DIRECT_UPLOAD, needForward = true)
+    public boolean enableCloudMemtableDirectUpload = false;
 
     @VarAttrDef.VarAttr(name = LOAD_STREAM_PER_NODE)
     public int loadStreamPerNode = 2;
@@ -5600,6 +5605,7 @@ public class SessionVariable implements Serializable, Writable {
 
         tResult.setTruncateCharOrVarcharColumns(truncateCharOrVarcharColumns);
         tResult.setEnableMemtableOnSinkNode(enableMemtableOnSinkNode);
+        tResult.setEnableCloudMemtableDirectUpload(enableCloudMemtableDirectUpload);
 
         tResult.setInvertedIndexConjunctionOptThreshold(invertedIndexConjunctionOptThreshold);
         tResult.setInvertedIndexMaxExpansions(invertedIndexMaxExpansions);

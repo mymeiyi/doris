@@ -35,6 +35,8 @@ public:
 
     Status commit_txn() override;
 
+    Status build_rowset_from_meta(const RowsetMetaPB& meta);
+
     virtual void update_tablet_stats();
 
     const RowsetMetaSharedPtr& rowset_meta();

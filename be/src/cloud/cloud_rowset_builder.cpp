@@ -20,6 +20,7 @@
 #include <algorithm>
 
 #include "cloud/cloud_meta_mgr.h"
+#include "cloud/cloud_rowset_writer.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/cloud_tablet_mgr.h"
@@ -247,6 +248,11 @@ bool CloudRowsetBuilder::is_s3_storage() const {
 
 Status CloudRowsetBuilder::commit_rowset(const std::string& job_id, int64_t table_id) {
     return _engine.meta_mgr().commit_rowset(*rowset_meta(), job_id, table_id);
+}
+
+Status CloudRowsetBuilder::build_rowset_from_meta(const RowsetMetaPB& meta) {
+    DCHECK_EQ(_tablet_schema->keys_type(), DUP_KEYS);
+    return static_cast<CloudRowsetWriter*>(_rowset_writer.get())->build_from_meta(meta, _rowset);
 }
 
 Status CloudRowsetBuilder::commit_txn() {

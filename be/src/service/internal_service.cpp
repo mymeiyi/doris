@@ -473,6 +473,7 @@ void PInternalService::open_load_stream(google::protobuf::RpcController* control
             return;
         }
 
+        response->set_supports_direct_upload(config::is_cloud_mode());
         stream_options.handler = load_stream;
         stream_options.idle_timeout_ms = request->idle_timeout_ms();
         DBUG_EXECUTE_IF("PInternalServiceImpl.open_load_stream.set_idle_timeout",

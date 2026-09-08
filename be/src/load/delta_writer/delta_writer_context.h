@@ -57,6 +57,7 @@ struct WriteRequest {
     WriteRequestType write_req_type = WriteRequestType::DATA;
     std::string storage_vault_id;
     bool enable_table_memtable_backpressure = false;
+    bool cloud_direct_upload = false;
 };
 
 struct TabletAddRowsPayload {

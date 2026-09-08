@@ -1420,4 +1420,133 @@ TEST_F(LoadStreamMgrTest, incremental_close_race_orhpans_streams) {
     config::enable_debug_points = saved_debug_points;
 }
 
+TEST_F(LoadStreamMgrTest, DirectUploadDuplicateAndMissingWriterResults) {
+    WriteRequest req;
+    req.tablet_id = NORMAL_TABLET_ID;
+    RuntimeProfile profile("direct-upload-test");
+    LoadStreamWriter writer(&req, &profile);
+    writer._writer_ranges.emplace("writer", 100);
+    RowsetMetaPB meta;
+    meta.set_num_segments(1);
+    meta.add_segment_ids(100);
+    // Seed an already accepted result to exercise retries without uploading a file.
+    writer._partial_rowsets.emplace(100, meta);
+    int64_t added = -1;
+    ASSERT_TRUE(writer.add_rowset("writer", meta, &added).ok());
+    EXPECT_EQ(0, added);
+    EXPECT_FALSE(writer.add_rowset("unknown", meta, &added).ok());
+    meta.set_num_rows(7);
+    EXPECT_FALSE(writer.add_rowset("writer", meta, &added).ok());
+    writer._is_init = true;
+    writer._direct_upload = true;
+    writer._partial_rowsets.clear();
+    EXPECT_FALSE(writer.pre_close().ok());
+    writer._pre_closed = true;
+    EXPECT_FALSE(writer.add_rowset("writer", meta, &added).ok());
+}
+
+class CloudDirectUploadMetaTest : public testing::Test {
+protected:
+    RowsetMetaPB base_meta() {
+        RowsetMetaPB meta;
+        meta.set_rowset_id(0);
+        meta.set_rowset_id_v2("000000000000000000000000000000000000000000000001");
+        meta.set_tablet_id(10);
+        meta.set_txn_id(20);
+        meta.set_resource_id("vault");
+        meta.set_index_id(30);
+        meta.set_partition_id(40);
+        meta.mutable_load_id()->set_hi(50);
+        meta.mutable_load_id()->set_lo(60);
+        meta.mutable_tablet_schema()->set_keys_type(DUP_KEYS);
+        meta.mutable_tablet_schema()->set_num_short_key_columns(0);
+        meta.mutable_tablet_schema()->set_num_rows_per_row_block(1024);
+        meta.mutable_tablet_schema()->set_compress_kind(COMPRESS_LZ4);
+        return meta;
+    }
+
+    RowsetMetaPB partial(int id) {
+        auto meta = base_meta();
+        meta.set_num_segments(1);
+        meta.add_segment_ids(id);
+        meta.add_num_segment_rows(id + 1);
+        meta.set_num_rows(id + 1);
+        meta.add_segments_file_size(100 + id);
+        meta.set_data_disk_size(100 + id);
+        meta.set_index_disk_size(10);
+        meta.set_total_disk_size(110 + id);
+        auto* bounds = meta.add_segments_key_bounds();
+        bounds->set_min_key("a");
+        bounds->set_max_key("z");
+        meta.add_inverted_index_file_info()->set_index_size(10);
+        return meta;
+    }
+};
+
+TEST_F(CloudDirectUploadMetaTest, AssembleSparseSegmentsAndPackedLocations) {
+    auto first = partial(0);
+    auto* location = &(*first.mutable_packed_slice_locations())["data/10/rowset_0.dat"];
+    location->set_packed_file_path("packed/object");
+    location->set_offset(64);
+    location->set_size(100);
+    RowsetMetaPB merged;
+    // A writer can finish first even though its allocated range is last.
+    std::map<int32_t, RowsetMetaPB> partials;
+    partials.emplace(100, partial(102));
+    partials.emplace(0, first);
+    ASSERT_TRUE(LoadStreamWriter::assemble_direct_rowset(base_meta(), partials, 100, &merged).ok());
+    EXPECT_EQ(2, merged.num_segments());
+    EXPECT_EQ(0, merged.segment_ids(0));
+    EXPECT_EQ(102, merged.segment_ids(1));
+    EXPECT_EQ(1, merged.num_segment_rows(0));
+    EXPECT_EQ(103, merged.num_segment_rows(1));
+    EXPECT_EQ(202, merged.segments_file_size(1));
+    EXPECT_EQ(104, merged.num_rows());
+    EXPECT_EQ(322, merged.total_disk_size());
+    EXPECT_EQ(2, merged.inverted_index_file_info_size());
+    EXPECT_EQ(COMMITTED, merged.rowset_state());
+    RowsetMetaPB restored;
+    ASSERT_TRUE(restored.ParseFromString(merged.SerializeAsString()));
+    EXPECT_EQ(64, restored.packed_slice_locations().at("data/10/rowset_0.dat").offset());
+    EXPECT_EQ(102, restored.segment_ids(1));
+}
+
+TEST_F(CloudDirectUploadMetaTest, RejectInvalidPartialResults) {
+    RowsetMetaPB merged;
+    auto check = [&](const RowsetMetaPB& meta) {
+        EXPECT_FALSE(
+                LoadStreamWriter::assemble_direct_rowset(base_meta(), {{100, meta}}, 100, &merged)
+                        .ok());
+    };
+    check(partial(99)); // Outside this writer's range.
+    check(partial(200));
+    auto meta = partial(100);
+    meta.set_rowset_id_v2("different-rowset");
+    check(meta);
+    meta = partial(100);
+    meta.clear_segments_file_size();
+    check(meta);
+    meta = partial(100);
+    meta.set_num_rows(1);
+    check(meta);
+    meta = partial(100);
+    meta.set_total_disk_size(1);
+    check(meta);
+    meta = partial(100);
+    meta.set_segments_key_bounds_aggregated(true);
+    check(meta);
+    EXPECT_FALSE(LoadStreamWriter::assemble_direct_rowset(
+                         base_meta(), {{0, partial(0)}, {1, partial(1)}}, 1, &merged)
+                         .ok());
+}
+
+TEST_F(CloudDirectUploadMetaTest, EmptyWriter) {
+    RowsetMetaPB merged;
+    ASSERT_TRUE(
+            LoadStreamWriter::assemble_direct_rowset(base_meta(), {{0, base_meta()}}, 100, &merged)
+                    .ok());
+    EXPECT_EQ(0, merged.num_segments());
+    EXPECT_TRUE(merged.empty());
+}
+
 } // namespace doris

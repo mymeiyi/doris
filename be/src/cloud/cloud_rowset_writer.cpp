@@ -106,6 +106,18 @@ Status CloudRowsetWriter::_build_rowset_meta(RowsetMeta* rowset_meta, bool check
     return _collect_all_packed_slice_locations(rowset_meta);
 }
 
+Status CloudRowsetWriter::build_from_meta(const RowsetMetaPB& meta, RowsetSharedPtr& rowset) {
+    DORIS_CHECK(_seg_files.get_file_writers().empty());
+    if (!_rowset_meta->init_from_pb(meta)) {
+        return Status::InvalidArgument("invalid assembled rowset metadata for tablet {}",
+                                       _context.tablet_id);
+    }
+    RETURN_IF_ERROR(RowsetFactory::create_rowset(_rowset_meta->tablet_schema(),
+                                                 _context.tablet_path, _rowset_meta, &rowset));
+    _already_built = true;
+    return Status::OK();
+}
+
 Status CloudRowsetWriter::build(RowsetSharedPtr& rowset) {
     if (_calc_delete_bitmap_token != nullptr) {
         RETURN_IF_ERROR(_calc_delete_bitmap_token->wait());

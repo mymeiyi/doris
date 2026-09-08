@@ -19,6 +19,7 @@
 
 #include <gen_cpp/internal_service.pb.h>
 
+#include <map>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -52,6 +53,14 @@ public:
     ~LoadStreamWriter();
 
     Status init();
+    Status get_write_context(const std::string& writer_id, PCloudLoadWriteContext* context);
+    Status add_rowset(const std::string& writer_id, const RowsetMetaPB& meta,
+                      int64_t* added_segments);
+    bool is_direct_upload() { return _direct_upload.load(); }
+
+    static Status assemble_direct_rowset(const RowsetMetaPB& base,
+                                         const std::map<int32_t, RowsetMetaPB>& partials,
+                                         int32_t capacity, RowsetMetaPB* result);
 
     Status append_data(uint32_t segid, uint64_t offset, butil::IOBuf buf,
                        FileType file_type = FileType::SEGMENT_FILE);
@@ -74,6 +83,10 @@ private:
     // without lock
     Status _pre_close();
 
+    std::atomic<bool> _direct_upload {false};
+    int32_t _segment_capacity = 0;
+    std::unordered_map<std::string, int32_t> _writer_ranges;
+    std::map<int32_t, RowsetMetaPB> _partial_rowsets;
     bool _is_init = false;
     bool _is_canceled = false;
     bool _pre_closed = false;

@@ -388,6 +388,9 @@ public class BrokerLoadJob extends BulkLoadJob {
                 // Generate loading task and init the plan of task
                 LoadLoadingTask task = createTask(db, table, brokerFileGroups,
                         isEnableMemtableOnSinkNode, batchSize, aggKey, attachment);
+                // Both local and cloud jobs create their task through this path.
+                task.setCloudMemtableDirectUpload(Boolean.parseBoolean(
+                        sessionVariables.getOrDefault(SessionVariable.ENABLE_CLOUD_MEMTABLE_DIRECT_UPLOAD, "false")));
                 idToTasks.put(task.getSignature(), task);
                 // idToTasks contains previous LoadPendingTasks, so idToTasks is just used to save all tasks.
                 // use newLoadingTasks to save new created loading tasks and submit them later.

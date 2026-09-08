@@ -95,7 +95,9 @@ private:
     bool _is_cancelled = false;
     WriteRequest _req;
     std::shared_ptr<WorkloadGroup> _workload_group;
-    std::shared_ptr<BetaRowsetWriterV2> _rowset_writer;
+    std::shared_ptr<RowsetWriter> _rowset_writer;
+    std::string _direct_writer_id;
+    int32_t _segment_start_id = 0;
     TabletSchemaSPtr _tablet_schema;
     bool _delta_written_success = false;
 

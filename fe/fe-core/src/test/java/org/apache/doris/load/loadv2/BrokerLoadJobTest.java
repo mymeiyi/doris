@@ -259,6 +259,9 @@ public class BrokerLoadJobTest {
             BrokerLoadJob brokerLoadJob = new BrokerLoadJob();
             Deencapsulation.setField(brokerLoadJob, "state", JobState.LOADING);
             Deencapsulation.setField(brokerLoadJob, "enableMemTableOnSinkNode", enableMemtableOnSink);
+            if (enableMemtableOnSink) {
+                brokerLoadJob.sessionVariables.put("enable_cloud_memtable_direct_upload", "true");
+            }
             BrokerDesc brokerDesc = Mockito.mock(BrokerDesc.class);
             Deencapsulation.setField(brokerLoadJob, "brokerDesc", brokerDesc);
             long taskId = 1L;
@@ -329,6 +332,8 @@ public class BrokerLoadJobTest {
             for (LoadTask task : idToTasks.values()) {
                 boolean actualMemtableOnSink = Deencapsulation.getField(task, "enableMemTableOnSinkNode");
                 Assertions.assertEquals(expectedMemtableOnSink, actualMemtableOnSink);
+                boolean actualDirectUpload = Deencapsulation.getField(task, "cloudMemtableDirectUpload");
+                Assertions.assertEquals(enableMemtableOnSink, actualDirectUpload);
             }
         }
     }

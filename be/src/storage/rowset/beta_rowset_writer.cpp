@@ -1058,8 +1058,9 @@ Status BaseBetaRowsetWriter::_build_rowset_meta(RowsetMeta* rowset_meta, bool ch
     std::vector<uint32_t> segment_rows;
     std::vector<int64_t> segment_ids;
     std::optional<bool> segments_key_bounds_truncated;
-    const bool record_segment_ids = _context.write_type == DataWriteType::TYPE_COMPACTION &&
-                                    (_context.is_partial_output_writer || _segment_start_id != 0);
+    const bool record_segment_ids =
+            _context.is_partial_output_writer ||
+            (_context.write_type == DataWriteType::TYPE_COMPACTION && _segment_start_id != 0);
     {
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
         if (record_segment_ids) {
