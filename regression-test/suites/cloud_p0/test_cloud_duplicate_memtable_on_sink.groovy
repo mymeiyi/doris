@@ -23,6 +23,7 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
     options.cloudMode = true
     options.setFeNum(1)
     options.setBeNum(3)
+    options.enableDebugPoints()
     // Split the small S3 CSV across all three BEs with load_parallelism = 1.
     options.feConfigs += ['min_bytes_per_broker_scanner = 100']
 
@@ -107,6 +108,10 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
         try {
             sql "SET enable_memtable_on_sink_node = true"
             sql "SET enable_profile = true"
+            // The three scanners read 6, 6, and 8 rows. Flush after the first four rows on
+            // each BE, then flush the remaining rows at close to produce two segments each.
+            sql "SET broker_load_batch_size = 4"
+            GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush", [execute: 1])
             sql """
                 LOAD LABEL ${label} (
                     DATA INFILE("s3://${getS3BucketName()}/regression/load/data/basic_data.csv")
@@ -146,10 +151,11 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
                 assertTrue(pipeline.contains("FILE_SCAN_OPERATOR"), "Missing S3 scanner on BE ${backend.Host}")
                 assertTrue((pipeline =~ /(?m)^\s*- NumScanners: 1\s*$/).find(),
                         "Expected one S3 scanner on BE ${backend.Host}")
-                assertTrue((pipeline =~ /(?m)^\s*- SegmentNum: 1\s*$/).find(),
-                        "Expected one flushed segment on BE ${backend.Host}")
+                assertTrue((pipeline =~ /(?m)^\s*- SegmentNum: 2\s*$/).find(),
+                        "Expected two flushed segments on BE ${backend.Host}")
             }
         } finally {
+            GetDebugPoint().disableDebugPointForAllBEs("MemTable.need_flush")
             sql "SET enable_profile = false"
             sql "SET enable_memtable_on_sink_node = false"
         }
@@ -170,8 +176,8 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
                 def rowsetMeta = parseJson(body)
                 sql """
                     SELECT assert_true(
-                        ${rowsetMeta.num_segments as int} = 3 AND ${rowsetMeta.num_rows as long} = 20,
-                        'S3 load should commit one segment from each of the three sink BEs')
+                        ${rowsetMeta.num_segments as int} = 6 AND ${rowsetMeta.num_rows as long} = 20,
+                        'S3 load should commit two segments from each of the three sink BEs')
                 """
         }
     }
