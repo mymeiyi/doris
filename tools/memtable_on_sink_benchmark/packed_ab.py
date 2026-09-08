@@ -63,11 +63,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--concurrency', type=int, default=48)
     parser.add_argument('--on-only', action='store_true')
+    parser.add_argument('--compare-packed', action='store_true',
+                        help='Keep forwarding enabled and compare packed file OFF/ON')
+    parser.add_argument('--data', default='data.jsonl')
     args = parser.parse_args()
     assert args.concurrency > 0 and args.concurrency % 3 == 0
+    assert not (args.compare_packed and args.on_only)
     suffix = f'_{args.concurrency}' if args.concurrency != 48 else ''
+    config_prefix = 'packed_switch' if args.compare_packed else 'packed'
     original = {host: get_config(host) for host in HOSTS}
-    snapshot = pathlib.Path(f'packed_config_before{suffix}.json')
+    snapshot = pathlib.Path(f'{config_prefix}_config_before{suffix}.json')
     assert not snapshot.exists(), 'Keep previous snapshot intact; use a new experiment directory'
     snapshot.write_text(json.dumps(original, indent=2))
     try:
@@ -76,14 +81,22 @@ def main():
             set_config(host, 'false')
         print('All BEs: enable_packed_file=false', flush=True)
         rounds = [('packed_off_mem_off', 'false'), ('packed_off_mem_on', 'true')]
+        if args.compare_packed:
+            rounds = [('packed_switch_off', 'true'), ('packed_switch_on', 'true')]
         if args.on_only:
             rounds = rounds[1:]
         for name, enabled in rounds:
             name += suffix
             wait_for_compaction()
+            if args.compare_packed:
+                packed = 'true' if name.startswith('packed_switch_on') else 'false'
+                for host in HOSTS:
+                    set_config(host, packed)
+                print(name, 'enable_packed_file=' + packed, flush=True)
             with open(name + '.log', 'w') as output:
                 subprocess.run(['python3', 'bench.py', '--name', name, '--enabled', enabled,
-                                '--count', '7500', '--concurrency', str(args.concurrency)], stdout=output,
+                                '--count', '7500', '--concurrency', str(args.concurrency),
+                                '--data', args.data], stdout=output,
                                stderr=subprocess.STDOUT, check=True)
             print('Finished', name, flush=True)
     finally:
@@ -96,7 +109,7 @@ def main():
                 errors.append(f'{host}: {error}')
         assert not errors, errors
         restored = {host: get_config(host) for host in HOSTS}
-        pathlib.Path(f'packed_config_restored{suffix}.json').write_text(json.dumps(restored, indent=2))
+        pathlib.Path(f'{config_prefix}_config_restored{suffix}.json').write_text(json.dumps(restored, indent=2))
         assert restored == original
         print('Restored packed file configuration', restored, flush=True)
 

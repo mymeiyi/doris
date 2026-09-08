@@ -145,7 +145,7 @@ while True:
                ('compaction', 's3_', 'memtable', 'flush', 'load_channel', 'load_stream',
                 'thread_pool_', 'queue_size', 'streaming_load_current_processing')))
     sample['bvars'] = {}
-    for pattern in ['load_stream*', '*s3*']:
+    for pattern in ['load_stream*', '*s3*', '*packed*']:
         with urllib.request.urlopen(f'http://127.0.0.1:8060/vars/{pattern}?console=1', timeout=3) as response:
             sample['bvars'][pattern] = response.read().decode()
     print(json.dumps(sample), flush=True)

@@ -63,6 +63,14 @@ process is forcibly killed, use `packed_config_before.json` to restore manually.
 For the requested 96-concurrency forward-only follow-up, run
 `python3 packed_ab.py --concurrency 96 --on-only`. Round names and configuration
 snapshots gain a `_96` suffix, preserving the original 48-concurrency results.
+After deploying packed-file support for forwarding, use
+`python3 packed_ab.py --compare-packed --data data_1000.jsonl` to hold forwarding
+enabled and compare packed file OFF/ON at concurrency 48. This uses distinct
+`packed_switch_*` round names and configuration snapshots. The tested payload is
+the first 1000 complete lines of the original sample; both output files fall below
+the existing 1 MiB eligibility limit. Compare these two rounds with each other;
+their throughput is not directly comparable to the earlier 10,000-row requests.
+The monitor also captures packed-file bvars to verify actual packing and delay.
 The original cluster uses a 1 MiB small-file eligibility limit; 5 MiB is the target
 packed-file size. The experiment's approximately 2.05 MiB segment and 4.19 MiB V2
 index files exceed the eligibility limit, so a disabled option alone does not
