@@ -239,9 +239,27 @@ void CompactionProfileAction::handle(HttpRequest* req) {
         // Resources
         profile.AddMember("peak_memory_bytes", task.peak_memory_bytes, allocator);
         profile.AddMember("is_vertical", task.is_vertical, allocator);
-        profile.AddMember("is_distributed", task.is_distributed, allocator);
-        profile.AddMember("distributed_task_count", task.distributed_task_count, allocator);
-        profile.AddMember("distributed_worker_count", task.distributed_worker_count, allocator);
+        if (task.is_distributed) {
+            rapidjson::Value distributed(rapidjson::kObjectType);
+            distributed.AddMember("is_distributed", true, allocator);
+            rapidjson::Value job_id;
+            job_id.SetString(task.distributed_job_id.c_str(),
+                             static_cast<rapidjson::SizeType>(task.distributed_job_id.size()),
+                             allocator);
+            distributed.AddMember("job_id", job_id, allocator);
+            distributed.AddMember("task_count", task.distributed_task_count, allocator);
+            distributed.AddMember("worker_count", task.distributed_worker_count, allocator);
+            distributed.AddMember("bytes_read_from_peer", task.bytes_read_from_peer, allocator);
+            distributed.AddMember("plan_time_us", task.distributed_plan_time_us, allocator);
+            distributed.AddMember("submit_rpc_time_us", task.distributed_submit_rpc_time_us,
+                                  allocator);
+            distributed.AddMember("local_read_time_us", task.local_read_time_us, allocator);
+            distributed.AddMember("remote_read_time_us", task.remote_read_time_us, allocator);
+            distributed.AddMember("peer_read_time_us", task.peer_read_time_us, allocator);
+            distributed.AddMember("worker_cpu_time_us", task.distributed_worker_cpu_time_us,
+                                  allocator);
+            profile.AddMember("distributed_compaction", distributed, allocator);
+        }
         profile.AddMember("permits", task.permits, allocator);
 
         // Vertical compaction progress

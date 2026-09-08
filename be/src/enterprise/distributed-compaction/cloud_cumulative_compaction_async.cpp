@@ -144,6 +144,8 @@ std::optional<Status> CloudStorageEngine::_try_submit_cumulative_compaction_task
             RunningStats rs;
             rs.start_time_ms =
                     duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+            rs.is_vertical = compaction->is_vertical();
+            rs.permits = compaction->get_compaction_permits();
             CompactionTaskTracker::instance()->update_to_running(compaction_id, rs);
         }
         bool delayed = false;
