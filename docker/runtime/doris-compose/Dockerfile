@@ -55,7 +55,11 @@ FROM ${JDK_IMAGE}
 # set environment variables
 ENV JACOCO_VERSION=0.8.8
 
-RUN sed -i -e s@/deb.debian.org/@/mirrors.aliyun.com/@g -e s@/security.debian.org/@/mirrors.aliyun.com/@g /etc/apt/sources.list \
+# Pin Bullseye security packages to a snapshot to avoid 404s from the live repository.
+# Disable index expiry checks only for this immutable snapshot; signature checks remain enabled.
+RUN sed -i -e s@/deb.debian.org/@/mirrors.aliyun.com/@g \
+        -e '/ bullseye-security /s@http[^ ]*@[check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20260901T000000Z/@' \
+        /etc/apt/sources.list \
     && apt-get clean \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
