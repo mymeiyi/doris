@@ -139,11 +139,15 @@ while True:
                   host_cpu_ticks=list(map(int, stat)), network=network)
     if previous is not None:
         sample['cpu_cores'] = (sample['cpu_seconds']-previous['cpu_seconds'])/(sample['time']-previous['time'])
-    if int(started) % 5 == 0:
-        with urllib.request.urlopen('http://127.0.0.1:8040/metrics', timeout=3) as response:
-            sample['metrics'] = '\n'.join(line for line in response.read().decode().splitlines()
-                if not line.startswith('#') and any(word in line for word in
-                   ('compaction', 's3_', 'memtable', 'flush', 'load_channel', 'load_stream')))
+    with urllib.request.urlopen('http://127.0.0.1:8040/metrics', timeout=3) as response:
+        sample['metrics'] = '\n'.join(line for line in response.read().decode().splitlines()
+            if not line.startswith('#') and any(word in line for word in
+               ('compaction', 's3_', 'memtable', 'flush', 'load_channel', 'load_stream',
+                'thread_pool_', 'queue_size', 'streaming_load_current_processing')))
+    sample['bvars'] = {}
+    for pattern in ['load_stream*', '*s3*']:
+        with urllib.request.urlopen(f'http://127.0.0.1:8060/vars/{pattern}?console=1', timeout=3) as response:
+            sample['bvars'][pattern] = response.read().decode()
     print(json.dumps(sample), flush=True)
     previous = sample
     time.sleep(max(0, 1-(time.monotonic()-started)))

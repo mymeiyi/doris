@@ -41,6 +41,9 @@ the sink's `WriteMemTableTime` profile counter to verify actual execution.
 Each round retains every HTTP response, monotonic request duration, wall-clock
 start/end timestamps, per-second BE process CPU/RSS and host network samples,
 selected BE metrics, table metadata, validation results, and a JSON summary.
+Each second, monitoring also records thread-pool queues, active threads, cumulative
+task wait/execution times, and the load-stream/S3 bvars from BE port 8060.
+Thread-pool execution time is elapsed time, including blocked time, not CPU time.
 CPU is measured in occupied cores (16 cores per BE). The client runs on `.6`, so
 its CPU time is reported separately. CPU totals are interpolated at the request
 interval boundaries using the surrounding samples.
@@ -57,6 +60,9 @@ It snapshots `enable_packed_file` on all BEs, waits for compaction to settle,
 temporarily disables the option, runs one OFF/ON pair, and restores the original
 values in `finally`. Updates are not persisted to configuration files. If the
 process is forcibly killed, use `packed_config_before.json` to restore manually.
+For the requested 96-concurrency forward-only follow-up, run
+`python3 packed_ab.py --concurrency 96 --on-only`. Round names and configuration
+snapshots gain a `_96` suffix, preserving the original 48-concurrency results.
 The original cluster uses a 1 MiB small-file eligibility limit; 5 MiB is the target
 packed-file size. The experiment's approximately 2.05 MiB segment and 4.19 MiB V2
 index files exceed the eligibility limit, so a disabled option alone does not

@@ -18,6 +18,7 @@
 
 """Run the requested packed-file control pair, restoring runtime BE configuration."""
 
+import argparse
 import json
 import pathlib
 import subprocess
@@ -59,8 +60,14 @@ def wait_for_compaction():
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--concurrency', type=int, default=48)
+    parser.add_argument('--on-only', action='store_true')
+    args = parser.parse_args()
+    assert args.concurrency > 0 and args.concurrency % 3 == 0
+    suffix = f'_{args.concurrency}' if args.concurrency != 48 else ''
     original = {host: get_config(host) for host in HOSTS}
-    snapshot = pathlib.Path('packed_config_before.json')
+    snapshot = pathlib.Path(f'packed_config_before{suffix}.json')
     assert not snapshot.exists(), 'Keep previous snapshot intact; use a new experiment directory'
     snapshot.write_text(json.dumps(original, indent=2))
     try:
@@ -68,11 +75,15 @@ def main():
         for host in HOSTS:
             set_config(host, 'false')
         print('All BEs: enable_packed_file=false', flush=True)
-        for name, enabled in [('packed_off_mem_off', 'false'), ('packed_off_mem_on', 'true')]:
+        rounds = [('packed_off_mem_off', 'false'), ('packed_off_mem_on', 'true')]
+        if args.on_only:
+            rounds = rounds[1:]
+        for name, enabled in rounds:
+            name += suffix
             wait_for_compaction()
             with open(name + '.log', 'w') as output:
                 subprocess.run(['python3', 'bench.py', '--name', name, '--enabled', enabled,
-                                '--count', '7500', '--concurrency', '48'], stdout=output,
+                                '--count', '7500', '--concurrency', str(args.concurrency)], stdout=output,
                                stderr=subprocess.STDOUT, check=True)
             print('Finished', name, flush=True)
     finally:
@@ -85,7 +96,7 @@ def main():
                 errors.append(f'{host}: {error}')
         assert not errors, errors
         restored = {host: get_config(host) for host in HOSTS}
-        pathlib.Path('packed_config_restored.json').write_text(json.dumps(restored, indent=2))
+        pathlib.Path(f'packed_config_restored{suffix}.json').write_text(json.dumps(restored, indent=2))
         assert restored == original
         print('Restored packed file configuration', restored, flush=True)
 
