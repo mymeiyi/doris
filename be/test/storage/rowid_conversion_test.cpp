@@ -1072,7 +1072,8 @@ TEST_F(TestRowIdConversion, SegmentRangeUsesExplicitOutputPhysicalSegmentIds) {
     RowsetReaderSharedPtr input_reader;
     ASSERT_TRUE(input_rowset->create_reader(&input_reader).ok());
     RowIdConversion rowid_conversion(RowIdConversion::Mode::LAZY_CHUNKED);
-    Merger::Statistics stats {.rowid_conversion = &rowid_conversion};
+    Merger::Statistics stats;
+    stats.rowid_conversion = &rowid_conversion;
     auto tablet = create_tablet(*tablet_schema, true);
     ASSERT_TRUE(Merger::vmerge_rowsets(tablet, ReaderType::READER_CUMULATIVE_COMPACTION,
                                        *tablet_schema, {input_reader}, output_writer.get(), &stats,
