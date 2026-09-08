@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+import org.apache.doris.regression.action.ProfileAction
 import org.apache.doris.regression.suite.ClusterOptions
 
 suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
@@ -22,6 +23,8 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
     options.cloudMode = true
     options.setFeNum(1)
     options.setBeNum(3)
+    // Split the small S3 CSV across all three BEs with load_parallelism = 1.
+    options.feConfigs += ['min_bytes_per_broker_scanner = 100']
 
     docker(options) {
         sql "DROP TABLE IF EXISTS test_cloud_duplicate_memtable_on_sink_source"
@@ -84,5 +87,91 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
                 'cloud duplicate memtable-on-sink result mismatch')
             FROM test_cloud_duplicate_memtable_on_sink
         """
+
+        sql "DROP TABLE IF EXISTS test_cloud_duplicate_memtable_on_sink_s3"
+        sql """
+            CREATE TABLE test_cloud_duplicate_memtable_on_sink_s3 (
+                k BIGINT NOT NULL,
+                v BIGINT NOT NULL
+            )
+            DUPLICATE KEY(k)
+            DISTRIBUTED BY HASH(k) BUCKETS 1
+            PROPERTIES (
+                "replication_num" = "1",
+                "disable_auto_compaction" = "true"
+            )
+        """
+
+        def label = "cloud_duplicate_memtable_on_sink_s3_" + UUID.randomUUID().toString().replace('-', '_')
+        try {
+            sql "SET enable_memtable_on_sink_node = true"
+            sql "SET enable_profile = true"
+            sql """
+                LOAD LABEL ${label} (
+                    DATA INFILE("s3://${getS3BucketName()}/regression/load/data/basic_data.csv")
+                    INTO TABLE test_cloud_duplicate_memtable_on_sink_s3
+                    COLUMNS TERMINATED BY "|"
+                    FORMAT AS "CSV"
+                    (k, c01, c02, c03, c04, c05, c06, c07, c08, c09,
+                        c10, c11, c12, c13, c14, c15, c16, c17, c18)
+                    SET (v = k * 2)
+                )
+                WITH S3 (
+                    "AWS_ACCESS_KEY" = "${getS3AK()}",
+                    "AWS_SECRET_KEY" = "${getS3SK()}",
+                    "AWS_ENDPOINT" = "${getS3Endpoint()}",
+                    "AWS_REGION" = "${getS3Region()}",
+                    "provider" = "${getS3Provider()}"
+                )
+                PROPERTIES ("load_parallelism" = "1")
+            """
+            waitForBrokerLoadDone(label)
+            def load = sql_return_maparray("SHOW LOAD WHERE LABEL = '${label}'")[0]
+            assertEquals("FINISHED", load.State, "S3 load did not finish: ${load}")
+
+            def profileString = new ProfileAction(context).getProfileBySql(
+                    label, ["DeltaWriterV2", "NumScanners"])
+            logger.info("S3 memtable-on-sink profile:\n{}", profileString)
+
+            // Only inspect per-BE pipelines, excluding the merged profile's duplicate counters.
+            def pipelines = profileString.split(/(?m)(?=^[ \t]*(?:Pipeline \d+|FragmentLevelProfile:)\(host=)/)
+                    .findAll { it.trim().startsWith("Pipeline ") }
+            def backends = sql_return_maparray("SHOW BACKENDS")
+            backends.each { backend ->
+                def pipeline = pipelines.find {
+                    it.readLines()[0].contains("hostname:${backend.Host},") && it.contains("DeltaWriterV2")
+                }
+                assertNotNull(pipeline, "Missing S3 sink writer on BE ${backend.Host}")
+                assertTrue(pipeline.contains("FILE_SCAN_OPERATOR"), "Missing S3 scanner on BE ${backend.Host}")
+                assertTrue((pipeline =~ /(?m)^\s*- NumScanners: 1\s*$/).find(),
+                        "Expected one S3 scanner on BE ${backend.Host}")
+                assertTrue((pipeline =~ /(?m)^\s*- SegmentNum: 1\s*$/).find(),
+                        "Expected one flushed segment on BE ${backend.Host}")
+            }
+        } finally {
+            sql "SET enable_profile = false"
+            sql "SET enable_memtable_on_sink_node = false"
+        }
+
+        sql """
+            SELECT assert_true(
+                COUNT(*) = 20 AND SUM(k) = 1133 AND SUM(v) = 2266,
+                'cloud duplicate S3 memtable-on-sink result mismatch')
+            FROM test_cloud_duplicate_memtable_on_sink_s3
+        """
+        def tablet = sql_return_maparray("SHOW TABLETS FROM test_cloud_duplicate_memtable_on_sink_s3")[0]
+        def partition = sql_return_maparray("SHOW PARTITIONS FROM test_cloud_duplicate_memtable_on_sink_s3")[0]
+        def ms = cluster.getAllMetaservices()[0]
+        getSegmentFilesFromMs("${ms.host}:${ms.httpPort}", tablet.TabletId, partition.VisibleVersion) {
+            responseCode, body ->
+                assertEquals(200, responseCode)
+                logger.info("S3 memtable-on-sink rowset meta: {}", body)
+                def rowsetMeta = parseJson(body)
+                sql """
+                    SELECT assert_true(
+                        ${rowsetMeta.num_segments as int} = 3 AND ${rowsetMeta.num_rows as long} = 20,
+                        'S3 load should commit one segment from each of the three sink BEs')
+                """
+        }
     }
 }
