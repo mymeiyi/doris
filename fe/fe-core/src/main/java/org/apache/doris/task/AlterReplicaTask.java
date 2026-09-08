@@ -34,6 +34,7 @@ import org.apache.doris.thrift.TQueryGlobals;
 import org.apache.doris.thrift.TQueryOptions;
 import org.apache.doris.thrift.TTaskType;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 
 import java.util.ArrayList;
@@ -194,8 +195,12 @@ public class AlterReplicaTask extends AgentTask {
         }
         req.setStorageVaultId(this.vaultId);
 
-        req.setQueryOptions(this.queryOptions);
-        req.setQueryGlobals(this.queryGlobals);
+        // Older alter jobs persisted queryGlobals/queryOptions as empty JSON objects, or omitted them.
+        // Leave both optional fields unset in that case so BE uses its existing old-request defaults.
+        if (queryGlobals != null && queryGlobals.isSetNowString()) {
+            req.setQueryOptions(Preconditions.checkNotNull(queryOptions));
+            req.setQueryGlobals(queryGlobals);
+        }
         return req;
     }
 }

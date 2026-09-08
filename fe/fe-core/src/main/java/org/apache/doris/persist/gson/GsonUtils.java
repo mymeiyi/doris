@@ -201,6 +201,8 @@ import org.apache.doris.system.BackendHbResponse;
 import org.apache.doris.system.BrokerHbResponse;
 import org.apache.doris.system.FrontendHbResponse;
 import org.apache.doris.system.HeartbeatResponse;
+import org.apache.doris.thrift.TQueryGlobals;
+import org.apache.doris.thrift.TQueryOptions;
 import org.apache.doris.transaction.TxnCommitAttachment;
 
 import com.google.common.collect.ImmutableList;
@@ -624,6 +626,9 @@ public class GsonUtils {
                     = RuntimeTypeAdapterFactory.of(AbstractTableStreamUpdate.class, "clazz")
                     .registerSubtype(OlapTableStreamUpdate.class, OlapTableStreamUpdate.class.getSimpleName());
 
+    // Thrift fields have no SerializedName annotations. Preserve their values and isSet flags.
+    private static final Gson THRIFT_GSON = new Gson();
+
     // the builder of GSON instance.
     // Add any other adapters if necessary.
     //
@@ -645,6 +650,8 @@ public class GsonUtils {
             .registerTypeAdapter(ImmutableMap.class, new ImmutableMapDeserializer())
             .registerTypeAdapter(ImmutableList.class, new ImmutableListDeserializer())
             .registerTypeAdapter(AtomicBoolean.class, new AtomicBooleanAdapter())
+            .registerTypeAdapter(TQueryGlobals.class, THRIFT_GSON.getAdapter(TQueryGlobals.class))
+            .registerTypeAdapter(TQueryOptions.class, THRIFT_GSON.getAdapter(TQueryOptions.class))
             .registerTypeAdapterFactory(exprAdapterFactory)
             .registerTypeAdapterFactory(columnTypeAdapterFactory)
             .registerTypeAdapterFactory(distributionInfoTypeAdapterFactory)
