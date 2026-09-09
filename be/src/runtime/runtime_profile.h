@@ -271,7 +271,7 @@ public:
             counter.set_name(name);
             counter.set_value(this->value());
             counter.set_type(unit_to_proto(this->type()));
-            counter.set_level(this->value());
+            counter.set_level(this->_level);
             return counter;
         }
 

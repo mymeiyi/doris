@@ -1034,15 +1034,15 @@ void VNodeChannel::_refresh_back_pressure_version_wait_time(
     int64_t max_rowset_num_gap = 0;
     // if any one tablet is under high load pressure, we would make the whole procedure
     // sleep to prevent the corresponding BE return -235
-    std::for_each(
-            tablet_load_infos.begin(), tablet_load_infos.end(),
-            [&max_rowset_num_gap](auto& load_info) {
-                int64_t cur_rowset_num = load_info.current_rowset_nums();
-                int64_t high_load_point = load_info.max_config_rowset_nums() *
-                                          (config::load_back_pressure_version_threshold / 100);
-                DCHECK(cur_rowset_num > high_load_point);
-                max_rowset_num_gap = std::max(max_rowset_num_gap, cur_rowset_num - high_load_point);
-            });
+    std::for_each(tablet_load_infos.begin(), tablet_load_infos.end(),
+                  [&max_rowset_num_gap](auto& load_info) {
+                      int64_t cur_rowset_num = load_info.current_rowset_nums();
+                      int64_t high_load_point = load_info.max_config_rowset_nums() *
+                                                config::load_back_pressure_version_threshold / 100;
+                      DCHECK(cur_rowset_num > high_load_point);
+                      max_rowset_num_gap =
+                              std::max(max_rowset_num_gap, cur_rowset_num - high_load_point);
+                  });
     // to slow down the high load pressure
     // we would use the rowset num gap to calculate one sleep time
     // for example:

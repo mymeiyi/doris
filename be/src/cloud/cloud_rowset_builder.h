@@ -22,6 +22,8 @@
 namespace doris {
 
 class CloudTablet;
+class PCloudLoadMowSnapshot;
+class PCloudLoadMowResult;
 class CloudStorageEngine;
 
 class CloudRowsetBuilder : public BaseRowsetBuilder {
@@ -32,6 +34,15 @@ public:
     ~CloudRowsetBuilder() override;
 
     Status init() override;
+
+    Status commit_txn() override;
+
+    Status build_rowset_from_meta(const RowsetMetaPB& meta);
+    Status get_direct_mow_snapshot(PCloudLoadMowSnapshot* snapshot);
+    Status merge_direct_mow_bitmap(const PCloudLoadMowResult& result);
+
+    static Status validate_direct_mow_result(const PCloudLoadMowResult& result,
+                                             int64_t snapshot_version);
 
     virtual void update_tablet_stats();
 
@@ -54,6 +65,7 @@ protected:
     Status check_tablet_version_count();
 
     CloudStorageEngine& _engine;
+    std::unique_ptr<PCloudLoadMowSnapshot> _direct_mow_snapshot;
 
     // whether to skip writing rowset metadata to meta service.
     // This is used for empty rowset when config::skip_writing_empty_rowset_metadata is true.

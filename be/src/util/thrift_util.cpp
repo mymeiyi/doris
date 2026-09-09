@@ -179,6 +179,23 @@ bool _has_inverted_index_v1_or_partial_update(TOlapTableSink sink) {
     return false;
 }
 
+bool supports_cloud_memtable_on_sink(const TOlapTableSink& sink, bool direct_upload) {
+    if (!sink.__isset.keys_type) {
+        return false; // Older FEs do not identify the table model.
+    }
+    switch (sink.keys_type) {
+    case TKeysType::DUP_KEYS:
+    case TKeysType::AGG_KEYS:
+        return true;
+    case TKeysType::UNIQUE_KEYS:
+        // Do not enable MOW accidentally when an older FE omits its mode.
+        return sink.__isset.enable_unique_key_merge_on_write &&
+               (!sink.enable_unique_key_merge_on_write || direct_upload);
+    default:
+        return false;
+    }
+}
+
 bool _has_row_binlog(const TOlapTableSink& sink) {
     OlapTableSchemaParam schema;
     if (!schema.init(sink.schema).ok()) {

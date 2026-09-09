@@ -144,7 +144,8 @@ public:
     Status open(BrpcClientCache<PBackendService_Stub>* client_cache, const NodeInfo& node_info,
                 int64_t txn_id, const OlapTableSchemaParam& schema,
                 const std::vector<PTabletID>& tablets_for_schema, int total_streams,
-                int64_t idle_timeout_ms, bool enable_profile);
+                int64_t idle_timeout_ms, bool enable_profile, int64_t txn_expiration,
+                const std::string& storage_vault_id, bool write_file_cache);
 
 // for mock this class in UT
 #ifdef BE_TEST
@@ -175,6 +176,12 @@ public:
 
     // cancel the stream, abort close_wait, mark _is_closed and _is_cancelled
     void cancel(Status reason);
+
+    Status get_write_context(int64_t partition_id, int64_t index_id, int64_t tablet_id,
+                             const std::string& writer_id, PCloudLoadWriteContext* context);
+    Status add_rowset(int64_t partition_id, int64_t index_id, int64_t tablet_id,
+                      const std::string& writer_id, const RowsetMetaPB& meta,
+                      const PCloudLoadMowResult* mow_result = nullptr);
 
     Status wait_for_schema(int64_t partition_id, int64_t index_id, int64_t tablet_id,
                            int64_t timeout_ms = 60000);
@@ -293,6 +300,11 @@ protected:
     std::mutex _send_mutex;
     butil::IOBuf _buffer;
 
+    bool _supports_direct_upload = false;
+    bthread::Mutex _write_context_mutex;
+    bthread::ConditionVariable _write_context_cv;
+    std::unordered_map<std::string, PLoadStreamResponse> _write_context_responses;
+
     bthread::Mutex _schema_mutex;
     bthread::ConditionVariable _schema_cv;
     std::shared_ptr<IndexToTabletSchema> _tablet_schema_for_index;
@@ -331,7 +343,8 @@ public:
     Status open(BrpcClientCache<PBackendService_Stub>* client_cache, const NodeInfo& node_info,
                 int64_t txn_id, const OlapTableSchemaParam& schema,
                 const std::vector<PTabletID>& tablets_for_schema, int total_streams,
-                int64_t idle_timeout_ms, bool enable_profile);
+                int64_t idle_timeout_ms, bool enable_profile, int64_t txn_expiration,
+                const std::string& storage_vault_id, bool write_file_cache);
 
     bool is_incremental() const { return _is_incremental; }
 

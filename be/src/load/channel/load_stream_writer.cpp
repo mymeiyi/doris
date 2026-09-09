@@ -22,6 +22,7 @@
 #include <fmt/format.h>
 #include <gen_cpp/internal_service.pb.h>
 #include <gen_cpp/olap_file.pb.h>
+#include <google/protobuf/util/message_differencer.h>
 
 #include <filesystem>
 #include <ostream>
@@ -29,12 +30,14 @@
 #include <utility>
 
 #include "bvar/bvar.h"
-#include "cloud/config.h"
+#include "cloud/cloud_rowset_builder.h"
+#include "cloud/cloud_warm_up_manager.h"
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/config.h"
 #include "common/logging.h"
 #include "common/status.h"
 #include "core/block/block.h"
+#include "exec/common/variant_util.h"
 #include "io/fs/file_writer.h" // IWYU pragma: keep
 #include "load/channel/load_channel_mgr.h"
 #include "load/memtable/memtable.h"
@@ -75,9 +78,8 @@ bvar::Adder<int64_t> g_load_stream_file_writer_cnt("load_stream_file_writer_coun
 LoadStreamWriter::LoadStreamWriter(WriteRequest* context, RuntimeProfile* profile)
         : _req(*context), _rowset_writer(nullptr) {
     g_load_stream_writer_cnt << 1;
-    // TODO(plat1ko): CloudStorageEngine
-    _rowset_builder = std::make_unique<RowsetBuilder>(
-            ExecEnv::GetInstance()->storage_engine().to_local(), *context, profile);
+    _rowset_builder =
+            ExecEnv::GetInstance()->storage_engine().create_rowset_builder(*context, profile);
     _resource_ctx = thread_context()->resource_ctx(); // from load stream
 }
 
@@ -96,9 +98,219 @@ Status LoadStreamWriter::init() {
     return Status::OK();
 }
 
+namespace {
+Status validate_direct_rowset(const RowsetMetaPB& base, const RowsetMetaPB& meta, int32_t start,
+                              int32_t capacity) {
+    const auto count = meta.num_segments();
+    if (meta.rowset_id_v2() != base.rowset_id_v2() || meta.tablet_id() != base.tablet_id() ||
+        meta.txn_id() != base.txn_id() || meta.resource_id() != base.resource_id() ||
+        meta.index_id() != base.index_id() || meta.partition_id() != base.partition_id() ||
+        meta.tablet_schema_hash() != base.tablet_schema_hash() ||
+        meta.table_id() != base.table_id() || meta.db_id() != base.db_id() ||
+        UniqueId(meta.load_id()) != UniqueId(base.load_id())) {
+        return Status::InvalidArgument("direct upload rowset identity mismatch for tablet {}",
+                                       base.tablet_id());
+    }
+    if (!meta.has_tablet_schema() || count < 0 || count > capacity ||
+        meta.segment_ids_size() != count || meta.num_segment_rows_size() != count ||
+        meta.segments_key_bounds_size() != count || meta.segments_file_size_size() != count ||
+        meta.segments_key_bounds_aggregated() ||
+        (meta.inverted_index_file_info_size() != 0 &&
+         meta.inverted_index_file_info_size() != count)) {
+        return Status::InvalidArgument("misaligned direct upload metadata for tablet {}",
+                                       base.tablet_id());
+    }
+    int64_t partial_rows = 0;
+    for (int pos = 0; pos < count; ++pos) {
+        const int64_t id = meta.segment_ids(pos);
+        if (id < start || id >= static_cast<int64_t>(start) + capacity ||
+            (pos > 0 && id <= meta.segment_ids(pos - 1)) || meta.num_segment_rows(pos) < 0 ||
+            meta.segments_file_size(pos) <= 0) {
+            return Status::InvalidArgument("invalid direct upload segment {} for tablet {}", id,
+                                           base.tablet_id());
+        }
+        partial_rows += meta.num_segment_rows(pos);
+    }
+    if (partial_rows != meta.num_rows() || meta.data_disk_size() < 0 ||
+        meta.index_disk_size() < 0 ||
+        meta.total_disk_size() != meta.data_disk_size() + meta.index_disk_size()) {
+        return Status::InvalidArgument("invalid direct upload statistics for tablet {}",
+                                       base.tablet_id());
+    }
+    return Status::OK();
+}
+} // namespace
+
+Status LoadStreamWriter::get_write_context(const std::string& writer_id,
+                                           PCloudLoadWriteContext* context) {
+    // Control messages run synchronously in LoadStream::_dispatch, which attaches the load.
+    std::lock_guard lock(_lock);
+    const auto& ctx = _rowset_writer->context();
+    if (!config::is_cloud_mode() || ctx.partial_update_info->is_partial_update() ||
+        ctx.write_binlog_opt().enable ||
+        (ctx.tablet_schema->has_inverted_index() &&
+         ctx.tablet_schema->get_inverted_index_storage_format() ==
+                 InvertedIndexStorageFormatPB::V1)) {
+        return Status::NotSupported("direct upload requires cloud full-row load with V2 indexes");
+    }
+    if (_pre_closed || writer_id.empty()) {
+        return Status::InvalidArgument("invalid direct writer registration for tablet {}",
+                                       _req.tablet_id);
+    }
+    if (!_direct_upload.exchange(true)) {
+        _segment_capacity = config::max_segment_num_per_rowset;
+        DORIS_CHECK_GT(_segment_capacity, 0);
+    }
+    auto it = _writer_ranges.find(writer_id);
+    if (it == _writer_ranges.end()) {
+        const int64_t start = static_cast<int64_t>(_writer_ranges.size()) * _segment_capacity;
+        if (start + _segment_capacity > INT32_MAX) {
+            return Status::InvalidArgument("direct upload segment range overflow for tablet {}",
+                                           _req.tablet_id);
+        }
+        it = _writer_ranges.emplace(writer_id, static_cast<int32_t>(start)).first;
+    }
+    if (ctx.tablet->enable_unique_key_merge_on_write()) {
+        RETURN_IF_ERROR(static_cast<CloudRowsetBuilder*>(_rowset_builder.get())
+                                ->get_direct_mow_snapshot(context->mutable_mow_snapshot()));
+    }
+    context->set_writer_id(writer_id);
+    *context->mutable_rowset_meta() = _rowset_writer->rowset_meta()->get_rowset_pb();
+    context->mutable_rowset_meta()->set_newest_write_timestamp(ctx.newest_write_timestamp);
+    context->set_segment_start_id(it->second);
+    context->set_segment_capacity(_segment_capacity);
+    context->set_encrypt_algorithm(ctx.encrypt_algorithm.value());
+    context->set_file_cache_ttl_sec(ctx.file_cache_ttl_sec);
+    context->set_write_file_cache(ctx.write_file_cache);
+    context->set_warm_up_file_cache(config::enable_file_cache && ctx.write_file_cache);
+    return Status::OK();
+}
+
+Status LoadStreamWriter::add_rowset(const std::string& writer_id, const RowsetMetaPB& meta,
+                                    int64_t* added_segments,
+                                    const PCloudLoadMowResult* mow_result) {
+    // Control messages run synchronously in LoadStream::_dispatch, which attaches the load.
+    std::lock_guard lock(_lock);
+    *added_segments = 0;
+    auto it = _writer_ranges.find(writer_id);
+    if (it == _writer_ranges.end() || _pre_closed) {
+        return Status::InvalidArgument("unknown or closed direct writer {} for tablet {}",
+                                       writer_id, _req.tablet_id);
+    }
+    const bool is_mow = _rowset_builder->tablet()->enable_unique_key_merge_on_write();
+    if (is_mow != (mow_result != nullptr)) {
+        return Status::InvalidArgument("direct upload MOW result does not match tablet {}",
+                                       _req.tablet_id);
+    }
+    auto previous = _partial_rowsets.find(it->second);
+    if (previous != _partial_rowsets.end()) {
+        if (!google::protobuf::util::MessageDifferencer::Equals(previous->second, meta)) {
+            return Status::InvalidArgument("conflicting direct writer result {}", writer_id);
+        }
+        if (is_mow && !google::protobuf::util::MessageDifferencer::Equals(
+                              _mow_results.at(it->second), *mow_result)) {
+            return Status::InvalidArgument("conflicting direct MOW result {}", writer_id);
+        }
+        return Status::OK();
+    }
+    RETURN_IF_ERROR(validate_direct_rowset(_rowset_writer->rowset_meta()->get_rowset_pb(), meta,
+                                           it->second, _segment_capacity));
+    // Packed mappings name logical files in this rowset, never an uploader's absolute S3 URI.
+    std::unordered_set<std::string> paths;
+    for (auto id : meta.segment_ids()) {
+        auto path = _rowset_writer->context().segment_path(cast_set<int32_t>(id));
+        paths.insert(path);
+        auto prefix = InvertedIndexDescriptor::get_index_file_path_prefix(path);
+        paths.insert(InvertedIndexDescriptor::get_index_file_path_v2(std::string(prefix)));
+    }
+    for (const auto& [path, location] : meta.packed_slice_locations()) {
+        if (!paths.contains(path) || location.offset() < 0 || location.size() < 0 ||
+            location.packed_file_path().empty()) {
+            return Status::InvalidArgument("invalid direct upload packed slice {}", path);
+        }
+    }
+    if (is_mow) {
+        RETURN_IF_ERROR(static_cast<CloudRowsetBuilder*>(_rowset_builder.get())
+                                ->merge_direct_mow_bitmap(*mow_result));
+        _mow_results.emplace(it->second, *mow_result);
+    }
+    _partial_rowsets.emplace(it->second, meta);
+    *added_segments = meta.num_segments();
+    return Status::OK();
+}
+
+Status LoadStreamWriter::assemble_direct_rowset(const RowsetMetaPB& base,
+                                                const std::map<int32_t, RowsetMetaPB>& partials,
+                                                int32_t capacity, RowsetMetaPB* result) {
+    *result = base;
+    int64_t rows = 0;
+    int64_t data_size = 0;
+    int64_t index_size = 0;
+    std::vector<TabletSchemaSPtr> schemas;
+    for (const auto& [start, meta] : partials) {
+        RETURN_IF_ERROR(validate_direct_rowset(base, meta, start, capacity));
+        const auto count = meta.num_segments();
+        if (count > 0 && result->segment_ids_size() > 0 &&
+            meta.segment_ids(0) <= result->segment_ids(result->segment_ids_size() - 1)) {
+            return Status::InvalidArgument("overlapping direct upload segment ranges");
+        }
+        result->mutable_segment_ids()->MergeFrom(meta.segment_ids());
+        result->mutable_num_segment_rows()->MergeFrom(meta.num_segment_rows());
+        result->mutable_segments_file_size()->MergeFrom(meta.segments_file_size());
+        result->mutable_segments_key_bounds()->MergeFrom(meta.segments_key_bounds());
+        result->mutable_inverted_index_file_info()->MergeFrom(meta.inverted_index_file_info());
+        for (const auto& [path, location] : meta.packed_slice_locations()) {
+            if (location.packed_file_path().empty() ||
+                !result->mutable_packed_slice_locations()->emplace(path, location).second) {
+                return Status::InvalidArgument("invalid or duplicate packed slice {}", path);
+            }
+        }
+        rows += meta.num_rows();
+        data_size += meta.data_disk_size();
+        index_size += meta.index_disk_size();
+        result->set_segments_key_bounds_truncated(result->segments_key_bounds_truncated() ||
+                                                  meta.segments_key_bounds_truncated());
+        auto schema = std::make_shared<TabletSchema>();
+        schema->init_from_pb(meta.tablet_schema());
+        if (schema->has_inverted_or_ann_index() && meta.inverted_index_file_info_size() != count) {
+            return Status::InvalidArgument("missing direct upload index metadata for tablet {}",
+                                           base.tablet_id());
+        }
+        schemas.push_back(std::move(schema));
+    }
+    if (result->segment_ids_size() > capacity) {
+        return Status::InvalidArgument("too many direct upload segments for tablet {}",
+                                       base.tablet_id());
+    }
+    auto schema = std::make_shared<TabletSchema>();
+    schema->init_from_pb(base.tablet_schema());
+    if (schema->num_variant_columns() > 0 && !schemas.empty()) {
+        TabletSchemaSPtr merged_schema;
+        schemas.push_back(schema);
+        RETURN_IF_ERROR(variant_util::get_least_common_schema(schemas, nullptr, merged_schema));
+        merged_schema->to_schema_pb(result->mutable_tablet_schema());
+    }
+    result->set_num_segments(result->segment_ids_size());
+    result->set_num_rows(rows);
+    result->set_data_disk_size(data_size);
+    result->set_index_disk_size(index_size);
+    result->set_total_disk_size(data_size + index_size);
+    result->set_empty(rows == 0);
+    result->set_segments_overlap_pb(OVERLAPPING);
+    result->set_enable_segments_file_size(true);
+    result->set_enable_inverted_index_file_info(true);
+    result->set_creation_time(UnixSeconds());
+    result->set_newest_write_timestamp(UnixSeconds());
+    result->set_rowset_state(COMMITTED);
+    return Status::OK();
+}
+
 Status LoadStreamWriter::append_data(uint32_t segid, uint64_t offset, butil::IOBuf buf,
                                      FileType file_type) {
     SCOPED_ATTACH_TASK(_resource_ctx);
+    DBUG_EXECUTE_IF("LoadStreamWriter.append_data.unexpected_transfer", {
+        return Status::InternalError("unexpected segment transfer in direct-upload load");
+    });
     io::FileWriter* file_writer = nullptr;
     auto& file_writers =
             file_type == FileType::SEGMENT_FILE ? _segment_file_writers : _inverted_file_writers;
@@ -178,7 +390,14 @@ Status LoadStreamWriter::close_writer(uint32_t segid, FileType file_type) {
         return Status::Corruption("file {} closed with 0 bytes, file type is {}",
                                   file_writer->path().native(), file_type);
     }
-    return Status::OK();
+    // Streamed writers are owned here, outside the RowsetWriter's file collections.
+    // Use the logical path used at creation, not file_writer->path(), which may be an S3 URI.
+    auto file_path = _rowset_writer->context().segment_path(segid);
+    if (file_type == FileType::INVERTED_INDEX_FILE) {
+        auto prefix = InvertedIndexDescriptor::get_index_file_path_prefix(file_path);
+        file_path = InvertedIndexDescriptor::get_index_file_path_v2(std::string(prefix));
+    }
+    return _rowset_writer->rowset_meta()->collect_packed_slice_location(*file_writer, file_path);
 }
 
 Status LoadStreamWriter::add_segment(uint32_t segid, const SegmentStatistics& stat) {
@@ -305,7 +524,19 @@ Status LoadStreamWriter::_pre_close() {
         }
     }
 
-    RETURN_IF_ERROR(_rowset_builder->build_rowset());
+    if (_direct_upload.load()) {
+        if (_writer_ranges.size() != _partial_rowsets.size()) {
+            return Status::Corruption("missing direct writer results for tablet {}",
+                                      _req.tablet_id);
+        }
+        RowsetMetaPB meta;
+        RETURN_IF_ERROR(assemble_direct_rowset(_rowset_writer->rowset_meta()->get_rowset_pb(),
+                                               _partial_rowsets, _segment_capacity, &meta));
+        RETURN_IF_ERROR(static_cast<CloudRowsetBuilder*>(_rowset_builder.get())
+                                ->build_rowset_from_meta(meta));
+    } else {
+        RETURN_IF_ERROR(_rowset_builder->build_rowset());
+    }
     RETURN_IF_ERROR(_rowset_builder->submit_calc_delete_bitmap_task());
     _pre_closed = true;
     return Status::OK();
@@ -317,9 +548,13 @@ Status LoadStreamWriter::close() {
         RETURN_IF_ERROR(_pre_close());
     }
     RETURN_IF_ERROR(_rowset_builder->wait_calc_delete_bitmap());
-    // FIXME(plat1ko): No `commit_txn` operation in cloud mode, need better abstractions
-    RETURN_IF_ERROR(static_cast<RowsetBuilder*>(_rowset_builder.get())->commit_txn());
-
+    RETURN_IF_ERROR(_rowset_builder->commit_txn());
+    if (_direct_upload.load() && config::enable_file_cache && _req.write_file_cache) {
+        auto& builder = static_cast<CloudRowsetBuilder&>(*_rowset_builder);
+        ExecEnv::GetInstance()->storage_engine().to_cloud().cloud_warm_up_manager().warm_up_rowset(
+                *builder.rowset_meta(), _rowset_builder->tablet_sptr()->table_id(),
+                /*sync_wait_timeout_ms=*/-1, /*warm_up_local=*/true);
+    }
     return Status::OK();
 }
 

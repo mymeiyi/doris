@@ -345,8 +345,8 @@ void FileCacheBlockDownloader::download_segment_file(const DownloadFileMeta& met
     for (size_t i = 0; i < task_num; i++) {
         size_t offset = meta.offset + task_offset;
 
-        size_t size = std::min(one_single_task_size,
-                               static_cast<size_t>(meta.download_size - task_offset));
+        size_t size =
+                std::min(one_single_task_size, static_cast<size_t>(download_size - task_offset));
         size_t bytes_read;
         VLOG_DEBUG << "download_segment_file, path=" << meta.path << ", read_at offset=" << offset
                    << ", size=" << size;
@@ -355,7 +355,7 @@ void FileCacheBlockDownloader::download_segment_file(const DownloadFileMeta& met
         //  2. Provide `FileReader::async_read()` interface
         DCHECK(meta.ctx.is_dryrun == config::enable_reader_dryrun_when_download_file_cache);
         TEST_SYNC_POINT_CALLBACK("FileCacheBlockDownloader::download_segment_file:before_read",
-                                 &download_ctx);
+                                 &download_ctx, &offset, &size);
         st = file_reader->read_at(offset, {buffer.get(), size}, &bytes_read, &download_ctx);
         if (!st.ok()) {
             LOG(WARNING) << "failed to download file path=" << meta.path << ", st=" << st;

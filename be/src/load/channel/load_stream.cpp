@@ -57,11 +57,16 @@ bvar::LatencyRecorder g_load_stream_flush_wait_ms("load_stream_flush_wait_ms");
 bvar::Adder<int> g_load_stream_flush_running_threads("load_stream_flush_wait_threads");
 
 TabletStream::TabletStream(const PUniqueId& load_id, int64_t id, int64_t txn_id,
-                           LoadStreamMgr* load_stream_mgr, RuntimeProfile* profile)
+                           LoadStreamMgr* load_stream_mgr, RuntimeProfile* profile,
+                           int64_t txn_expiration, std::string storage_vault_id,
+                           bool write_file_cache)
         : _id(id),
           _next_segid(0),
           _load_id(load_id),
           _txn_id(txn_id),
+          _txn_expiration(txn_expiration),
+          _storage_vault_id(std::move(storage_vault_id)),
+          _write_file_cache(write_file_cache),
           _load_stream_mgr(load_stream_mgr) {
     load_stream_mgr->create_token(_flush_token);
     _profile = profile->create_child(fmt::format("TabletStream {}", id), true, true);
@@ -81,12 +86,14 @@ Status TabletStream::init(std::shared_ptr<OlapTableSchemaParam> schema, int64_t 
     WriteRequest req {
             .tablet_id = _id,
             .txn_id = _txn_id,
+            .txn_expiration = _txn_expiration,
             .index_id = index_id,
             .partition_id = partition_id,
             .load_id = _load_id,
             .table_schema_param = schema,
-            // TODO(plat1ko): write_file_cache
-            .storage_vault_id {},
+            .write_file_cache = _write_file_cache,
+            .memtable_on_sink = true,
+            .storage_vault_id = _storage_vault_id,
     };
 
     _load_stream_writer = std::make_shared<LoadStreamWriter>(&req, _profile);
@@ -101,9 +108,32 @@ Status TabletStream::init(std::shared_ptr<OlapTableSchemaParam> schema, int64_t 
     return _status.status();
 }
 
-Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data) {
+Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data,
+                                 PCloudLoadWriteContext* context) {
     if (!_status.ok()) {
         return _status.status();
+    }
+
+    if (header.opcode() == PStreamHeader::GET_WRITE_CONTEXT) {
+        std::lock_guard lock(_lock);
+        if (!_segids_mapping.empty()) {
+            _status.update(
+                    Status::InvalidArgument("cannot switch streamed tablet to direct upload"));
+            return _status.status();
+        }
+        auto st = _load_stream_writer->get_write_context(header.writer_id(), context);
+        _status.update(st);
+        return st;
+    }
+    if (header.opcode() == PStreamHeader::ADD_ROWSET) {
+        std::lock_guard lock(_lock);
+        int64_t added_segments = 0;
+        auto st = _load_stream_writer->add_rowset(
+                header.writer_id(), header.partial_rowset_meta(), &added_segments,
+                header.has_mow_result() ? &header.mow_result() : nullptr);
+        _next_segid += cast_set<uint32_t>(added_segments);
+        _status.update(st);
+        return st;
     }
 
     // dispatch add_segment request
@@ -119,6 +149,11 @@ Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data
     SegIdMapping* mapping = nullptr;
     {
         std::lock_guard lock_guard(_lock);
+        if (_load_stream_writer->is_direct_upload()) {
+            _status.update(
+                    Status::InvalidArgument("cannot stream files into a direct-upload rowset"));
+            return _status.status();
+        }
         if (!_segids_mapping.contains(src_id)) {
             _segids_mapping[src_id] = std::make_unique<SegIdMapping>();
         }
@@ -346,10 +381,15 @@ Status TabletStream::close() {
 
 IndexStream::IndexStream(const PUniqueId& load_id, int64_t id, int64_t txn_id,
                          std::shared_ptr<OlapTableSchemaParam> schema,
-                         LoadStreamMgr* load_stream_mgr, RuntimeProfile* profile)
+                         LoadStreamMgr* load_stream_mgr, RuntimeProfile* profile,
+                         int64_t txn_expiration, std::string storage_vault_id,
+                         bool write_file_cache)
         : _id(id),
           _load_id(load_id),
           _txn_id(txn_id),
+          _txn_expiration(txn_expiration),
+          _storage_vault_id(std::move(storage_vault_id)),
+          _write_file_cache(write_file_cache),
           _schema(schema),
           _load_stream_mgr(load_stream_mgr) {
     _profile = profile->create_child(fmt::format("IndexStream {}", id), true, true);
@@ -367,7 +407,8 @@ IndexStream::~IndexStream() {
     }
 }
 
-Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data) {
+Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data,
+                                PCloudLoadWriteContext* context) {
     SCOPED_TIMER(_append_data_timer);
     int64_t tablet_id = header.tablet_id();
     TabletStreamSharedPtr tablet_stream;
@@ -381,13 +422,14 @@ Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data)
         }
     }
 
-    return tablet_stream->append_data(header, data);
+    return tablet_stream->append_data(header, data, context);
 }
 
 void IndexStream::_init_tablet_stream(TabletStreamSharedPtr& tablet_stream, int64_t tablet_id,
                                       int64_t partition_id) {
-    tablet_stream = std::make_shared<TabletStream>(_load_id, tablet_id, _txn_id, _load_stream_mgr,
-                                                   _profile);
+    tablet_stream =
+            std::make_shared<TabletStream>(_load_id, tablet_id, _txn_id, _load_stream_mgr, _profile,
+                                           _txn_expiration, _storage_vault_id, _write_file_cache);
     _tablet_streams_map[tablet_id] = tablet_stream;
     auto st = tablet_stream->init(_schema, _id, partition_id);
     if (!st.ok()) {
@@ -489,7 +531,9 @@ Status LoadStream::init(const POpenLoadStreamRequest* request) {
     RETURN_IF_ERROR(_schema->init(request->schema()));
     for (auto& index : request->schema().indexes()) {
         _index_streams_map[index.id()] = std::make_shared<IndexStream>(
-                _load_id, index.id(), _txn_id, _schema, _load_stream_mgr, _profile.get());
+                _load_id, index.id(), _txn_id, _schema, _load_stream_mgr, _profile.get(),
+                request->txn_expiration(), request->storage_vault_id(),
+                request->write_file_cache());
     }
     LOG(INFO) << "succeed to init load stream " << *this;
     return Status::OK();
@@ -693,7 +737,8 @@ void LoadStream::_parse_header(butil::IOBuf* const message, PStreamHeader& hdr) 
     VLOG_DEBUG << "header parse result: " << hdr.DebugString();
 }
 
-Status LoadStream::_append_data(const PStreamHeader& header, butil::IOBuf* data) {
+Status LoadStream::_append_data(const PStreamHeader& header, butil::IOBuf* data,
+                                PCloudLoadWriteContext* context) {
     SCOPED_TIMER(_append_data_timer);
     IndexStreamSharedPtr index_stream;
 
@@ -707,7 +752,7 @@ Status LoadStream::_append_data(const PStreamHeader& header, butil::IOBuf* data)
         index_stream = it->second;
     }
 
-    return index_stream->append_data(header, data);
+    return index_stream->append_data(header, data, context);
 }
 
 int LoadStream::on_received_messages(StreamId id, butil::IOBuf* const messages[], size_t size) {
@@ -772,6 +817,7 @@ void LoadStream::_dispatch(StreamId id, const PStreamHeader& hdr, butil::IOBuf* 
     }
 
     switch (hdr.opcode()) {
+    case PStreamHeader::ADD_ROWSET:
     case PStreamHeader::ADD_SEGMENT: {
         auto st = _append_data(hdr, data);
         if (!st.ok()) {
@@ -821,6 +867,19 @@ void LoadStream::_dispatch(StreamId id, const PStreamHeader& hdr, butil::IOBuf* 
         auto streams_to_close = mark_eos_sent_and_collect(id, is_incremental);
         for (auto& closing_id : streams_to_close) {
             brpc::StreamClose(closing_id);
+        }
+    } break;
+    case PStreamHeader::GET_WRITE_CONTEXT: {
+        PLoadStreamResponse response;
+        auto* context = response.mutable_write_context();
+        context->set_writer_id(hdr.writer_id());
+        auto st = _append_data(hdr, data, context);
+        st.to_protobuf(response.mutable_status());
+        butil::IOBuf buf;
+        buf.append(response.SerializeAsString());
+        auto write_status = _write_stream(id, buf);
+        if (!write_status.ok()) {
+            LOG(WARNING) << "failed to return cloud write context: " << write_status;
         }
     } break;
     case PStreamHeader::GET_SCHEMA: {

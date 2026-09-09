@@ -1168,6 +1168,9 @@ message POpenLoadStreamRequest {
     optional bool enable_profile = 6 [default = false];
     optional int64 total_streams = 7;
     optional int64 idle_timeout_ms = 8;
+    optional int64 txn_expiration = 9;
+    optional string storage_vault_id = 10;
+    optional bool write_file_cache = 11;
 }
 
 message PTabletSchemaWithIndex {
@@ -1176,8 +1179,35 @@ message PTabletSchemaWithIndex {
     optional bool enable_unique_key_merge_on_write = 3;
 }
 
+// All writers of one MOW load compare against the same rowsets and deletion state.
+message PCloudLoadMowSnapshot {
+    optional int64 version = 1;
+    repeated RowsetMetaPB rowsets = 2;
+    optional DeleteBitmapPB delete_bitmap = 3;
+}
+
+message PCloudLoadMowResult {
+    optional int64 snapshot_version = 1;
+    optional DeleteBitmapPB delete_bitmap = 2;
+}
+
+// A writer owns one stable segment range for the lifetime of a load attempt.
+message PCloudLoadWriteContext {
+    optional string writer_id = 1;
+    optional RowsetMetaPB rowset_meta = 2;
+    optional int32 segment_start_id = 3;
+    optional int32 segment_capacity = 4;
+    optional EncryptionAlgorithmPB encrypt_algorithm = 5;
+    optional int64 file_cache_ttl_sec = 6;
+    optional bool write_file_cache = 7;
+    optional PCloudLoadMowSnapshot mow_snapshot = 8;
+    // The target can asynchronously cache completed direct-upload rowsets.
+    optional bool warm_up_file_cache = 9 [default = false];
+}
+
 message POpenLoadStreamResponse {
     optional PStatus status = 1;
+    optional bool supports_direct_upload = 4 [default = false];
     repeated PTabletSchemaWithIndex tablet_schemas = 2;
     repeated PTabletLoadRowsetInfo tablet_load_rowset_num_infos = 3;
 }
@@ -1189,6 +1219,7 @@ message PFailedTablet {
 
 message PLoadStreamResponse {
     optional PStatus status = 1;
+    optional PCloudLoadWriteContext write_context = 8;
     repeated int64 success_tablet_ids = 2;
     repeated PFailedTablet failed_tablets = 3;
     optional bytes load_stream_profile = 4;
@@ -1203,6 +1234,8 @@ message PStreamHeader {
         CLOSE_LOAD = 2;
         ADD_SEGMENT = 3;
         GET_SCHEMA = 4;
+        GET_WRITE_CONTEXT = 5;
+        ADD_ROWSET = 6;
     }
     optional PUniqueId load_id = 1;
     optional int64 partition_id = 2;
@@ -1218,6 +1251,9 @@ message PStreamHeader {
     optional uint64 offset = 12;
     optional FileType file_type = 13;
     optional int64 num_incremental_streams = 14;
+    optional string writer_id = 15;
+    optional RowsetMetaPB partial_rowset_meta = 16;
+    optional PCloudLoadMowResult mow_result = 17;
 }
 
 message PGetWalQueueSizeRequest{

@@ -17,9 +17,12 @@
 
 #include "cloud/cloud_rowset_builder.h"
 
+#include <gen_cpp/internal_service.pb.h>
+
 #include <algorithm>
 
 #include "cloud/cloud_meta_mgr.h"
+#include "cloud/cloud_rowset_writer.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/cloud_tablet_mgr.h"
@@ -247,6 +250,99 @@ bool CloudRowsetBuilder::is_s3_storage() const {
 
 Status CloudRowsetBuilder::commit_rowset(const std::string& job_id, int64_t table_id) {
     return _engine.meta_mgr().commit_rowset(*rowset_meta(), job_id, table_id);
+}
+
+Status CloudRowsetBuilder::get_direct_mow_snapshot(PCloudLoadMowSnapshot* snapshot) {
+    DORIS_CHECK(_tablet->enable_unique_key_merge_on_write());
+    if (_direct_mow_snapshot == nullptr) {
+        RETURN_IF_ERROR(cloud_tablet()->sync_rowsets());
+        auto context = _rowset_writer->context().mow_context;
+        DORIS_CHECK(context != nullptr);
+        DeleteBitmap snapshot_bitmap(_tablet->tablet_id());
+        {
+            std::unique_lock sync_lock(cloud_tablet()->get_sync_meta_lock());
+            std::shared_lock lock(_tablet->get_header_lock());
+            if (_tablet->tablet_state() != TABLET_RUNNING) {
+                return Status::NotSupported("direct MOW load requires a running tablet {}",
+                                            _tablet->tablet_id());
+            }
+            _max_version_in_flush_phase = _tablet->max_version_unlocked();
+            _rowset_ids->clear();
+            RETURN_IF_ERROR(_tablet->get_all_rs_id_unlocked(_max_version_in_flush_phase,
+                                                            _rowset_ids.get()));
+            context->max_version = _max_version_in_flush_phase;
+            context->rowset_ptrs = _tablet->get_rowset_by_ids(_rowset_ids.get());
+            std::vector<DeleteBitmap::RowsetIdWithSegmentIds> rowset_segments;
+            for (const auto& rowset : context->rowset_ptrs) {
+                std::vector<DeleteBitmap::SegmentId> ids;
+                for (auto segment : rowset->segments()) {
+                    ids.push_back(cast_set<DeleteBitmap::SegmentId>(segment.id()));
+                }
+                rowset_segments.emplace_back(rowset->rowset_id(), std::move(ids));
+            }
+            _tablet->tablet_meta()->delete_bitmap().subset_and_agg(
+                    rowset_segments, 0, _max_version_in_flush_phase, &snapshot_bitmap);
+        }
+        _direct_mow_snapshot = std::make_unique<PCloudLoadMowSnapshot>();
+        _direct_mow_snapshot->set_version(_max_version_in_flush_phase);
+        // Keep the rowset references in MowContext until the load has finished.
+        for (const auto& rowset : context->rowset_ptrs) {
+            auto* meta = _direct_mow_snapshot->add_rowsets();
+            *meta = rowset->rowset_meta()->get_rowset_pb();
+            meta->clear_tablet_schema();
+            rowset->tablet_schema()->to_schema_pb(meta->mutable_tablet_schema());
+        }
+        *_direct_mow_snapshot->mutable_delete_bitmap() = snapshot_bitmap.to_pb();
+    }
+    *snapshot = *_direct_mow_snapshot;
+    DBUG_EXECUTE_IF("CloudRowsetBuilder.direct_mow.snapshot_ready", DBUG_BLOCK);
+    return Status::OK();
+}
+
+Status CloudRowsetBuilder::validate_direct_mow_result(const PCloudLoadMowResult& result,
+                                                      int64_t snapshot_version) {
+    if (!result.has_snapshot_version() || result.snapshot_version() != snapshot_version ||
+        !result.has_delete_bitmap()) {
+        return Status::InvalidArgument("missing or mismatched direct MOW snapshot result");
+    }
+    const auto& bitmap = result.delete_bitmap();
+    const auto count = bitmap.rowset_ids_size();
+    if (bitmap.segment_ids_size() != count || bitmap.versions_size() != count ||
+        bitmap.segment_delete_bitmaps_size() != count) {
+        return Status::InvalidArgument("misaligned direct MOW delete bitmap");
+    }
+    for (int pos = 0; pos < count; ++pos) {
+        if (bitmap.versions(pos) != DeleteBitmap::TEMP_VERSION_COMMON) {
+            return Status::InvalidArgument("direct MOW bitmap must use the temporary version");
+        }
+        const auto& bytes = bitmap.segment_delete_bitmaps(pos);
+        const auto size =
+                roaring::api::roaring_bitmap_portable_deserialize_size(bytes.data(), bytes.size());
+        if (size == 0 || size != bytes.size()) {
+            return Status::Corruption("invalid serialized direct MOW bitmap");
+        }
+    }
+    return Status::OK();
+}
+
+Status CloudRowsetBuilder::merge_direct_mow_bitmap(const PCloudLoadMowResult& result) {
+    DORIS_CHECK(_direct_mow_snapshot != nullptr);
+    RETURN_IF_ERROR(validate_direct_mow_result(result, _direct_mow_snapshot->version()));
+    _delete_bitmap->merge(DeleteBitmap::from_pb(result.delete_bitmap(), _tablet->tablet_id()));
+    return Status::OK();
+}
+
+Status CloudRowsetBuilder::build_rowset_from_meta(const RowsetMetaPB& meta) {
+    return static_cast<CloudRowsetWriter*>(_rowset_writer.get())->build_from_meta(meta, _rowset);
+}
+
+Status CloudRowsetBuilder::commit_txn() {
+    DCHECK(is_data_builder());
+    RETURN_IF_ERROR(commit_rowset("", _tablet->table_id()));
+    RETURN_IF_ERROR(set_txn_related_info());
+    update_tablet_stats();
+    _is_committed = true;
+    return Status::OK();
 }
 
 Status CloudRowsetBuilder::set_txn_related_info() {

@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "exec/sink/load_stream_map_pool.h"
 #include "exec/sink/load_stream_stub.h"
 #include "exec/sink/sink_test_utils.h"
+#include "exec/sink/writer/vtablet_writer.h"
 #include "io/fs/local_file_system.h"
 #include "load/memtable/memtable_memory_limiter.h"
 #include "runtime/exec_env.h"
@@ -52,6 +54,47 @@ public:
 };
 
 const int64_t src_id = 1000;
+
+TEST_F(TestVTabletWriterV2, back_pressure_percentage_preserves_fraction) {
+    const auto saved_threshold = config::load_back_pressure_version_threshold;
+    const auto saved_max_wait = config::max_load_back_pressure_version_wait_time_ms;
+    Defer restore_config([&] {
+        config::load_back_pressure_version_threshold = saved_threshold;
+        config::max_load_back_pressure_version_wait_time_ms = saved_max_wait;
+    });
+    config::load_back_pressure_version_threshold = 80;
+    config::max_load_back_pressure_version_wait_time_ms = 3000;
+
+    VTabletWriter writer(TDataSink {}, {}, nullptr, nullptr);
+    IndexChannel index(&writer, 1, nullptr);
+    VNodeChannel channel(&writer, &index, 1);
+    LoadStreamStub stream(UniqueId(1, 2), 1, nullptr, nullptr);
+    struct TestCase {
+        int32_t max_rowsets;
+        int32_t current_rowsets;
+        int64_t expected_wait_ms;
+    };
+    const TestCase cases[] = {
+            {20000, 16001, 1001},
+            {20000, 16566, 1566},
+            {20000, 19000, 3000},
+            // INT32_MAX * 80 must be evaluated in int64_t before division.
+            {std::numeric_limits<int32_t>::max(), 1717987017, 1100},
+    };
+    for (const auto& test_case : cases) {
+        SCOPED_TRACE(test_case.current_rowsets);
+        google::protobuf::RepeatedPtrField<PTabletLoadRowsetInfo> infos;
+        auto* info = infos.Add();
+        info->set_max_config_rowset_nums(test_case.max_rowsets);
+        info->set_current_rowset_nums(test_case.current_rowsets);
+        stream._refresh_back_pressure_version_wait_time(infos);
+        EXPECT_EQ(test_case.expected_wait_ms,
+                  stream.get_and_reset_load_back_pressure_version_wait_time_ms());
+        channel._refresh_back_pressure_version_wait_time(infos);
+        EXPECT_EQ(test_case.expected_wait_ms,
+                  channel._load_back_pressure_version_wait_time_ms.load());
+    }
+}
 
 static void add_stream(std::shared_ptr<LoadStreamMap> load_stream_map, int64_t node_id,
                        std::vector<int64_t> success_tablets,

@@ -89,6 +89,11 @@ int LoadStreamReplyHandler::on_received_messages(brpc::StreamId id, butil::IOBuf
                 stub->_failed_tablets.emplace(pb.id(), Status::create(pb.status()));
             }
         }
+        if (response.has_write_context()) {
+            std::lock_guard lock(stub->_write_context_mutex);
+            stub->_write_context_responses[response.write_context().writer_id()] = response;
+            stub->_write_context_cv.notify_all();
+        }
         if (response.tablet_schemas_size() > 0) {
             ss << ", tablet schema num: " << response.tablet_schemas_size();
             std::lock_guard<bthread::Mutex> lock(stub->_schema_mutex);
@@ -170,7 +175,8 @@ Status LoadStreamStub::open(BrpcClientCache<PBackendService_Stub>* client_cache,
                             const NodeInfo& node_info, int64_t txn_id,
                             const OlapTableSchemaParam& schema,
                             const std::vector<PTabletID>& tablets_for_schema, int total_streams,
-                            int64_t idle_timeout_ms, bool enable_profile) {
+                            int64_t idle_timeout_ms, bool enable_profile, int64_t txn_expiration,
+                            const std::string& storage_vault_id, bool write_file_cache) {
     std::unique_lock<bthread::Mutex> lock(_open_mutex);
     if (_is_init.load()) {
         return _status;
@@ -194,6 +200,9 @@ Status LoadStreamStub::open(BrpcClientCache<PBackendService_Stub>* client_cache,
     request.set_src_id(_src_id);
     request.set_txn_id(txn_id);
     request.set_enable_profile(enable_profile);
+    request.set_txn_expiration(txn_expiration);
+    request.set_storage_vault_id(storage_vault_id);
+    request.set_write_file_cache(write_file_cache);
     if (_is_incremental) {
         request.set_total_streams(0);
     } else if (total_streams > 0) {
@@ -233,6 +242,7 @@ Status LoadStreamStub::open(BrpcClientCache<PBackendService_Stub>* client_cache,
     }
     LOG(INFO) << "open load stream to host=" << node_info.host << ", port=" << node_info.brpc_port
               << ", " << *this;
+    _supports_direct_upload = response.supports_direct_upload();
     _is_open.store(true);
     _status = Status::OK();
     return _status;
@@ -302,6 +312,61 @@ Status LoadStreamStub::close_load(const std::vector<PTabletID>& tablets_to_commi
     }
     _is_closing.store(true);
     return Status::OK();
+}
+
+Status LoadStreamStub::get_write_context(int64_t partition_id, int64_t index_id, int64_t tablet_id,
+                                         const std::string& writer_id,
+                                         PCloudLoadWriteContext* context) {
+    if (!_supports_direct_upload) {
+        return Status::NotSupported("BE {} does not support cloud memtable direct upload", _dst_id);
+    }
+    PStreamHeader header;
+    *header.mutable_load_id() = _load_id;
+    header.set_src_id(_src_id);
+    header.set_partition_id(partition_id);
+    header.set_index_id(index_id);
+    header.set_tablet_id(tablet_id);
+    header.set_writer_id(writer_id);
+    header.set_opcode(PStreamHeader::GET_WRITE_CONTEXT);
+    RETURN_IF_ERROR(_encode_and_send(header));
+    MonotonicStopWatch watch;
+    watch.start();
+    std::unique_lock lock(_write_context_mutex);
+    while (!_write_context_responses.contains(writer_id)) {
+        RETURN_IF_ERROR(check_cancel());
+        if (_is_closed.load()) {
+            return Status::InternalError("stream closed while getting write context for tablet {}",
+                                         tablet_id);
+        }
+        if (watch.elapsed_time() / 1000000 >= config::open_load_stream_timeout_ms) {
+            return Status::TimedOut("getting write context for tablet {}", tablet_id);
+        }
+        _write_context_cv.wait_for(lock, 100000);
+    }
+    auto response = std::move(_write_context_responses.at(writer_id));
+    _write_context_responses.erase(writer_id);
+    RETURN_IF_ERROR(Status::create(response.status()));
+    *context = std::move(*response.mutable_write_context());
+    return Status::OK();
+}
+
+Status LoadStreamStub::add_rowset(int64_t partition_id, int64_t index_id, int64_t tablet_id,
+                                  const std::string& writer_id, const RowsetMetaPB& meta,
+                                  const PCloudLoadMowResult* mow_result) {
+    RETURN_IF_ERROR(check_cancel());
+    PStreamHeader header;
+    *header.mutable_load_id() = _load_id;
+    header.set_src_id(_src_id);
+    header.set_partition_id(partition_id);
+    header.set_index_id(index_id);
+    header.set_tablet_id(tablet_id);
+    header.set_writer_id(writer_id);
+    header.set_opcode(PStreamHeader::ADD_ROWSET);
+    *header.mutable_partial_rowset_meta() = meta;
+    if (mow_result != nullptr) {
+        *header.mutable_mow_result() = *mow_result;
+    }
+    return _encode_and_send(header);
 }
 
 // GET_SCHEMA
@@ -417,7 +482,8 @@ Status LoadStreamStub::_encode_and_send(PStreamHeader& header, std::span<const S
         buf.append(slice.get_data(), slice.get_size());
     }
     bool eos = header.opcode() == doris::PStreamHeader::CLOSE_LOAD;
-    bool get_schema = header.opcode() == doris::PStreamHeader::GET_SCHEMA;
+    bool get_schema = header.opcode() == doris::PStreamHeader::GET_SCHEMA ||
+                      header.opcode() == doris::PStreamHeader::GET_WRITE_CONTEXT;
     add_bytes_written(buf.size());
     return _send_with_buffer(buf, eos || get_schema);
 }
@@ -460,6 +526,8 @@ void LoadStreamStub::_handle_failure(butil::IOBuf& buf, Status st) {
 
         // step 3: handle failure
         switch (hdr.opcode()) {
+        case PStreamHeader::GET_WRITE_CONTEXT:
+        case PStreamHeader::ADD_ROWSET:
         case PStreamHeader::ADD_SEGMENT:
         case PStreamHeader::APPEND_DATA: {
             DBUG_EXECUTE_IF("LoadStreamStub._handle_failure.append_data_failed", {
@@ -543,15 +611,15 @@ void LoadStreamStub::_refresh_back_pressure_version_wait_time(
     int64_t max_rowset_num_gap = 0;
     // if any one tablet is under high load pressure, we would make the whole procedure
     // sleep to prevent the corresponding BE return -235
-    std::for_each(
-            tablet_load_infos.begin(), tablet_load_infos.end(),
-            [&max_rowset_num_gap](auto& load_info) {
-                int64_t cur_rowset_num = load_info.current_rowset_nums();
-                int64_t high_load_point = load_info.max_config_rowset_nums() *
-                                          (config::load_back_pressure_version_threshold / 100);
-                DCHECK(cur_rowset_num > high_load_point);
-                max_rowset_num_gap = std::max(max_rowset_num_gap, cur_rowset_num - high_load_point);
-            });
+    std::for_each(tablet_load_infos.begin(), tablet_load_infos.end(),
+                  [&max_rowset_num_gap](auto& load_info) {
+                      int64_t cur_rowset_num = load_info.current_rowset_nums();
+                      int64_t high_load_point = load_info.max_config_rowset_nums() *
+                                                config::load_back_pressure_version_threshold / 100;
+                      DCHECK(cur_rowset_num > high_load_point);
+                      max_rowset_num_gap =
+                              std::max(max_rowset_num_gap, cur_rowset_num - high_load_point);
+                  });
     // to slow down the high load pressure
     // we would use the rowset num gap to calculate one sleep time
     // for example:
@@ -591,7 +659,8 @@ Status LoadStreamStubs::open(BrpcClientCache<PBackendService_Stub>* client_cache
                              const NodeInfo& node_info, int64_t txn_id,
                              const OlapTableSchemaParam& schema,
                              const std::vector<PTabletID>& tablets_for_schema, int total_streams,
-                             int64_t idle_timeout_ms, bool enable_profile) {
+                             int64_t idle_timeout_ms, bool enable_profile, int64_t txn_expiration,
+                             const std::string& storage_vault_id, bool write_file_cache) {
     bool get_schema = true;
     auto status = Status::OK();
     bool first_stream = true;
@@ -599,10 +668,12 @@ Status LoadStreamStubs::open(BrpcClientCache<PBackendService_Stub>* client_cache
         Status st;
         if (get_schema) {
             st = stream->open(client_cache, node_info, txn_id, schema, tablets_for_schema,
-                              total_streams, idle_timeout_ms, enable_profile);
+                              total_streams, idle_timeout_ms, enable_profile, txn_expiration,
+                              storage_vault_id, write_file_cache);
         } else {
             st = stream->open(client_cache, node_info, txn_id, schema, {}, total_streams,
-                              idle_timeout_ms, enable_profile);
+                              idle_timeout_ms, enable_profile, txn_expiration, storage_vault_id,
+                              write_file_cache);
         }
         // Simulate one stream open failure within LoadStreamStubs.
         // This causes the successfully opened streams to be cancelled,

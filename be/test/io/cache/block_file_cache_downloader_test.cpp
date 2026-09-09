@@ -253,7 +253,7 @@ TEST_F(FileCacheBlockDownloaderTest, DownloadSegmentForcesSynchronousCacheWriteF
     }};
     FileWriterPtr writer;
     ASSERT_TRUE(global_local_filesystem()->create_file(file, &writer).ok());
-    ASSERT_TRUE(writer->append(Slice("x", 1)).ok());
+    ASSERT_TRUE(writer->append(Slice("xyz", 3)).ok());
     ASSERT_TRUE(writer->close().ok());
 
     const bool old_dryrun_config = config::enable_reader_dryrun_when_download_file_cache;
@@ -262,18 +262,21 @@ TEST_F(FileCacheBlockDownloaderTest, DownloadSegmentForcesSynchronousCacheWriteF
         config::enable_reader_dryrun_when_download_file_cache = old_dryrun_config;
         config::s3_write_buffer_size = old_buffer_size;
     }};
-    config::s3_write_buffer_size = 1;
+    config::s3_write_buffer_size = 2;
 
     std::vector<std::pair<bool, CacheWriteMode>> observed_contexts;
+    std::vector<std::pair<size_t, size_t>> observed_ranges;
     auto* sync_point = SyncPoint::get_instance();
     SyncPoint::CallbackGuard guard;
     sync_point->set_call_back(
             "FileCacheBlockDownloader::download_segment_file:before_read",
             [&](auto&& values) {
-                auto* context = try_any_cast<IOContext*>(values.back());
+                auto* context = try_any_cast<IOContext*>(values[0]);
                 ASSERT_TRUE(context->cache_write_mode_override.has_value());
                 observed_contexts.emplace_back(context->is_dryrun,
                                                *context->cache_write_mode_override);
+                observed_ranges.emplace_back(*try_any_cast<size_t*>(values[1]),
+                                             *try_any_cast<size_t*>(values[2]));
             },
             &guard);
     sync_point->enable_processing();
@@ -285,26 +288,31 @@ TEST_F(FileCacheBlockDownloaderTest, DownloadSegmentForcesSynchronousCacheWriteF
     FileCacheBlockDownloader downloader(_engine);
     for (bool is_dryrun : {false, true}) {
         config::enable_reader_dryrun_when_download_file_cache = is_dryrun;
-        Status completion_status = Status::InternalError("download completion was not called");
-        DownloadFileMeta meta {
-                .path = file,
-                .file_size = 1,
-                .offset = 0,
-                .download_size = 1,
-                .file_system = global_local_filesystem(),
-                .ctx = IOContext {.is_dryrun = is_dryrun},
-                .download_done = [&](Status status) { completion_status = std::move(status); },
-                .tablet_id = 10086,
-        };
-        DownloadTask task(std::move(meta));
-        downloader.download_blocks(task);
-        EXPECT_TRUE(completion_status.ok());
+        // Index warmup omits download_size; bound the last read by the resolved file size.
+        for (int64_t download_size : {3, 0, -1}) {
+            observed_contexts.clear();
+            observed_ranges.clear();
+            Status completion_status = Status::InternalError("download completion was not called");
+            DownloadFileMeta meta {
+                    .path = file,
+                    .file_size = 3,
+                    .offset = 0,
+                    .download_size = download_size,
+                    .file_system = global_local_filesystem(),
+                    .ctx = IOContext {.is_dryrun = is_dryrun},
+                    .download_done = [&](Status status) { completion_status = std::move(status); },
+                    .tablet_id = 10086,
+            };
+            DownloadTask task(std::move(meta));
+            downloader.download_blocks(task);
+            EXPECT_TRUE(completion_status.ok());
+            EXPECT_EQ(observed_ranges, (std::vector<std::pair<size_t, size_t>> {{0, 2}, {2, 1}}));
+            EXPECT_EQ(observed_contexts, (std::vector<std::pair<bool, CacheWriteMode>> {
+                                                 {is_dryrun, CacheWriteMode::SYNC_WRITE},
+                                                 {is_dryrun, CacheWriteMode::SYNC_WRITE},
+                                         }));
+        }
     }
-
-    EXPECT_EQ(observed_contexts, (std::vector<std::pair<bool, CacheWriteMode>> {
-                                         {false, CacheWriteMode::SYNC_WRITE},
-                                         {true, CacheWriteMode::SYNC_WRITE},
-                                 }));
 }
 
 } // namespace doris::io

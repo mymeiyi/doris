@@ -534,6 +534,8 @@ struct TQueryOptions {
   // index reads -- the two formats amplify write-back differently, so each
   // needs its own switch.
   1005: optional bool inverted_index_snii_read_no_write_file_cache = false
+  1006: optional bool enable_cloud_memtable_direct_upload = false;
+
 }
 
 

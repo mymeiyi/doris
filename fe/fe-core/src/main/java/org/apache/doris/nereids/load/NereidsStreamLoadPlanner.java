@@ -321,6 +321,7 @@ public class NereidsStreamLoadPlanner {
                 ? taskInfo.isMemtableOnSinkNode()
                 : false;
         queryOptions.setEnableMemtableOnSinkNode(enableMemtableOnSinkNode);
+        queryOptions.setEnableCloudMemtableDirectUpload(Config.stream_load_default_cloud_memtable_direct_upload);
         queryOptions.setNewVersionUnixTimestamp(true);
         queryOptions.setNewVersionPercentile(true);
         queryOptions.setNewVersionBitmapOpCount(true);

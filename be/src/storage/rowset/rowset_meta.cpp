@@ -56,6 +56,26 @@ RowsetMeta::~RowsetMeta() {
     }
 }
 
+Status RowsetMeta::collect_packed_slice_location(const io::FileWriter& file_writer,
+                                                 const std::string& file_path) {
+    if (file_writer.state() != io::FileWriter::State::CLOSED) {
+        return Status::OK();
+    }
+    if (!file_writer.is_in_packed_file()) {
+        return Status::OK();
+    }
+
+    io::PackedSliceLocation location;
+    RETURN_IF_ERROR(
+            io::PackedFileManager::instance()->get_packed_slice_location(file_path, &location));
+    DORIS_CHECK(!location.packed_file_path.empty());
+    add_packed_slice_location(file_path, location.packed_file_path, location.offset, location.size,
+                              location.packed_file_size);
+    LOG(INFO) << "collect packed file index: " << file_path << " -> " << location.packed_file_path
+              << ", offset: " << location.offset << ", size: " << location.size;
+    return Status::OK();
+}
+
 bool RowsetMeta::init(std::string_view pb_rowset_meta) {
     bool ret = _deserialize_from_pb(pb_rowset_meta);
     if (!ret) {
