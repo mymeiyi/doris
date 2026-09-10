@@ -120,6 +120,7 @@ TEST(RuntimeProfileTest, Basic) {
     updated_profile.update(thrift_profile);
     RuntimeProfile::Counter* counter_updated = updated_profile.get_counter("A");
     EXPECT_EQ(counter_updated->value(), 1);
+    EXPECT_EQ(counter_updated->level(), counter_a->level());
 
     // update 2 more times, counters should stay the same
     updated_profile.update(thrift_profile);
@@ -196,6 +197,7 @@ TEST(RuntimeProfileTest, ProtoBasic) {
     updated_profile.update(proto_profile);
     RuntimeProfile::Counter* counter_updated = updated_profile.get_counter("A");
     EXPECT_EQ(counter_updated->value(), 1);
+    EXPECT_EQ(counter_updated->level(), counter_a->level());
 
     // update 2 more times, counters should stay the same
     updated_profile.update(proto_profile);
