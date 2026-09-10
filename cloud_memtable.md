@@ -73,7 +73,7 @@ SET profile_level = 2;
 | 配置 | 默认值 | 用途 |
 |---|---|---|
 | `stream_load_default_memtable_on_sink_node` | `false` | Stream Load / HTTP Stream 未显式传前移参数时的默认值；Group Commit 内部导入也读取它 |
-| `stream_load_default_cloud_memtable_direct_upload` | `false` | Stream Load、HTTP Stream、Routine Load 以及 Group Commit 内部导入的直传开关 |
+| `stream_load_default_cloud_memtable_direct_upload` | `true` | Stream Load、HTTP Stream、Routine Load 以及 Group Commit 内部导入的直传开关 |
 | `enable_stream_load_profile` | `false` | NereidsStreamLoadPlanner 路径的 Profile 收集，包括普通 Stream Load 和 Routine Load |
 
 前两项为动态、`masterOnly` 配置。示例：
@@ -189,7 +189,7 @@ HDFS / Broker 的数据源描述使用各自原有语法，前移与直传设置
 直传只读取 FE 的 `stream_load_default_cloud_memtable_direct_upload`，当前没有独立的单请求直传 header。
 在另一个 MySQL 连接执行 `SET enable_cloud_memtable_direct_upload=true` 对该 HTTP 请求无效。
 
-先在 FE 开启直传：
+FE 默认开启直传；若此前显式关闭，可重新开启：
 
 ```sql
 ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_direct_upload' = 'true');

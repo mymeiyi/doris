@@ -56,7 +56,7 @@ SET enable_cloud_memtable_direct_upload = true;
 ```
 
 Stream Load 使用 FE 动态配置 `stream_load_default_cloud_memtable_direct_upload`，默认
-`false`；仍需通过 `memtable_on_sink_node` 请求参数或已有 FE 默认配置开启 MemTable 前移。
+`true`；仍需通过 `memtable_on_sink_node` 请求参数或已有 FE 默认配置开启 MemTable 前移。
 新增配置不改变非 Cloud 导入。
 
 直传需要参与导入的 BE 及 MetaService、Recycler 均支持当前分支的显式 Segment ID 格式。

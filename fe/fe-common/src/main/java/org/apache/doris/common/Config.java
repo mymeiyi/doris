@@ -624,7 +624,7 @@ public class Config extends ConfigBase {
 
     @ConfField(mutable = true, masterOnly = true, description = "Upload cloud memtable-on-sink segments directly "
             + "to object storage in stream load")
-    public static boolean stream_load_default_cloud_memtable_direct_upload = false;
+    public static boolean stream_load_default_cloud_memtable_direct_upload = true;
 
     @ConfField(mutable = true, masterOnly = true, description = "Whether to enable forwarding group commit stream "
             + "load to follower nodes. If true, stream load with "
