@@ -59,11 +59,18 @@ public:
     std::shared_ptr<ResourceContext> resource_context() { return _resource_ctx; }
 
 private:
+    void _init_write_profile();
+
     // Convert `_rowset_builder` from `BaseRowsetBuilder` to `CloudRowsetBuilder`
     CloudRowsetBuilder* rowset_builder();
 
     // Handle commit for empty rowset (when no data is written)
     Status _commit_empty_rowset();
+
+    RuntimeProfile::Counter* _write_lock_wait_timer = nullptr;
+    RuntimeProfile::Counter* _write_lock_hold_timer = nullptr;
+    RuntimeProfile::Counter* _write_memtable_timer = nullptr;
+    RuntimeProfile::Counter* _write_count = nullptr;
 
     bthread::Mutex _mtx;
     std::shared_ptr<ResourceContext> _resource_ctx;
