@@ -33,8 +33,7 @@ suite("test_lazy_commit_version_syncer", "docker") {
         'enable_cloud_txn_lazy_commit=true',
         'cloud_enable_version_syncer=true',
         'cloud_version_syncer_interval_second=1',
-        'meta_service_brpc_timeout_ms=30000',
-        'sys_log_verbose_modules=org.apache.doris.cloud'
+        'meta_service_brpc_timeout_ms=30000'
     ]
     options.msConfigs += [
         'enable_cloud_txn_lazy_commit=true',
@@ -45,6 +44,33 @@ suite("test_lazy_commit_version_syncer", "docker") {
 
     docker(options) {
         def ms = cluster.getAllMetaservices().get(0)
+        def fe = cluster.getMasterFe()
+        // These counters are process-wide. Use an isolated cluster with one table and one in-flight DELETE.
+        def feRpcCount = { String counter, String method ->
+            def metrics
+            httpTest {
+                op "get"
+                endpoint "${fe.host}:${fe.httpPort}"
+                uri "/metrics?type=json"
+                check { code, body ->
+                    assertEquals(200, code)
+                    metrics = new JsonSlurper().parseText(body)
+                }
+            }
+            def entry = metrics.find {
+                it.tags.metric == "doris_fe_meta_service_rpc_${counter}" && it.tags.method == method
+            }
+            // Per-method metrics are created on the first RPC/retry, so an absent counter is initially zero.
+            return entry == null ? 0L : entry.value.toLong()
+        }
+        def lazyCommitCount = { String counter ->
+            def name = "txn_lazy_committer_${counter}"
+            def (code, out, err) = curl("GET", "http://${ms.host}:${ms.httpPort}/vars/${name}")
+            assertEquals(0, code)
+            def matcher = out =~ /(?m)^${name}\s*:\s*(\d+)$/
+            assertTrue(matcher.find(), "Missing MS counter ${name}: ${out}; ${err}")
+            return matcher.group(1).toLong()
+        }
         // Requires an MS binary built with ENABLE_INJECTION_POINT, as do other MS injection suites.
         def injectMs = { String parameters ->
             httpTest {
@@ -72,8 +98,11 @@ suite("test_lazy_commit_version_syncer", "docker") {
         }
         // Observe FE's cache throughout the case; SHOW PARTITIONS must not repair it via an expired TTL.
         sql "SET cloud_force_sync_version = false"
-        sql "SET cloud_partition_version_cache_ttl_ms = 3600000"
-        sql "SET cloud_table_version_cache_ttl_ms = 3600000"
+        // The daemon runs only for never-expiring global caches on branches with the TTL guard.
+        sql "SET GLOBAL cloud_partition_version_cache_ttl_ms = 9223372036854775807"
+        sql "SET GLOBAL cloud_table_version_cache_ttl_ms = 9223372036854775807"
+        sql "SET cloud_partition_version_cache_ttl_ms = 9223372036854775807"
+        sql "SET cloud_table_version_cache_ttl_ms = 9223372036854775807"
         def cachedVersion = {
             def partitions = sql_return_maparray "SHOW PARTITIONS FROM test_lazy_commit_version_syncer"
             assertEquals(1, partitions.size())
@@ -81,18 +110,14 @@ suite("test_lazy_commit_version_syncer", "docker") {
         }
         assertEquals(12L, cachedVersion())
 
-        def feLog = new File(cluster.getMasterFe().getLogFilePath())
-        def msLog = new File(ms.getLogFilePath())
-        int feLogStart = feLog.getText("UTF-8").length()
-        int msLogStart = msLog.getText("UTF-8").length()
-        def feLogSinceDelete = { feLog.getText("UTF-8").substring(feLogStart) }
-        def msLogSinceDelete = { msLog.getText("UTF-8").substring(msLogStart) }
+        awaitUntil(10, 0.1) { lazyCommitCount("submitted") == lazyCommitCount("finished") }
+        long lazyBefore = lazyCommitCount("submitted")
+        long partitionRequestsBefore = feRpcCount("total", "getPartitionVersion")
+        long commitRetriesBefore = feRpcCount("retry", "commitTxn")
         def phaseOnePoint = "commit_txn_eventually::abort_txn_after_mark_txn_commited"
         // This point is after task submission: the worker can finish while the original RPC sleeps.
         // Unlike task->wait, its name contains no characters requiring URL encoding.
         def responsePoint = "commit_txn_eventually::txn_lazy_committer_wait"
-        def phaseOneHit = "injection point hit, point=${phaseOnePoint} sleep ms=15000"
-        def responseHit = "injection point hit, point=${responsePoint} sleep ms=40000"
         def deleteFuture = null
         String stage = "register MS injection points"
         try {
@@ -107,48 +132,46 @@ suite("test_lazy_commit_version_syncer", "docker") {
             deleteFuture = thread("lazy-commit-delete") {
                 sql "DELETE FROM test_lazy_commit_version_syncer WHERE k = 1"
             }
-            stage = "wait for MS lazy commit phase-one injection"
+            stage = "wait for daemon partition version RPC"
             awaitUntil(10, 0.1) {
-                if (msLogSinceDelete().contains(phaseOneHit)) {
-                    return true
-                }
                 if (deleteFuture.isDone()) {
-                    // Surface a SQL failure immediately instead of hiding it behind an Awaitility timeout.
                     deleteFuture.get()
-                    throw new IllegalStateException("DELETE completed without observing ${phaseOnePoint}. " +
-                            "Check MS ENABLE_INJECTION_POINT=ON, lazy commit configuration, and the MS log path. " +
-                            "The injection HTTP API returning OK does not prove callbacks were compiled in.")
+                    throw new IllegalStateException("DELETE completed before the injected pause was observed. " +
+                            "Check MS ENABLE_INJECTION_POINT=ON and lazy commit configuration; " +
+                            "HTTP OK is insufficient.")
                 }
-                return false
+                return feRpcCount("total", "getPartitionVersion") > partitionRequestsBefore
             }
-            // Verify the intended overlap instead of assuming the daemon ran during the 15-second pause.
-            // A fixed daemon may wait for/complete the pending transaction here, which is also valid.
-            stage = "wait for daemon partition sync during lazy commit phase one"
-            awaitUntil(10, 0.1) {
-                feLogSinceDelete().readLines().any {
-                    it.contains("sync partition version for db:") &&
-                            it.contains("name=test_lazy_commit_version_syncer,")
-                }
-            }
-            assertFalse(msLogSinceDelete().contains(responseHit),
-                    "The daemon must start synchronizing before the original commit leaves the phase-one pause")
+            // A total counter advances at RPC entry. Waiting for the next daemon round ensures that the
+            // preceding partition RPC and cache update have completed, without reading asynchronous logs.
+            stage = "wait for completion of the first daemon sync"
+            long tableRequestsDuringSync = feRpcCount("total", "getTableVersion")
+            awaitUntil(5, 0.1) { feRpcCount("total", "getTableVersion") > tableRequestsDuringSync }
+            // On the unfixed daemon, the lazy task has not been submitted during the phase-one pause.
+            // A daemon using waitForPendingTxns=true may submit/finish it early and must then cache 13.
+            assertTrue(lazyCommitCount("submitted") == lazyBefore || cachedVersion() == 13L,
+                    "The first daemon sync must finish before lazy submission, or recover partition version 13")
 
-            stage = "wait for DELETE and verify the already-visible retry"
+            stage = "wait for the lazy task to finish before the original RPC returns"
+            awaitUntil(20, 0.1) { lazyCommitCount("finished") == lazyBefore + 1 }
+            assertFalse(deleteFuture.isDone(), "The original commit response must still be delayed")
+            assertEquals(commitRetriesBefore, feRpcCount("retry", "commitTxn"),
+                    "Lazy commit must finish before the first commit RPC retry")
+
+            stage = "wait for DELETE retry after lazy commit"
             deleteFuture.get(60, TimeUnit.SECONDS)
-            assertTrue(msLogSinceDelete().contains(responseHit), "The first successful response must be delayed")
-            assertTrue(feLogSinceDelete().contains("failed to request meta service code DEADLINE_EXCEEDED"),
-                    "The original commit RPC must time out")
-            assertTrue(msLogSinceDelete().contains("transaction is already visible: db_id="),
-                    "The real MS retry must take the VISIBLE branch without partition versions/table stats")
+            assertTrue(feRpcCount("retry", "commitTxn") > commitRetriesBefore,
+                    "The delayed response must cause a real commit RPC retry")
+            assertEquals(lazyBefore + 1, lazyCommitCount("submitted"),
+                    "The successful retry must not submit a second lazy task")
+            // The only lazy task finished before any retry, and DELETE succeeded without another task:
+            // the retry observes VISIBLE. No MS metadata keys or transaction log text are inspected.
 
-            // Give subsequent daemon cycles a chance to recover. Their own one-second cache interval
-            // is independent of the long session TTL used by SHOW PARTITIONS above.
             stage = "wait for two daemon cycles after DELETE"
-            int afterCommit = feLogSinceDelete().length()
+            long tableRequestsAfterCommit = feRpcCount("total", "getTableVersion")
             awaitUntil(10, 0.2) {
-                feLogSinceDelete().substring(afterCommit).readLines().count {
-                    it.contains("sync table version cost")
-                } >= 2
+                // Entry into the third round guarantees the first two rounds have finished.
+                feRpcCount("total", "getTableVersion") >= tableRequestsAfterCommit + 3
             }
             // Intentionally fails on the unfixed code with actual version 12. This checks the cause of
             // E-230 before BE compaction makes querying that obsolete version impossible.
@@ -156,15 +179,8 @@ suite("test_lazy_commit_version_syncer", "docker") {
             assertEquals(13L, cachedVersion(),
                     "DELETE is visible in MS, but daemon table-version equality leaves FE partition version at 12")
         } catch (Throwable failure) {
-            // docker() removes the cluster on failure, so preserve diagnostics in the regression log first.
-            logger.error("Lazy commit reproduction failed at stage: ${stage}; " +
-                    "DELETE done: ${deleteFuture?.isDone()}; FE log: ${feLog}; MS log: ${msLog}", failure)
-            try {
-                logger.error("MS log tail:\n{}", msLog.readLines("UTF-8").takeRight(200).join("\n"))
-                logger.error("FE log tail:\n{}", feLog.readLines("UTF-8").takeRight(200).join("\n"))
-            } catch (Exception logFailure) {
-                failure.addSuppressed(logFailure)
-            }
+            logger.error("Lazy commit reproduction failed at stage: ${stage}; DELETE done: ${deleteFuture?.isDone()}",
+                    failure)
             throw failure
         } finally {
             injectMs("op=disable")
