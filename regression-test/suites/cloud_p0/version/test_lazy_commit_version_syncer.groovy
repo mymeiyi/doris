@@ -88,15 +88,19 @@ suite("test_lazy_commit_version_syncer", "docker") {
         def feLogSinceDelete = { feLog.getText("UTF-8").substring(feLogStart) }
         def msLogSinceDelete = { msLog.getText("UTF-8").substring(msLogStart) }
         def phaseOnePoint = "commit_txn_eventually::abort_txn_after_mark_txn_commited"
-        def responsePoint = "commit_txn_eventually::task->wait"
+        // This point is after task submission: the worker can finish while the original RPC sleeps.
+        // Unlike task->wait, its name contains no characters requiring URL encoding.
+        def responsePoint = "commit_txn_eventually::txn_lazy_committer_wait"
         def phaseOneHit = "injection point hit, point=${phaseOnePoint} sleep ms=15000"
         def responseHit = "injection point hit, point=${responsePoint} sleep ms=40000"
         def deleteFuture = null
         try {
             // Both points are outside an uncommitted FDB transaction. Sleeping inside the second-phase
             // KV commit would instead expire that transaction and reproduce an unrelated failure.
-            injectMs("op=set&name=${URLEncoder.encode(phaseOnePoint, 'UTF-8')}&behavior=sleep&duration=15000")
-            injectMs("op=set&name=${URLEncoder.encode(responsePoint, 'UTF-8')}&behavior=sleep&duration=40000")
+            // MS reads name through brpc::URI::GetQuery without URL decoding. Keep the literal '::';
+            // encoding it registers a different callback name, even though the API returns OK.
+            injectMs("op=set&name=${phaseOnePoint}&behavior=sleep&duration=15000")
+            injectMs("op=set&name=${responsePoint}&behavior=sleep&duration=40000")
             injectMs("op=enable")
 
             deleteFuture = thread("lazy-commit-delete") {
@@ -135,8 +139,8 @@ suite("test_lazy_commit_version_syncer", "docker") {
                     "DELETE is visible in MS, but daemon table-version equality leaves FE partition version at 12")
         } finally {
             injectMs("op=disable")
-            injectMs("op=clear&name=${URLEncoder.encode(phaseOnePoint, 'UTF-8')}")
-            injectMs("op=clear&name=${URLEncoder.encode(responsePoint, 'UTF-8')}")
+            injectMs("op=clear&name=${phaseOnePoint}")
+            injectMs("op=clear&name=${responsePoint}")
             if (deleteFuture != null && !deleteFuture.isDone()) {
                 deleteFuture.get(60, TimeUnit.SECONDS)
             }
