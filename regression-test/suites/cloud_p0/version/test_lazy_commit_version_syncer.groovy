@@ -94,6 +94,7 @@ suite("test_lazy_commit_version_syncer", "docker") {
         def phaseOneHit = "injection point hit, point=${phaseOnePoint} sleep ms=15000"
         def responseHit = "injection point hit, point=${responsePoint} sleep ms=40000"
         def deleteFuture = null
+        String stage = "register MS injection points"
         try {
             // Both points are outside an uncommitted FDB transaction. Sleeping inside the second-phase
             // KV commit would instead expire that transaction and reproduce an unrelated failure.
@@ -106,9 +107,23 @@ suite("test_lazy_commit_version_syncer", "docker") {
             deleteFuture = thread("lazy-commit-delete") {
                 sql "DELETE FROM test_lazy_commit_version_syncer WHERE k = 1"
             }
-            awaitUntil(10, 0.1) { msLogSinceDelete().contains(phaseOneHit) }
+            stage = "wait for MS lazy commit phase-one injection"
+            awaitUntil(10, 0.1) {
+                if (msLogSinceDelete().contains(phaseOneHit)) {
+                    return true
+                }
+                if (deleteFuture.isDone()) {
+                    // Surface a SQL failure immediately instead of hiding it behind an Awaitility timeout.
+                    deleteFuture.get()
+                    throw new IllegalStateException("DELETE completed without observing ${phaseOnePoint}. " +
+                            "Check MS ENABLE_INJECTION_POINT=ON, lazy commit configuration, and the MS log path. " +
+                            "The injection HTTP API returning OK does not prove callbacks were compiled in.")
+                }
+                return false
+            }
             // Verify the intended overlap instead of assuming the daemon ran during the 15-second pause.
             // A fixed daemon may wait for/complete the pending transaction here, which is also valid.
+            stage = "wait for daemon partition sync during lazy commit phase one"
             awaitUntil(10, 0.1) {
                 feLogSinceDelete().readLines().any {
                     it.contains("sync partition version for db:") &&
@@ -118,6 +133,7 @@ suite("test_lazy_commit_version_syncer", "docker") {
             assertFalse(msLogSinceDelete().contains(responseHit),
                     "The daemon must start synchronizing before the original commit leaves the phase-one pause")
 
+            stage = "wait for DELETE and verify the already-visible retry"
             deleteFuture.get(60, TimeUnit.SECONDS)
             assertTrue(msLogSinceDelete().contains(responseHit), "The first successful response must be delayed")
             assertTrue(feLogSinceDelete().contains("failed to request meta service code DEADLINE_EXCEEDED"),
@@ -127,6 +143,7 @@ suite("test_lazy_commit_version_syncer", "docker") {
 
             // Give subsequent daemon cycles a chance to recover. Their own one-second cache interval
             // is independent of the long session TTL used by SHOW PARTITIONS above.
+            stage = "wait for two daemon cycles after DELETE"
             int afterCommit = feLogSinceDelete().length()
             awaitUntil(10, 0.2) {
                 feLogSinceDelete().substring(afterCommit).readLines().count {
@@ -135,8 +152,20 @@ suite("test_lazy_commit_version_syncer", "docker") {
             }
             // Intentionally fails on the unfixed code with actual version 12. This checks the cause of
             // E-230 before BE compaction makes querying that obsolete version impossible.
+            stage = "verify FE cached partition version is 13"
             assertEquals(13L, cachedVersion(),
                     "DELETE is visible in MS, but daemon table-version equality leaves FE partition version at 12")
+        } catch (Throwable failure) {
+            // docker() removes the cluster on failure, so preserve diagnostics in the regression log first.
+            logger.error("Lazy commit reproduction failed at stage: ${stage}; " +
+                    "DELETE done: ${deleteFuture?.isDone()}; FE log: ${feLog}; MS log: ${msLog}", failure)
+            try {
+                logger.error("MS log tail:\n{}", msLog.readLines("UTF-8").takeRight(200).join("\n"))
+                logger.error("FE log tail:\n{}", feLog.readLines("UTF-8").takeRight(200).join("\n"))
+            } catch (Exception logFailure) {
+                failure.addSuppressed(logFailure)
+            }
+            throw failure
         } finally {
             injectMs("op=disable")
             injectMs("op=clear&name=${phaseOnePoint}")
