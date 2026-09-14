@@ -96,17 +96,22 @@ suite("test_lazy_commit_version_syncer", "docker") {
         for (int i = 1; i <= 11; ++i) {
             sql "INSERT INTO test_lazy_commit_version_syncer VALUES (${i}, ${i})"
         }
-        // Observe FE's cache throughout the case; SHOW PARTITIONS must not repair it via an expired TTL.
-        sql "SET cloud_force_sync_version = false"
-        // The daemon runs only for never-expiring global caches on branches with the TTL guard.
+        // Enable proactive synchronization and reproduce never-expiring version caches.
         sql "SET GLOBAL cloud_partition_version_cache_ttl_ms = 9223372036854775807"
         sql "SET GLOBAL cloud_table_version_cache_ttl_ms = 9223372036854775807"
         sql "SET cloud_partition_version_cache_ttl_ms = 9223372036854775807"
         sql "SET cloud_table_version_cache_ttl_ms = 9223372036854775807"
+        def tablets = sql_return_maparray "SHOW TABLETS FROM test_lazy_commit_version_syncer"
+        assertEquals(1, tablets.size())
+        def tabletInfo = sql_return_maparray "SHOW TABLET ${tablets[0].TabletId}"
+        assertEquals(1, tabletInfo.size())
+        def detailCmd = tabletInfo[0].DetailCmd
+        // In cloud mode, the tablet detail PROC displays getCachedVisibleVersion(). It must not
+        // refresh an invalidated cache through MS, as SHOW PARTITIONS would after a failed sync.
         def cachedVersion = {
-            def partitions = sql_return_maparray "SHOW PARTITIONS FROM test_lazy_commit_version_syncer"
-            assertEquals(1, partitions.size())
-            return partitions[0].VisibleVersion.toLong()
+            def replicas = sql_return_maparray detailCmd
+            assertEquals(1, replicas.size())
+            return replicas[0].Version.toLong()
         }
         assertEquals(12L, cachedVersion())
 
