@@ -188,6 +188,86 @@ public class CloudSyncVersionDaemonTest {
     }
 
     @Test
+    public void testScalarVersionReadsMustRefreshWhenSyncerIsDisabled() throws Exception {
+        assertVersionReadsWhenSyncerIsDisabled(false);
+    }
+
+    @Test
+    public void testBatchVersionReadsMustRefreshWhenSyncerIsDisabled() throws Exception {
+        assertVersionReadsWhenSyncerIsDisabled(true);
+    }
+
+    private void assertVersionReadsWhenSyncerIsDisabled(boolean batchMode) throws Exception {
+        table.setSyncedTableVersion(100);
+        AtomicLong msTableVersion = new AtomicLong(100);
+        AtomicLong msPartitionVersion = new AtomicLong(12);
+        AtomicInteger versionRequests = new AtomicInteger();
+        Mockito.when(proxy.getVisibleVersionAsync(Mockito.any(Cloud.GetVersionRequest.class)))
+                .thenAnswer(invocation -> {
+                    Cloud.GetVersionRequest request = invocation.getArgument(0);
+                    versionRequests.incrementAndGet();
+                    long version = request.getIsTableVersion() ? msTableVersion.get() : msPartitionVersion.get();
+                    Cloud.GetVersionResponse.Builder response = Cloud.GetVersionResponse.newBuilder()
+                            .setStatus(Cloud.MetaServiceResponseStatus.newBuilder().setCode(Cloud.MetaServiceCode.OK))
+                            .addVersionUpdateTimeMs(2000);
+                    if (request.getBatchMode()) {
+                        response.addVersions(version);
+                    } else {
+                        response.setVersion(version);
+                    }
+                    return CompletableFuture.completedFuture(response.build());
+                });
+
+        // An existing session keeps the default infinite TTLs when the dynamic syncer switch is disabled.
+        ConnectContext previousContext = ConnectContext.get();
+        ConnectContext ctx = new ConnectContext();
+        ctx.setSessionVariable(variables);
+        ctx.setThreadLocalInfo();
+        try (MockedStatic<Config> mockedConfig = Mockito.mockStatic(Config.class, Mockito.CALLS_REAL_METHODS)) {
+            mockedConfig.when(Config::isNotCloudMode).thenReturn(false);
+            Assertions.assertEquals(Long.MAX_VALUE, variables.cloudPartitionVersionCacheTtlMs);
+            Assertions.assertEquals(Long.MAX_VALUE, variables.cloudTableVersionCacheTtlMs);
+            Assertions.assertEquals(12, partition.getCachedVisibleVersion());
+            Assertions.assertEquals(100, table.getCachedTableVersion());
+            Config.cloud_enable_version_syncer = false;
+            CloudFEVersionSynchronizer synchronizer = new CloudFEVersionSynchronizer();
+            for (int commit = 1; commit <= 2; commit++) {
+                long expectedPartitionVersion = 12 + commit;
+                long expectedTableVersion = 100 + commit;
+                // The master commits new data in MS; this follower receives no version update.
+                msPartitionVersion.set(expectedPartitionVersion);
+                msTableVersion.set(expectedTableVersion);
+                int requestsBeforeBackgroundSync = versionRequests.get();
+                synchronizer.pushVersionAsync(db.getId(),
+                        Collections.singletonList(Pair.of(table, expectedTableVersion)),
+                        Collections.singletonMap(partition, Pair.of(expectedPartitionVersion, 2000L)));
+                daemon.runAfterCatalogReady();
+                Assertions.assertEquals(requestsBeforeBackgroundSync, versionRequests.get(),
+                        "The disabled syncer must not issue background version RPCs");
+
+                // Use actual query getters without manually expiring caches or re-enabling the daemon.
+                long partitionVersion = batchMode
+                        ? CloudPartition.getSnapshotVisibleVersion(Collections.singletonList(partition)).get(0)
+                        : partition.getVisibleVersion();
+                long tableVersion = batchMode
+                        ? OlapTable.getVisibleVersionInBatch(Collections.singletonList(table)).get(0)
+                        : table.getVisibleVersion();
+                Assertions.assertAll("Queries must keep refreshing versions while background sync is disabled",
+                        () -> Assertions.assertEquals(expectedPartitionVersion, partitionVersion,
+                                "Infinite partition TTL must not hide a committed version without background sync"),
+                        () -> Assertions.assertEquals(expectedTableVersion, tableVersion,
+                                "Infinite table TTL must not hide a committed version without background sync"));
+            }
+        } finally {
+            if (previousContext == null) {
+                ConnectContext.remove();
+            } else {
+                previousContext.setThreadLocalInfo();
+            }
+        }
+    }
+
+    @Test
     public void testForceSyncMustWaitForPendingTxnBeforePushingVersions() throws Exception {
         table.setSyncedTableVersion(100);
         AtomicBoolean pendingTxn = new AtomicBoolean(true);
