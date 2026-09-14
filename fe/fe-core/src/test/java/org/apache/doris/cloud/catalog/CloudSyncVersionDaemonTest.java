@@ -26,6 +26,7 @@ import org.apache.doris.catalog.SinglePartitionInfo;
 import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.cloud.transaction.CloudGlobalTransactionMgr;
+import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.jmockit.Deencapsulation;
@@ -281,6 +282,15 @@ public class CloudSyncVersionDaemonTest {
 
     @Test
     public void testForceSyncMustWaitForPendingTxnBeforePushingVersions() throws Exception {
+        assertForceSyncWaitsForPendingTxn(false);
+    }
+
+    @Test
+    public void testForceSyncMustNotPushVersionsWhenPendingTxnWaitFails() throws Exception {
+        assertForceSyncWaitsForPendingTxn(true);
+    }
+
+    private void assertForceSyncWaitsForPendingTxn(boolean failPendingWait) throws Exception {
         table.setSyncedTableVersion(100);
         AtomicBoolean pendingTxn = new AtomicBoolean(true);
         AtomicInteger partitionRequests = new AtomicInteger();
@@ -299,6 +309,10 @@ public class CloudSyncVersionDaemonTest {
                         Assertions.assertEquals(Collections.singletonList(partition.getId()),
                                 request.getPartitionIdsList());
                         if (request.getWaitForPendingTxn()) {
+                            if (failPendingWait) {
+                                return CompletableFuture.failedFuture(
+                                        new TimeoutException("pending txn wait timed out"));
+                            }
                             pendingTxn.set(false);
                         }
                         response.addVersions(pendingTxn.get() ? 12 : 13).addVersionUpdateTimeMs(2000);
@@ -329,7 +343,19 @@ public class CloudSyncVersionDaemonTest {
         ctx.setThreadLocalInfo();
         try (MockedStatic<Config> mockedConfig = Mockito.mockStatic(Config.class, Mockito.CALLS_REAL_METHODS)) {
             mockedConfig.when(Config::isNotCloudMode).thenReturn(false);
+            mockedConfig.when(Config::metaServiceRpcRetryTimes).thenReturn(1);
             // Exercise the actual forced SHOW PARTITIONS path; intercept only its outbound push.
+            if (failPendingWait) {
+                Assertions.assertThrows(AnalysisException.class, () -> Deencapsulation.invoke(
+                        new PartitionsProcDir(db, table, false), "getPartitionVersions", table,
+                        Collections.singletonList(partition.getId())));
+                Mockito.verifyNoInteractions(synchronizer);
+                Assertions.assertEquals(1, partitionRequests.get());
+                Assertions.assertTrue(pendingTxn.get());
+                Assertions.assertEquals(12, partition.getCachedVisibleVersion());
+                Assertions.assertEquals(100, table.getCachedTableVersion());
+                return;
+            }
             List<Long> shownVersions = Deencapsulation.invoke(new PartitionsProcDir(db, table, false),
                     "getPartitionVersions", table, Collections.singletonList(partition.getId()));
             Mockito.verify(synchronizer).pushVersionAsync(Mockito.eq(db.getId()), Mockito.anyList(), Mockito.anyMap());
