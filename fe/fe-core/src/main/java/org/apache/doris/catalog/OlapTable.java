@@ -3617,6 +3617,10 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
     public synchronized void setCachedTableVersion(long version) {
         if (version >= cachedTableVersion) {
+            // A newer table version does not prove that all partition updates reached this FE.
+            if (version > cachedTableVersion) {
+                partitionVersionSyncNeeded = true;
+            }
             cachedTableVersion = version;
             lastTableVersionCachedTimeMs = System.currentTimeMillis();
         }

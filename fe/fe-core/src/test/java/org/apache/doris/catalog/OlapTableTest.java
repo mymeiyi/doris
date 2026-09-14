@@ -691,6 +691,8 @@ public class OlapTableTest {
 
             table.setCachedTableVersion(100);
             Assertions.assertFalse(table.isCachedTableVersionExpired());
+            Assertions.assertTrue(table.isTableVersionSyncNeeded(),
+                    "The first table-version update cannot certify that all partitions are synchronized");
             table.invalidateCachedTableVersion();
             Assertions.assertTrue(table.isCachedTableVersionExpired());
             for (long version : new long[] {100, 102, 101}) {
@@ -728,6 +730,11 @@ public class OlapTableTest {
             Assertions.assertFalse(table.isTableVersionSyncNeeded());
             Assertions.assertFalse(table.isCachedTableVersionExpired());
             Assertions.assertFalse(table.isCachedTableVersionExpired(Long.MAX_VALUE));
+            table.setCachedTableVersion(103);
+            table.setCachedTableVersion(102);
+            Assertions.assertEquals(103, table.getCachedTableVersion());
+            Assertions.assertFalse(table.isTableVersionSyncNeeded(),
+                    "Equal or older updates must not invalidate a completed partition sync");
         } finally {
             ConnectContext.remove();
         }
