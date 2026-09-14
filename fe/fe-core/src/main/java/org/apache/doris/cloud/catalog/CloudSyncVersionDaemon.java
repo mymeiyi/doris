@@ -32,6 +32,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -117,8 +118,13 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
             for (Future<Void> future : futures) {
                 future.get();
             }
-        } catch (InterruptedException | ExecutionException e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.error("Interrupted while waiting for get table version tasks to complete", e);
+            return Collections.emptyMap();
+        } catch (ExecutionException e) {
             LOG.error("Error waiting for get table version tasks to complete", e);
+            return Collections.emptyMap();
         }
         LOG.info("sync table version cost {} ms, rpc size: {}, found {} tables need to sync partition version",
                 System.currentTimeMillis() - start, futures.size(), tableVersionMap.size());
@@ -134,7 +140,7 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
                 for (int i = 0; i < tables.size(); i++) {
                     OlapTable table = tables.get(i);
                     long version = versions.get(i);
-                    if (version > table.getCachedTableVersion()) {
+                    if (table.isTableVersionSyncNeeded() || version > table.getCachedTableVersion()) {
                         tableVersionMap.compute(table, (k, v) -> {
                             if (v == null || version > v) {
                                 return version;
@@ -155,6 +161,9 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
     }
 
     private void syncPartitionVersion(Map<OlapTable, Long> tableVersionMap) {
+        // Keep the cache invalid until every partition batch has completed, even if a concurrent
+        // commit or table-version read advances the cached table version during this sync.
+        tableVersionMap.keySet().forEach(OlapTable::invalidateCachedTableVersion);
         Set<Long> failedTables = ConcurrentHashMap.newKeySet();
         List<Future<Void>> futures = new ArrayList<>();
         long start = System.currentTimeMillis();
@@ -182,14 +191,19 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
             for (Future<Void> future : futures) {
                 future.get();
             }
-        } catch (InterruptedException | ExecutionException e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.error("Interrupted while waiting for get partition version tasks to complete", e);
+            return;
+        } catch (ExecutionException e) {
             LOG.error("Error waiting for get partition version tasks to complete", e);
+            return;
         }
         // set table version for success tables
         for (Entry<OlapTable, Long> entry : tableVersionMap.entrySet()) {
             if (!failedTables.contains(entry.getKey().getId())) {
                 OlapTable olapTable = entry.getKey();
-                olapTable.setCachedTableVersion(entry.getValue());
+                olapTable.setSyncedTableVersion(entry.getValue());
             }
         }
         LOG.info("sync partition version cost {} ms, table size: {}, rpc size: {}, failed tables: {}",
@@ -199,10 +213,13 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
     private Future<Void> submitGetPartitionVersionTask(Set<Long> failedTables, List<CloudPartition> partitions) {
         return GET_VERSION_THREAD_POOL.submit(() -> {
             try {
+                // Lazy commit advances the MS table version before partition versions become visible.
+                // Do not mark that table version synchronized until its pending transactions have finished.
                 CloudPartition.getSnapshotVisibleVersionFromMs(
-                        partitions, false, Config.cloud_version_syncer_get_version_retry_times);
+                        partitions, true, Config.cloud_version_syncer_get_version_retry_times);
             } catch (Exception e) {
                 LOG.warn("get partition version error", e);
+                partitions.forEach(CloudPartition::invalidateCachedVisibleVersion);
                 Set<Long> failedTableIds = partitions.stream().map(p -> p.getTableId())
                         .collect(Collectors.toSet());
                 failedTables.addAll(failedTableIds);

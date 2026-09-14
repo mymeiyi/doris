@@ -244,8 +244,8 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
     private ConcurrentHashMap<String, CompletableFuture<Void>> partitionCreationFutures = new ConcurrentHashMap<>();
 
     // Cache for table version in cloud mode
-    // This value is set when get the table version from meta-service, 0 means version is not cached yet
-    private volatile long lastTableVersionCachedTimeMs = 0;
+    // -1 means not cached yet; 0 keeps an incomplete partition sync invalid until the daemon succeeds.
+    private volatile long lastTableVersionCachedTimeMs = -1;
     private volatile long cachedTableVersion = -1;
 
     private ReadWriteLock versionLock = Config.isCloudMode() ? new ReentrantReadWriteLock(true) : null;
@@ -3590,28 +3590,41 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
     @VisibleForTesting
     protected boolean isCachedTableVersionExpired() {
-        // -1 means no cache yet, need to fetch from MS
-        if (cachedTableVersion == -1) {
-            return true;
-        }
         ConnectContext ctx = ConnectContext.get();
         long cacheExpirationMs = ctx == null ? VariableMgr.getDefaultSessionVariable().cloudTableVersionCacheTtlMs
                 : ctx.getSessionVariable().cloudTableVersionCacheTtlMs;
-        if (cacheExpirationMs <= 0) { // always expired
-            return true;
-        }
-        return System.currentTimeMillis() - lastTableVersionCachedTimeMs > cacheExpirationMs;
+        return isCachedTableVersionExpired(cacheExpirationMs);
     }
 
     public boolean isCachedTableVersionExpired(long expirationMs) {
         // -1 means no cache yet, need to fetch from MS
-        if (cachedTableVersion == -1 || expirationMs <= 0) {
+        if (cachedTableVersion == -1 || isTableVersionSyncNeeded() || expirationMs <= 0) {
             return true;
         }
         return System.currentTimeMillis() - lastTableVersionCachedTimeMs > expirationMs;
     }
 
-    public void setCachedTableVersion(long version) {
+    public boolean isTableVersionSyncNeeded() {
+        return lastTableVersionCachedTimeMs == 0;
+    }
+
+    public synchronized void invalidateCachedTableVersion() {
+        lastTableVersionCachedTimeMs = 0;
+    }
+
+    public synchronized void setCachedTableVersion(long version) {
+        if (version >= cachedTableVersion) {
+            cachedTableVersion = version;
+            // Partial updates and table-version reads must not clear an incomplete partition sync.
+            if (lastTableVersionCachedTimeMs != 0) {
+                lastTableVersionCachedTimeMs = System.currentTimeMillis();
+            }
+        }
+    }
+
+    // Only the sync daemon may clear the marker, after all partition batches succeed.
+    public synchronized void setSyncedTableVersion(long version) {
+        // A concurrent update beyond this sync's target version requires another full sync.
         if (version >= cachedTableVersion) {
             cachedTableVersion = version;
             lastTableVersionCachedTimeMs = System.currentTimeMillis();
