@@ -31,6 +31,8 @@ import org.apache.doris.common.jmockit.Deencapsulation;
 import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.qe.VariableMgr;
+import org.apache.doris.thrift.TCloudVersionInfo;
+import org.apache.doris.thrift.TFrontendSyncCloudVersionRequest;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
@@ -49,6 +51,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class CloudSyncVersionDaemonTest {
     private Database db;
@@ -172,6 +175,72 @@ public class CloudSyncVersionDaemonTest {
         Assertions.assertEquals(1, partitionRequests.get(), "A successful sync does not need another partition RPC");
         Assertions.assertEquals(101, table.getCachedTableVersion());
         Assertions.assertEquals(13, partition.getCachedVisibleVersion());
+    }
+
+    @Test
+    public void testFollowerMustRecoverMissedPushAfterLaterPartitionPush() throws Exception {
+        CloudPartition otherPartition = CloudPartitionTest.createPartition(5, db.getId(), table.getId());
+        otherPartition.setCachedVisibleVersion(8, 1000);
+        table.addPartition(otherPartition);
+        // Start with a fully synchronized follower, not an already incomplete daemon sync.
+        table.setSyncedTableVersion(100);
+        Assertions.assertFalse(table.isTableVersionSyncNeeded());
+        Deencapsulation.setField(table, "versionLock", new ReentrantReadWriteLock(true));
+
+        AtomicInteger tableRequests = new AtomicInteger();
+        AtomicInteger partitionRequests = new AtomicInteger();
+        Mockito.when(proxy.getVisibleVersionAsync(Mockito.any(Cloud.GetVersionRequest.class)))
+                .thenAnswer(invocation -> {
+                    Cloud.GetVersionRequest request = invocation.getArgument(0);
+                    Assertions.assertEquals(Collections.singletonList(db.getId()), request.getDbIdsList());
+                    Assertions.assertEquals(Collections.singletonList(table.getId()), request.getTableIdsList());
+                    Cloud.GetVersionResponse.Builder response = Cloud.GetVersionResponse.newBuilder()
+                            .setStatus(Cloud.MetaServiceResponseStatus.newBuilder().setCode(Cloud.MetaServiceCode.OK));
+                    if (request.getIsTableVersion()) {
+                        tableRequests.incrementAndGet();
+                        response.addVersions(102);
+                    } else {
+                        partitionRequests.incrementAndGet();
+                        Assertions.assertTrue(request.getWaitForPendingTxn());
+                        Assertions.assertEquals(1, request.getPartitionIdsCount());
+                        if (request.getPartitionIds(0) == partition.getId()) {
+                            response.addVersions(13);
+                        } else {
+                            Assertions.assertEquals(otherPartition.getId(), request.getPartitionIds(0));
+                            response.addVersions(9);
+                        }
+                        response.addVersionUpdateTimeMs(2000);
+                    }
+                    return CompletableFuture.completedFuture(response.build());
+                });
+
+        // Master commits A (P1=13, T=101), but its push never reaches this follower.
+        // Master then commits B (P2=9, T=102); only B's push is delivered.
+        TFrontendSyncCloudVersionRequest push = new TFrontendSyncCloudVersionRequest()
+                .setDbId(db.getId())
+                .setTableVersionInfos(Collections.singletonList(new TCloudVersionInfo()
+                        .setTableId(table.getId()).setVersion(102)))
+                .setPartitionVersionInfos(Collections.singletonList(new TCloudVersionInfo()
+                        .setTableId(table.getId()).setPartitionId(otherPartition.getId())
+                        .setVersion(9).setVersionUpdateTime(2000)));
+        // Run the actual follower worker synchronously so the push finishes before the daemon starts.
+        Deencapsulation.invoke(new CloudFEVersionSynchronizer(), "syncVersion", db, push);
+        Assertions.assertEquals(12, partition.getCachedVisibleVersion());
+        Assertions.assertEquals(9, otherPartition.getCachedVisibleVersion());
+        Assertions.assertEquals(102, table.getCachedTableVersion());
+        Assertions.assertEquals(0, tableRequests.get(), "No daemon sync has started before the later push");
+
+        // The fixture uses a zero polling interval: both cycles must check MS despite a fresh table cache.
+        daemon.runAfterCatalogReady();
+        daemon.runAfterCatalogReady();
+        Assertions.assertEquals(2, tableRequests.get());
+        // Inspect only the cache; a query or an MS getter could repair the missed version itself.
+        Assertions.assertEquals(13, partition.getCachedVisibleVersion(),
+                "A later push must not hide P1's missed update when MS and cached table versions are both 102");
+        Assertions.assertEquals(9, otherPartition.getCachedVisibleVersion());
+        Assertions.assertEquals(102, table.getCachedTableVersion());
+        Assertions.assertEquals(2, partitionRequests.get(), "Sync both partitions once, then skip the clean table");
+        Assertions.assertFalse(table.isTableVersionSyncNeeded());
     }
 
     @Test
