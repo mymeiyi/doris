@@ -27,8 +27,11 @@ import org.apache.doris.cloud.proto.Cloud;
 import org.apache.doris.cloud.rpc.MetaServiceProxy;
 import org.apache.doris.cloud.transaction.CloudGlobalTransactionMgr;
 import org.apache.doris.common.Config;
+import org.apache.doris.common.Pair;
 import org.apache.doris.common.jmockit.Deencapsulation;
+import org.apache.doris.common.proc.PartitionsProcDir;
 import org.apache.doris.datasource.InternalCatalog;
+import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.qe.VariableMgr;
 import org.apache.doris.thrift.TCloudVersionInfo;
@@ -44,6 +47,7 @@ import org.mockito.Mockito;
 import java.lang.reflect.Field;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -181,6 +185,77 @@ public class CloudSyncVersionDaemonTest {
         Assertions.assertEquals(1, partitionRequests.get(), "A successful sync does not need another partition RPC");
         Assertions.assertEquals(101, table.getCachedTableVersion());
         Assertions.assertEquals(13, partition.getCachedVisibleVersion());
+    }
+
+    @Test
+    public void testForceSyncMustWaitForPendingTxnBeforePushingVersions() throws Exception {
+        table.setSyncedTableVersion(100);
+        AtomicBoolean pendingTxn = new AtomicBoolean(true);
+        AtomicInteger partitionRequests = new AtomicInteger();
+        Mockito.when(proxy.getVisibleVersionAsync(Mockito.any(Cloud.GetVersionRequest.class)))
+                .thenAnswer(invocation -> {
+                    Cloud.GetVersionRequest request = invocation.getArgument(0);
+                    Assertions.assertEquals(Collections.singletonList(db.getId()), request.getDbIdsList());
+                    Assertions.assertEquals(Collections.singletonList(table.getId()), request.getTableIdsList());
+                    Cloud.GetVersionResponse.Builder response = Cloud.GetVersionResponse.newBuilder()
+                            .setStatus(Cloud.MetaServiceResponseStatus.newBuilder().setCode(Cloud.MetaServiceCode.OK));
+                    if (request.getIsTableVersion()) {
+                        // Lazy commit has advanced the table counter, but partition 13 is not visible yet.
+                        response.addVersions(101);
+                    } else {
+                        partitionRequests.incrementAndGet();
+                        Assertions.assertEquals(Collections.singletonList(partition.getId()),
+                                request.getPartitionIdsList());
+                        if (request.getWaitForPendingTxn()) {
+                            pendingTxn.set(false);
+                        }
+                        response.addVersions(pendingTxn.get() ? 12 : 13).addVersionUpdateTimeMs(2000);
+                    }
+                    return CompletableFuture.completedFuture(response.build());
+                });
+
+        AtomicLong pushedTableVersion = new AtomicLong(-1);
+        AtomicLong pushedPartitionVersion = new AtomicLong(-1);
+        AtomicBoolean pendingAtPush = new AtomicBoolean(true);
+        CloudFEVersionSynchronizer synchronizer = Mockito.mock(CloudFEVersionSynchronizer.class);
+        Mockito.when(((CloudEnv) Env.getCurrentEnv()).getCloudFEVersionSynchronizer()).thenReturn(synchronizer);
+        Mockito.doAnswer(invocation -> {
+            List<Pair<OlapTable, Long>> tableVersions = invocation.getArgument(1);
+            Map<CloudPartition, Pair<Long, Long>> partitionVersions = invocation.getArgument(2);
+            Assertions.assertEquals(1, tableVersions.size());
+            Assertions.assertEquals(1, partitionVersions.size());
+            pushedTableVersion.set(tableVersions.get(0).second);
+            pushedPartitionVersion.set(partitionVersions.get(partition).first);
+            pendingAtPush.set(pendingTxn.get());
+            return null;
+        }).when(synchronizer).pushVersionAsync(Mockito.eq(db.getId()), Mockito.anyList(), Mockito.anyMap());
+
+        ConnectContext previousContext = ConnectContext.get();
+        ConnectContext ctx = new ConnectContext();
+        ctx.setSessionVariable(variables);
+        variables.cloudForceSyncVersion = true;
+        ctx.setThreadLocalInfo();
+        try (MockedStatic<Config> mockedConfig = Mockito.mockStatic(Config.class, Mockito.CALLS_REAL_METHODS)) {
+            mockedConfig.when(Config::isNotCloudMode).thenReturn(false);
+            // Exercise the actual forced SHOW PARTITIONS path; intercept only its outbound push.
+            List<Long> shownVersions = Deencapsulation.invoke(new PartitionsProcDir(db, table, false),
+                    "getPartitionVersions", table, Collections.singletonList(partition.getId()));
+            Mockito.verify(synchronizer).pushVersionAsync(Mockito.eq(db.getId()), Mockito.anyList(), Mockito.anyMap());
+            Assertions.assertEquals(1, partitionRequests.get());
+            Assertions.assertEquals(101, pushedTableVersion.get());
+            Assertions.assertEquals(13, pushedPartitionVersion.get(),
+                    "Forced sync must not push table version 101 with partition version 12 from a pending transaction");
+            Assertions.assertFalse(pendingAtPush.get(), "The pending transaction must be visible before the push");
+            Assertions.assertEquals(Collections.singletonList(13L), shownVersions);
+            // Cache-only observation: do not run the daemon or query getters that could repair the stale version.
+            Assertions.assertEquals(13, partition.getCachedVisibleVersion());
+        } finally {
+            if (previousContext == null) {
+                ConnectContext.remove();
+            } else {
+                previousContext.setThreadLocalInfo();
+            }
+        }
     }
 
     @Test
