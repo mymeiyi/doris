@@ -127,6 +127,10 @@ public class CloudPartition extends Partition {
         return super.getVisibleVersion();
     }
 
+    public void invalidateCachedVisibleVersion() {
+        lastVersionCachedTimeMs = 0;
+    }
+
     @VisibleForTesting
     protected boolean isCachedVersionExpired() {
         if (lastVersionCachedTimeMs == 0) {

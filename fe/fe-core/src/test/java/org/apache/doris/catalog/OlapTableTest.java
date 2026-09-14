@@ -671,6 +671,53 @@ public class OlapTableTest {
         }
     }
 
+    @Test
+    public void testTableVersionReadsPreserveIncompleteSync() throws Exception {
+        OlapTable table = createCloudOlapTable(1000, new Database(1, "test_db"));
+        ConnectContext ctx = new ConnectContext();
+        ctx.setSessionVariable(new SessionVariable());
+        ctx.getSessionVariable().cloudTableVersionCacheTtlMs = Long.MAX_VALUE;
+        ctx.setThreadLocalInfo();
+        try (MockedStatic<Config> mockedConfig = Mockito.mockStatic(Config.class, Mockito.CALLS_REAL_METHODS);
+                MockedStatic<VersionHelper> mockedVH = Mockito.mockStatic(VersionHelper.class)) {
+            mockedConfig.when(Config::isNotCloudMode).thenReturn(false);
+            Cloud.GetVersionResponse response = Cloud.GetVersionResponse.newBuilder()
+                    .setStatus(Cloud.MetaServiceResponseStatus.newBuilder().setCode(Cloud.MetaServiceCode.OK))
+                    .setVersion(103).addVersions(103).build();
+            mockedVH.when(() -> VersionHelper.getVersionFromMeta(Mockito.any(Cloud.GetVersionRequest.class)))
+                    .thenReturn(response);
+            mockedVH.when(() -> VersionHelper.getVersionFromMeta(
+                    Mockito.any(Cloud.GetVersionRequest.class), Mockito.anyInt())).thenReturn(response);
+
+            table.setCachedTableVersion(100);
+            Assertions.assertFalse(table.isCachedTableVersionExpired());
+            table.invalidateCachedTableVersion();
+            for (long version : new long[] {100, 102, 101}) {
+                table.setCachedTableVersion(version);
+                Assertions.assertTrue(table.isTableVersionSyncNeeded());
+                Assertions.assertTrue(table.isCachedTableVersionExpired());
+                Assertions.assertTrue(table.isCachedTableVersionExpired(Long.MAX_VALUE));
+            }
+            Assertions.assertEquals(102, table.getCachedTableVersion());
+
+            // Both scalar and batch table-version reads update the value, but cannot certify partition sync.
+            Assertions.assertEquals(103, table.getVisibleVersion());
+            Assertions.assertTrue(table.isTableVersionSyncNeeded());
+            Assertions.assertEquals(Lists.newArrayList(103L),
+                    OlapTable.getVisibleVersionInBatch(Lists.newArrayList(table)));
+            Assertions.assertTrue(table.isCachedTableVersionExpired());
+
+            table.setSyncedTableVersion(102);
+            Assertions.assertEquals(103, table.getCachedTableVersion());
+            Assertions.assertTrue(table.isTableVersionSyncNeeded());
+            table.setSyncedTableVersion(103);
+            Assertions.assertFalse(table.isCachedTableVersionExpired());
+            Assertions.assertFalse(table.isCachedTableVersionExpired(Long.MAX_VALUE));
+        } finally {
+            ConnectContext.remove();
+        }
+    }
+
     private OlapTable createCloudOlapTable(long tableId, Database db) {
         OlapTable table = new OlapTable() {
             private ReadWriteLock versionLock = new ReentrantReadWriteLock();
