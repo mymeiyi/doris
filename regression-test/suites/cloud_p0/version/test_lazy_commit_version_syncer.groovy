@@ -147,11 +147,11 @@ suite("test_lazy_commit_version_syncer", "docker") {
                 }
                 return feRpcCount("total", "getPartitionVersion") > partitionRequestsBefore
             }
-            // A total counter advances at RPC entry. Waiting for the next daemon round ensures that the
-            // preceding partition RPC and cache update have completed, without reading asynchronous logs.
+            // A total counter advances at RPC entry. A sync can issue a second table RPC to validate its
+            // partition batches. Two more table RPCs ensure the preceding cache publication has completed.
             stage = "wait for completion of the first daemon sync"
             long tableRequestsDuringSync = feRpcCount("total", "getTableVersion")
-            awaitUntil(5, 0.1) { feRpcCount("total", "getTableVersion") > tableRequestsDuringSync }
+            awaitUntil(5, 0.1) { feRpcCount("total", "getTableVersion") >= tableRequestsDuringSync + 2 }
             // On the unfixed daemon, the lazy task has not been submitted during the phase-one pause.
             // A daemon using waitForPendingTxns=true may submit/finish it early and must then cache 13.
             assertTrue(lazyCommitCount("submitted") == lazyBefore || cachedVersion() == 13L,
@@ -177,8 +177,9 @@ suite("test_lazy_commit_version_syncer", "docker") {
             stage = "wait for two daemon cycles after DELETE"
             long tableRequestsAfterCommit = feRpcCount("total", "getTableVersion")
             awaitUntil(10, 0.2) {
-                // Entry into the third round guarantees the first two rounds have finished.
-                feRpcCount("total", "getTableVersion") >= tableRequestsAfterCommit + 3
+                // Each round issues at most two table RPCs, including validation before cache publication.
+                // Five more RPCs guarantee that at least two complete rounds have finished.
+                feRpcCount("total", "getTableVersion") >= tableRequestsAfterCommit + 5
             }
             // Intentionally fails on the unfixed code with actual version 12. This checks the cause of
             // E-230 before BE compaction makes querying that obsolete version impossible.

@@ -27,12 +27,14 @@ import org.apache.doris.common.util.MasterDaemon;
 import org.apache.doris.qe.VariableMgr;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -164,6 +166,8 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
         // commit or table-version read refreshes the cache during this sync.
         tableVersionMap.keySet().forEach(OlapTable::invalidateCachedTableVersion);
         Set<Long> failedTables = ConcurrentHashMap.newKeySet();
+        Map<Long, CloudPartition.PartitionVersion> versions = new ConcurrentHashMap<>();
+        Map<Long, List<CloudPartition>> tablePartitions = new HashMap<>();
         List<Future<Void>> futures = new ArrayList<>();
         long start = System.currentTimeMillis();
         List<CloudPartition> partitions = new ArrayList<>();
@@ -172,17 +176,28 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
             OlapTable olapTable = entry.getKey();
             LOG.info("sync partition version for db: {}, table: {}, table cache version: {}, new version: {}",
                     olapTable.getDatabase().getId(), olapTable, olapTable.getCachedTableVersion(), entry.getValue());
-            for (Partition partition : olapTable.getAllPartitions()) {
-                partitions.add((CloudPartition) partition);
+            List<CloudPartition> currentPartitions;
+            olapTable.readLock();
+            try {
+                currentPartitions = olapTable.getAllPartitions().stream().map(p -> (CloudPartition) p)
+                        .collect(Collectors.toList());
+            } finally {
+                olapTable.readUnlock();
+            }
+            tablePartitions.put(olapTable.getId(), currentPartitions);
+            for (CloudPartition partition : currentPartitions) {
+                partitions.add(partition);
                 if (partitions.size() >= Config.cloud_get_version_task_batch_size) {
-                    Future<Void> future = submitGetPartitionVersionTask(failedTables, ImmutableList.copyOf(partitions));
+                    Future<Void> future = submitGetPartitionVersionTask(
+                            failedTables, versions, ImmutableList.copyOf(partitions));
                     futures.add(future);
                     partitions.clear();
                 }
             }
         }
         if (partitions.size() > 0) {
-            Future<Void> future = submitGetPartitionVersionTask(failedTables, ImmutableList.copyOf(partitions));
+            Future<Void> future = submitGetPartitionVersionTask(
+                    failedTables, versions, ImmutableList.copyOf(partitions));
             futures.add(future);
             partitions.clear();
         }
@@ -198,27 +213,77 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
             LOG.error("Error waiting for get partition version tasks to complete", e);
             return;
         }
-        // set table version for success tables
+        // Separate RPC batches can straddle a commit. Publish only if the MS table version stayed unchanged.
+        validateTableVersions(tableVersionMap, failedTables);
         for (Entry<OlapTable, Long> entry : tableVersionMap.entrySet()) {
-            if (!failedTables.contains(entry.getKey().getId())) {
-                OlapTable olapTable = entry.getKey();
-                olapTable.setSyncedTableVersion(entry.getValue());
+            OlapTable olapTable = entry.getKey();
+            olapTable.readLock();
+            try {
+                olapTable.versionWriteLock();
+                try {
+                    if (olapTable.getCachedTableVersion() > entry.getValue()) {
+                        failedTables.add(olapTable.getId());
+                    }
+                    if (failedTables.contains(olapTable.getId())) {
+                        // Invalidate together so a query cannot combine a failed batch with a successful one.
+                        for (Partition partition : olapTable.getAllPartitions()) {
+                            ((CloudPartition) partition).invalidateCachedVisibleVersion();
+                        }
+                        continue;
+                    }
+                    for (CloudPartition partition : tablePartitions.get(olapTable.getId())) {
+                        versions.get(partition.getId()).updateCache(partition);
+                    }
+                    olapTable.setSyncedTableVersion(entry.getValue());
+                } finally {
+                    olapTable.versionWriteUnlock();
+                }
+            } finally {
+                olapTable.readUnlock();
             }
         }
         LOG.info("sync partition version cost {} ms, table size: {}, rpc size: {}, failed tables: {}",
                 System.currentTimeMillis() - start, tableVersionMap.size(), futures.size(), failedTables);
     }
 
-    private Future<Void> submitGetPartitionVersionTask(Set<Long> failedTables, List<CloudPartition> partitions) {
+    private void validateTableVersions(Map<OlapTable, Long> tableVersionMap, Set<Long> failedTables) {
+        List<OlapTable> tables = tableVersionMap.keySet().stream()
+                .filter(table -> !failedTables.contains(table.getId())).collect(Collectors.toList());
+        for (List<OlapTable> batch : Lists.partition(tables, Config.cloud_get_version_task_batch_size)) {
+            List<Long> dbIds = batch.stream().map(table -> table.getDatabase().getId()).collect(Collectors.toList());
+            List<Long> tableIds = batch.stream().map(OlapTable::getId).collect(Collectors.toList());
+            try {
+                List<Long> versions = OlapTable.getVisibleVersionFromMeta(
+                        dbIds, tableIds, Config.cloud_version_syncer_get_version_retry_times);
+                for (int i = 0; i < batch.size(); i++) {
+                    long expected = tableVersionMap.get(batch.get(i));
+                    if (versions.get(i) != expected) {
+                        failedTables.add(tableIds.get(i));
+                        LOG.info("table version changed during partition sync, table: {}, before: {}, after: {}",
+                                tableIds.get(i), expected, versions.get(i));
+                    }
+                }
+            } catch (Exception e) {
+                failedTables.addAll(tableIds);
+                LOG.warn("failed to validate table versions after partition sync, tables: {}", tableIds, e);
+            }
+        }
+    }
+
+    private Future<Void> submitGetPartitionVersionTask(Set<Long> failedTables,
+            Map<Long, CloudPartition.PartitionVersion> versions, List<CloudPartition> partitions) {
         return GET_VERSION_THREAD_POOL.submit(() -> {
             try {
                 // Lazy commit advances the MS table version before partition versions become visible.
                 // Do not mark that table version synchronized until its pending transactions have finished.
-                CloudPartition.getSnapshotVisibleVersionFromMs(
-                        partitions, true, Config.cloud_version_syncer_get_version_retry_times);
+                List<CloudPartition.PartitionVersion> snapshots =
+                        CloudPartition.getSnapshotVisibleVersionFromMsWithoutCache(
+                                partitions, true, Config.cloud_version_syncer_get_version_retry_times);
+                for (int i = 0; i < partitions.size(); i++) {
+                    versions.put(partitions.get(i).getId(), snapshots.get(i));
+                }
             } catch (Exception e) {
                 LOG.warn("get partition version error", e);
-                partitions.forEach(CloudPartition::invalidateCachedVisibleVersion);
                 Set<Long> failedTableIds = partitions.stream().map(p -> p.getTableId())
                         .collect(Collectors.toSet());
                 failedTables.addAll(failedTableIds);

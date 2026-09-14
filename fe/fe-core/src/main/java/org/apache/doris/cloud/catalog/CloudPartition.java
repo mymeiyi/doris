@@ -249,6 +249,29 @@ public class CloudPartition extends Partition {
 
     public static List<Long> getSnapshotVisibleVersionFromMs(
             List<CloudPartition> partitions, boolean waitForPendingTxns, int maxAttempts) throws RpcException {
+        List<PartitionVersion> snapshots = getSnapshotVisibleVersionFromMsWithoutCache(
+                partitions, waitForPendingTxns, maxAttempts);
+        List<Long> versions = new ArrayList<>(snapshots.size());
+        List<OlapTable> tables = getTables(partitions);
+        for (OlapTable table : tables) {
+            table.versionWriteLock();
+        }
+        try {
+            for (int i = 0; i < snapshots.size(); i++) {
+                snapshots.get(i).updateCache(partitions.get(i));
+                versions.add(snapshots.get(i).version);
+            }
+        } finally {
+            for (int i = tables.size() - 1; i >= 0; i--) {
+                tables.get(i).versionWriteUnlock();
+            }
+        }
+        return versions;
+    }
+
+    // The daemon stages all batches before publishing a table's partition versions under its version write lock.
+    static List<PartitionVersion> getSnapshotVisibleVersionFromMsWithoutCache(
+            List<CloudPartition> partitions, boolean waitForPendingTxns, int maxAttempts) throws RpcException {
         if (partitions.isEmpty()) {
             return new ArrayList<>();
         }
@@ -267,22 +290,38 @@ public class CloudPartition extends Partition {
         List<Long> versions = getSnapshotVisibleVersion(
                 dbIds, tableIds, partitionIds, versionUpdateTimesMs, commitTsos, waitForPendingTxns, maxAttempts);
 
-        // Cache visible version, see hasData() for details.
         int size = versions.size();
         boolean hasCommitTsos = commitTsos.size() == size;
+        List<PartitionVersion> snapshots = new ArrayList<>(size);
         for (int i = 0; i < size; ++i) {
             Long version = versions.get(i);
             if (version > Partition.PARTITION_INIT_VERSION) {
                 // For compatibility, the existing partitions may not have mtime
                 long mTime = versions.size() == versionUpdateTimesMs.size() ? versionUpdateTimesMs.get(i) : 0;
                 long tso = hasCommitTsos ? commitTsos.get(i) : -1;
-                partitions.get(i).setCachedVisibleVersion(versions.get(i), mTime, tso);
+                snapshots.add(new PartitionVersion(version, mTime, tso));
             } else { // No data has been written to this partition
-                partitions.get(i).setCachedVisibleVersion(Partition.PARTITION_INIT_VERSION, System.currentTimeMillis());
+                snapshots.add(new PartitionVersion(Partition.PARTITION_INIT_VERSION, System.currentTimeMillis(), -1));
             }
         }
 
-        return versions;
+        return snapshots;
+    }
+
+    static final class PartitionVersion {
+        private final long version;
+        private final long updateTimeMs;
+        private final long commitTso;
+
+        private PartitionVersion(long version, long updateTimeMs, long commitTso) {
+            this.version = version;
+            this.updateTimeMs = updateTimeMs;
+            this.commitTso = commitTso;
+        }
+
+        void updateCache(CloudPartition partition) {
+            partition.setCachedVisibleVersion(version, updateTimeMs, commitTso);
+        }
     }
 
     private static List<OlapTable> getTables(List<CloudPartition> partitions) {

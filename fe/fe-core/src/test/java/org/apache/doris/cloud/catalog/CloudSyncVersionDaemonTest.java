@@ -88,6 +88,7 @@ public class CloudSyncVersionDaemonTest {
         db = new Database(1, "lazy_commit_db");
         table = new OlapTable(2, "lazy_commit_table", Collections.emptyList(), KeysType.DUP_KEYS,
                 new SinglePartitionInfo(), new RandomDistributionInfo(1));
+        Deencapsulation.setField(table, "versionLock", new ReentrantReadWriteLock(true));
         partition = CloudPartitionTest.createPartition(3, db.getId(), table.getId());
         table.addPartition(partition);
         db.registerTable(table);
@@ -162,7 +163,7 @@ public class CloudSyncVersionDaemonTest {
                 });
 
         daemon.runAfterCatalogReady();
-        Assertions.assertEquals(1, tableRequests.get());
+        Assertions.assertEquals(2, tableRequests.get(), "Validate the table version before publishing partitions");
         Assertions.assertEquals(1, partitionRequests.get());
         Assertions.assertEquals(101, table.getCachedTableVersion());
         Assertions.assertFalse(pendingTxn.get(), "The daemon must wait before caching the new table version");
@@ -176,7 +177,7 @@ public class CloudSyncVersionDaemonTest {
                 .build();
         Deencapsulation.invoke(new CloudGlobalTransactionMgr(), "updateVersion", retryResponse);
         daemon.runAfterCatalogReady();
-        Assertions.assertEquals(2, tableRequests.get());
+        Assertions.assertEquals(3, tableRequests.get());
         Assertions.assertEquals(1, partitionRequests.get(), "A successful sync does not need another partition RPC");
         Assertions.assertEquals(101, table.getCachedTableVersion());
         Assertions.assertEquals(13, partition.getCachedVisibleVersion());
@@ -190,7 +191,6 @@ public class CloudSyncVersionDaemonTest {
         // Start with a fully synchronized follower, not an already incomplete daemon sync.
         table.setSyncedTableVersion(100);
         Assertions.assertFalse(table.isTableVersionSyncNeeded());
-        Deencapsulation.setField(table, "versionLock", new ReentrantReadWriteLock(true));
 
         AtomicInteger tableRequests = new AtomicInteger();
         AtomicInteger partitionRequests = new AtomicInteger();
@@ -238,7 +238,7 @@ public class CloudSyncVersionDaemonTest {
         // The fixture uses a zero polling interval: both cycles must check MS despite a fresh table cache.
         daemon.runAfterCatalogReady();
         daemon.runAfterCatalogReady();
-        Assertions.assertEquals(2, tableRequests.get());
+        Assertions.assertEquals(3, tableRequests.get());
         // Inspect only the cache; a query or an MS getter could repair the missed version itself.
         Assertions.assertEquals(13, partition.getCachedVisibleVersion(),
                 "A later push must not hide P1's missed update when MS and cached table versions are both 102");
@@ -250,6 +250,15 @@ public class CloudSyncVersionDaemonTest {
 
     @Test
     public void testQuerySnapshotMustNotMixVersionsDuringDaemonRefresh() throws Exception {
+        assertQuerySnapshotDuringDaemonRefresh(2);
+    }
+
+    @Test
+    public void testQuerySnapshotMustNotMixVersionsAcrossDaemonBatches() throws Exception {
+        assertQuerySnapshotDuringDaemonRefresh(1);
+    }
+
+    private void assertQuerySnapshotDuringDaemonRefresh(int batchSize) throws Exception {
         CloudPartition firstPartition = Mockito.spy(partition);
         CloudPartition otherPartition = Mockito.spy(
                 CloudPartitionTest.createPartition(5, db.getId(), table.getId()));
@@ -257,7 +266,7 @@ public class CloudSyncVersionDaemonTest {
         table.addPartition(firstPartition);
         table.addPartition(otherPartition);
         table.setSyncedTableVersion(100);
-        Config.cloud_get_version_task_batch_size = 2;
+        Config.cloud_get_version_task_batch_size = batchSize;
         List<CloudPartition> partitions = List.of(firstPartition, otherPartition);
 
         CountDownLatch firstVersionRead = new CountDownLatch(1);
@@ -305,12 +314,13 @@ public class CloudSyncVersionDaemonTest {
                     } else {
                         partitionRequests.incrementAndGet();
                         Assertions.assertTrue(request.getWaitForPendingTxn());
-                        Assertions.assertEquals(2, request.getPartitionIdsCount());
-                        Assertions.assertTrue(request.getPartitionIdsList().contains(firstPartition.getId()));
-                        Assertions.assertTrue(request.getPartitionIdsList().contains(otherPartition.getId()));
-                        // One committed transaction advanced both partitions; MS returns one consistent batch.
-                        response.addVersions(13).addVersions(13)
-                                .addVersionUpdateTimeMs(2000).addVersionUpdateTimeMs(2000);
+                        Assertions.assertEquals(batchSize, request.getPartitionIdsCount());
+                        // One committed transaction advanced both partitions, possibly fetched in separate batches.
+                        for (long partitionId : request.getPartitionIdsList()) {
+                            Assertions.assertTrue(partitionId == firstPartition.getId()
+                                    || partitionId == otherPartition.getId());
+                            response.addVersions(13).addVersionUpdateTimeMs(2000);
+                        }
                     }
                     return CompletableFuture.completedFuture(response.build());
                 });
@@ -330,7 +340,8 @@ public class CloudSyncVersionDaemonTest {
             Assertions.assertTrue(firstVersionRead.await(10, TimeUnit.SECONDS), "The query did not read P1");
             daemon.runAfterCatalogReady();
             List<Long> snapshot = querySnapshot.get(10, TimeUnit.SECONDS);
-            Assertions.assertEquals(1, partitionRequests.get(), "The query must not refresh either cached version");
+            Assertions.assertEquals(2 / batchSize, partitionRequests.get(),
+                    "The query must not refresh either cached version");
             Assertions.assertEquals(2, cacheWrites.get());
             Assertions.assertEquals(101, table.getCachedTableVersion());
             Assertions.assertEquals(List.of(12L, 12L), snapshot,
@@ -394,7 +405,9 @@ public class CloudSyncVersionDaemonTest {
         Assertions.assertEquals(0,
                 (long) Deencapsulation.getField(partition, "lastVersionCachedTimeMs"));
         Assertions.assertTrue(partition.isCachedVersionExpired());
-        Assertions.assertEquals(8, otherPartition.getCachedVisibleVersion(), "Keep the successful batch's version");
+        Assertions.assertEquals(7, otherPartition.getCachedVisibleVersion(), "Do not publish a successful batch alone");
+        Assertions.assertEquals(0,
+                (long) Deencapsulation.getField(otherPartition, "lastVersionCachedTimeMs"));
         Assertions.assertEquals(100, table.getCachedTableVersion(), "A failed batch must not advance the table cache");
         Assertions.assertEquals(0,
                 (long) Deencapsulation.getField(table, "lastTableVersionCachedTimeMs"));
@@ -420,7 +433,7 @@ public class CloudSyncVersionDaemonTest {
         timeout.set(false);
         Config.cloud_enable_version_syncer = true;
         daemon.runAfterCatalogReady();
-        Assertions.assertEquals(2, tableRequests.get(), "An incomplete sync must bypass the table cache's TTL");
+        Assertions.assertEquals(3, tableRequests.get(), "Retry and validate despite the refreshed table cache's TTL");
         Assertions.assertEquals(4, partitionRequests.get(),
                 "Retry all batches even when MS table version equals the refreshed cache");
         Assertions.assertEquals(13, partition.getCachedVisibleVersion());
@@ -433,12 +446,25 @@ public class CloudSyncVersionDaemonTest {
             Config.cloud_version_syncer_interval_second = 0;
         }
         daemon.runAfterCatalogReady();
-        Assertions.assertEquals(2, tableRequests.get(), "Clear the retry marker only after all batches succeed");
+        Assertions.assertEquals(3, tableRequests.get(), "Clear the retry marker only after all batches succeed");
         Assertions.assertEquals(4, partitionRequests.get());
     }
 
     @Test
-    public void testSuccessfulSyncDoesNotClearNewerTableVersion() throws Exception {
+    public void testDiscardBatchesWhenMsVersionChangesWithoutPush() throws Exception {
+        assertRejectedPartitionSnapshot(false);
+    }
+
+    @Test
+    public void testDiscardBatchesWhenTableVersionValidationFails() throws Exception {
+        assertRejectedPartitionSnapshot(true);
+    }
+
+    private void assertRejectedPartitionSnapshot(boolean failValidation) throws Exception {
+        CloudPartition otherPartition = CloudPartitionTest.createPartition(5, db.getId(), table.getId());
+        otherPartition.setCachedVisibleVersion(12, 1000);
+        table.addPartition(otherPartition);
+        table.setSyncedTableVersion(100);
         AtomicLong msTableVersion = new AtomicLong(101);
         AtomicInteger tableRequests = new AtomicInteger();
         AtomicInteger partitionRequests = new AtomicInteger();
@@ -448,16 +474,71 @@ public class CloudSyncVersionDaemonTest {
                     Cloud.GetVersionResponse.Builder response = Cloud.GetVersionResponse.newBuilder()
                             .setStatus(Cloud.MetaServiceResponseStatus.newBuilder().setCode(Cloud.MetaServiceCode.OK));
                     if (request.getIsTableVersion()) {
-                        tableRequests.incrementAndGet();
+                        if (tableRequests.incrementAndGet() == 2 && failValidation) {
+                            return CompletableFuture.failedFuture(new TimeoutException("table validation timed out"));
+                        }
                         response.addVersions(msTableVersion.get());
                     } else {
                         Assertions.assertTrue(request.getWaitForPendingTxn());
-                        if (partitionRequests.incrementAndGet() == 1) {
-                            // This response captured partition 13 before another path cached table version 102.
-                            // The daemon must not certify version 102 using its version 101 sync result.
+                        Assertions.assertEquals(1, request.getPartitionIdsCount());
+                        Assertions.assertTrue(request.getPartitionIds(0) == partition.getId()
+                                || request.getPartitionIds(0) == otherPartition.getId());
+                        if (partitionRequests.incrementAndGet() == 1 && !failValidation) {
+                            // A commit occurs between partition snapshots, without any push updating the FE cache.
+                            response.addVersions(12);
+                            msTableVersion.set(102);
+                        } else {
                             response.addVersions(13);
+                        }
+                        response.addVersionUpdateTimeMs(2000).addCommitTsos(3000);
+                    }
+                    return CompletableFuture.completedFuture(response.build());
+                });
+
+        daemon.runAfterCatalogReady();
+        Assertions.assertEquals(2, tableRequests.get());
+        Assertions.assertEquals(2, partitionRequests.get());
+        Assertions.assertEquals(12, partition.getCachedVisibleVersion());
+        Assertions.assertEquals(12, otherPartition.getCachedVisibleVersion());
+        Assertions.assertEquals(100, table.getCachedTableVersion(), "Do not confirm an unvalidated snapshot");
+        Assertions.assertTrue(table.isTableVersionSyncNeeded());
+        Assertions.assertEquals(0, (long) Deencapsulation.getField(partition, "lastVersionCachedTimeMs"));
+        Assertions.assertEquals(0, (long) Deencapsulation.getField(otherPartition, "lastVersionCachedTimeMs"));
+
+        daemon.runAfterCatalogReady();
+        Assertions.assertEquals(4, tableRequests.get());
+        Assertions.assertEquals(4, partitionRequests.get());
+        Assertions.assertEquals(msTableVersion.get(), table.getCachedTableVersion());
+        Assertions.assertFalse(table.isTableVersionSyncNeeded());
+        for (CloudPartition cachedPartition : List.of(partition, otherPartition)) {
+            Assertions.assertEquals(13, cachedPartition.getCachedVisibleVersion());
+            Assertions.assertEquals(2000, cachedPartition.getVisibleVersionTime());
+            Assertions.assertEquals(3000L, cachedPartition.getTso().longValue());
+        }
+    }
+
+    @Test
+    public void testSyncDiscardsVersionsWhenCacheAdvancesAfterValidationSnapshot() throws Exception {
+        AtomicLong msTableVersion = new AtomicLong(101);
+        AtomicInteger tableRequests = new AtomicInteger();
+        AtomicInteger partitionRequests = new AtomicInteger();
+        Mockito.when(proxy.getVisibleVersionAsync(Mockito.any(Cloud.GetVersionRequest.class)))
+                .thenAnswer(invocation -> {
+                    Cloud.GetVersionRequest request = invocation.getArgument(0);
+                    Cloud.GetVersionResponse.Builder response = Cloud.GetVersionResponse.newBuilder()
+                            .setStatus(Cloud.MetaServiceResponseStatus.newBuilder().setCode(Cloud.MetaServiceCode.OK));
+                    if (request.getIsTableVersion()) {
+                        response.addVersions(msTableVersion.get());
+                        if (tableRequests.incrementAndGet() == 2) {
+                            // This validation response captured 101, then another path cached table version 102.
+                            // Check the local version again under the publication lock before applying partition 13.
                             msTableVersion.set(102);
                             table.setCachedTableVersion(102);
+                        }
+                    } else {
+                        Assertions.assertTrue(request.getWaitForPendingTxn());
+                        if (partitionRequests.incrementAndGet() == 1) {
+                            response.addVersions(13);
                         } else {
                             response.addVersions(14);
                         }
@@ -466,20 +547,20 @@ public class CloudSyncVersionDaemonTest {
                 });
 
         daemon.runAfterCatalogReady();
-        Assertions.assertEquals(13, partition.getCachedVisibleVersion());
+        Assertions.assertEquals(12, partition.getCachedVisibleVersion(), "Discard the stale MS snapshot");
         Assertions.assertEquals(102, table.getCachedTableVersion());
         Assertions.assertTrue(table.isTableVersionSyncNeeded());
 
         Config.cloud_version_syncer_interval_second = 3600;
         daemon.runAfterCatalogReady();
-        Assertions.assertEquals(2, tableRequests.get());
+        Assertions.assertEquals(4, tableRequests.get());
         Assertions.assertEquals(2, partitionRequests.get());
         Assertions.assertEquals(14, partition.getCachedVisibleVersion());
         Assertions.assertEquals(102, table.getCachedTableVersion());
         Assertions.assertFalse(table.isTableVersionSyncNeeded());
 
         daemon.runAfterCatalogReady();
-        Assertions.assertEquals(2, tableRequests.get());
+        Assertions.assertEquals(4, tableRequests.get());
         Assertions.assertEquals(2, partitionRequests.get());
     }
 }
