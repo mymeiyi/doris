@@ -258,6 +258,18 @@ public class CloudSyncVersionDaemonTest {
                         () -> Assertions.assertEquals(expectedTableVersion, tableVersion,
                                 "Infinite table TTL must not hide a committed version without background sync"));
             }
+            Assertions.assertEquals(4, versionRequests.get(), "Both version reads must refresh after each commit");
+            Config.cloud_enable_version_syncer = true;
+            Assertions.assertEquals(Long.MAX_VALUE, variables.cloudPartitionVersionCacheTtlMs);
+            Assertions.assertEquals(Long.MAX_VALUE, variables.cloudTableVersionCacheTtlMs);
+            Assertions.assertEquals(14, batchMode
+                    ? CloudPartition.getSnapshotVisibleVersion(Collections.singletonList(partition)).get(0)
+                    : partition.getVisibleVersion());
+            Assertions.assertEquals(102, batchMode
+                    ? OlapTable.getVisibleVersionInBatch(Collections.singletonList(table)).get(0)
+                    : table.getVisibleVersion());
+            Assertions.assertEquals(4, versionRequests.get(), "Re-enabling sync must restore ordinary TTL cache hits");
+            Assertions.assertTrue(table.isTableVersionSyncNeeded(), "Cache hits must preserve pending full-table sync");
         } finally {
             if (previousContext == null) {
                 ConnectContext.remove();
@@ -567,7 +579,7 @@ public class CloudSyncVersionDaemonTest {
         Assertions.assertEquals(0,
                 (long) Deencapsulation.getField(table, "lastTableVersionCachedTimeMs"));
 
-        // Disabling the daemon must not prevent ordinary updates from restoring TTL caching.
+        // Ordinary updates still populate caches while synchronization is disabled, but reads must bypass them.
         Config.cloud_enable_version_syncer = false;
         if (finiteTtl) {
             variables.cloudPartitionVersionCacheTtlMs = 60000;
@@ -579,7 +591,7 @@ public class CloudSyncVersionDaemonTest {
         table.setCachedTableVersion(102);
         Config.cloud_version_syncer_interval_second = 3600;
         Assertions.assertTrue(table.isTableVersionSyncNeeded());
-        Assertions.assertFalse(table.isCachedTableVersionExpired(variables.cloudTableVersionCacheTtlMs));
+        Assertions.assertTrue(table.isCachedTableVersionExpired(variables.cloudTableVersionCacheTtlMs));
         daemon.runAfterCatalogReady();
         Assertions.assertEquals(1, tableRequests.get(), "A disabled daemon must not issue RPCs");
         Assertions.assertEquals(2, partitionRequests.get());
@@ -587,6 +599,7 @@ public class CloudSyncVersionDaemonTest {
 
         timeout.set(false);
         Config.cloud_enable_version_syncer = true;
+        Assertions.assertFalse(table.isCachedTableVersionExpired(variables.cloudTableVersionCacheTtlMs));
         daemon.runAfterCatalogReady();
         Assertions.assertEquals(3, tableRequests.get(), "Retry and validate despite the refreshed table cache's TTL");
         Assertions.assertEquals(4, partitionRequests.get(),

@@ -3600,7 +3600,8 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
     public boolean isCachedTableVersionExpired(long expirationMs) {
         // -1 means no cache yet, need to fetch from MS
-        if (cachedTableVersion == -1 || lastTableVersionCachedTimeMs == 0 || expirationMs <= 0) {
+        if (!Config.cloud_enable_version_syncer
+                || cachedTableVersion == -1 || lastTableVersionCachedTimeMs == 0 || expirationMs <= 0) {
             return true;
         }
         return System.currentTimeMillis() - lastTableVersionCachedTimeMs > expirationMs;

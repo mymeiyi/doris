@@ -133,7 +133,8 @@ public class CloudPartition extends Partition {
 
     @VisibleForTesting
     protected boolean isCachedVersionExpired() {
-        if (lastVersionCachedTimeMs == 0) {
+        // Without pushes or background sync, queries must refresh versions themselves.
+        if (!Config.cloud_enable_version_syncer || lastVersionCachedTimeMs == 0) {
             return true;
         }
         ConnectContext ctx = ConnectContext.get();
