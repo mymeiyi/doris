@@ -60,13 +60,6 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
         if (!Config.cloud_enable_version_syncer) {
             return;
         }
-        // This daemon has no ConnectContext, so use the global/default TTLs to decide whether
-        // the shared version caches need proactive refresh. Finite TTLs refresh lazily on reads,
-        // while Long.MAX_VALUE never expires and requires this daemon to keep the cache current.
-        if (VariableMgr.getDefaultSessionVariable().cloudPartitionVersionCacheTtlMs != Long.MAX_VALUE
-                && VariableMgr.getDefaultSessionVariable().cloudTableVersionCacheTtlMs != Long.MAX_VALUE) {
-            return;
-        }
         LOG.info("begin sync cloud table and partition version");
         Map<OlapTable, Long> tableVersionMap = syncTableVersions();
         if (!tableVersionMap.isEmpty()) {
@@ -81,6 +74,11 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
         List<Long> dbIds = new ArrayList<>();
         List<Long> tableIds = new ArrayList<>();
         List<OlapTable> tables = new ArrayList<>();
+        // Finite TTLs refresh lazily on reads, but incomplete syncs must still be retried
+        // after changing TTLs or re-enabling the daemon.
+        boolean syncExpiredTables = VariableMgr.getDefaultSessionVariable().cloudPartitionVersionCacheTtlMs
+                == Long.MAX_VALUE
+                || VariableMgr.getDefaultSessionVariable().cloudTableVersionCacheTtlMs == Long.MAX_VALUE;
         // TODO meta service support range scan all table versions
         for (Database db : Env.getCurrentInternalCatalog().getDbs()) {
             List<Table> tableList = db.getTables();
@@ -89,8 +87,9 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
                     continue;
                 }
                 OlapTable olapTable = (OlapTable) table;
-                if (!olapTable.isCachedTableVersionExpired(
-                        Config.cloud_version_syncer_interval_second * 1000)) {
+                if (!olapTable.isTableVersionSyncNeeded() && (!syncExpiredTables
+                        || !olapTable.isCachedTableVersionExpired(
+                                Config.cloud_version_syncer_interval_second * 1000))) {
                     continue;
                 }
                 dbIds.add(db.getId());
@@ -161,8 +160,8 @@ public class CloudSyncVersionDaemon extends MasterDaemon {
     }
 
     private void syncPartitionVersion(Map<OlapTable, Long> tableVersionMap) {
-        // Keep the cache invalid until every partition batch has completed, even if a concurrent
-        // commit or table-version read advances the cached table version during this sync.
+        // Keep retrying until every partition batch has completed, even if a concurrent
+        // commit or table-version read refreshes the cache during this sync.
         tableVersionMap.keySet().forEach(OlapTable::invalidateCachedTableVersion);
         Set<Long> failedTables = ConcurrentHashMap.newKeySet();
         List<Future<Void>> futures = new ArrayList<>();

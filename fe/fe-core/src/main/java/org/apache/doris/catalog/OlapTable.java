@@ -244,9 +244,11 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
     private ConcurrentHashMap<String, CompletableFuture<Void>> partitionCreationFutures = new ConcurrentHashMap<>();
 
     // Cache for table version in cloud mode
-    // -1 means not cached yet; 0 keeps an incomplete partition sync invalid until the daemon succeeds.
-    private volatile long lastTableVersionCachedTimeMs = -1;
+    // 0 means no valid cache timestamp. Ordinary version updates restore normal TTL caching.
+    private volatile long lastTableVersionCachedTimeMs = 0;
     private volatile long cachedTableVersion = -1;
+    // Independent of TTL: only a complete daemon sync may clear this marker.
+    private volatile boolean partitionVersionSyncNeeded = false;
 
     private ReadWriteLock versionLock = Config.isCloudMode() ? new ReentrantReadWriteLock(true) : null;
 
@@ -3598,27 +3600,25 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
 
     public boolean isCachedTableVersionExpired(long expirationMs) {
         // -1 means no cache yet, need to fetch from MS
-        if (cachedTableVersion == -1 || isTableVersionSyncNeeded() || expirationMs <= 0) {
+        if (cachedTableVersion == -1 || lastTableVersionCachedTimeMs == 0 || expirationMs <= 0) {
             return true;
         }
         return System.currentTimeMillis() - lastTableVersionCachedTimeMs > expirationMs;
     }
 
     public boolean isTableVersionSyncNeeded() {
-        return lastTableVersionCachedTimeMs == 0;
+        return partitionVersionSyncNeeded;
     }
 
     public synchronized void invalidateCachedTableVersion() {
+        partitionVersionSyncNeeded = true;
         lastTableVersionCachedTimeMs = 0;
     }
 
     public synchronized void setCachedTableVersion(long version) {
         if (version >= cachedTableVersion) {
             cachedTableVersion = version;
-            // Partial updates and table-version reads must not clear an incomplete partition sync.
-            if (lastTableVersionCachedTimeMs != 0) {
-                lastTableVersionCachedTimeMs = System.currentTimeMillis();
-            }
+            lastTableVersionCachedTimeMs = System.currentTimeMillis();
         }
     }
 
@@ -3628,6 +3628,7 @@ public class OlapTable extends Table implements MTMVRelatedTableIf, GsonPostProc
         if (version >= cachedTableVersion) {
             cachedTableVersion = version;
             lastTableVersionCachedTimeMs = System.currentTimeMillis();
+            partitionVersionSyncNeeded = false;
         }
     }
 

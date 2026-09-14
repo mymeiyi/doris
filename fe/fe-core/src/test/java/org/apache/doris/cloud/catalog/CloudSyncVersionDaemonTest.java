@@ -60,6 +60,7 @@ public class CloudSyncVersionDaemonTest {
     private MetaServiceProxy[] originalProxies;
     private MockedStatic<Env> mockedEnv;
     private MockedStatic<VariableMgr> mockedVariableMgr;
+    private SessionVariable variables;
     private boolean originalEnableSyncer;
     private int originalSyncInterval;
     private int originalAttempts;
@@ -95,7 +96,7 @@ public class CloudSyncVersionDaemonTest {
         mockedEnv = Mockito.mockStatic(Env.class);
         mockedEnv.when(Env::getCurrentInternalCatalog).thenReturn(catalog);
         mockedEnv.when(Env::getCurrentEnv).thenReturn(env);
-        SessionVariable variables = new SessionVariable();
+        variables = new SessionVariable();
         variables.cloudPartitionVersionCacheTtlMs = Long.MAX_VALUE;
         variables.cloudTableVersionCacheTtlMs = Long.MAX_VALUE;
         mockedVariableMgr = Mockito.mockStatic(VariableMgr.class);
@@ -175,6 +176,15 @@ public class CloudSyncVersionDaemonTest {
 
     @Test
     public void testRetryFailedBatchDespiteConcurrentTableCacheRefresh() throws Exception {
+        assertRetryFailedBatchAfterReenabling(false);
+    }
+
+    @Test
+    public void testRetryFailedBatchAfterSwitchingToFiniteTtl() throws Exception {
+        assertRetryFailedBatchAfterReenabling(true);
+    }
+
+    private void assertRetryFailedBatchAfterReenabling(boolean finiteTtl) throws Exception {
         CloudPartition otherPartition = CloudPartitionTest.createPartition(5, db.getId(), table.getId());
         otherPartition.setCachedVisibleVersion(7, 1000);
         table.addPartition(otherPartition);
@@ -221,14 +231,26 @@ public class CloudSyncVersionDaemonTest {
         Assertions.assertEquals(0,
                 (long) Deencapsulation.getField(table, "lastTableVersionCachedTimeMs"));
 
+        // Disabling the daemon must not prevent ordinary updates from restoring TTL caching.
+        Config.cloud_enable_version_syncer = false;
+        if (finiteTtl) {
+            variables.cloudPartitionVersionCacheTtlMs = 60000;
+            variables.cloudTableVersionCacheTtlMs = 60000;
+        }
         // Another commit refreshes the other partition and table cache while the failed batch remains stale.
         otherPartition.setCachedVisibleVersion(9, 2000);
         msTableVersion.set(102);
         table.setCachedTableVersion(102);
         Config.cloud_version_syncer_interval_second = 3600;
         Assertions.assertTrue(table.isTableVersionSyncNeeded());
-        Assertions.assertTrue(table.isCachedTableVersionExpired(Long.MAX_VALUE));
+        Assertions.assertFalse(table.isCachedTableVersionExpired(variables.cloudTableVersionCacheTtlMs));
+        daemon.runAfterCatalogReady();
+        Assertions.assertEquals(1, tableRequests.get(), "A disabled daemon must not issue RPCs");
+        Assertions.assertEquals(2, partitionRequests.get());
+        Assertions.assertTrue(table.isTableVersionSyncNeeded());
+
         timeout.set(false);
+        Config.cloud_enable_version_syncer = true;
         daemon.runAfterCatalogReady();
         Assertions.assertEquals(2, tableRequests.get(), "An incomplete sync must bypass the table cache's TTL");
         Assertions.assertEquals(4, partitionRequests.get(),
@@ -238,6 +260,10 @@ public class CloudSyncVersionDaemonTest {
         Assertions.assertEquals(102, table.getCachedTableVersion());
         Assertions.assertFalse(table.isTableVersionSyncNeeded());
 
+        if (finiteTtl) {
+            // Even an expired daemon polling interval must not trigger proactive sync for a clean finite-TTL table.
+            Config.cloud_version_syncer_interval_second = 0;
+        }
         daemon.runAfterCatalogReady();
         Assertions.assertEquals(2, tableRequests.get(), "Clear the retry marker only after all batches succeed");
         Assertions.assertEquals(4, partitionRequests.get());

@@ -692,25 +692,40 @@ public class OlapTableTest {
             table.setCachedTableVersion(100);
             Assertions.assertFalse(table.isCachedTableVersionExpired());
             table.invalidateCachedTableVersion();
+            Assertions.assertTrue(table.isCachedTableVersionExpired());
             for (long version : new long[] {100, 102, 101}) {
                 table.setCachedTableVersion(version);
                 Assertions.assertTrue(table.isTableVersionSyncNeeded());
-                Assertions.assertTrue(table.isCachedTableVersionExpired());
-                Assertions.assertTrue(table.isCachedTableVersionExpired(Long.MAX_VALUE));
+                Assertions.assertFalse(table.isCachedTableVersionExpired());
+                Assertions.assertFalse(table.isCachedTableVersionExpired(Long.MAX_VALUE));
             }
             Assertions.assertEquals(102, table.getCachedTableVersion());
 
             // Both scalar and batch table-version reads update the value, but cannot certify partition sync.
+            table.invalidateCachedTableVersion();
             Assertions.assertEquals(103, table.getVisibleVersion());
             Assertions.assertTrue(table.isTableVersionSyncNeeded());
+            Assertions.assertFalse(table.isCachedTableVersionExpired());
+            Assertions.assertEquals(103, table.getVisibleVersion());
+            mockedVH.verify(() -> VersionHelper.getVersionFromMeta(Mockito.any(Cloud.GetVersionRequest.class)),
+                    Mockito.times(1));
+
+            ctx.getSessionVariable().cloudTableVersionCacheTtlMs = 60000;
+            table.invalidateCachedTableVersion();
             Assertions.assertEquals(Lists.newArrayList(103L),
                     OlapTable.getVisibleVersionInBatch(Lists.newArrayList(table)));
-            Assertions.assertTrue(table.isCachedTableVersionExpired());
+            Assertions.assertTrue(table.isTableVersionSyncNeeded());
+            Assertions.assertFalse(table.isCachedTableVersionExpired());
+            Assertions.assertEquals(Lists.newArrayList(103L),
+                    OlapTable.getVisibleVersionInBatch(Lists.newArrayList(table)));
+            mockedVH.verify(() -> VersionHelper.getVersionFromMeta(
+                    Mockito.any(Cloud.GetVersionRequest.class), Mockito.anyInt()), Mockito.times(1));
 
             table.setSyncedTableVersion(102);
             Assertions.assertEquals(103, table.getCachedTableVersion());
             Assertions.assertTrue(table.isTableVersionSyncNeeded());
             table.setSyncedTableVersion(103);
+            Assertions.assertFalse(table.isTableVersionSyncNeeded());
             Assertions.assertFalse(table.isCachedTableVersionExpired());
             Assertions.assertFalse(table.isCachedTableVersionExpired(Long.MAX_VALUE));
         } finally {
