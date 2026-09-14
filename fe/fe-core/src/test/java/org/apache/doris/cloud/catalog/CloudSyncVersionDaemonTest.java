@@ -43,14 +43,19 @@ import org.mockito.Mockito;
 
 import java.lang.reflect.Field;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class CloudSyncVersionDaemonTest {
@@ -241,6 +246,100 @@ public class CloudSyncVersionDaemonTest {
         Assertions.assertEquals(102, table.getCachedTableVersion());
         Assertions.assertEquals(2, partitionRequests.get(), "Sync both partitions once, then skip the clean table");
         Assertions.assertFalse(table.isTableVersionSyncNeeded());
+    }
+
+    @Test
+    public void testQuerySnapshotMustNotMixVersionsDuringDaemonRefresh() throws Exception {
+        CloudPartition firstPartition = Mockito.spy(partition);
+        CloudPartition otherPartition = Mockito.spy(
+                CloudPartitionTest.createPartition(5, db.getId(), table.getId()));
+        otherPartition.setCachedVisibleVersion(12, 1000);
+        table.addPartition(firstPartition);
+        table.addPartition(otherPartition);
+        table.setSyncedTableVersion(100);
+        Config.cloud_get_version_task_batch_size = 2;
+        List<CloudPartition> partitions = List.of(firstPartition, otherPartition);
+
+        CountDownLatch firstVersionRead = new CountDownLatch(1);
+        CountDownLatch resumeQuery = new CountDownLatch(1);
+        ReentrantReadWriteLock versionLock = new ReentrantReadWriteLock(true);
+        ReentrantReadWriteLock.WriteLock writeLock = Mockito.spy(versionLock.writeLock());
+        ReadWriteLock observedLock = Mockito.mock(ReadWriteLock.class);
+        Mockito.when(observedLock.readLock()).thenReturn(versionLock.readLock());
+        Mockito.when(observedLock.writeLock()).thenReturn(writeLock);
+        Deencapsulation.setField(table, "versionLock", observedLock);
+        Mockito.doAnswer(invocation -> {
+            // A writer respecting the query's read lock must let the query finish before applying its batch.
+            resumeQuery.countDown();
+            return invocation.callRealMethod();
+        }).when(writeLock).lock();
+
+        AtomicInteger cacheWrites = new AtomicInteger();
+        for (CloudPartition cachedPartition : partitions) {
+            Mockito.doAnswer(invocation -> {
+                invocation.callRealMethod();
+                if (cacheWrites.incrementAndGet() == partitions.size()) {
+                    // The current daemon bypasses the write lock: resume after both caches have changed.
+                    resumeQuery.countDown();
+                }
+                return null;
+            }).when(cachedPartition).setCachedVisibleVersion(Mockito.anyLong(), Mockito.anyLong(), Mockito.anyLong());
+        }
+        Mockito.doAnswer(invocation -> {
+            long version = (long) invocation.callRealMethod();
+            Assertions.assertEquals(1, versionLock.getReadHoldCount(), "The query must hold the table version lock");
+            firstVersionRead.countDown();
+            Assertions.assertTrue(resumeQuery.await(10, TimeUnit.SECONDS),
+                    "The daemon did not reach cache publication");
+            return version;
+        }).when(firstPartition).getCachedVisibleVersion();
+
+        AtomicInteger partitionRequests = new AtomicInteger();
+        Mockito.when(proxy.getVisibleVersionAsync(Mockito.any(Cloud.GetVersionRequest.class)))
+                .thenAnswer(invocation -> {
+                    Cloud.GetVersionRequest request = invocation.getArgument(0);
+                    Cloud.GetVersionResponse.Builder response = Cloud.GetVersionResponse.newBuilder()
+                            .setStatus(Cloud.MetaServiceResponseStatus.newBuilder().setCode(Cloud.MetaServiceCode.OK));
+                    if (request.getIsTableVersion()) {
+                        response.addVersions(101);
+                    } else {
+                        partitionRequests.incrementAndGet();
+                        Assertions.assertTrue(request.getWaitForPendingTxn());
+                        Assertions.assertEquals(2, request.getPartitionIdsCount());
+                        Assertions.assertTrue(request.getPartitionIdsList().contains(firstPartition.getId()));
+                        Assertions.assertTrue(request.getPartitionIdsList().contains(otherPartition.getId()));
+                        // One committed transaction advanced both partitions; MS returns one consistent batch.
+                        response.addVersions(13).addVersions(13)
+                                .addVersionUpdateTimeMs(2000).addVersionUpdateTimeMs(2000);
+                    }
+                    return CompletableFuture.completedFuture(response.build());
+                });
+
+        InternalCatalog catalog = Env.getCurrentInternalCatalog();
+        ExecutorService queryExecutor = Executors.newSingleThreadExecutor();
+        try {
+            Future<List<Long>> querySnapshot = queryExecutor.submit(() -> {
+                // Install thread-local mocks on the query thread, just as on the daemon coordinator thread.
+                try (MockedStatic<Env> queryEnv = Mockito.mockStatic(Env.class);
+                        MockedStatic<VariableMgr> queryVariables = Mockito.mockStatic(VariableMgr.class)) {
+                    queryEnv.when(Env::getCurrentInternalCatalog).thenReturn(catalog);
+                    queryVariables.when(VariableMgr::getDefaultSessionVariable).thenReturn(variables);
+                    return CloudPartition.getSnapshotVisibleVersion(partitions);
+                }
+            });
+            Assertions.assertTrue(firstVersionRead.await(10, TimeUnit.SECONDS), "The query did not read P1");
+            daemon.runAfterCatalogReady();
+            List<Long> snapshot = querySnapshot.get(10, TimeUnit.SECONDS);
+            Assertions.assertEquals(1, partitionRequests.get(), "The query must not refresh either cached version");
+            Assertions.assertEquals(2, cacheWrites.get());
+            Assertions.assertEquals(101, table.getCachedTableVersion());
+            Assertions.assertEquals(List.of(12L, 12L), snapshot,
+                    "A query holding the version read lock must not see P1 before and P2 after the same transaction");
+        } finally {
+            resumeQuery.countDown();
+            queryExecutor.shutdownNow();
+            Assertions.assertTrue(queryExecutor.awaitTermination(10, TimeUnit.SECONDS));
+        }
     }
 
     @Test
