@@ -128,7 +128,7 @@ Status LoadStreamWriter::register_direct_upload_writer(const std::string& writer
     }
     if (ctx.tablet->enable_unique_key_merge_on_write()) {
         RETURN_IF_ERROR(static_cast<CloudRowsetBuilder*>(_rowset_builder.get())
-                                ->get_direct_mow_snapshot(context->mutable_mow_snapshot()));
+                                ->get_mow_snapshot_for_sink(context->mutable_mow_snapshot()));
     }
     context->set_writer_id(writer_id);
     *context->mutable_rowset_meta() = _rowset_writer->rowset_meta()->get_rowset_pb();
@@ -189,7 +189,7 @@ Status LoadStreamWriter::add_partial_rowset(const std::string& writer_id, const 
     }
     if (is_mow) {
         RETURN_IF_ERROR(static_cast<CloudRowsetBuilder*>(_rowset_builder.get())
-                                ->merge_direct_mow_bitmap(*mow_result));
+                                ->merge_sink_mow_bitmap(*mow_result));
         _mow_results.emplace(it->second, *mow_result);
     }
     _partial_rowset_metas.emplace(it->second, meta);
@@ -422,7 +422,7 @@ Status LoadStreamWriter::_pre_close() {
                                       _req.tablet_id);
         }
         RowsetMetaPB meta;
-        RETURN_IF_ERROR(CloudRowsetBuilder::assemble_direct_rowset_meta(
+        RETURN_IF_ERROR(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
                 _rowset_writer->rowset_meta()->get_rowset_pb(), _partial_rowset_metas,
                 _max_segments_per_rowset, &meta));
         RETURN_IF_ERROR(static_cast<CloudRowsetBuilder*>(_rowset_builder.get())

@@ -255,9 +255,9 @@ Status CloudRowsetBuilder::commit_rowset(const std::string& job_id, int64_t tabl
     return _engine.meta_mgr().commit_rowset(*rowset_meta(), job_id, table_id);
 }
 
-Status CloudRowsetBuilder::get_direct_mow_snapshot(PCloudLoadMowSnapshot* snapshot) {
+Status CloudRowsetBuilder::get_mow_snapshot_for_sink(PCloudLoadMowSnapshot* snapshot) {
     DORIS_CHECK(_tablet->enable_unique_key_merge_on_write());
-    if (_direct_mow_snapshot == nullptr) {
+    if (_mow_snapshot_for_sink == nullptr) {
         RETURN_IF_ERROR(cloud_tablet()->sync_rowsets());
         auto context = _rowset_writer->context().mow_context;
         DORIS_CHECK(context != nullptr);
@@ -286,18 +286,18 @@ Status CloudRowsetBuilder::get_direct_mow_snapshot(PCloudLoadMowSnapshot* snapsh
             _tablet->tablet_meta()->delete_bitmap().subset_and_agg(
                     rowset_segments, 0, _max_version_in_flush_phase, &snapshot_bitmap);
         }
-        _direct_mow_snapshot = std::make_unique<PCloudLoadMowSnapshot>();
-        _direct_mow_snapshot->set_version(_max_version_in_flush_phase);
+        _mow_snapshot_for_sink = std::make_unique<PCloudLoadMowSnapshot>();
+        _mow_snapshot_for_sink->set_version(_max_version_in_flush_phase);
         // Keep the rowset references in MowContext until the load has finished.
         for (const auto& rowset : context->rowset_ptrs) {
-            auto* meta = _direct_mow_snapshot->add_rowsets();
+            auto* meta = _mow_snapshot_for_sink->add_rowsets();
             *meta = rowset->rowset_meta()->get_rowset_pb();
             meta->clear_tablet_schema();
             rowset->tablet_schema()->to_schema_pb(meta->mutable_tablet_schema());
         }
-        *_direct_mow_snapshot->mutable_delete_bitmap() = snapshot_bitmap.to_pb();
+        *_mow_snapshot_for_sink->mutable_delete_bitmap() = snapshot_bitmap.to_pb();
     }
-    *snapshot = *_direct_mow_snapshot;
+    *snapshot = *_mow_snapshot_for_sink;
     DBUG_EXECUTE_IF("CloudRowsetBuilder.direct_mow.snapshot_ready", {
         // Expose readiness while blocked, independent of asynchronous log flushing.
         static bvar::Adder<int64_t> waiters("cloud_memtable_mow_snapshot_waiters");
@@ -308,8 +308,8 @@ Status CloudRowsetBuilder::get_direct_mow_snapshot(PCloudLoadMowSnapshot* snapsh
     return Status::OK();
 }
 
-Status CloudRowsetBuilder::validate_direct_mow_result(const PCloudLoadMowResult& result,
-                                                      int64_t snapshot_version) {
+Status CloudRowsetBuilder::validate_sink_mow_result(const PCloudLoadMowResult& result,
+                                                    int64_t snapshot_version) {
     if (!result.has_snapshot_version() || result.snapshot_version() != snapshot_version ||
         !result.has_delete_bitmap()) {
         return Status::InvalidArgument("missing or mismatched direct MOW snapshot result");
@@ -334,9 +334,9 @@ Status CloudRowsetBuilder::validate_direct_mow_result(const PCloudLoadMowResult&
     return Status::OK();
 }
 
-Status CloudRowsetBuilder::merge_direct_mow_bitmap(const PCloudLoadMowResult& result) {
-    DORIS_CHECK(_direct_mow_snapshot != nullptr);
-    RETURN_IF_ERROR(validate_direct_mow_result(result, _direct_mow_snapshot->version()));
+Status CloudRowsetBuilder::merge_sink_mow_bitmap(const PCloudLoadMowResult& result) {
+    DORIS_CHECK(_mow_snapshot_for_sink != nullptr);
+    RETURN_IF_ERROR(validate_sink_mow_result(result, _mow_snapshot_for_sink->version()));
     _delete_bitmap->merge(DeleteBitmap::from_pb(result.delete_bitmap(), _tablet->tablet_id()));
     return Status::OK();
 }
@@ -400,7 +400,7 @@ Status CloudRowsetBuilder::validate_partial_rowset_meta(const RowsetMetaPB& base
     return Status::OK();
 }
 
-Status CloudRowsetBuilder::assemble_direct_rowset_meta(
+Status CloudRowsetBuilder::assemble_rowset_meta_from_partials(
         const RowsetMetaPB& base_meta, const std::map<int32_t, RowsetMetaPB>& partial_rowset_metas,
         int32_t max_segments_per_rowset, RowsetMetaPB* result) {
     *result = base_meta;

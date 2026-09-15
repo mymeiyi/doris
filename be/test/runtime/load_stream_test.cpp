@@ -1496,7 +1496,8 @@ TEST_F(CloudDirectUploadMetaTest, AssembleSparseSegmentsAndPackedLocations) {
     std::map<int32_t, RowsetMetaPB> partials;
     partials.emplace(100, partial(102));
     partials.emplace(0, first);
-    ASSERT_TRUE(CloudRowsetBuilder::assemble_direct_rowset_meta(base_meta(), partials, 100, &merged)
+    ASSERT_TRUE(CloudRowsetBuilder::assemble_rowset_meta_from_partials(base_meta(), partials, 100,
+                                                                       &merged)
                         .ok());
     EXPECT_EQ(2, merged.num_segments());
     EXPECT_EQ(0, merged.segment_ids(0));
@@ -1541,15 +1542,15 @@ TEST_F(CloudDirectUploadMetaTest, RejectInvalidPartialResults) {
     meta.mutable_tablet_schema()->add_index()->set_index_type(INVERTED);
     meta.clear_inverted_index_file_info();
     check(meta);
-    EXPECT_FALSE(CloudRowsetBuilder::assemble_direct_rowset_meta(
+    EXPECT_FALSE(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
                          base_meta(), {{0, partial(0)}, {1, partial(1)}}, 1, &merged)
                          .ok());
 }
 
 TEST_F(CloudDirectUploadMetaTest, EmptyWriter) {
     RowsetMetaPB merged;
-    ASSERT_TRUE(CloudRowsetBuilder::assemble_direct_rowset_meta(base_meta(), {{0, base_meta()}},
-                                                                100, &merged)
+    ASSERT_TRUE(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
+                        base_meta(), {{0, base_meta()}}, 100, &merged)
                         .ok());
     EXPECT_EQ(0, merged.num_segments());
     EXPECT_TRUE(merged.empty());
@@ -1582,8 +1583,8 @@ TEST_F(CloudDirectUploadMetaTest, AssembleVariantSchemaWithoutDuplicateFields) {
     *first.mutable_tablet_schema() = *schema;
     *second.mutable_tablet_schema() = *schema;
     RowsetMetaPB merged;
-    ASSERT_TRUE(CloudRowsetBuilder::assemble_direct_rowset_meta(base, {{0, first}, {100, second}},
-                                                                100, &merged)
+    ASSERT_TRUE(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
+                        base, {{0, first}, {100, second}}, 100, &merged)
                         .ok());
     const auto& merged_schema = merged.tablet_schema();
     ASSERT_EQ(2, merged_schema.column_size());
@@ -1605,7 +1606,7 @@ TEST_F(CloudDirectUploadMetaTest, PreserveAggregateAndMorOverlappingLayout) {
         first.mutable_tablet_schema()->set_keys_type(type);
         second.mutable_tablet_schema()->set_keys_type(type);
         RowsetMetaPB merged;
-        ASSERT_TRUE(CloudRowsetBuilder::assemble_direct_rowset_meta(
+        ASSERT_TRUE(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
                             base, {{0, first}, {100, second}}, 100, &merged)
                             .ok());
         EXPECT_EQ(type, merged.tablet_schema().keys_type());
@@ -1622,48 +1623,48 @@ TEST_F(CloudDirectUploadMetaTest, PreserveDisjointKeyRanges) {
     second.mutable_segments_key_bounds(0)->set_min_key("c");
     RowsetMetaPB merged;
     auto base = base_meta();
-    ASSERT_TRUE(CloudRowsetBuilder::assemble_direct_rowset_meta(base, {{0, first}, {100, second}},
-                                                                100, &merged)
+    ASSERT_TRUE(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
+                        base, {{0, first}, {100, second}}, 100, &merged)
                         .ok());
     EXPECT_EQ(NONOVERLAPPING, merged.segments_overlap_pb());
 
     // Primary-key bounds cannot establish the ordering of cluster keys.
     base.mutable_tablet_schema()->add_cluster_key_uids(1);
-    ASSERT_TRUE(CloudRowsetBuilder::assemble_direct_rowset_meta(base, {{0, first}, {100, second}},
-                                                                100, &merged)
+    ASSERT_TRUE(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
+                        base, {{0, first}, {100, second}}, 100, &merged)
                         .ok());
     EXPECT_EQ(OVERLAPPING, merged.segments_overlap_pb());
 }
 
 TEST(CloudDirectMowTest, RequireMatchingSnapshotAndCompleteBitmap) {
     PCloudLoadMowResult result;
-    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    EXPECT_FALSE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
     result.set_snapshot_version(5);
-    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    EXPECT_FALSE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
     auto* bitmap = result.mutable_delete_bitmap();
-    EXPECT_TRUE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
-    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 6).ok());
+    EXPECT_TRUE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
+    EXPECT_FALSE(CloudRowsetBuilder::validate_sink_mow_result(result, 6).ok());
     bitmap->add_rowset_ids("020000000000000100000000000000020000000000000003");
-    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    EXPECT_FALSE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
     bitmap->add_segment_ids(1000);
     bitmap->add_versions(0);
-    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    EXPECT_FALSE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
     roaring::Roaring rows;
     rows.add(7);
     std::string bytes(rows.getSizeInBytes(), '\0');
     rows.write(bytes.data());
     bitmap->add_segment_delete_bitmaps(bytes);
-    ASSERT_TRUE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    ASSERT_TRUE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
     auto decoded = DeleteBitmap::from_pb(*bitmap, 1);
     RowsetId rowset_id;
     rowset_id.init(bitmap->rowset_ids(0));
     EXPECT_TRUE(decoded.contains({rowset_id, 1000, 0}, 7));
     EXPECT_FALSE(decoded.contains({rowset_id, 0, 0}, 7));
     bitmap->set_versions(0, 5);
-    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    EXPECT_FALSE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
     bitmap->set_versions(0, 0);
     bitmap->set_segment_delete_bitmaps(0, "invalid");
-    EXPECT_FALSE(CloudRowsetBuilder::validate_direct_mow_result(result, 5).ok());
+    EXPECT_FALSE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
 }
 
 } // namespace doris

@@ -43,17 +43,17 @@ public:
                                                const RowsetMetaPB& partial_meta,
                                                int32_t segment_start_id, int32_t segment_capacity);
     // Inputs have already passed validate_partial_rowset_meta at the stream boundary.
-    static Status assemble_direct_rowset_meta(
+    static Status assemble_rowset_meta_from_partials(
             const RowsetMetaPB& base_meta,
             const std::map<int32_t, RowsetMetaPB>& partial_rowset_metas,
             int32_t max_segments_per_rowset, RowsetMetaPB* result);
 
     Status build_rowset_from_assembled_meta(const RowsetMetaPB& meta);
-    Status get_direct_mow_snapshot(PCloudLoadMowSnapshot* snapshot);
-    Status merge_direct_mow_bitmap(const PCloudLoadMowResult& result);
+    Status get_mow_snapshot_for_sink(PCloudLoadMowSnapshot* snapshot);
+    Status merge_sink_mow_bitmap(const PCloudLoadMowResult& result);
 
-    static Status validate_direct_mow_result(const PCloudLoadMowResult& result,
-                                             int64_t snapshot_version);
+    static Status validate_sink_mow_result(const PCloudLoadMowResult& result,
+                                           int64_t snapshot_version);
 
     virtual void update_tablet_stats();
 
@@ -76,7 +76,7 @@ protected:
     Status check_tablet_version_count();
 
     CloudStorageEngine& _engine;
-    std::unique_ptr<PCloudLoadMowSnapshot> _direct_mow_snapshot;
+    std::unique_ptr<PCloudLoadMowSnapshot> _mow_snapshot_for_sink;
 
     // whether to skip writing rowset metadata to meta service.
     // This is used for empty rowset when config::skip_writing_empty_rowset_metadata is true.

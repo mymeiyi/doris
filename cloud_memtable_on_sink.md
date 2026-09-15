@@ -262,14 +262,14 @@ TabletStream::append_data()
   ├─ GET_WRITE_CONTEXT                                                   [直传注册]
   │   → LoadStreamWriter::register_direct_upload_writer(writer_id)
   │     → 记录 / 复用 writer 的 Segment ID 区间
-  │     → CloudRowsetBuilder::get_direct_mow_snapshot()                    [仅 MOW]
+  │     → CloudRowsetBuilder::get_mow_snapshot_for_sink()                    [仅 MOW]
   │     → 填充 PCloudLoadWriteContext
   │   ⇒ PLoadStreamResponse.write_context 返回 Sink
   │
   ├─ ADD_PARTIAL_ROWSET                                                  [直传上传完成]
   │   → LoadStreamWriter::add_partial_rowset()
   │     → CloudRowsetBuilder::validate_partial_rowset_meta()
-  │     → CloudRowsetBuilder::merge_direct_mow_bitmap()                    [仅 MOW]
+  │     → CloudRowsetBuilder::merge_sink_mow_bitmap()                    [仅 MOW]
   │     → 保存该 writer 的 partial Rowset 元数据
   │
   ├─ APPEND_DATA                                                         [文件转发]
@@ -307,7 +307,7 @@ Sink BE：VTabletWriterV2::close()
     → IndexStream::close()
       → TabletStream::pre_close() / close()
         → LoadStreamWriter::_pre_close()
-          ├─ 直传：CloudRowsetBuilder::assemble_direct_rowset_meta()
+          ├─ 直传：CloudRowsetBuilder::assemble_rowset_meta_from_partials()
           │         → build_rowset_from_assembled_meta()
           └─ 转发：BaseRowsetBuilder::build_rowset()
           → BaseRowsetBuilder::submit_calc_delete_bitmap_task()
