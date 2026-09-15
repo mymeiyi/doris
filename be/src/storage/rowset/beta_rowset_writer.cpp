@@ -71,19 +71,6 @@ using namespace ErrorCode;
 
 namespace {
 
-bool is_segment_overlapping(const std::vector<KeyBoundsPB>& segments_encoded_key_bounds) {
-    std::string_view last;
-    for (auto&& segment_encode_key : segments_encoded_key_bounds) {
-        auto&& cur_min = segment_encode_key.min_key();
-        auto&& cur_max = segment_encode_key.max_key();
-        if (cur_min <= last) {
-            return true;
-        }
-        last = cur_max;
-    }
-    return false;
-}
-
 bool copy_key_bounds_with_truncation(const KeyBoundsPB& src, KeyBoundsPB* dst) {
     DCHECK(dst != nullptr);
     if (config::random_segments_key_bounds_truncation) {
@@ -420,10 +407,19 @@ Status BaseBetaRowsetWriter::_generate_delete_bitmap(int32_t segment_id) {
         return Status::OK();
     }
     std::vector<RowsetSharedPtr> specified_rowsets;
-    {
+    if (_context.mow_context->snapshot_delete_bitmap != nullptr) {
+        specified_rowsets = _context.mow_context->rowset_ptrs;
+    } else {
         std::shared_lock meta_rlock(_context.tablet->get_header_lock());
         specified_rowsets =
                 _context.tablet->get_rowset_by_ids(_context.mow_context->rowset_ids.get());
+    }
+
+    RowsetSharedPtr streamed_rowset;
+    if (_seg_files.get(segment_id) == nullptr) {
+        // Streamed files are closed by LoadStreamWriter. Snapshot their packed mappings on
+        // its serial receive thread before later file closes mutate the shared rowset meta.
+        RETURN_IF_ERROR(_build_tmp(streamed_rowset, segment_id));
     }
 
     // Submit the entire delete bitmap calculation process to thread pool for async execution
@@ -432,7 +428,7 @@ Status BaseBetaRowsetWriter::_generate_delete_bitmap(int32_t segment_id) {
     const auto submit_time_us = MonotonicMicros();
     return _calc_delete_bitmap_token->submit_func([this, segment_id,
                                                    specified_rowsets = std::move(specified_rowsets),
-                                                   submit_time_us]() -> Status {
+                                                   submit_time_us, streamed_rowset]() -> Status {
         const auto queue_time_us = MonotonicMicros() - submit_time_us;
         Status st = Status::OK();
         // Step 1: Close file_writer (must be done before load_segments)
@@ -457,10 +453,9 @@ Status BaseBetaRowsetWriter::_generate_delete_bitmap(int32_t segment_id) {
 
         OlapStopWatch watch;
         // Step 2: Build tmp rowset (needs file_writer to be closed)
-        RowsetSharedPtr rowset_ptr;
-        st = _build_tmp(rowset_ptr, segment_id);
-        if (!st.ok()) {
-            return st;
+        RowsetSharedPtr rowset_ptr = streamed_rowset;
+        if (rowset_ptr == nullptr) {
+            RETURN_IF_ERROR(_build_tmp(rowset_ptr, segment_id));
         }
 
         // Step 3: Load segments (needs file_writer to be closed and rowset to be built)
@@ -477,7 +472,7 @@ Status BaseBetaRowsetWriter::_generate_delete_bitmap(int32_t segment_id) {
         st = BaseTablet::calc_delete_bitmap(_context.tablet, rowset_ptr, segments,
                                             specified_rowsets, _context.mow_context->delete_bitmap,
                                             _context.mow_context->max_version, nullptr, nullptr,
-                                            nullptr);
+                                            _context.mow_context->snapshot_delete_bitmap);
         if (!st.ok()) {
             return st;
         }
@@ -1058,8 +1053,9 @@ Status BaseBetaRowsetWriter::_build_rowset_meta(RowsetMeta* rowset_meta, bool ch
     std::vector<uint32_t> segment_rows;
     std::vector<int64_t> segment_ids;
     std::optional<bool> segments_key_bounds_truncated;
-    const bool record_segment_ids = _context.write_type == DataWriteType::TYPE_COMPACTION &&
-                                    (_context.is_partial_output_writer || _segment_start_id != 0);
+    const bool record_segment_ids =
+            _context.is_partial_output_writer ||
+            (_context.write_type == DataWriteType::TYPE_COMPACTION && _segment_start_id != 0);
     {
         std::lock_guard<std::mutex> lock(_segid_statistics_map_mutex);
         if (record_segment_ids) {
@@ -1119,7 +1115,9 @@ Status BaseBetaRowsetWriter::_build_rowset_meta(RowsetMeta* rowset_meta, bool ch
         rowset_meta->set_segments_overlap(OVERLAPPING);
     }
 
-    auto segment_num = _num_seg();
+    // A temporary rowset contains only completed segments, which may finish out of order.
+    auto segment_num =
+            completed_segment_ids != nullptr ? completed_segment_ids->size() : _num_seg();
     if (check_segment_num && config::check_segment_when_build_rowset_meta) {
         auto segments_encoded_key_bounds_size = segments_encoded_key_bounds.size();
         if (segments_encoded_key_bounds_size != segment_num) {
@@ -1181,6 +1179,7 @@ Status BaseBetaRowsetWriter::_build_tmp(RowsetSharedPtr& rowset_ptr, int32_t seg
             RETURN_IF_ERROR(tmp_rs_meta->collect_packed_slice_location(
                     *writer, _context.segment_path(segment_id)));
         }
+        // Forwarded files already have their packed mapping in the serial receive snapshot.
     }
 
     status = RowsetFactory::create_rowset(_context.tablet_schema, _context.tablet_path, tmp_rs_meta,
