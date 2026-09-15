@@ -177,8 +177,9 @@ public:
     // cancel the stream, abort close_wait, mark _is_closed and _is_cancelled
     void cancel(Status reason);
 
-    Status register_direct_upload_writer(int64_t partition_id, int64_t index_id, int64_t tablet_id,
-                                  const std::string& writer_id, PCloudLoadWriteContext* context);
+    Status register_sink_upload_writer(int64_t partition_id, int64_t index_id, int64_t tablet_id,
+                                       const std::string& writer_id,
+                                       PCloudLoadWriteContext* context);
     Status add_partial_rowset(int64_t partition_id, int64_t index_id, int64_t tablet_id,
                               const std::string& writer_id, const RowsetMetaPB& meta,
                               const PCloudLoadMowResult* mow_result = nullptr);

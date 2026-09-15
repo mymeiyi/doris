@@ -27,7 +27,7 @@ suite("test_cloud_memtable_mow_forward", "p0, docker") {
     options.beConfigs += ['small_file_threshold_bytes=1048576',
                           'enable_merge_on_write_correctness_check=true']
     options.feConfigs += ['stream_load_default_memtable_on_sink_node=true',
-                          'stream_load_default_cloud_memtable_direct_upload=false']
+                          'stream_load_default_cloud_memtable_sink_upload=false']
     docker(options) {
         sql "DROP TABLE IF EXISTS cloud_mow_forward_source"
         sql """
@@ -37,12 +37,12 @@ suite("test_cloud_memtable_mow_forward", "p0, docker") {
         """
         sql "SET enable_memtable_on_sink_node=false"
         sql "INSERT INTO cloud_mow_forward_source SELECT number FROM numbers('number'='12000')"
-        sql "SET enable_cloud_memtable_direct_upload=false"
+        sql "SET enable_cloud_memtable_sink_upload=false"
         sql "SET parallel_pipeline_task_num=4"
         sql "SET profile_level=2"
         sql "SET enable_sql_cache=false"
-        // Any accidental switch to direct upload must fail before its result is committed.
-        GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.direct_upload.after_upload_failure")
+        // Any accidental switch to sink upload must fail before its result is committed.
+        GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.sink_upload.after_upload_failure")
         try {
             [false, true].each { packed ->
                 setBeConfigTemporary(['enable_packed_file': packed.toString()]) {
@@ -124,7 +124,7 @@ suite("test_cloud_memtable_mow_forward", "p0, docker") {
                 }
             }
         } finally {
-            GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.direct_upload.after_upload_failure")
+            GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.sink_upload.after_upload_failure")
         }
     }
 }

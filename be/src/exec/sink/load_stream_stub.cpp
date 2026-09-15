@@ -314,9 +314,9 @@ Status LoadStreamStub::close_load(const std::vector<PTabletID>& tablets_to_commi
     return Status::OK();
 }
 
-Status LoadStreamStub::register_direct_upload_writer(int64_t partition_id, int64_t index_id,
-                                              int64_t tablet_id, const std::string& writer_id,
-                                              PCloudLoadWriteContext* context) {
+Status LoadStreamStub::register_sink_upload_writer(int64_t partition_id, int64_t index_id,
+                                                   int64_t tablet_id, const std::string& writer_id,
+                                                   PCloudLoadWriteContext* context) {
     PStreamHeader header;
     *header.mutable_load_id() = _load_id;
     header.set_src_id(_src_id);

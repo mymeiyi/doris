@@ -48,19 +48,19 @@ AGG、MOR、MOW 的业务更新顺序仍遵循各表模型和 Sequence 规则，
 | 变量 | 源码默认值 | 作用 |
 |---|---|---|
 | `enable_memtable_on_sink_node` | `true` | 普通 INSERT、Broker Load 和创建 Routine Load 时的前移选择 |
-| `enable_cloud_memtable_direct_upload` | `false` | 普通 INSERT、Broker Load 的直传选择 |
+| `enable_cloud_memtable_sink_upload` | `false` | 普通 INSERT、Broker Load 的直传选择 |
 | `enable_profile` | `false` | 收集 SQL 导入 Profile |
 | `profile_level` | `2` | `2` 或以上才会收集本文使用的详细 writer 标记 |
 | `load_stream_per_node` | `2` | 每节点 LoadStream 数量；不是前移或直传的开关 |
 
 ```sql
 SHOW VARIABLES LIKE 'enable_memtable_on_sink_node';
-SHOW VARIABLES LIKE 'enable_cloud_memtable_direct_upload';
+SHOW VARIABLES LIKE 'enable_cloud_memtable_sink_upload';
 SHOW VARIABLES LIKE 'enable_profile';
 SHOW VARIABLES LIKE 'profile_level';
 
 SET enable_memtable_on_sink_node = true;
-SET enable_cloud_memtable_direct_upload = true;
+SET enable_cloud_memtable_sink_upload = true;
 SET enable_profile = true;
 SET profile_level = 2;
 ```
@@ -73,14 +73,14 @@ SET profile_level = 2;
 | 配置 | 默认值 | 用途 |
 |---|---|---|
 | `stream_load_default_memtable_on_sink_node` | `false` | Stream Load / HTTP Stream 未显式传前移参数时的默认值；Group Commit 内部导入也读取它 |
-| `stream_load_default_cloud_memtable_direct_upload` | `true` | Stream Load、HTTP Stream、Routine Load 以及 Group Commit 内部导入的直传开关 |
+| `stream_load_default_cloud_memtable_sink_upload` | `true` | Stream Load、HTTP Stream、Routine Load 以及 Group Commit 内部导入的直传开关 |
 | `enable_stream_load_profile` | `false` | NereidsStreamLoadPlanner 路径的 Profile 收集，包括普通 Stream Load 和 Routine Load |
 
 前两项为动态、`masterOnly` 配置。示例：
 
 ```sql
 ADMIN SET FRONTEND CONFIG ('stream_load_default_memtable_on_sink_node' = 'true');
-ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_direct_upload' = 'true');
+ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_sink_upload' = 'true');
 ADMIN SHOW FRONTEND CONFIG LIKE 'stream_load_default_%memtable%';
 ```
 
@@ -88,7 +88,7 @@ ADMIN SHOW FRONTEND CONFIG LIKE 'stream_load_default_%memtable%';
 
 ```properties
 stream_load_default_memtable_on_sink_node = true
-stream_load_default_cloud_memtable_direct_upload = true
+stream_load_default_cloud_memtable_sink_upload = true
 ```
 
 动态修改不等于已写入部署配置；需要重启后仍保持时同步维护 `fe.conf`。
@@ -136,7 +136,7 @@ curl -X POST 'http://BE_HOST:8040/api/update_config?enable_packed_file=true'
 ```sql
 SET group_commit = 'off_mode';
 SET enable_memtable_on_sink_node = true;
-SET enable_cloud_memtable_direct_upload = true;
+SET enable_cloud_memtable_sink_upload = true;
 SET enable_profile = true;
 SET profile_level = 2;
 
@@ -149,7 +149,7 @@ SELECT number, number * 10 FROM numbers('number' = '10000');
 数据源不同不改变目标表的门控条件。这里关闭 Group Commit 是为了明确验证普通 INSERT 路径；
 Group Commit 见第 3.6 节。
 
-只启用前移、让目标 BE 上传：将 `enable_cloud_memtable_direct_upload` 设为 `false`。
+只启用前移、让目标 BE 上传：将 `enable_cloud_memtable_sink_upload` 设为 `false`。
 DUP / AGG / MOR / MOW 全列写入均支持；MOW 的 bitmap 由目标 BE 计算。
 
 ### 3.2 Broker Load：LOAD LABEL（S3 / HDFS / Broker）
@@ -158,7 +158,7 @@ DUP / AGG / MOR / MOW 全列写入均支持；MOW 的 bitmap 由目标 BE 计算
 
 ```sql
 SET enable_memtable_on_sink_node = true;
-SET enable_cloud_memtable_direct_upload = true;
+SET enable_cloud_memtable_sink_upload = true;
 SET enable_profile = true;
 SET profile_level = 2;
 
@@ -186,13 +186,13 @@ HDFS / Broker 的数据源描述使用各自原有语法，前移与直传设置
 ### 3.3 普通 Stream Load：`/api/db/table/_stream_load`
 
 **前移优先级：请求头 `memtable_on_sink_node` > FE 的 `stream_load_default_memtable_on_sink_node`。**
-直传只读取 FE 的 `stream_load_default_cloud_memtable_direct_upload`，当前没有独立的单请求直传 header。
-在另一个 MySQL 连接执行 `SET enable_cloud_memtable_direct_upload=true` 对该 HTTP 请求无效。
+直传只读取 FE 的 `stream_load_default_cloud_memtable_sink_upload`，当前没有独立的单请求直传 header。
+在另一个 MySQL 连接执行 `SET enable_cloud_memtable_sink_upload=true` 对该 HTTP 请求无效。
 
 FE 默认开启直传；若此前显式关闭，可重新开启：
 
 ```sql
-ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_direct_upload' = 'true');
+ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_sink_upload' = 'true');
 ```
 
 再发起带前移参数的请求（CSV 文件内容例如 `1,10`、`2,20`）：
@@ -237,7 +237,7 @@ ConnectContext 取得它们，并在验证后恢复；结合实际 Profile 与 B
 仅设置 SQL 会话的直传变量不能为 Routine Load 开启直传。
 
 ```sql
-ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_direct_upload' = 'true');
+ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_sink_upload' = 'true');
 SET enable_memtable_on_sink_node = true;
 
 CREATE ROUTINE LOAD demo.cloud_memtable_kafka ON cloud_memtable_demo
@@ -254,7 +254,7 @@ SHOW ROUTINE LOAD FOR demo.cloud_memtable_kafka;
 ```
 
 Kinesis job 使用其原有数据源属性，前移/直传配置来源相同。当前没有名为 `memtable_on_sink_node`
-或 `enable_cloud_memtable_direct_upload` 的 Routine Load job property，也没有对应 ALTER 开关。
+或 `enable_cloud_memtable_sink_upload` 的 Routine Load job property，也没有对应 ALTER 开关。
 已有 job 不能靠修改另一个会话的变量切换前移；FE 的直传配置影响之后规划的 task。
 
 观察 task Profile 时可临时开启 `enable_stream_load_profile`；`SHOW ROUTINE LOAD` 的 RUNNING 状态
@@ -279,7 +279,7 @@ Group Commit 要启用最终内部导入的前移和直传，应同时设置：
 
 ```sql
 ADMIN SET FRONTEND CONFIG ('stream_load_default_memtable_on_sink_node' = 'true');
-ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_direct_upload' = 'true');
+ADMIN SET FRONTEND CONFIG ('stream_load_default_cloud_memtable_sink_upload' = 'true');
 ```
 
 观察内部 `group_commit_...` label 对应的导入，而非只看外层请求返回或 `GROUP_COMMIT_BLOCK_SINK`。
@@ -336,7 +336,7 @@ SQL INSERT / Broker Load 在提交前执行 `SET enable_profile=true; SET profil
 | 内容 | 可以证明什么 |
 |---|---|
 | `DeltaWriterV2 <tablet_id>` | 此 writer 在 Sink BE 执行，实际启用了 MemTable 前移 |
-| `CloudMemtableDirectUpload: true` | 此 Sink 成功执行直传并上报 partial Rowset 结果 |
+| `CloudMemtableSinkUpload: true` | 此 Sink 成功执行直传并上报 partial Rowset 结果 |
 | `CloudMemtableMowBitmap: true` | MOW 的存量 bitmap 比较在 Sink 执行 |
 | `MemTableWriter <tablet_id>`，`MemTableSortTime`、`MemTableAggTime`、`SegmentWriterTime` | 用于观察 Sink 端 MemTable 工作及开销；单独出现通用 MemTable 计时不足以证明前移 |
 | `WaitFlushLimitTime`、`MemTableWaitFlushTime`、`CloseWaitTime` | 辅助分析等待；不能直接等同于 S3 上传时间或纯排队时间 |

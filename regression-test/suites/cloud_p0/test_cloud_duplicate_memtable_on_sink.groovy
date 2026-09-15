@@ -30,13 +30,13 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
     options.beConfigs += ['enable_packed_file=true', 'small_file_threshold_bytes=1048576',
                           'enable_adaptive_batch_size=false']
 
-    options.feConfigs += ['stream_load_default_cloud_memtable_direct_upload = true']
+    options.feConfigs += ['stream_load_default_cloud_memtable_sink_upload = true']
     docker(options) {
-        [false, true].each { directUpload ->
-            sql "SET enable_cloud_memtable_direct_upload = ${directUpload}"
-            if (directUpload) {
+        [false, true].each { sinkUpload ->
+            sql "SET enable_cloud_memtable_sink_upload = ${sinkUpload}"
+            if (sinkUpload) {
                 GetDebugPoint().enableDebugPointForAllBEs("LoadStreamWriter.append_data.unexpected_transfer")
-                GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.direct_upload.duplicate_result")
+                GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.sink_upload.duplicate_result")
             }
 
             sql "SET enable_sql_cache = false"
@@ -73,16 +73,16 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
                 sql "SET profile_level = 2"
                 sql "SET enable_profile = true"
                 sql """
-                    /* cloud_duplicate_memtable_on_sink_profile_${directUpload} */
+                    /* cloud_duplicate_memtable_on_sink_profile_${sinkUpload} */
                     INSERT INTO test_cloud_duplicate_memtable_on_sink
                     SELECT k, v FROM test_cloud_duplicate_memtable_on_sink_source
                 """
                 def required = ["DeltaWriterV2"]
-                if (directUpload) {
-                    required += "CloudMemtableDirectUpload: true"
+                if (sinkUpload) {
+                    required += "CloudMemtableSinkUpload: true"
                 }
                 def profileString = new ProfileAction(context).getProfileBySql(
-                        "cloud_duplicate_memtable_on_sink_profile_${directUpload}", required)
+                        "cloud_duplicate_memtable_on_sink_profile_${sinkUpload}", required)
                 logger.info("memtable-on-sink profile:\n{}", profileString)
             } finally {
                 sql "SET enable_profile = false"
@@ -172,11 +172,11 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
 
             // Read both segment data and V2 indexes without the uploader's file cache.
             sql "SET enable_file_cache = false"
-            quickTest("s3_rows_${directUpload}", """
+            quickTest("s3_rows_${sinkUpload}", """
                 SELECT COUNT(*), SUM(k), SUM(v)
                 FROM test_cloud_duplicate_memtable_on_sink_s3
             """, true)
-            quickTest("s3_index_${directUpload}", """
+            quickTest("s3_index_${sinkUpload}", """
                 SELECT k, v FROM test_cloud_duplicate_memtable_on_sink_s3 WHERE v IN (62, 100, 114)
             """, true)
             def tablet = sql_return_maparray("SHOW TABLETS FROM test_cloud_duplicate_memtable_on_sink_s3")[0]
@@ -189,7 +189,7 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
                     def rowsetMeta = parseJson(body)
                     def locations = rowsetMeta.packed_slice_locations
                     def segmentIds = rowsetMeta.segment_ids ?: (0..<(rowsetMeta.num_segments as int)).toList()
-                    logger.info("S3 rowset layout (directUpload={}): {}", directUpload, [
+                    logger.info("S3 rowset layout (sinkUpload={}): {}", sinkUpload, [
                         tablet_id: tablet.TabletId, version: partition.VisibleVersion,
                         rowset_id: rowsetMeta.rowset_id_v2, segment_ids: segmentIds,
                         num_segment_rows: rowsetMeta.num_segment_rows,
@@ -198,7 +198,7 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
                     ])
                     // Only the destination rowset's first segment and its V2 index are packed.
                     // The other five segments retain independent files.
-                    quickTest("s3_packed_meta_${directUpload}", """
+                    quickTest("s3_packed_meta_${sinkUpload}", """
                         SELECT ${rowsetMeta.num_segments as int}, ${rowsetMeta.num_rows as long},
                             ${locations.size()},
                             ${locations.keySet().count { it.endsWith('_0.dat') }},
@@ -208,7 +208,7 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
             }
         }
 
-        GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.direct_upload.duplicate_result")
+        GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.sink_upload.duplicate_result")
 
         // The stream-load planner propagates the FE default independently of SQL session options.
         streamLoad {
@@ -229,16 +229,16 @@ suite("test_cloud_duplicate_memtable_on_sink", "p0, docker") {
         """
 
         sql "SET enable_memtable_on_sink_node = true"
-        sql "SET enable_cloud_memtable_direct_upload = true"
+        sql "SET enable_cloud_memtable_sink_upload = true"
         // An uploaded partial rowset must remain invisible if its result cannot be sent.
         try {
-            GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.direct_upload.after_upload_failure")
+            GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.sink_upload.after_upload_failure")
             test {
                 sql "INSERT INTO test_cloud_duplicate_memtable_on_sink_s3 VALUES (999, 1998)"
-                exception "injected failure after direct upload"
+                exception "injected failure after sink upload"
             }
         } finally {
-            GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.direct_upload.after_upload_failure")
+            GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.sink_upload.after_upload_failure")
         }
         order_qt_failed_upload_rows """
             SELECT COUNT(*), SUM(k), SUM(v) FROM test_cloud_duplicate_memtable_on_sink_s3

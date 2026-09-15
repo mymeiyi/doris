@@ -1421,10 +1421,10 @@ TEST_F(LoadStreamMgrTest, incremental_close_race_orhpans_streams) {
     config::enable_debug_points = saved_debug_points;
 }
 
-TEST_F(LoadStreamMgrTest, DirectUploadDuplicateAndMissingWriterResults) {
+TEST_F(LoadStreamMgrTest, SinkUploadDuplicateAndMissingWriterResults) {
     WriteRequest req;
     req.tablet_id = NORMAL_TABLET_ID;
-    RuntimeProfile profile("direct-upload-test");
+    RuntimeProfile profile("sink-upload-test");
     LoadStreamWriter writer(&req, &profile);
     writer._rowset_builder->_tablet = engine_ref->tablet_manager()->get_tablet(NORMAL_TABLET_ID);
     writer._writer_segment_start_ids.emplace("writer", 100);
@@ -1440,14 +1440,14 @@ TEST_F(LoadStreamMgrTest, DirectUploadDuplicateAndMissingWriterResults) {
     meta.set_num_rows(7);
     EXPECT_FALSE(writer.add_partial_rowset("writer", meta, &added).ok());
     writer._is_init = true;
-    writer._direct_upload = true;
+    writer._sink_upload = true;
     writer._partial_rowset_metas.clear();
     EXPECT_FALSE(writer.pre_close().ok());
     writer._pre_closed = true;
     EXPECT_FALSE(writer.add_partial_rowset("writer", meta, &added).ok());
 }
 
-class CloudDirectUploadMetaTest : public testing::Test {
+class CloudSinkUploadMetaTest : public testing::Test {
 protected:
     RowsetMetaPB base_meta() {
         RowsetMetaPB meta;
@@ -1485,7 +1485,7 @@ protected:
     }
 };
 
-TEST_F(CloudDirectUploadMetaTest, AssembleSparseSegmentsAndPackedLocations) {
+TEST_F(CloudSinkUploadMetaTest, AssembleSparseSegmentsAndPackedLocations) {
     auto first = partial(0);
     auto* location = &(*first.mutable_packed_slice_locations())["data/10/rowset_0.dat"];
     location->set_packed_file_path("packed/object");
@@ -1515,7 +1515,7 @@ TEST_F(CloudDirectUploadMetaTest, AssembleSparseSegmentsAndPackedLocations) {
     EXPECT_EQ(102, restored.segment_ids(1));
 }
 
-TEST_F(CloudDirectUploadMetaTest, RejectInvalidPartialResults) {
+TEST_F(CloudSinkUploadMetaTest, RejectInvalidPartialResults) {
     RowsetMetaPB merged;
     auto check = [&](const RowsetMetaPB& meta) {
         EXPECT_FALSE(
@@ -1547,7 +1547,7 @@ TEST_F(CloudDirectUploadMetaTest, RejectInvalidPartialResults) {
                          .ok());
 }
 
-TEST_F(CloudDirectUploadMetaTest, EmptyWriter) {
+TEST_F(CloudSinkUploadMetaTest, EmptyWriter) {
     RowsetMetaPB merged;
     ASSERT_TRUE(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
                         base_meta(), {{0, base_meta()}}, 100, &merged)
@@ -1556,7 +1556,7 @@ TEST_F(CloudDirectUploadMetaTest, EmptyWriter) {
     EXPECT_TRUE(merged.empty());
 }
 
-TEST_F(CloudDirectUploadMetaTest, AssembleVariantSchemaWithoutDuplicateFields) {
+TEST_F(CloudSinkUploadMetaTest, AssembleVariantSchemaWithoutDuplicateFields) {
     auto base = base_meta();
     auto* schema = base.mutable_tablet_schema();
     auto* key = schema->add_column();
@@ -1597,7 +1597,7 @@ TEST_F(CloudDirectUploadMetaTest, AssembleVariantSchemaWithoutDuplicateFields) {
     EXPECT_EQ(1, merged_schema.cluster_key_uids(0));
 }
 
-TEST_F(CloudDirectUploadMetaTest, PreserveAggregateAndMorOverlappingLayout) {
+TEST_F(CloudSinkUploadMetaTest, PreserveAggregateAndMorOverlappingLayout) {
     for (auto type : {AGG_KEYS, UNIQUE_KEYS}) {
         auto base = base_meta();
         base.mutable_tablet_schema()->set_keys_type(type);
@@ -1616,7 +1616,7 @@ TEST_F(CloudDirectUploadMetaTest, PreserveAggregateAndMorOverlappingLayout) {
     }
 }
 
-TEST_F(CloudDirectUploadMetaTest, PreserveDisjointKeyRanges) {
+TEST_F(CloudSinkUploadMetaTest, PreserveDisjointKeyRanges) {
     auto first = partial(0);
     auto second = partial(100);
     first.mutable_segments_key_bounds(0)->set_max_key("b");
@@ -1636,7 +1636,7 @@ TEST_F(CloudDirectUploadMetaTest, PreserveDisjointKeyRanges) {
     EXPECT_EQ(OVERLAPPING, merged.segments_overlap_pb());
 }
 
-TEST(CloudDirectMowTest, RequireMatchingSnapshotAndCompleteBitmap) {
+TEST(CloudSinkMowTest, RequireMatchingSnapshotAndCompleteBitmap) {
     PCloudLoadMowResult result;
     EXPECT_FALSE(CloudRowsetBuilder::validate_sink_mow_result(result, 5).ok());
     result.set_snapshot_version(5);

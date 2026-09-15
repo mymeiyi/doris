@@ -53,11 +53,12 @@ public:
     ~LoadStreamWriter();
 
     Status init();
-    Status register_direct_upload_writer(const std::string& writer_id, PCloudLoadWriteContext* context);
+    Status register_sink_upload_writer(const std::string& writer_id,
+                                       PCloudLoadWriteContext* context);
     Status add_partial_rowset(const std::string& writer_id, const RowsetMetaPB& meta,
                               int64_t* num_added_segments,
                               const PCloudLoadMowResult* mow_result = nullptr);
-    bool is_direct_upload() { return _direct_upload.load(); }
+    bool is_sink_upload() { return _sink_upload.load(); }
 
     Status append_data(uint32_t segid, uint64_t offset, butil::IOBuf buf,
                        FileType file_type = FileType::SEGMENT_FILE);
@@ -80,7 +81,7 @@ private:
     // without lock
     Status _pre_close();
 
-    std::atomic<bool> _direct_upload {false};
+    std::atomic<bool> _sink_upload {false};
     int32_t _max_segments_per_rowset = 0;
     std::unordered_map<std::string, int32_t> _writer_segment_start_ids;
     // Partial results keyed by the writer's starting segment ID.

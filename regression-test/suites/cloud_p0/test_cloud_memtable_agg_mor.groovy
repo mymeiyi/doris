@@ -27,7 +27,7 @@ suite("test_cloud_memtable_agg_mor", "p0, docker") {
     options.beConfigs += ['enable_packed_file=true',
                           'small_file_threshold_bytes=1048576']
     options.feConfigs += ['min_bytes_per_broker_scanner=100',
-                          'stream_load_default_cloud_memtable_direct_upload=true']
+                          'stream_load_default_cloud_memtable_sink_upload=true']
     docker(options) {
         sql "DROP TABLE IF EXISTS cloud_memtable_models_source"
         sql """
@@ -67,7 +67,7 @@ suite("test_cloud_memtable_agg_mor", "p0, docker") {
                     """, true)
             }
         }
-        def loadS3 = { table, direct ->
+        def loadS3 = { table, sinkUpload ->
             def label = "agg_mor_" + UUID.randomUUID().toString().replace('-', '_')
             sql "SET enable_profile=true"
             sql """
@@ -84,14 +84,14 @@ suite("test_cloud_memtable_agg_mor", "p0, docker") {
                 ) PROPERTIES ("load_parallelism"="1")
             """
             waitForBrokerLoadDone(label)
-            def required = direct ? ["DeltaWriterV2", "CloudMemtableDirectUpload: true"] : ["DeltaWriterV2"]
+            def required = sinkUpload ? ["DeltaWriterV2", "CloudMemtableSinkUpload: true"] : ["DeltaWriterV2"]
             new ProfileAction(context).getProfileBySql(label, required)
             sql "SET enable_profile=false"
         }
 
-        [false, true].each { direct ->
-            sql "SET enable_cloud_memtable_direct_upload=${direct}"
-            if (direct) {
+        [false, true].each { sinkUpload ->
+            sql "SET enable_cloud_memtable_sink_upload=${sinkUpload}"
+            if (sinkUpload) {
                 GetDebugPoint().enableDebugPointForAllBEs("LoadStreamWriter.append_data.unexpected_transfer")
             }
             sql "DROP TABLE IF EXISTS cloud_memtable_agg"
@@ -124,51 +124,51 @@ suite("test_cloud_memtable_agg_mor", "p0, docker") {
             """
             sql "SET enable_profile=true"
             sql """
-                /* cloud_memtable_agg_${direct} */
+                /* cloud_memtable_agg_${sinkUpload} */
                 INSERT INTO cloud_memtable_agg
                 SELECT n % 4, n, n, n, to_bitmap(n), hll_hash(CAST(n % 4 AS STRING)),
                     n % 4 + 10, IF(n % 8 < 4, n % 4 + 20, NULL)
                 FROM cloud_memtable_models_source
             """
             sql """
-                /* cloud_memtable_mor_${direct} */
+                /* cloud_memtable_mor_${sinkUpload} */
                 INSERT INTO cloud_memtable_mor SELECT n % 4, n % 4 * 10 FROM cloud_memtable_models_source
             """
             sql """
-                /* cloud_memtable_mor_seq_${direct} */
+                /* cloud_memtable_mor_seq_${sinkUpload} */
                 INSERT INTO cloud_memtable_mor_seq SELECT n % 4, n * 10, n FROM cloud_memtable_models_source
             """
             ['agg', 'mor', 'mor_seq'].each { model ->
-                def required = direct ? ["DeltaWriterV2", "CloudMemtableDirectUpload: true"] : ["DeltaWriterV2"]
-                new ProfileAction(context).getProfileBySql("cloud_memtable_${model}_${direct}", required)
-                if (direct) {
+                def required = sinkUpload ? ["DeltaWriterV2", "CloudMemtableSinkUpload: true"] : ["DeltaWriterV2"]
+                new ProfileAction(context).getProfileBySql("cloud_memtable_${model}_${sinkUpload}", required)
+                if (sinkUpload) {
                     checkLayout("cloud_memtable_${model}", "layout_${model}")
                 }
             }
             sql "SET enable_profile=false"
-            quickTest("agg_${direct}", aggQuery, true)
-            quickTest("mor_${direct}", morQuery, true)
-            quickTest("seq_${direct}", seqQuery, true)
-            quickTest("seq_index_${direct}", seqQuery + " WHERE k IN (1,3)", true)
+            quickTest("agg_${sinkUpload}", aggQuery, true)
+            quickTest("mor_${sinkUpload}", morQuery, true)
+            quickTest("seq_${sinkUpload}", seqQuery, true)
+            quickTest("seq_index_${sinkUpload}", seqQuery + " WHERE k IN (1,3)", true)
 
             // A newer transaction with a lower Sequence must not replace the business-newer row.
             sql "INSERT INTO cloud_memtable_mor_seq VALUES (0,-1,1)"
-            quickTest("seq_lower_${direct}", seqQuery, true)
+            quickTest("seq_lower_${sinkUpload}", seqQuery, true)
             sql "INSERT INTO cloud_memtable_mor VALUES (0,99)"
-            quickTest("mor_new_version_${direct}", morQuery, true)
+            quickTest("mor_new_version_${sinkUpload}", morQuery, true)
             sql """
                 INSERT INTO cloud_memtable_agg
                 VALUES (0,10,-1,13000,bitmap_empty(),hll_empty(),99,NULL)
             """
-            quickTest("agg_new_version_${direct}", aggQuery, true)
+            quickTest("agg_new_version_${sinkUpload}", aggQuery, true)
             sql "INSERT INTO cloud_memtable_mor_seq SELECT n % 4,n*10,n FROM cloud_memtable_models_source WHERE n<0"
-            quickTest("seq_empty_${direct}", seqQuery, true)
+            quickTest("seq_empty_${sinkUpload}", seqQuery, true)
             ['agg', 'mor', 'mor_seq'].each { model ->
                 trigger_and_wait_compaction("cloud_memtable_${model}", "full")
             }
-            quickTest("agg_compacted_${direct}", aggQuery, true)
-            quickTest("mor_compacted_${direct}", morQuery, true)
-            quickTest("seq_compacted_${direct}", seqQuery, true)
+            quickTest("agg_compacted_${sinkUpload}", aggQuery, true)
+            quickTest("mor_compacted_${sinkUpload}", morQuery, true)
+            quickTest("seq_compacted_${sinkUpload}", seqQuery, true)
 
             sql """
                 CREATE TABLE cloud_memtable_agg_broker (k BIGINT NOT NULL, v BIGINT SUM)
@@ -181,10 +181,10 @@ suite("test_cloud_memtable_agg_mor", "p0, docker") {
                 PROPERTIES ("replication_num"="1", "enable_unique_key_merge_on_write"="false",
                             "disable_auto_compaction"="true")
             """
-            loadS3("cloud_memtable_agg_broker", direct)
-            loadS3("cloud_memtable_mor_broker", direct)
-            quickTest("agg_broker_${direct}", "SELECT k,v FROM cloud_memtable_agg_broker", true)
-            quickTest("mor_broker_${direct}", "SELECT k,v FROM cloud_memtable_mor_broker", true)
+            loadS3("cloud_memtable_agg_broker", sinkUpload)
+            loadS3("cloud_memtable_mor_broker", sinkUpload)
+            quickTest("agg_broker_${sinkUpload}", "SELECT k,v FROM cloud_memtable_agg_broker", true)
+            quickTest("mor_broker_${sinkUpload}", "SELECT k,v FROM cloud_memtable_mor_broker", true)
         }
 
         streamLoad {
@@ -216,9 +216,9 @@ suite("test_cloud_memtable_agg_mor", "p0, docker") {
         trigger_and_wait_compaction("cloud_memtable_mor_seq", "full")
         order_qt_mor_final_compacted seqQuery
 
-        // MOW without direct upload forwards files and calculates bitmaps on the target BE.
+        // MOW without sink upload forwards files and calculates bitmaps on the target BE.
         GetDebugPoint().disableDebugPointForAllBEs("LoadStreamWriter.append_data.unexpected_transfer")
-        sql "SET enable_cloud_memtable_direct_upload=false"
+        sql "SET enable_cloud_memtable_sink_upload=false"
         sql "DROP TABLE IF EXISTS cloud_memtable_mow_fallback"
         sql """
             CREATE TABLE cloud_memtable_mow_fallback (k BIGINT NOT NULL, v BIGINT)

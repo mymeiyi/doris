@@ -29,7 +29,7 @@ suite("test_cloud_memtable_group_commit", "p0, docker") {
     options.setBeNum(3)
     options.enableDebugPoints()
     options.feConfigs += ['stream_load_default_memtable_on_sink_node=true',
-                          'stream_load_default_cloud_memtable_direct_upload=true']
+                          'stream_load_default_cloud_memtable_sink_upload=true']
     docker(options) {
         sql "DROP TABLE IF EXISTS cloud_memtable_group_commit"
         sql """
@@ -93,7 +93,7 @@ suite("test_cloud_memtable_group_commit", "p0, docker") {
                                 .collectMany { it.profile.nodes }
                         return nodes.any { it.name == "DeltaWriterV2 ${tablet.TabletId}" } &&
                                 nodes.any {
-                                    it.infoStrings['CloudMemtableDirectUpload'] == 'true' &&
+                                    it.infoStrings['CloudMemtableSinkUpload'] == 'true' &&
                                             it.infoStrings['CloudMemtableMowBitmap'] == 'true'
                                 }
                     } finally {

@@ -97,22 +97,21 @@ Status LoadStreamWriter::init() {
     return Status::OK();
 }
 
-Status LoadStreamWriter::register_direct_upload_writer(const std::string& writer_id,
-                                                PCloudLoadWriteContext* context) {
+Status LoadStreamWriter::register_sink_upload_writer(const std::string& writer_id,
+                                                     PCloudLoadWriteContext* context) {
     // Control messages run synchronously in LoadStream::_dispatch, which attaches the load.
     std::lock_guard lock(_lock);
     const auto& ctx = _rowset_writer->context();
-    if (!config::is_cloud_mode() ||
-        (ctx.tablet_schema->has_inverted_index() &&
-         ctx.tablet_schema->get_inverted_index_storage_format() ==
-                 InvertedIndexStorageFormatPB::V1)) {
-        return Status::NotSupported("direct upload requires cloud mode and no V1 inverted indexes");
+    if (!config::is_cloud_mode() || (ctx.tablet_schema->has_inverted_index() &&
+                                     ctx.tablet_schema->get_inverted_index_storage_format() ==
+                                             InvertedIndexStorageFormatPB::V1)) {
+        return Status::NotSupported("sink upload requires cloud mode and no V1 inverted indexes");
     }
     if (_pre_closed || writer_id.empty()) {
-        return Status::InvalidArgument("invalid direct writer registration for tablet {}",
+        return Status::InvalidArgument("invalid sink writer registration for tablet {}",
                                        _req.tablet_id);
     }
-    if (!_direct_upload.exchange(true)) {
+    if (!_sink_upload.exchange(true)) {
         _max_segments_per_rowset = config::max_segment_num_per_rowset;
         DORIS_CHECK_GT(_max_segments_per_rowset, 0);
     }
@@ -121,7 +120,7 @@ Status LoadStreamWriter::register_direct_upload_writer(const std::string& writer
         const int64_t start =
                 static_cast<int64_t>(_writer_segment_start_ids.size()) * _max_segments_per_rowset;
         if (start + _max_segments_per_rowset > INT32_MAX) {
-            return Status::InvalidArgument("direct upload segment range overflow for tablet {}",
+            return Status::InvalidArgument("sink upload segment range overflow for tablet {}",
                                            _req.tablet_id);
         }
         it = _writer_segment_start_ids.emplace(writer_id, static_cast<int32_t>(start)).first;
@@ -149,22 +148,22 @@ Status LoadStreamWriter::add_partial_rowset(const std::string& writer_id, const 
     *num_added_segments = 0;
     auto it = _writer_segment_start_ids.find(writer_id);
     if (it == _writer_segment_start_ids.end() || _pre_closed) {
-        return Status::InvalidArgument("unknown or closed direct writer {} for tablet {}",
-                                       writer_id, _req.tablet_id);
+        return Status::InvalidArgument("unknown or closed sink writer {} for tablet {}", writer_id,
+                                       _req.tablet_id);
     }
     const bool is_mow = _rowset_builder->tablet()->enable_unique_key_merge_on_write();
     if (is_mow != (mow_result != nullptr)) {
-        return Status::InvalidArgument("direct upload MOW result does not match tablet {}",
+        return Status::InvalidArgument("sink upload MOW result does not match tablet {}",
                                        _req.tablet_id);
     }
     auto previous = _partial_rowset_metas.find(it->second);
     if (previous != _partial_rowset_metas.end()) {
         if (!google::protobuf::util::MessageDifferencer::Equals(previous->second, meta)) {
-            return Status::InvalidArgument("conflicting direct writer result {}", writer_id);
+            return Status::InvalidArgument("conflicting sink writer result {}", writer_id);
         }
         if (is_mow && !google::protobuf::util::MessageDifferencer::Equals(
                               _mow_results.at(it->second), *mow_result)) {
-            return Status::InvalidArgument("conflicting direct MOW result {}", writer_id);
+            return Status::InvalidArgument("conflicting sink MOW result {}", writer_id);
         }
         return Status::OK();
     }
@@ -183,7 +182,7 @@ Status LoadStreamWriter::add_partial_rowset(const std::string& writer_id, const 
         for (const auto& [path, location] : meta.packed_slice_locations()) {
             if (!paths.contains(path) || location.offset() < 0 || location.size() < 0 ||
                 location.packed_file_path().empty()) {
-                return Status::InvalidArgument("invalid direct upload packed slice {}", path);
+                return Status::InvalidArgument("invalid sink upload packed slice {}", path);
             }
         }
     }
@@ -201,7 +200,7 @@ Status LoadStreamWriter::append_data(uint32_t segid, uint64_t offset, butil::IOB
                                      FileType file_type) {
     SCOPED_ATTACH_TASK(_resource_ctx);
     DBUG_EXECUTE_IF("LoadStreamWriter.append_data.unexpected_transfer", {
-        return Status::InternalError("unexpected segment transfer in direct-upload load");
+        return Status::InternalError("unexpected segment transfer in sink-upload load");
     });
     io::FileWriter* file_writer = nullptr;
     auto& file_writers =
@@ -416,10 +415,9 @@ Status LoadStreamWriter::_pre_close() {
         }
     }
 
-    if (_direct_upload.load()) {
+    if (_sink_upload.load()) {
         if (_writer_segment_start_ids.size() != _partial_rowset_metas.size()) {
-            return Status::Corruption("missing direct writer results for tablet {}",
-                                      _req.tablet_id);
+            return Status::Corruption("missing sink writer results for tablet {}", _req.tablet_id);
         }
         RowsetMetaPB meta;
         RETURN_IF_ERROR(CloudRowsetBuilder::assemble_rowset_meta_from_partials(
@@ -462,7 +460,7 @@ Status LoadStreamWriter::close() {
     }
     RETURN_IF_ERROR(_rowset_builder->wait_calc_delete_bitmap());
     RETURN_IF_ERROR(_rowset_builder->commit_txn());
-    if (_direct_upload.load() && config::enable_file_cache && _req.write_file_cache) {
+    if (_sink_upload.load() && config::enable_file_cache && _req.write_file_cache) {
         auto& builder = static_cast<CloudRowsetBuilder&>(*_rowset_builder);
         ExecEnv::GetInstance()->storage_engine().to_cloud().cloud_warm_up_manager().warm_up_rowset(
                 *builder.rowset_meta(), _rowset_builder->tablet_sptr()->table_id(),

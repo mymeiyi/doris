@@ -18,24 +18,24 @@
 import org.apache.doris.regression.suite.ClusterOptions
 import org.apache.doris.regression.util.Http
 
-suite("test_cloud_memtable_direct_upload_cache", "p0, docker") {
+suite("test_cloud_memtable_sink_upload_cache", "p0, docker") {
     def options = new ClusterOptions()
     options.cloudMode = true
     options.setFeNum(1)
     options.setBeNum(3)
     options.enableDebugPoints()
-    options.feConfigs += ['stream_load_default_cloud_memtable_direct_upload=true']
+    options.feConfigs += ['stream_load_default_cloud_memtable_sink_upload=true']
     options.beConfigs += ['enable_file_cache=true', 'small_file_threshold_bytes=1048576']
     docker(options) {
-        sql "DROP TABLE IF EXISTS cloud_memtable_direct_upload_cache"
+        sql "DROP TABLE IF EXISTS cloud_memtable_sink_upload_cache"
         sql """
-            CREATE TABLE cloud_memtable_direct_upload_cache (
+            CREATE TABLE cloud_memtable_sink_upload_cache (
                 k BIGINT NOT NULL, v BIGINT, INDEX idx_k(k) USING INVERTED
             ) DUPLICATE KEY(k) DISTRIBUTED BY HASH(k) BUCKETS 1
             PROPERTIES ("replication_num"="1", "disable_auto_compaction"="true",
                         "inverted_index_storage_format"="V2")
         """
-        def tablet = sql_return_maparray("SHOW TABLETS FROM cloud_memtable_direct_upload_cache")[0]
+        def tablet = sql_return_maparray("SHOW TABLETS FROM cloud_memtable_sink_upload_cache")[0]
         def backends = sql_return_maparray("SHOW BACKENDS")
         def target = backends.find { it.BackendId == tablet.BackendId }
         def remote = backends.find { it.BackendId != tablet.BackendId }
@@ -64,7 +64,7 @@ suite("test_cloud_memtable_direct_upload_cache", "p0, docker") {
                         }
                         try {
                             streamLoad {
-                                table "cloud_memtable_direct_upload_cache"
+                                table "cloud_memtable_sink_upload_cache"
                                 directToBe sink.Host, sink.HttpPort as int
                                 set "column_separator", ","
                                 set "memtable_on_sink_node", "true"
@@ -80,7 +80,7 @@ suite("test_cloud_memtable_direct_upload_cache", "p0, docker") {
                                 }
                             }
                             def partition = sql_return_maparray(
-                                    "SHOW PARTITIONS FROM cloud_memtable_direct_upload_cache")[0]
+                                    "SHOW PARTITIONS FROM cloud_memtable_sink_upload_cache")[0]
                             def meta
                             getSegmentFilesFromMs("${ms.host}:${ms.httpPort}", tablet.TabletId,
                                     partition.VisibleVersion) { code, body ->
@@ -129,6 +129,6 @@ suite("test_cloud_memtable_direct_upload_cache", "p0, docker") {
         } finally {
             GetDebugPoint().disableDebugPointForAllBEs("LoadStreamWriter.append_data.unexpected_transfer")
         }
-        order_qt_rows "SELECT k, SUM(v), COUNT(*) FROM cloud_memtable_direct_upload_cache GROUP BY k"
+        order_qt_rows "SELECT k, SUM(v), COUNT(*) FROM cloud_memtable_sink_upload_cache GROUP BY k"
     }
 }

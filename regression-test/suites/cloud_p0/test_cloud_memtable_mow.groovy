@@ -28,7 +28,7 @@ suite("test_cloud_memtable_mow", "p0, docker") {
     options.beConfigs += ['share_delta_writers=false', 'enable_packed_file=true',
                           'small_file_threshold_bytes=1048576',
                           'enable_merge_on_write_correctness_check=true']
-    options.feConfigs += ['stream_load_default_cloud_memtable_direct_upload=true',
+    options.feConfigs += ['stream_load_default_cloud_memtable_sink_upload=true',
                           'min_bytes_per_broker_scanner=100']
     docker(options) {
         sql "DROP TABLE IF EXISTS cloud_mow_source"
@@ -62,13 +62,13 @@ suite("test_cloud_memtable_mow", "p0, docker") {
         sql "INSERT INTO cloud_mow_direct_seq VALUES (0,-1,-1),(1,-1,-1),(2,-1,-1),(3,-1,-1)"
         sql "INSERT INTO cloud_mow_direct_seq VALUES (0,0,0),(1,0,0),(2,0,0),(3,0,0)"
         sql "SET enable_memtable_on_sink_node=true"
-        sql "SET enable_cloud_memtable_direct_upload=true"
+        sql "SET enable_cloud_memtable_sink_upload=true"
         sql "SET parallel_pipeline_task_num=4"
         sql "SET enable_file_cache=false"
         sql "SET profile_level=2"
         sql "SET enable_profile=true"
         GetDebugPoint().enableDebugPointForAllBEs("LoadStreamWriter.append_data.unexpected_transfer")
-        GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.direct_upload.duplicate_result")
+        GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.sink_upload.duplicate_result")
         sql """
             /* cloud_mow_direct_profile */
             INSERT INTO cloud_mow_direct SELECT n%4,n%4*10 FROM cloud_mow_source
@@ -79,10 +79,10 @@ suite("test_cloud_memtable_mow", "p0, docker") {
         """
         ['cloud_mow_direct_profile', 'cloud_mow_direct_seq_profile'].each { tag ->
             new ProfileAction(context).getProfileBySql(tag,
-                    ["CloudMemtableDirectUpload: true", "CloudMemtableMowBitmap: true"])
+                    ["CloudMemtableSinkUpload: true", "CloudMemtableMowBitmap: true"])
         }
         sql "SET enable_profile=false"
-        GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.direct_upload.duplicate_result")
+        GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.sink_upload.duplicate_result")
         order_qt_initial "SELECT * FROM cloud_mow_direct"
         order_qt_initial_seq "SELECT * FROM cloud_mow_direct_seq"
         order_qt_index "SELECT * FROM cloud_mow_direct_seq WHERE k IN (1,3)"
@@ -134,12 +134,12 @@ suite("test_cloud_memtable_mow", "p0, docker") {
         order_qt_stream "SELECT * FROM cloud_mow_direct_seq"
 
         // Freeze the snapshot, then replace its rowsets with a concurrent load and compaction.
-        def block = "CloudRowsetBuilder.direct_mow.snapshot_ready"
+        def block = "CloudRowsetBuilder.sink_mow.snapshot_ready"
         def backends = sql_return_maparray("SHOW BACKENDS")
         GetDebugPoint().enableDebugPointForAllBEs(block, [timeout: "120"])
         def pending = thread {
             sql "SET enable_memtable_on_sink_node=true"
-            sql "SET enable_cloud_memtable_direct_upload=true"
+            sql "SET enable_cloud_memtable_sink_upload=true"
             sql "INSERT INTO cloud_mow_direct_seq VALUES (0,200000,20000)"
         }
         try {
@@ -162,14 +162,14 @@ suite("test_cloud_memtable_mow", "p0, docker") {
         pending.get(120, TimeUnit.SECONDS)
         order_qt_concurrent_compaction "SELECT * FROM cloud_mow_direct_seq"
 
-        GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.direct_mow.after_bitmap_failure")
+        GetDebugPoint().enableDebugPointForAllBEs("DeltaWriterV2.sink_mow.after_bitmap_failure")
         try {
             test {
                 sql "INSERT INTO cloud_mow_direct_seq VALUES (99,990000,99000)"
-                exception "injected failure after direct MOW bitmap calculation"
+                exception "injected failure after sink MOW bitmap calculation"
             }
         } finally {
-            GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.direct_mow.after_bitmap_failure")
+            GetDebugPoint().disableDebugPointForAllBEs("DeltaWriterV2.sink_mow.after_bitmap_failure")
         }
         order_qt_failed_invisible "SELECT * FROM cloud_mow_direct_seq"
 
@@ -193,11 +193,11 @@ suite("test_cloud_memtable_mow", "p0, docker") {
             UNIQUE KEY(k) DISTRIBUTED BY HASH(k) BUCKETS 1
             PROPERTIES ("replication_num"="1", "enable_unique_key_merge_on_write"="true")
         """
-        [true, false].each { direct ->
-            if (!direct) {
+        [true, false].each { sinkUpload ->
+            if (!sinkUpload) {
                 GetDebugPoint().disableDebugPointForAllBEs("LoadStreamWriter.append_data.unexpected_transfer")
             }
-            sql "SET enable_cloud_memtable_direct_upload=${direct}"
+            sql "SET enable_cloud_memtable_sink_upload=${sinkUpload}"
             def label = "mow_broker_" + UUID.randomUUID().toString().replace('-', '_')
             sql "SET enable_profile=true"
             sql """
@@ -216,10 +216,10 @@ suite("test_cloud_memtable_mow", "p0, docker") {
             def load = sql_return_maparray("SHOW LOAD WHERE LABEL = '${label}'")[0]
             assertEquals("FINISHED", load.State, "Broker load did not finish: ${load}")
             new ProfileAction(context).getProfile(load.JobId.toString(),
-                    direct ? ["CloudMemtableDirectUpload: true", "CloudMemtableMowBitmap: true"]
+                    sinkUpload ? ["CloudMemtableSinkUpload: true", "CloudMemtableMowBitmap: true"]
                            : ["DeltaWriterV2"])
             sql "SET enable_profile=false"
-            quickTest("broker_${direct}", "SELECT * FROM cloud_mow_broker", true)
+            quickTest("broker_${sinkUpload}", "SELECT * FROM cloud_mow_broker", true)
         }
     }
 }

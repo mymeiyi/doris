@@ -135,8 +135,8 @@ Status DeltaWriterV2::init() {
     context.memtable_on_sink_support_index_v2 = true;
     context.encrypt_algorithm = EncryptionAlgorithmPB::PLAINTEXT;
 
-    if (_req.cloud_direct_upload) {
-        RETURN_IF_ERROR(_init_direct_upload_writer(context));
+    if (_req.cloud_sink_upload) {
+        RETURN_IF_ERROR(_init_sink_upload_writer(context));
     } else {
         _rowset_writer = std::make_shared<BetaRowsetWriterV2>(_streams);
         RETURN_IF_ERROR(_rowset_writer->init(context));
@@ -146,7 +146,7 @@ Status DeltaWriterV2::init() {
                                            _streams[0]->enable_unique_mow(_req.index_id)));
     ExecEnv::GetInstance()->memtable_memory_limiter()->register_writer(_memtable_writer);
     _is_init = true;
-    if (!_req.cloud_direct_upload) {
+    if (!_req.cloud_sink_upload) {
         _streams.clear();
     }
     return Status::OK();
@@ -206,34 +206,37 @@ Status DeltaWriterV2::close() {
     return _memtable_writer->close();
 }
 
-Status DeltaWriterV2::_init_direct_upload_writer(RowsetWriterContext& context) {
+Status DeltaWriterV2::_init_sink_upload_writer(RowsetWriterContext& context) {
     DORIS_CHECK(config::is_cloud_mode());
     DORIS_CHECK_EQ(_streams.size(), 1);
     // The local id identifies this writer, including unshared writers on the same BE.
-    _direct_writer_id = context.rowset_id.to_string();
-    PCloudLoadWriteContext remote;
-    RETURN_IF_ERROR(_streams[0]->register_direct_upload_writer(
-            _req.partition_id, _req.index_id, _req.tablet_id, _direct_writer_id, &remote));
+    _sink_writer_id = context.rowset_id.to_string();
+    PCloudLoadWriteContext target_write_context;
+    RETURN_IF_ERROR(_streams[0]->register_sink_upload_writer(_req.partition_id, _req.index_id,
+                                                             _req.tablet_id, _sink_writer_id,
+                                                             &target_write_context));
     if (context.enable_unique_key_merge_on_write) {
-        if (!remote.has_mow_snapshot() || !remote.mow_snapshot().has_version() ||
-            !remote.mow_snapshot().has_delete_bitmap()) {
-            return Status::NotSupported("target BE does not support direct MOW upload");
+        if (!target_write_context.has_mow_snapshot() ||
+            !target_write_context.mow_snapshot().has_version() ||
+            !target_write_context.mow_snapshot().has_delete_bitmap()) {
+            return Status::NotSupported("target BE does not support MOW sink upload");
         }
-        RETURN_IF_ERROR(_init_direct_mow_context(context, remote.mow_snapshot()));
+        RETURN_IF_ERROR(
+                _init_mow_context_from_snapshot(context, target_write_context.mow_snapshot()));
     }
-    const auto& meta = remote.rowset_meta();
+    const auto& meta = target_write_context.rowset_meta();
     context.rowset_id.init(meta.rowset_id_v2());
     context.tablet_schema_hash = meta.tablet_schema_hash();
     context.txn_expiration = meta.txn_expiration();
     context.newest_write_timestamp = meta.newest_write_timestamp();
-    context.encrypt_algorithm = remote.encrypt_algorithm();
-    context.file_cache_ttl_sec = remote.file_cache_ttl_sec();
+    context.encrypt_algorithm = target_write_context.encrypt_algorithm();
+    context.file_cache_ttl_sec = target_write_context.file_cache_ttl_sec();
     context.write_file_cache = _req.write_file_cache;
     // Keep upload-time caching only when this sink is also the target BE. Older targets
     // do not advertise warmup, so retain their existing sink-side cache behavior.
     // Stream Load may leave the fragment's source backend id unset (-1).
     context.disable_file_cache =
-            remote.warm_up_file_cache() &&
+            target_write_context.warm_up_file_cache() &&
             ExecEnv::GetInstance()->cluster_info()->backend_id != _streams[0]->dst_id();
     if (meta.has_inverted_index_storage_format()) {
         context.inverted_index_storage_format = meta.inverted_index_storage_format();
@@ -242,23 +245,24 @@ Status DeltaWriterV2::_init_direct_upload_writer(RowsetWriterContext& context) {
     auto& engine = static_cast<CloudStorageEngine&>(ExecEnv::GetInstance()->storage_engine());
     context.storage_resource = engine.get_storage_resource(meta.resource_id());
     if (!context.storage_resource) {
-        return Status::InternalError("direct upload storage resource {} unavailable",
+        return Status::InternalError("sink upload storage resource {} unavailable",
                                      meta.resource_id());
     }
-    _segment_start_id = remote.segment_start_id();
+    _segment_start_id = target_write_context.segment_start_id();
     context.is_partial_output_writer = true;
     context.enable_segcompaction = false;
     context.memtable_on_sink_support_index_v2 = false;
     // Preserve whole-rowset first-segment packing, not first-segment-per-writer packing.
     context.allow_packed_file = _segment_start_id == 0;
     _rowset_writer = DORIS_TRY(RowsetFactory::create_rowset_writer(engine, context, false));
-    _rowset_writer->set_segment_start_id(_segment_start_id, remote.segment_capacity());
+    _rowset_writer->set_segment_start_id(_segment_start_id,
+                                         target_write_context.segment_capacity());
     _req.txn_expiration = context.txn_expiration;
     return Status::OK();
 }
 
-Status DeltaWriterV2::_init_direct_mow_context(RowsetWriterContext& context,
-                                               const PCloudLoadMowSnapshot& snapshot) {
+Status DeltaWriterV2::_init_mow_context_from_snapshot(RowsetWriterContext& context,
+                                                      const PCloudLoadMowSnapshot& snapshot) {
     auto& engine = static_cast<CloudStorageEngine&>(ExecEnv::GetInstance()->storage_engine());
     context.tablet = DORIS_TRY(engine.get_tablet(_req.tablet_id));
     auto ids = std::make_shared<RowsetIdUnorderedSet>();
@@ -267,7 +271,7 @@ Status DeltaWriterV2::_init_direct_mow_context(RowsetWriterContext& context,
     for (const auto& meta : snapshot.rowsets()) {
         auto rowset_meta = std::make_shared<RowsetMeta>();
         if (!rowset_meta->init_from_pb(meta)) {
-            return Status::InvalidArgument("invalid direct MOW snapshot rowset");
+            return Status::InvalidArgument("invalid sink MOW snapshot rowset");
         }
         RowsetSharedPtr rowset;
         RETURN_IF_ERROR(RowsetFactory::create_rowset(rowset_meta->tablet_schema(), "", rowset_meta,
@@ -296,31 +300,30 @@ Status DeltaWriterV2::close_wait(int32_t& num_segments, RuntimeProfile* profile)
 
     RETURN_IF_ERROR(_memtable_writer->close_wait(profile));
     num_segments = _rowset_writer->get_allocated_segment_id() - _segment_start_id;
-    if (_req.cloud_direct_upload) {
-        RETURN_IF_ERROR(_finish_direct_upload(profile));
+    if (_req.cloud_sink_upload) {
+        RETURN_IF_ERROR(_finish_sink_upload(profile));
     }
 
     _delta_written_success = true;
     return Status::OK();
 }
 
-Status DeltaWriterV2::_finish_direct_upload(RuntimeProfile* profile) {
+Status DeltaWriterV2::_finish_sink_upload(RuntimeProfile* profile) {
     RowsetSharedPtr partial;
     RETURN_IF_ERROR(_rowset_writer->build(partial));
     if (UnixSeconds() >= _req.txn_expiration) {
-        return Status::TimedOut("direct upload transaction {} expired", _req.txn_id);
+        return Status::TimedOut("sink upload transaction {} expired", _req.txn_id);
     }
-    DBUG_EXECUTE_IF("DeltaWriterV2.direct_upload.after_upload_failure",
-                    { return Status::InternalError("injected failure after direct upload"); });
+    DBUG_EXECUTE_IF("DeltaWriterV2.sink_upload.after_upload_failure",
+                    { return Status::InternalError("injected failure after sink upload"); });
     PCloudLoadMowResult mow_result;
     const auto& mow_context = _rowset_writer->context().mow_context;
     if (mow_context != nullptr) {
         // CloudRowsetWriter::build has waited for all per-segment bitmap tasks.
         mow_result.set_snapshot_version(mow_context->max_version);
         *mow_result.mutable_delete_bitmap() = mow_context->delete_bitmap->to_pb();
-        DBUG_EXECUTE_IF("DeltaWriterV2.direct_mow.after_bitmap_failure", {
-            return Status::InternalError(
-                    "injected failure after direct MOW bitmap calculation");
+        DBUG_EXECUTE_IF("DeltaWriterV2.sink_mow.after_bitmap_failure", {
+            return Status::InternalError("injected failure after sink MOW bitmap calculation");
         });
         if (profile != nullptr) {
             profile->add_info_string("CloudMemtableMowBitmap", "true");
@@ -328,15 +331,15 @@ Status DeltaWriterV2::_finish_direct_upload(RuntimeProfile* profile) {
     }
     const auto* result = mow_context != nullptr ? &mow_result : nullptr;
     RETURN_IF_ERROR(_streams[0]->add_partial_rowset(
-            _req.partition_id, _req.index_id, _req.tablet_id, _direct_writer_id,
+            _req.partition_id, _req.index_id, _req.tablet_id, _sink_writer_id,
             partial->rowset_meta()->get_rowset_pb(), result));
-    DBUG_EXECUTE_IF("DeltaWriterV2.direct_upload.duplicate_result", {
+    DBUG_EXECUTE_IF("DeltaWriterV2.sink_upload.duplicate_result", {
         RETURN_IF_ERROR(_streams[0]->add_partial_rowset(
-                _req.partition_id, _req.index_id, _req.tablet_id, _direct_writer_id,
+                _req.partition_id, _req.index_id, _req.tablet_id, _sink_writer_id,
                 partial->rowset_meta()->get_rowset_pb(), result));
     });
     if (profile != nullptr) {
-        profile->add_info_string("CloudMemtableDirectUpload", "true");
+        profile->add_info_string("CloudMemtableSinkUpload", "true");
     }
     return Status::OK();
 }

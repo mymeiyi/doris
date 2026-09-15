@@ -1200,7 +1200,7 @@ message PCloudLoadWriteContext {
     optional EncryptionAlgorithmPB encrypt_algorithm = 5;
     optional int64 file_cache_ttl_sec = 6;
     optional PCloudLoadMowSnapshot mow_snapshot = 8;
-    // The target can asynchronously cache completed direct-upload rowsets.
+    // The target can asynchronously cache completed sink-upload rowsets.
     optional bool warm_up_file_cache = 9 [default = false];
 }
 

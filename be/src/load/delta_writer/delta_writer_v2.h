@@ -87,10 +87,10 @@ private:
                                         const OlapTableSchemaParam* table_schema_param,
                                         const TabletSchema& ori_tablet_schema);
     int64_t _table_id() const;
-    Status _init_direct_upload_writer(RowsetWriterContext& context);
-    Status _finish_direct_upload(RuntimeProfile* profile);
-    Status _init_direct_mow_context(RowsetWriterContext& context,
-                                    const PCloudLoadMowSnapshot& snapshot);
+    Status _init_sink_upload_writer(RowsetWriterContext& context);
+    Status _finish_sink_upload(RuntimeProfile* profile);
+    Status _init_mow_context_from_snapshot(RowsetWriterContext& context,
+                                           const PCloudLoadMowSnapshot& snapshot);
 
     void _update_profile(RuntimeProfile* profile);
 
@@ -99,7 +99,7 @@ private:
     WriteRequest _req;
     std::shared_ptr<WorkloadGroup> _workload_group;
     std::shared_ptr<RowsetWriter> _rowset_writer;
-    std::string _direct_writer_id;
+    std::string _sink_writer_id;
     int32_t _segment_start_id = 0;
     TabletSchemaSPtr _tablet_schema;
     bool _delta_written_success = false;

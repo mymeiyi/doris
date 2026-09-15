@@ -54,10 +54,10 @@ SQL 会话的前移开关默认开启，直传开关默认关闭；显式启用�
 
 ```sql
 SET enable_memtable_on_sink_node = true;
-SET enable_cloud_memtable_direct_upload = true;
+SET enable_cloud_memtable_sink_upload = true;
 ```
 
-Stream Load 使用 FE 动态配置 `stream_load_default_cloud_memtable_direct_upload`，默认
+Stream Load 使用 FE 动态配置 `stream_load_default_cloud_memtable_sink_upload`，默认
 `true`；仍需通过 `memtable_on_sink_node` 请求参数或已有 FE 默认配置开启 MemTable 前移。
 新增配置不改变非 Cloud 导入。
 
@@ -101,7 +101,7 @@ flowchart TD
 ```
 
 Group Commit 内部任务使用 FE 的 `stream_load_default_memtable_on_sink_node` 和
-`stream_load_default_cloud_memtable_direct_upload` 默认配置。`async_mode` 的外层请求可在
+`stream_load_default_cloud_memtable_sink_upload` 默认配置。`async_mode` 的外层请求可在
 WAL 确认后返回，不能将该返回视为图中的事务 VISIBLE。Rowset 元数据提交也不等于事务可见，
 预热与后续事务提交/发布可并行进行。
 
@@ -217,11 +217,11 @@ VTabletWriterV2::write()
     → DeltaWriterV2::write()
       → init()                                                           [首次写入时延迟初始化]
         ├─ 文件转发：创建 BetaRowsetWriterV2
-        └─ Sink 直传：_init_direct_upload_writer(context)
-            → LoadStreamStub::register_direct_upload_writer()
+        └─ Sink 直传：_init_sink_upload_writer(context)
+            → LoadStreamStub::register_sink_upload_writer()
               ⇒ GET_WRITE_CONTEXT                                        [目标端见 2.3]
               ← 共享 Rowset 元数据、独占 Segment ID 区间及 MOW 快照
-            → _init_direct_mow_context()                                 [仅 MOW]
+            → _init_mow_context_from_snapshot()                                 [仅 MOW]
             → RowsetFactory::create_rowset_writer()
               → CloudRowsetWriter                                        [Sink 本地对象]
             → RowsetWriter::set_segment_start_id()
@@ -260,7 +260,7 @@ IndexStream::append_data() → TabletStream::append_data()`。
 ```text
 TabletStream::append_data()
   ├─ GET_WRITE_CONTEXT                                                   [直传注册]
-  │   → LoadStreamWriter::register_direct_upload_writer(writer_id)
+  │   → LoadStreamWriter::register_sink_upload_writer(writer_id)
   │     → 记录 / 复用 writer 的 Segment ID 区间
   │     → CloudRowsetBuilder::get_mow_snapshot_for_sink()                    [仅 MOW]
   │     → 填充 PCloudLoadWriteContext
@@ -293,7 +293,7 @@ Sink BE：VTabletWriterV2::close()
       → MemTableWriter::close()：提交剩余 MemTable flush
     → 各 DeltaWriterV2::close_wait()
       → MemTableWriter::close_wait()：等待 flush 完成
-      → [直传] _finish_direct_upload(profile)
+      → [直传] _finish_sink_upload(profile)
         → RowsetWriter::build(partial)
         → [MOW] build 内等待 bitmap 任务，随后构建 PCloudLoadMowResult
         → LoadStreamStub::add_partial_rowset()
@@ -344,7 +344,7 @@ writer B: [1000, 2000)，实际写 1000、1001
 最终 segment_ids = [0, 1, 1000, 1001]，num_segments = 4
 ```
 
-使用现有 `set_segment_start_id()` 分配 ID。direct load 的 partial writer 持久化显式 ID，
+使用现有 `set_segment_start_id()` 分配 ID。sink 上传路径的 partial writer 持久化显式 ID，
 保留逐 Segment key bounds，并关闭可能重新编号的 Segment compaction。最终实际 Segment
 总数仍受 Rowset 上限约束。
 
@@ -394,10 +394,10 @@ V2 索引及 packed 映射持久化、关闭文件缓存读取、重复 partial 
 直传测试通过 debug point 拒绝目标 BE 接收文件内容。两个用例均从 MetaService 获取 Rowset
 布局并记录实际 Segment ID、逐段行数和文件大小；packed 对照还将完整 ID 列表写入测试结果。
 
-`test_cloud_memtable_direct_upload_unshared` 覆盖关闭 DeltaWriter 共享、关闭 packed、多 Sink
+`test_cloud_memtable_sink_upload_unshared` 覆盖关闭 DeltaWriter 共享、关闭 packed、多 Sink
 导入同一 tablet，以及空输入和多个导入事务。
 
-`CloudDirectUploadMetaTest` 及 LoadStream 单测覆盖稀疏 ID 元数据汇总、序列化、越界/错位/统计
+`CloudSinkUploadMetaTest` 及 LoadStream 单测覆盖稀疏 ID 元数据汇总、序列化、越界/错位/统计
 异常、空 writer、重复结果和缺失结果。性能默认开启与否应另行通过 RELEASE benchmark 决定。
 
 `test_cloud_memtable_agg_mor` 对照转发与直传，覆盖 AGG 聚合状态、REPLACE/REPLACE_IF_NOT_NULL、

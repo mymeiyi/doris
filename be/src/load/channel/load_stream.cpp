@@ -116,11 +116,10 @@ Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data
     if (header.opcode() == PStreamHeader::GET_WRITE_CONTEXT) {
         std::lock_guard lock(_lock);
         if (!_segids_mapping.empty()) {
-            _status.update(
-                    Status::InvalidArgument("cannot switch streamed tablet to direct upload"));
+            _status.update(Status::InvalidArgument("cannot switch streamed tablet to sink upload"));
             return _status.status();
         }
-        auto st = _load_stream_writer->register_direct_upload_writer(header.writer_id(), context);
+        auto st = _load_stream_writer->register_sink_upload_writer(header.writer_id(), context);
         _status.update(st);
         return st;
     }
@@ -130,7 +129,7 @@ Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data
         auto st = _load_stream_writer->add_partial_rowset(
                 header.writer_id(), header.partial_rowset_meta(), &num_added_segments,
                 header.has_mow_result() ? &header.mow_result() : nullptr);
-        // Direct uploads use this as the accepted segment count for close validation, not ID allocation.
+        // Sink uploads use this as the accepted segment count for close validation, not ID allocation.
         _next_segid += cast_set<uint32_t>(num_added_segments);
         _status.update(st);
         return st;
@@ -149,9 +148,9 @@ Status TabletStream::append_data(const PStreamHeader& header, butil::IOBuf* data
     SegIdMapping* mapping = nullptr;
     {
         std::lock_guard lock_guard(_lock);
-        if (_load_stream_writer->is_direct_upload()) {
+        if (_load_stream_writer->is_sink_upload()) {
             _status.update(
-                    Status::InvalidArgument("cannot stream files into a direct-upload rowset"));
+                    Status::InvalidArgument("cannot stream files into a sink-upload rowset"));
             return _status.status();
         }
         if (!_segids_mapping.contains(src_id)) {

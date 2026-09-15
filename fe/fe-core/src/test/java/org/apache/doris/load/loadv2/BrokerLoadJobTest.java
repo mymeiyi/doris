@@ -226,7 +226,7 @@ public class BrokerLoadJobTest {
             "true, AGG_KEYS, false, true, true, true, true"
     })
     public void testPendingTaskOnFinished(boolean cloudMode, KeysType keysType, boolean mergeOnWrite,
-            boolean enableMemtableOnSink, boolean lightSchemaChange, boolean directUpload,
+            boolean enableMemtableOnSink, boolean lightSchemaChange, boolean sinkUpload,
             boolean expectedMemtableOnSink) throws Exception {
         BrokerPendingTaskAttachment attachment = Mockito.mock(BrokerPendingTaskAttachment.class);
         Env env = Mockito.mock(Env.class);
@@ -263,8 +263,8 @@ public class BrokerLoadJobTest {
             BrokerLoadJob brokerLoadJob = new BrokerLoadJob();
             Deencapsulation.setField(brokerLoadJob, "state", JobState.LOADING);
             Deencapsulation.setField(brokerLoadJob, "enableMemTableOnSinkNode", enableMemtableOnSink);
-            if (directUpload) {
-                brokerLoadJob.sessionVariables.put("enable_cloud_memtable_direct_upload", "true");
+            if (sinkUpload) {
+                brokerLoadJob.sessionVariables.put("enable_cloud_memtable_sink_upload", "true");
             }
             BrokerDesc brokerDesc = Mockito.mock(BrokerDesc.class);
             Deencapsulation.setField(brokerLoadJob, "brokerDesc", brokerDesc);
@@ -337,8 +337,8 @@ public class BrokerLoadJobTest {
             for (LoadTask task : idToTasks.values()) {
                 boolean actualMemtableOnSink = Deencapsulation.getField(task, "enableMemTableOnSinkNode");
                 Assertions.assertEquals(expectedMemtableOnSink, actualMemtableOnSink);
-                boolean actualDirectUpload = Deencapsulation.getField(task, "cloudMemtableDirectUpload");
-                Assertions.assertEquals(directUpload, actualDirectUpload);
+                boolean actualSinkUpload = Deencapsulation.getField(task, "cloudMemtableSinkUpload");
+                Assertions.assertEquals(sinkUpload, actualSinkUpload);
             }
         }
     }

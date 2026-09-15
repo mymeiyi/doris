@@ -266,7 +266,7 @@ Status CloudRowsetBuilder::get_mow_snapshot_for_sink(PCloudLoadMowSnapshot* snap
             std::unique_lock sync_lock(cloud_tablet()->get_sync_meta_lock());
             std::shared_lock lock(_tablet->get_header_lock());
             if (_tablet->tablet_state() != TABLET_RUNNING) {
-                return Status::NotSupported("direct MOW load requires a running tablet {}",
+                return Status::NotSupported("sink MOW load requires a running tablet {}",
                                             _tablet->tablet_id());
             }
             _max_version_in_flush_phase = _tablet->max_version_unlocked();
@@ -298,7 +298,7 @@ Status CloudRowsetBuilder::get_mow_snapshot_for_sink(PCloudLoadMowSnapshot* snap
         *_mow_snapshot_for_sink->mutable_delete_bitmap() = snapshot_bitmap.to_pb();
     }
     *snapshot = *_mow_snapshot_for_sink;
-    DBUG_EXECUTE_IF("CloudRowsetBuilder.direct_mow.snapshot_ready", {
+    DBUG_EXECUTE_IF("CloudRowsetBuilder.sink_mow.snapshot_ready", {
         // Expose readiness while blocked, independent of asynchronous log flushing.
         static bvar::Adder<int64_t> waiters("cloud_memtable_mow_snapshot_waiters");
         waiters << 1;
@@ -312,23 +312,23 @@ Status CloudRowsetBuilder::validate_sink_mow_result(const PCloudLoadMowResult& r
                                                     int64_t snapshot_version) {
     if (!result.has_snapshot_version() || result.snapshot_version() != snapshot_version ||
         !result.has_delete_bitmap()) {
-        return Status::InvalidArgument("missing or mismatched direct MOW snapshot result");
+        return Status::InvalidArgument("missing or mismatched sink MOW snapshot result");
     }
     const auto& bitmap = result.delete_bitmap();
     const auto count = bitmap.rowset_ids_size();
     if (bitmap.segment_ids_size() != count || bitmap.versions_size() != count ||
         bitmap.segment_delete_bitmaps_size() != count) {
-        return Status::InvalidArgument("misaligned direct MOW delete bitmap");
+        return Status::InvalidArgument("misaligned sink MOW delete bitmap");
     }
     for (int pos = 0; pos < count; ++pos) {
         if (bitmap.versions(pos) != DeleteBitmap::TEMP_VERSION_COMMON) {
-            return Status::InvalidArgument("direct MOW bitmap must use the temporary version");
+            return Status::InvalidArgument("sink MOW bitmap must use the temporary version");
         }
         const auto& bytes = bitmap.segment_delete_bitmaps(pos);
         const auto size =
                 roaring::api::roaring_bitmap_portable_deserialize_size(bytes.data(), bytes.size());
         if (size == 0 || size != bytes.size()) {
-            return Status::Corruption("invalid serialized direct MOW bitmap");
+            return Status::Corruption("invalid serialized sink MOW bitmap");
         }
     }
     return Status::OK();
@@ -356,7 +356,7 @@ Status CloudRowsetBuilder::validate_partial_rowset_meta(const RowsetMetaPB& base
         partial_meta.table_id() != base_meta.table_id() ||
         partial_meta.db_id() != base_meta.db_id() ||
         UniqueId(partial_meta.load_id()) != UniqueId(base_meta.load_id())) {
-        return Status::InvalidArgument("direct upload rowset identity mismatch for tablet {}",
+        return Status::InvalidArgument("sink upload rowset identity mismatch for tablet {}",
                                        base_meta.tablet_id());
     }
     if (!partial_meta.has_tablet_schema() || count < 0 || count > segment_capacity ||
@@ -366,7 +366,7 @@ Status CloudRowsetBuilder::validate_partial_rowset_meta(const RowsetMetaPB& base
         partial_meta.segments_key_bounds_aggregated() ||
         (partial_meta.inverted_index_file_info_size() != 0 &&
          partial_meta.inverted_index_file_info_size() != count)) {
-        return Status::InvalidArgument("misaligned direct upload metadata for tablet {}",
+        return Status::InvalidArgument("misaligned sink upload metadata for tablet {}",
                                        base_meta.tablet_id());
     }
     const bool has_index =
@@ -375,7 +375,7 @@ Status CloudRowsetBuilder::validate_partial_rowset_meta(const RowsetMetaPB& base
                        index.index_type() == IndexType::ANN;
             });
     if (has_index && partial_meta.inverted_index_file_info_size() != count) {
-        return Status::InvalidArgument("missing direct upload index metadata for tablet {}",
+        return Status::InvalidArgument("missing sink upload index metadata for tablet {}",
                                        base_meta.tablet_id());
     }
     int64_t partial_rows = 0;
@@ -385,7 +385,7 @@ Status CloudRowsetBuilder::validate_partial_rowset_meta(const RowsetMetaPB& base
             id >= static_cast<int64_t>(segment_start_id) + segment_capacity ||
             (pos > 0 && id <= partial_meta.segment_ids(pos - 1)) ||
             partial_meta.num_segment_rows(pos) < 0 || partial_meta.segments_file_size(pos) <= 0) {
-            return Status::InvalidArgument("invalid direct upload segment {} for tablet {}", id,
+            return Status::InvalidArgument("invalid sink upload segment {} for tablet {}", id,
                                            base_meta.tablet_id());
         }
         partial_rows += partial_meta.num_segment_rows(pos);
@@ -394,7 +394,7 @@ Status CloudRowsetBuilder::validate_partial_rowset_meta(const RowsetMetaPB& base
         partial_meta.index_disk_size() < 0 ||
         partial_meta.total_disk_size() !=
                 partial_meta.data_disk_size() + partial_meta.index_disk_size()) {
-        return Status::InvalidArgument("invalid direct upload statistics for tablet {}",
+        return Status::InvalidArgument("invalid sink upload statistics for tablet {}",
                                        base_meta.tablet_id());
     }
     return Status::OK();
@@ -415,7 +415,7 @@ Status CloudRowsetBuilder::assemble_rowset_meta_from_partials(
         const auto count = partial_meta.num_segments();
         if (count > 0 && result->segment_ids_size() > 0 &&
             partial_meta.segment_ids(0) <= result->segment_ids(result->segment_ids_size() - 1)) {
-            return Status::InvalidArgument("overlapping direct upload segment ranges");
+            return Status::InvalidArgument("overlapping sink upload segment ranges");
         }
         result->mutable_segment_ids()->MergeFrom(partial_meta.segment_ids());
         result->mutable_num_segment_rows()->MergeFrom(partial_meta.num_segment_rows());
@@ -440,7 +440,7 @@ Status CloudRowsetBuilder::assemble_rowset_meta_from_partials(
         }
     }
     if (result->segment_ids_size() > max_segments_per_rowset) {
-        return Status::InvalidArgument("too many direct upload segments for tablet {}",
+        return Status::InvalidArgument("too many sink upload segments for tablet {}",
                                        base_meta.tablet_id());
     }
     if (has_variant && !schemas.empty()) {

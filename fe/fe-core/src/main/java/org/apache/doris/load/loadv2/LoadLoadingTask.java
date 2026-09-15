@@ -84,7 +84,7 @@ public class LoadLoadingTask extends LoadTask {
     private final boolean singleTabletLoadPerSink;
 
     private final boolean enableMemTableOnSinkNode;
-    private boolean cloudMemtableDirectUpload;
+    private boolean cloudMemtableSinkUpload;
     private final int batchSize;
 
     private NereidsLoadingTaskPlanner planner;
@@ -148,8 +148,8 @@ public class LoadLoadingTask extends LoadTask {
         loadBackendSelectionHint = hint;
     }
 
-    public void setCloudMemtableDirectUpload(boolean enabled) {
-        cloudMemtableDirectUpload = enabled;
+    public void setCloudMemtableSinkUpload(boolean enabled) {
+        cloudMemtableSinkUpload = enabled;
     }
 
     public TUniqueId getLoadId() {
@@ -195,7 +195,7 @@ public class LoadLoadingTask extends LoadTask {
         curCoordinator.setExecMemoryLimit(execMemLimit);
 
         curCoordinator.setMemTableOnSinkNode(enableMemTableOnSinkNode);
-        curCoordinator.getQueryOptions().setEnableCloudMemtableDirectUpload(cloudMemtableDirectUpload);
+        curCoordinator.getQueryOptions().setEnableCloudMemtableSinkUpload(cloudMemtableSinkUpload);
         if (enableMemTableOnSinkNode) {
             curCoordinator.setBatchSize(batchSize);
         }
