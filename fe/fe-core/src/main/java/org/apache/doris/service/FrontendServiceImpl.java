@@ -3208,6 +3208,7 @@ public class FrontendServiceImpl implements FrontendService.Iface {
         } else {
             ctx.getSessionVariable().enableMemtableOnSinkNode = Config.stream_load_default_memtable_on_sink_node;
         }
+        ctx.getSessionVariable().enableCloudMemtableSinkUpload = Config.cloud_stream_load_default_memtable_sink_upload;
         ctx.getSessionVariable().groupCommit = request.getGroupCommitMode();
         ctx.getSessionVariable().setEnableInsertStrict(false);
         if (request.isSetPartialUpdate() && !request.isPartialUpdate()) {
