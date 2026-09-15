@@ -29,7 +29,7 @@
 #include <utility>
 
 #include "bvar/bvar.h"
-#include "cloud/config.h"
+#include "cloud/cloud_rowset_builder.h"
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/config.h"
 #include "common/logging.h"
@@ -75,9 +75,13 @@ bvar::Adder<int64_t> g_load_stream_file_writer_cnt("load_stream_file_writer_coun
 LoadStreamWriter::LoadStreamWriter(WriteRequest* context, RuntimeProfile* profile)
         : _req(*context), _rowset_writer(nullptr) {
     g_load_stream_writer_cnt << 1;
-    // TODO(plat1ko): CloudStorageEngine
-    _rowset_builder = std::make_unique<RowsetBuilder>(
-            ExecEnv::GetInstance()->storage_engine().to_local(), *context, profile);
+    auto& engine = ExecEnv::GetInstance()->storage_engine();
+    if (config::is_cloud_mode()) {
+        _rowset_builder =
+                std::make_unique<CloudRowsetBuilder>(engine.to_cloud(), *context, profile);
+    } else {
+        _rowset_builder = std::make_unique<RowsetBuilder>(engine.to_local(), *context, profile);
+    }
     _resource_ctx = thread_context()->resource_ctx(); // from load stream
 }
 
@@ -177,6 +181,17 @@ Status LoadStreamWriter::close_writer(uint32_t segid, FileType file_type) {
     if (file_writer->bytes_appended() == 0 && file_type != FileType::INVERTED_INDEX_FILE) {
         return Status::Corruption("file {} closed with 0 bytes, file type is {}",
                                   file_writer->path().native(), file_type);
+    }
+    if (config::is_cloud_mode()) {
+        // Streamed writers are owned here, outside the RowsetWriter's file collections.
+        // Use the logical path used at creation, not file_writer->path(), which may be an S3 URI.
+        auto file_path = _rowset_writer->context().segment_path(segid);
+        if (file_type == FileType::INVERTED_INDEX_FILE) {
+            auto prefix = InvertedIndexDescriptor::get_index_file_path_prefix(file_path);
+            file_path = InvertedIndexDescriptor::get_index_file_path_v2(std::string(prefix));
+        }
+        return _rowset_writer->rowset_meta()->collect_packed_slice_location(*file_writer,
+                                                                            file_path);
     }
     return Status::OK();
 }
@@ -306,6 +321,26 @@ Status LoadStreamWriter::_pre_close() {
     }
 
     RETURN_IF_ERROR(_rowset_builder->build_rowset());
+    if (config::is_cloud_mode()) {
+        // Forwarded files are owned here, outside CloudRowsetWriter's collections.
+        auto meta = _rowset_writer->rowset_meta();
+        DORIS_CHECK(meta->segments_file_size().empty());
+        DORIS_CHECK(meta->inverted_index_file_info().empty());
+        std::vector<size_t> sizes;
+        sizes.reserve(_segment_file_writers.size());
+        for (const auto& writer : _segment_file_writers) {
+            sizes.push_back(writer->bytes_appended());
+        }
+        meta->add_segments_file_size(sizes);
+        std::vector<InvertedIndexFileInfo> indexes(_inverted_file_writers.size());
+        std::vector<const InvertedIndexFileInfo*> index_ptrs;
+        index_ptrs.reserve(indexes.size());
+        for (size_t pos = 0; pos < indexes.size(); ++pos) {
+            indexes[pos].set_index_size(_inverted_file_writers[pos]->bytes_appended());
+            index_ptrs.push_back(&indexes[pos]);
+        }
+        meta->add_inverted_index_files_info(index_ptrs);
+    }
     RETURN_IF_ERROR(_rowset_builder->submit_calc_delete_bitmap_task());
     _pre_closed = true;
     return Status::OK();
@@ -317,9 +352,7 @@ Status LoadStreamWriter::close() {
         RETURN_IF_ERROR(_pre_close());
     }
     RETURN_IF_ERROR(_rowset_builder->wait_calc_delete_bitmap());
-    // FIXME(plat1ko): No `commit_txn` operation in cloud mode, need better abstractions
-    RETURN_IF_ERROR(static_cast<RowsetBuilder*>(_rowset_builder.get())->commit_txn());
-
+    RETURN_IF_ERROR(_rowset_builder->commit_txn());
     return Status::OK();
 }
 

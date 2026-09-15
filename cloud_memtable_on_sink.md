@@ -386,7 +386,7 @@ event-driven warmup job。预热遵循 `file_cache_enable_only_warm_up_idx` 等�
 
 ## 6. 验证
 
-`test_cloud_duplicate_memtable_on_sink` 对照转发和直传路径，覆盖三 BE S3 导入、多个 Segment、
+`test_cloud_memtable_on_sink` 的 DUP 部分对照转发和直传路径，覆盖三 BE S3 导入、多个 Segment、
 V2 索引及 packed 映射持久化、关闭文件缓存读取、重复 partial 结果、Stream Load 和上传后失败。
 直传测试通过 debug point 拒绝目标 BE 接收文件内容。两个用例均从 MetaService 获取 Rowset
 布局并记录实际 Segment ID、逐段行数和文件大小；packed 对照还将完整 ID 列表写入测试结果。
@@ -397,12 +397,15 @@ V2 索引及 packed 映射持久化、关闭文件缓存读取、重复 partial 
 `CloudSinkUploadMetaTest` 及 LoadStream 单测覆盖稀疏 ID 元数据汇总、序列化、越界/错位/统计
 异常、空 writer、重复结果和缺失结果。性能默认开启与否应另行通过 RELEASE benchmark 决定。
 
-`test_cloud_memtable_agg_mor` 对照转发与直传，覆盖 AGG 聚合状态、REPLACE/REPLACE_IF_NOT_NULL、
+`test_cloud_memtable_on_sink` 的 AGG/MOR 部分对照转发与直传，覆盖 AGG 聚合状态、REPLACE/REPLACE_IF_NOT_NULL、
 MOR 带/不带 Sequence、跨 sink 重复 key、低 Sequence 后写、空输入、索引读取、packed 布局、
-Broker Load、Stream Load、delete sign、重插入和 compaction 前后结果，以及 MOW 文件转发。
+Broker Load、Stream Load、delete sign、重插入和 compaction 前后结果；V1 索引表验证开启前移后导入成功。
 
 `test_cloud_memtable_mow_forward` 覆盖 MOW 文件转发的普通/packed 文件、V2 索引、
-存量与跨 Sink 重复 key、Sequence、删除重插、Stream Load、异步 Group Commit 和 compaction。
+存量与跨 Sink 重复 key、带/不带 Sequence、删除重插、Broker Load、Stream Load、异步 Group Commit
+和 compaction。显式检查重复 key、关闭文件缓存读取，通过内部 BE profile 确认 Group Commit 前移；
+partial update 验证开启前移后导入成功。DUP 部分通过接收 writer 故障注入检查 Stream Load 前移、
+失败数据不可见及后续导入成功。
 
 ## 7. MOW 直传
 
