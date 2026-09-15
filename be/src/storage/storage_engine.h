@@ -74,6 +74,9 @@ class CreateTabletRRIdxCache;
 struct DirInfo;
 class SnapshotManager;
 class WorkloadGroup;
+class BaseRowsetBuilder;
+class RuntimeProfile;
+struct WriteRequest;
 
 using SegCompactionCandidates = std::vector<segment_v2::SegmentSharedPtr>;
 using SegCompactionCandidatesSharedPtr = std::shared_ptr<SegCompactionCandidates>;
@@ -125,6 +128,9 @@ public:
 
     virtual Status get_tablet_meta(int64_t tablet_id, TabletMetaSharedPtr* tablet_meta,
                                    bool force_use_only_cached = false) = 0;
+
+    virtual std::unique_ptr<BaseRowsetBuilder> create_rowset_builder(const WriteRequest& req,
+                                                                     RuntimeProfile* profile) = 0;
 
     void register_report_listener(ReportWorker* listener);
     void deregister_report_listener(ReportWorker* listener);
@@ -260,6 +266,9 @@ public:
 
     Status get_tablet_meta(int64_t tablet_id, TabletMetaSharedPtr* tablet_meta,
                            bool force_use_only_cached = false) override;
+
+    std::unique_ptr<BaseRowsetBuilder> create_rowset_builder(const WriteRequest& req,
+                                                             RuntimeProfile* profile) override;
 
     void clear_transaction_task(const TTransactionId transaction_id);
     void clear_transaction_task(const TTransactionId transaction_id,

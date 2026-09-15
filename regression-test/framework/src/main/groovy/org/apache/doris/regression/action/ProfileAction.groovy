@@ -160,11 +160,12 @@ class ProfileAction implements SuiteAction {
         Throwable lastException = null
         long deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() <= deadline) {
+            // LOAD LABEL can have both a command profile and an internal load profile.
             for (final def profileItem in getProfileList()) {
                 if (profileItem["Sql Statement"].toString().contains(sqlPattern)) {
                     profileId = profileItem["Profile ID"].toString()
                     if (profileItem["Profile Completion State"]?.toString() != PROFILE_LIST_COMPLETE) {
-                        break
+                        continue
                     }
                     try {
                         profileText = getProfile(profileId)
@@ -173,12 +174,11 @@ class ProfileAction implements SuiteAction {
                         lastException = t
                         log.info("Profile {} with sql pattern {} is not available yet: {}",
                                 profileId, sqlPattern, t.getMessage())
-                        break
+                        continue
                     }
                     if (isProfileReady(profileText, requiredContents)) {
                         return profileText
                     }
-                    break
                 }
             }
             if (profileId == "") {
