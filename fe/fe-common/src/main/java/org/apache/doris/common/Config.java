@@ -622,6 +622,10 @@ public class Config extends ConfigBase {
             + "in stream load")
     public static boolean stream_load_default_memtable_on_sink_node = false;
 
+    @ConfField(mutable = true, masterOnly = true, description = "Upload cloud memtable segments from sink BEs "
+            + "to object storage in stream load")
+    public static boolean stream_load_default_cloud_memtable_sink_upload = true;
+
     @ConfField(mutable = true, masterOnly = true, description = "Whether to enable forwarding group commit stream "
             + "load to follower nodes. If true, stream load with "
             + "group commit mode will be forwarded to a follower FE " + "round robin.")
