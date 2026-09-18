@@ -2694,7 +2694,7 @@ Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_out
                                       : ReaderType::READER_CUMULATIVE_COMPACTION;
     context.disable_file_cache = !request.is_coordinator();
     if (request.is_coordinator()) {
-        context.file_cache_ttl_sec = _tablet->ttl_seconds();
+        context.file_cache_expiration_time = _tablet->file_cache_ttl_expiration_time();
         if (context.compaction_type == ReaderType::READER_CUMULATIVE_COMPACTION) {
             context.write_file_cache = should_cache_cloud_cumulative_compaction_output();
             context.approximate_bytes_to_write = input_rowsets.front()->total_disk_size();
