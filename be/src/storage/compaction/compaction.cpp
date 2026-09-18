@@ -104,6 +104,23 @@ using std::vector;
 namespace doris {
 using namespace ErrorCode;
 
+bool should_cache_cloud_cumulative_compaction_output() {
+    return !config::enable_file_cache_write_index_file_only;
+}
+
+bool should_cache_cloud_base_compaction_output(int64_t input_rowsets_cached_size,
+                                               int64_t input_rowsets_total_size) {
+    if (config::enable_file_cache_write_index_file_only) {
+        return false;
+    }
+    if (config::enable_file_cache_keep_base_compaction_output) {
+        return true;
+    }
+    return input_rowsets_total_size > 0 &&
+           double(input_rowsets_cached_size) / double(input_rowsets_total_size) >
+                   config::file_cache_keep_base_compaction_output_min_hit_ratio;
+}
+
 // Determine whether to enable index-only file cache mode for compaction output.
 // This function decides if only index files should be written to cache, based on:
 // - write_file_cache: whether file cache is enabled
@@ -245,6 +262,9 @@ void Compaction::submit_profile_record(bool success, int64_t start_time_ms,
     }
     stats.bytes_read_from_local = _stats.bytes_read_from_local;
     stats.bytes_read_from_remote = _stats.bytes_read_from_remote;
+    stats.is_distributed = _is_distributed;
+    stats.distributed_task_count = _distributed_task_count;
+    stats.distributed_worker_count = _distributed_worker_count;
     if (_mem_tracker) {
         stats.peak_memory_bytes = _mem_tracker->peak_consumption();
     }
@@ -285,7 +305,7 @@ Status Compaction::merge_input_rowsets() {
     MergeInputRowsetsContext context;
     RETURN_IF_ERROR(prepare_merge_input_rowsets_execution(&context));
     RETURN_IF_ERROR(execute_merge_input_rowsets(&context));
-    return finish_merge_input_rowsets_execution(&context);
+    return finish_merge_input_rowsets_execution(&context, /*build_output_rowset=*/true);
 }
 
 Status Compaction::prepare_merge_input_rowsets_execution(MergeInputRowsetsContext* context) {
@@ -328,15 +348,21 @@ Status Compaction::execute_merge_input_rowsets(MergeInputRowsetsContext* context
     return Status::OK();
 }
 
-Status Compaction::finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context) {
+Status Compaction::finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context,
+                                                        bool build_output_rowset) {
     auto& result = context->result;
     COUNTER_UPDATE(_merged_rows_counter, _stats.merged_rows);
     COUNTER_UPDATE(_filtered_rows_counter, _stats.filtered_rows);
 
-    // 3. In the `build`, `_close_file_writers` is called to close the inverted index file writer and write the final compound index file.
-    RETURN_NOT_OK_STATUS_WITH_WARN(_output_rs_writer->build(_output_rowset),
-                                   fmt::format("rowset writer build failed. output_version: {}",
-                                               _output_version.to_string()));
+    if (build_output_rowset) {
+        // 3. In the `build`, `_close_file_writers` is called to close the inverted index file
+        // writer and write the final compound index file.
+        RETURN_NOT_OK_STATUS_WITH_WARN(_output_rs_writer->build(_output_rowset),
+                                       fmt::format("rowset writer build failed. output_version: {}",
+                                                   _output_version.to_string()));
+    } else {
+        DORIS_CHECK(_output_rowset != nullptr);
+    }
     _output_rowset->rowset_meta()->set_commit_tso(commit_tso_range(_input_rowsets));
 
     // When true, writers should remove variant extracted subcolumns from the
@@ -2476,12 +2502,12 @@ int64_t CloudCompactionMixin::num_input_rowsets() const {
 }
 
 bool CloudCompactionMixin::should_cache_compaction_output() {
-    if (config::enable_file_cache_write_index_file_only) {
-        return false;
+    if (compaction_type() == ReaderType::READER_CUMULATIVE_COMPACTION) {
+        return should_cache_cloud_cumulative_compaction_output();
     }
 
-    if (compaction_type() == ReaderType::READER_CUMULATIVE_COMPACTION) {
-        return true;
+    if (config::enable_file_cache_write_index_file_only) {
+        return false;
     }
 
     if (compaction_type() == ReaderType::READER_BASE_COMPACTION) {
@@ -2504,14 +2530,8 @@ bool CloudCompactionMixin::should_cache_compaction_output() {
                   << ", file_cache_keep_base_compaction_output_min_hit_ratio="
                   << config::file_cache_keep_base_compaction_output_min_hit_ratio;
 
-        if (config::enable_file_cache_keep_base_compaction_output) {
-            return true;
-        }
-
-        if (input_rowsets_hit_cache_ratio >
-            config::file_cache_keep_base_compaction_output_min_hit_ratio) {
-            return true;
-        }
+        return should_cache_cloud_base_compaction_output(_input_rowsets_cached_size,
+                                                         _input_rowsets_total_size);
     }
     return false;
 }

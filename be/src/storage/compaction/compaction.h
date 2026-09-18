@@ -55,6 +55,14 @@ class CloudStorageEngine;
 
 static constexpr int COMPACTION_DELETE_BITMAP_LOCK_ID = -1;
 static constexpr int64_t INVALID_COMPACTION_INITIATOR_ID = -100;
+
+bool should_cache_cloud_cumulative_compaction_output();
+bool should_cache_cloud_base_compaction_output(int64_t input_rowsets_cached_size,
+                                               int64_t input_rowsets_total_size);
+bool should_enable_compaction_cache_index_only(bool write_file_cache, ReaderType compaction_type,
+                                               bool enable_base_index_only,
+                                               bool enable_cumu_index_only);
+
 // This class is a base class for compaction.
 // The entrance of this class is compact()
 // Any compaction should go through four procedures.
@@ -120,7 +128,8 @@ protected:
 
     Status execute_merge_input_rowsets(MergeInputRowsetsContext* context);
 
-    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context);
+    Status finish_merge_input_rowsets_execution(MergeInputRowsetsContext* context,
+                                                bool build_output_rowset);
 
     virtual Status prepare_merge_input_rowsets(MergeInputRowsetsResult* /*result*/) {
         return Status::OK();
@@ -198,6 +207,9 @@ protected:
     CompactionState _state {CompactionState::INITED};
 
     bool _is_vertical;
+    bool _is_distributed {false};
+    int64_t _distributed_task_count {0};
+    int64_t _distributed_worker_count {0};
     bool _is_ordered_data_compaction {false};
     bool _trigger_quick_merge_by_binlog {false};
     bool _allow_delete_in_cumu_compaction;
@@ -289,6 +301,9 @@ public:
 
 protected:
     CloudTablet* cloud_tablet() { return static_cast<CloudTablet*>(_tablet.get()); }
+    const CloudTablet* cloud_tablet() const {
+        return static_cast<const CloudTablet*>(_tablet.get());
+    }
 
     Status update_delete_bitmap() override;
 

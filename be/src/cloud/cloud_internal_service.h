@@ -75,6 +75,30 @@ public:
                          const PFetchPeerDataRequest* request, PFetchPeerDataResponse* response,
                          google::protobuf::Closure* done) override;
 
+    void cloud_distributed_compaction_submit(
+            google::protobuf::RpcController* controller,
+            const PCloudDistributedCompactionSubmitRequest* request,
+            PCloudDistributedCompactionSubmitResponse* response,
+            google::protobuf::Closure* done) override;
+
+    void cloud_distributed_compaction_get_status(
+            google::protobuf::RpcController* controller,
+            const PCloudDistributedCompactionGetStatusRequest* request,
+            PCloudDistributedCompactionGetStatusResponse* response,
+            google::protobuf::Closure* done) override;
+
+    void cloud_distributed_compaction_calc_incremental_delete_bitmap(
+            google::protobuf::RpcController* controller,
+            const PCloudDistributedCompactionCalcIncrementalDeleteBitmapRequest* request,
+            PCloudDistributedCompactionCalcIncrementalDeleteBitmapResponse* response,
+            google::protobuf::Closure* done) override;
+
+    void cloud_distributed_compaction_finalize(
+            google::protobuf::RpcController* controller,
+            const PCloudDistributedCompactionFinalizeRequest* request,
+            PCloudDistributedCompactionFinalizeResponse* response,
+            google::protobuf::Closure* done) override;
+
 private:
     CloudStorageEngine& _engine;
 };
