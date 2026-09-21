@@ -58,6 +58,7 @@
 #include "util/brpc_client_cache.h"
 #include "util/brpc_closure.h"
 #include "util/debug_points.h"
+#include "util/defer_op.h"
 #include "util/mem_info.h"
 #include "util/stopwatch.hpp"
 #include "util/time.h"
@@ -199,14 +200,16 @@ Status DeltaWriterV2::close() {
 }
 
 Status DeltaWriterV2::close_wait(int32_t& num_segments, RuntimeProfile* profile) {
+    Defer update_profile([&] {
+        if (profile != nullptr) {
+            _update_profile(profile);
+        }
+    });
     SCOPED_RAW_TIMER(&_close_wait_time);
     std::lock_guard<std::mutex> l(_lock);
     DCHECK(_is_init)
             << "delta writer is supposed be to initialized before close_wait() being called";
 
-    if (profile != nullptr) {
-        _update_profile(profile);
-    }
     RETURN_IF_ERROR(_memtable_writer->close_wait(profile));
     num_segments = _rowset_writer->next_segment_id();
 
