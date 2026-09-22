@@ -142,6 +142,7 @@ suite("test_cloud_memtable_mow_forward", "p0, docker") {
                         check { result, exception, startTime, endTime ->
                             if (exception != null) { throw exception }
                             def response = parseJson(result)
+                            sql "SELECT assert_true('${response.Status}' = 'Success', 'forwarded Stream Load failed')"
                             quickTest("stream_status_${packed}", "SELECT '${response.Status}'", true)
                         }
                     }
@@ -165,6 +166,7 @@ suite("test_cloud_memtable_mow_forward", "p0, docker") {
                             check { result, exception, startTime, endTime ->
                                 if (exception != null) { throw exception }
                                 def response = parseJson(result)
+                                sql "SELECT assert_true('${response.Status}' = 'Success', 'Group Commit Stream Load failed')"
                                 groupLabel = response.Label
                                 quickTest("group_status_${packed}", "SELECT '${response.Status}', '${response.GroupCommit}'", true)
                             }
