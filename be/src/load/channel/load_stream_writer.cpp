@@ -30,6 +30,7 @@
 
 #include "bvar/bvar.h"
 #include "cloud/cloud_rowset_builder.h"
+#include "cloud/config.h"
 #include "common/compiler_util.h" // IWYU pragma: keep
 #include "common/config.h"
 #include "common/logging.h"
@@ -91,9 +92,15 @@ LoadStreamWriter::~LoadStreamWriter() {
     g_load_stream_writer_cnt << -1;
 }
 
-Status LoadStreamWriter::init() {
+Status LoadStreamWriter::init(bool is_empty) {
     DBUG_EXECUTE_IF("LoadStreamWriter.init.failure",
                     { return Status::InternalError("fault injection"); });
+    if (config::is_cloud_mode()) {
+        // Set this before initialization so empty tablets also skip PREPARE_ROWSET.
+        static_cast<CloudRowsetBuilder*>(_rowset_builder.get())
+                ->set_skip_writing_rowset_metadata(is_empty &&
+                                                   config::skip_writing_empty_rowset_metadata);
+    }
     RETURN_IF_ERROR(_rowset_builder->init());
     _rowset_writer = _rowset_builder->rowset_writer();
     _is_init = true;
@@ -267,7 +274,7 @@ Status LoadStreamWriter::_pre_close() {
         // in same partition has data loaded.
         // so we have to also init this LoadStreamWriter, so that it can create an empty rowset
         // for this tablet when being closed.
-        RETURN_IF_ERROR(init());
+        RETURN_IF_ERROR(init(true));
     }
 
     DCHECK(_is_init)

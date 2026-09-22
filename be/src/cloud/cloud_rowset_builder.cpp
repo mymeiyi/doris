@@ -251,7 +251,9 @@ Status CloudRowsetBuilder::commit_rowset(const std::string& job_id, int64_t tabl
 
 Status CloudRowsetBuilder::commit_txn() {
     DCHECK(is_data_builder());
-    RETURN_IF_ERROR(commit_rowset("", _tablet->table_id()));
+    if (!_skip_writing_rowset_metadata) {
+        RETURN_IF_ERROR(commit_rowset("", _tablet->table_id()));
+    }
     RETURN_IF_ERROR(set_txn_related_info());
     update_tablet_stats();
     _is_committed = true;

@@ -50,7 +50,7 @@ public:
                  std::string storage_vault_id, bool write_file_cache);
 
     Status init(std::shared_ptr<OlapTableSchemaParam> schema, int64_t index_id,
-                int64_t partition_id);
+                int64_t partition_id, bool is_empty = false);
 
     Status append_data(const PStreamHeader& header, butil::IOBuf* data);
     Status add_segment(const PStreamHeader& header, butil::IOBuf* data);
@@ -109,7 +109,7 @@ public:
 
 private:
     void _init_tablet_stream(TabletStreamSharedPtr& tablet_stream, int64_t tablet_id,
-                             int64_t partition_id);
+                             int64_t partition_id, bool is_empty);
 
 private:
     int64_t _id;

@@ -82,7 +82,7 @@ inline std::ostream& operator<<(std::ostream& ostr, const TabletStream& tablet_s
 }
 
 Status TabletStream::init(std::shared_ptr<OlapTableSchemaParam> schema, int64_t index_id,
-                          int64_t partition_id) {
+                          int64_t partition_id, bool is_empty) {
     WriteRequest req {
             .tablet_id = _id,
             .txn_id = _txn_id,
@@ -100,7 +100,7 @@ Status TabletStream::init(std::shared_ptr<OlapTableSchemaParam> schema, int64_t 
         _status.update(Status::Uninitialized("fault injection"));
         return _status.status();
     });
-    _status.update(_load_stream_writer->init());
+    _status.update(_load_stream_writer->init(is_empty));
     if (!_status.ok()) {
         LOG(INFO) << "failed to init rowset builder due to " << *this;
     }
@@ -386,7 +386,7 @@ Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data)
         std::lock_guard lock_guard(_lock);
         auto it = _tablet_streams_map.find(tablet_id);
         if (it == _tablet_streams_map.end()) {
-            _init_tablet_stream(tablet_stream, tablet_id, header.partition_id());
+            _init_tablet_stream(tablet_stream, tablet_id, header.partition_id(), false);
         } else {
             tablet_stream = it->second;
         }
@@ -396,12 +396,12 @@ Status IndexStream::append_data(const PStreamHeader& header, butil::IOBuf* data)
 }
 
 void IndexStream::_init_tablet_stream(TabletStreamSharedPtr& tablet_stream, int64_t tablet_id,
-                                      int64_t partition_id) {
+                                      int64_t partition_id, bool is_empty) {
     tablet_stream =
             std::make_shared<TabletStream>(_load_id, tablet_id, _txn_id, _load_stream_mgr, _profile,
                                            _txn_expiration, _storage_vault_id, _write_file_cache);
     _tablet_streams_map[tablet_id] = tablet_stream;
-    auto st = tablet_stream->init(_schema, _id, partition_id);
+    auto st = tablet_stream->init(_schema, _id, partition_id, is_empty);
     if (!st.ok()) {
         LOG(WARNING) << "tablet stream init failed " << *tablet_stream;
     }
@@ -426,7 +426,8 @@ void IndexStream::close(const std::vector<PTabletID>& tablets_to_commit,
         TabletStreamSharedPtr tablet_stream;
         auto it = _tablet_streams_map.find(tablet.tablet_id());
         if (it == _tablet_streams_map.end()) {
-            _init_tablet_stream(tablet_stream, tablet.tablet_id(), tablet.partition_id());
+            // A tablet first seen at close received no files from any sender.
+            _init_tablet_stream(tablet_stream, tablet.tablet_id(), tablet.partition_id(), true);
         } else {
             tablet_stream = it->second;
         }
