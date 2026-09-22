@@ -349,7 +349,6 @@ Status read_key_samples(const segment_v2::SegmentSharedPtr& segment, const Table
     }
     StorageReadOptions read_options;
     read_options.stats = reader_stats;
-    read_options.tablet_schema = segment->tablet_schema();
     auto io_ctx = read_options.io_ctx;
     io_ctx.reader_type = ReaderType::READER_BASE_COMPACTION;
     io_ctx.file_cache_stats = &reader_stats->file_cache_stats;
