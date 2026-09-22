@@ -26,6 +26,7 @@
 #include <sstream>
 
 #include "bvar/bvar.h"
+#include "cloud/cloud_meta_mgr.h"
 #include "cloud/config.h"
 #include "common/signal_handler.h"
 #include "load/channel/load_channel.h"
@@ -443,8 +444,28 @@ void IndexStream::close(const std::vector<PTabletID>& tablets_to_commit,
         tablet_stream->pre_close();
     }
 
+    const bool is_cloud = config::is_cloud_mode();
+    std::vector<Status> close_statuses;
+    if (is_cloud) {
+        close_statuses.resize(_tablet_streams_map.size());
+        std::vector<std::function<Status()>> tasks;
+        tasks.reserve(_tablet_streams_map.size());
+        size_t i = 0;
+        for (auto& [_, tablet_stream] : _tablet_streams_map) {
+            tasks.emplace_back([tablet_stream, &close_statuses, i] {
+                close_statuses[i] = tablet_stream->close();
+                // A tablet failure must not stop the remaining tablets from closing.
+                return Status::OK();
+            });
+            ++i;
+        }
+        auto st = cloud::bthread_fork_join(tasks, 10);
+        DORIS_CHECK(st.ok()) << st;
+    }
+
+    size_t i = 0;
     for (auto& [_, tablet_stream] : _tablet_streams_map) {
-        auto st = tablet_stream->close();
+        auto st = is_cloud ? std::move(close_statuses[i++]) : tablet_stream->close();
         if (st.ok()) {
             success_tablet_ids->push_back(tablet_stream->id());
         } else {

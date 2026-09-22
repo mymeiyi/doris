@@ -17,6 +17,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -24,10 +29,12 @@
 
 #include "cloud/cloud_committed_rs_mgr.h"
 #include "cloud/cloud_rowset_builder.h"
+#include "cloud/cloud_rowset_writer.h"
 #include "cloud/cloud_storage_engine.h"
 #include "cloud/cloud_tablet.h"
 #include "cloud/cloud_txn_delete_bitmap_cache.h"
 #include "cloud/config.h"
+#include "load/channel/load_stream_mgr.h"
 #include "load/channel/load_stream_writer.h"
 #include "runtime/exec_env.h"
 #include "storage/rowset/rowset.h"
@@ -35,6 +42,7 @@
 #include "storage/rowset/rowset_meta.h"
 #include "storage/tablet/tablet_meta.h"
 #include "util/time.h"
+#include "util/work_thread_pool.hpp"
 
 namespace doris {
 namespace {
@@ -55,6 +63,29 @@ public:
 
     bool skip_metadata_at_init = false;
     int commit_calls = 0;
+};
+
+class ClosingLoadRowsetBuilder : public BaseRowsetBuilder {
+public:
+    ClosingLoadRowsetBuilder(CloudStorageEngine& engine, const WriteRequest& req,
+                             std::atomic<int>& prepared, std::function<Status()> commit)
+            : BaseRowsetBuilder(req, nullptr), _prepared(prepared), _commit(std::move(commit)) {
+        _rowset_writer = std::make_shared<CloudRowsetWriter>(engine);
+        _rowset_writer->_rowset_meta = std::make_shared<RowsetMeta>();
+    }
+
+    Status init() override { return Status::OK(); }
+    Status build_rowset() override {
+        ++_prepared;
+        return Status::OK();
+    }
+    Status submit_calc_delete_bitmap_task() override { return Status::OK(); }
+    Status wait_calc_delete_bitmap() override { return Status::OK(); }
+    Status commit_txn() override { return _commit(); }
+
+private:
+    std::atomic<int>& _prepared;
+    std::function<Status()> _commit;
 };
 
 } // namespace
@@ -181,6 +212,80 @@ TEST_F(CloudLoadStreamTest, MetadataCommitFailureDoesNotRegisterMarker) {
     EXPECT_FALSE(_engine->committed_rs_mgr()
                          .get_committed_rowset(req.txn_id, req.tablet_id)
                          .has_value());
+}
+
+TEST_F(CloudLoadStreamTest, CloseTabletsConcurrentlyAndCollectAllResults) {
+    constexpr int tablet_count = 25;
+    FifoThreadPool pool(16, 64, "CloudLoadStreamCloseTest");
+    LoadStreamMgr manager(1);
+    manager.set_heavy_work_pool(&pool);
+    RuntimeProfile profile("CloudLoadStreamCloseTest");
+    PUniqueId load_id;
+    IndexStream index(load_id, 1, 1, nullptr, &manager, &profile, UnixSeconds() + 3600, "", false);
+
+    std::atomic<int> prepared {0};
+    std::mutex mutex;
+    std::condition_variable cv;
+    int started = 0;
+    int active = 0;
+    int peak_active = 0;
+    bool timed_out = false;
+    for (int64_t tablet_id = 1; tablet_id <= tablet_count; ++tablet_id) {
+        auto tablet = std::make_shared<TabletStream>(load_id, tablet_id, 1, &manager, &profile,
+                                                     UnixSeconds() + 3600, "", false);
+        WriteRequest req;
+        req.tablet_id = tablet_id;
+        auto writer = std::make_shared<LoadStreamWriter>(&req, nullptr);
+        writer->_rowset_builder =
+                std::make_unique<ClosingLoadRowsetBuilder>(*_engine, req, prepared, [&, tablet_id] {
+                    EXPECT_EQ(prepared.load(), tablet_count);
+                    std::unique_lock lock(mutex);
+                    ++started;
+                    ++active;
+                    peak_active = std::max(peak_active, active);
+                    cv.notify_all();
+                    // Hold the first wave until ten tablets are closing concurrently.
+                    // A serial implementation times out once instead of hanging the test.
+                    if (!cv.wait_for(lock, std::chrono::seconds(5),
+                                     [&] { return started >= 10 || timed_out; })) {
+                        timed_out = true;
+                        cv.notify_all();
+                    }
+                    --active;
+                    return tablet_id % 2 == 0
+                                   ? Status::OK()
+                                   : Status::InternalError("injected tablet close failure");
+                });
+        writer->_rowset_writer = writer->_rowset_builder->rowset_writer();
+        writer->_is_init = true;
+        tablet->_load_stream_writer = std::move(writer);
+        index._tablet_streams_map.emplace(tablet_id, std::move(tablet));
+    }
+
+    std::vector<int64_t> success_tablets;
+    FailedTablets failed_tablets;
+    index.close({}, &success_tablets, &failed_tablets);
+
+    EXPECT_FALSE(timed_out);
+    EXPECT_EQ(peak_active, 10);
+    EXPECT_EQ(started, tablet_count);
+    std::sort(success_tablets.begin(), success_tablets.end());
+    std::vector<int64_t> expected_success;
+    for (int64_t id = 2; id <= tablet_count; id += 2) {
+        expected_success.push_back(id);
+    }
+    EXPECT_EQ(success_tablets, expected_success);
+    std::vector<int64_t> failed_ids;
+    for (const auto& [id, st] : failed_tablets) {
+        failed_ids.push_back(id);
+        EXPECT_NE(st.to_string().find("injected tablet close failure"), std::string::npos);
+    }
+    std::sort(failed_ids.begin(), failed_ids.end());
+    std::vector<int64_t> expected_failed;
+    for (int64_t id = 1; id <= tablet_count; id += 2) {
+        expected_failed.push_back(id);
+    }
+    EXPECT_EQ(failed_ids, expected_failed);
 }
 
 } // namespace doris
