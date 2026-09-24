@@ -54,6 +54,7 @@
 #include "storage/rowset/rowset_meta.h"
 #include "storage/rowset/rowset_writer.h"
 #include "storage/rowset/rowset_writer_context.h"
+#include "storage/segment/vertical_segment_writer.h"
 #include "storage/storage_engine.h"
 #include "storage/tablet/tablet_meta.h"
 #include "util/defer_op.h"
@@ -527,24 +528,31 @@ protected:
             return writer_result.error();
         }
         auto writer = std::move(writer_result).value();
+        // SegmentFlusher uses the writer's default short-key block size, not the schema's.
+        // Give each logical row a full block so its key is represented in the short-key index.
+        // MoW samples primary keys (or falls back to the schema's row-block size of one).
+        const size_t rows_per_key =
+                is_mow ? 1 : segment_v2::VerticalSegmentWriterOptions {}.num_rows_per_block;
         uint64_t total_rows = 0;
         for (const auto& key_rows : segment_key_rows) {
             Block block = schema->create_storage_block();
             auto columns = std::move(block).mutate_columns();
             for (const auto& key_row : key_rows) {
                 DORIS_CHECK_EQ(key_row.size(), schema->num_key_columns());
-                for (size_t column_index = 0; column_index < key_row.size(); ++column_index) {
-                    columns[column_index]->insert(key_row[column_index]);
-                }
-                for (size_t column_index = key_row.size(); column_index < columns.size();
-                     ++column_index) {
-                    columns[column_index]->insert_default();
+                for (size_t row = 0; row < rows_per_key; ++row) {
+                    for (size_t column_index = 0; column_index < key_row.size(); ++column_index) {
+                        columns[column_index]->insert(key_row[column_index]);
+                    }
+                    for (size_t column_index = key_row.size(); column_index < columns.size();
+                         ++column_index) {
+                        columns[column_index]->insert_default();
+                    }
                 }
             }
             block.set_columns(std::move(columns));
             RETURN_IF_ERROR(writer->add_block(&block));
             RETURN_IF_ERROR(writer->flush());
-            total_rows += key_rows.size();
+            total_rows += block.rows();
         }
         RowsetSharedPtr rowset;
         RETURN_IF_ERROR(writer->build(rowset));
@@ -727,7 +735,9 @@ TEST_F(DistributedCompactionKeyRangePlanningTest, samples_uneven_segments_propor
     EXPECT_EQ(result.segment_count, 2);
     EXPECT_EQ(result.encoded_sample_count, 5);
     ASSERT_EQ(result.key_ranges.boundaries.size(), 3);
-    EXPECT_EQ(result.key_ranges.boundaries[0][0].get<TYPE_INT>(), 10);
+    // Samples represent 1, 2, 2, 2, 3 full blocks. The first target is 2.5 blocks,
+    // so the nearest prefix is 3 blocks, immediately before key 12.
+    EXPECT_EQ(result.key_ranges.boundaries[0][0].get<TYPE_INT>(), 12);
     EXPECT_EQ(result.key_ranges.boundaries[1][0].get<TYPE_INT>(), 14);
     EXPECT_EQ(result.key_ranges.boundaries[2][0].get<TYPE_INT>(), 17);
 }

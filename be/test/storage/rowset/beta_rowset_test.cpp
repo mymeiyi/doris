@@ -397,7 +397,6 @@ TEST_F(BetaRowsetTest, PreferredPeerPropagatesToSegmentIoContext) {
     auto read_schema = std::make_shared<ReadSchema>(
             project_columns_by_ordinal(tablet_schema->columns(), std::vector<ColumnId> {0, 1, 2}));
     RowsetReaderContext reader_context;
-    reader_context.tablet_schema = tablet_schema;
     reader_context.read_schema = read_schema;
     reader_context.stats = &_stats;
     ASSERT_TRUE(reader->init(&reader_context).ok());

@@ -51,6 +51,10 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         long compactionTimeoutMs = 90000L
         String submitRetryDebugPoint = "CloudInternalServiceImpl::" +
                 "cloud_distributed_compaction_submit.too_many_tasks_after_accept"
+        String cumulativeInputDebugPoint =
+                "CloudSizeBasedCumulativeCompactionPolicy::pick_input_rowsets.set_input_rowsets"
+        String cumulativePointDebugPoint =
+                "CloudSizeBasedCumulativeCompactionPolicy::new_cumulative_point"
         String missedRowsMismatchDebugPoint =
                 "DistributedCompactionWorker::handle_compaction.corrupt_missed_rows_count"
 
@@ -174,6 +178,17 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 )
             """
 
+            def backends = sql_return_maparray "SHOW BACKENDS"
+            assertEquals(2, backends.size())
+            def tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
+            assertEquals(1, tablets.size())
+            String tabletId = tablets[0].TabletId
+            String coordinatorBackendId = tablets[0].BackendId
+            def coordinator = backends.find {
+                it.BackendId.toString() == coordinatorBackendId.toString()
+            }
+            assertNotNull(coordinator)
+
             for (int round = 0; round < 6; ++round) {
                 sql """
                     INSERT INTO ${tableName}
@@ -182,7 +197,27 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 """
                 if (round % 2 == 1) {
                     sql "sync"
-                    trigger_and_wait_compaction(tableName, "cumulative")
+                    // Pin preparation to two versions regardless of compressed rowset sizes.
+                    int startVersion = round + 1
+                    int endVersion = round + 2
+                    try {
+                        GetDebugPoint().enableDebugPointForAllBEs(cumulativeInputDebugPoint,
+                                [tablet_id: tabletId, start_version: startVersion,
+                                 end_version: endVersion])
+                        GetDebugPoint().enableDebugPointForAllBEs(cumulativePointDebugPoint,
+                                [tablet_id: tabletId, cumu_point: endVersion + 1])
+                        trigger_and_wait_compaction(tableName, "cumulative")
+                    } finally {
+                        GetDebugPoint().disableDebugPointForAllBEs(cumulativePointDebugPoint)
+                        GetDebugPoint().disableDebugPointForAllBEs(cumulativeInputDebugPoint)
+                    }
+                    // The helper permits no-op responses; verify the merge actually happened.
+                    def prepared = showTablet(coordinator.Host, coordinator.HttpPort, tabletId)
+                    assertTrue(prepared.rowsets.any {
+                        it.startsWith("[${startVersion}-${endVersion}] ")
+                    }, "missing prepared rowset: ${prepared.rowsets}")
+                    assertEquals(endVersion + 1,
+                            prepared["cumulative point"].toString().toInteger())
                 }
             }
 
@@ -205,18 +240,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 LIMIT 4
             """
 
-            def backends = sql_return_maparray "SHOW BACKENDS"
-            assertEquals(2, backends.size())
             sql "set cloud_force_sync_tablet_stats = true"
-            def tablets = sql_return_maparray "SHOW TABLETS FROM ${tableName}"
-            assertEquals(1, tablets.size())
-            String tabletId = tablets[0].TabletId
-            String coordinatorBackendId = tablets[0].BackendId
-            def coordinator = backends.find {
-                it.BackendId.toString() == coordinatorBackendId.toString()
-            }
-            assertNotNull(coordinator)
-
             Thread.sleep(2000)
             long inputSizeBytes = 0
             long reportDeadline = System.currentTimeMillis() + compactionTimeoutMs
@@ -249,7 +273,11 @@ suite("test_cloud_distributed_base_compaction", "docker") {
 
             def before = showTablet(coordinator.Host, coordinator.HttpPort, tabletId)
             int inputRowsetCount = before.rowsets.count { it.contains(" DATA ") }
-            assertTrue(inputRowsetCount >= 4, "expected at least four input rowsets: ${before.rowsets}")
+            // [0-1] is excluded by Cloud base compaction; all three prepared rowsets must
+            // be below the cumulative point and eligible for the distributed base task.
+            assertEquals(8, before["cumulative point"].toString().toInteger())
+            assertEquals(["[0-1]", "[2-3]", "[4-5]", "[6-7]"],
+                    before.rowsets.collect { it.tokenize(" ")[0] }.sort())
 
             def after = null
             boolean injectSubmitRetry = keyCase.injectSubmitRetry == true
