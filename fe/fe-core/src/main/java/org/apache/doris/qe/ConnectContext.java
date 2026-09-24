@@ -536,6 +536,12 @@ public class ConnectContext {
         return this.preparedStatementContextMap.get(stmtName);
     }
 
+    public void invalidatePreparedStatementPlans() {
+        for (PreparedStatementContext preparedStatement : preparedStatementContextMap.values()) {
+            preparedStatement.planInvalidated = true;
+        }
+    }
+
     public void closeTxn() {
         if (isTxnModel()) {
             try {

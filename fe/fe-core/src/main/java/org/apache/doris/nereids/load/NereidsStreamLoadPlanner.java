@@ -103,6 +103,12 @@ public class NereidsStreamLoadPlanner {
      * create the plan. the plan's query id and load id are same, using the parameter 'loadId'
      */
     public TPipelineFragmentParams plan(TUniqueId loadId, int fragmentInstanceIdIndex) throws UserException {
+        return plan(loadId, fragmentInstanceIdIndex, new TQueryOptions());
+    }
+
+    /** Build a load plan using the supplied execution options, overriding load-specific fields. */
+    public TPipelineFragmentParams plan(TUniqueId loadId, int fragmentInstanceIdIndex, TQueryOptions queryOptions)
+            throws UserException {
         if (destTable.getKeysType() != KeysType.UNIQUE_KEYS
                 && taskInfo.getMergeType() != LoadTask.MergeType.APPEND) {
             throw new AnalysisException("load by MERGE or DELETE is only supported in unique tables.");
@@ -301,7 +307,6 @@ public class NereidsStreamLoadPlanner {
         params.setLoadStreamPerNode(taskInfo.getStreamPerNode());
         params.setTotalLoadStreams(taskInfo.getStreamPerNode());
         params.setNumLocalSink(1);
-        TQueryOptions queryOptions = new TQueryOptions();
         queryOptions.setQueryType(TQueryType.LOAD);
         int timeout = taskInfo.getTimeout();
         queryOptions.setQueryTimeout(timeout);

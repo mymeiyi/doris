@@ -54,6 +54,8 @@ public class SetOptionsCommand extends Command implements Forward, NeedAuditEncr
 
     @Override
     public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
+        // Invalidate before applying SET: a later assignment can fail after earlier ones took effect.
+        ctx.invalidatePreparedStatementPlans();
         for (SetVarOp varOp : setVarOpList) {
             varOp.validate(ctx);
             varOp.run(ctx);
@@ -82,6 +84,7 @@ public class SetOptionsCommand extends Command implements Forward, NeedAuditEncr
 
     @Override
     public void afterForwardToMaster(ConnectContext ctx) throws Exception {
+        ctx.invalidatePreparedStatementPlans();
         for (SetVarOp varOp : setVarOpList) {
             varOp.validate(ctx);
             varOp.afterForwardToMaster(ctx);

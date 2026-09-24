@@ -32,6 +32,7 @@ import org.apache.http.util.EntityUtils
 
 import java.nio.charset.StandardCharsets
 import java.sql.Connection
+import java.sql.PreparedStatement
 import java.sql.ResultSetMetaData
 import org.apache.doris.regression.suite.SuiteContext
 import org.apache.doris.regression.util.JdbcUtils
@@ -44,6 +45,7 @@ import java.util.Random
 @CompileStatic
 class TestAction implements SuiteAction {
     private String sql
+    private PreparedStatement preparedStatement
     private boolean isOrder
     private String resultFileUri
     private String resultTag
@@ -179,7 +181,9 @@ class TestAction implements SuiteAction {
         long startTime = System.currentTimeMillis()
         try {
             log.info("Execute ${isOrder ? "order_" : ""}sql:\n${sql}".toString())
-            (result, meta) = JdbcUtils.executeToList(conn, sql)
+            (result, meta) = preparedStatement == null
+                    ? JdbcUtils.executeToList(conn, sql)
+                    : JdbcUtils.executeToList(conn, preparedStatement)
             if (isOrder) {
                 result = DataUtils.sortByToString(result)
             }
@@ -197,6 +201,11 @@ class TestAction implements SuiteAction {
 
     void sql(Closure<String> sqlSupplier) {
         this.sql = sqlSupplier.call()
+    }
+
+    void sql(PreparedStatement statement) {
+        this.preparedStatement = statement
+        this.sql = statement.toString()
     }
 
     void order(boolean isOrder) {

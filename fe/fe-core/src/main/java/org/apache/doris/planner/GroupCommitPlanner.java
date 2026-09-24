@@ -128,7 +128,9 @@ public class GroupCommitPlanner {
         NereidsStreamLoadPlanner planner = new NereidsStreamLoadPlanner(db, table, streamLoadTask);
         // Will using load id as query id in fragment
         // TODO support pipeline
-        TPipelineFragmentParams tRequest = planner.plan(streamLoadTask.getId());
+        // Start with all session execution options; the load planner overrides load-specific fields.
+        TPipelineFragmentParams tRequest = planner.plan(streamLoadTask.getId(), 1,
+                ConnectContext.get().getSessionVariable().toThrift());
         for (Map.Entry<Integer, List<TScanRangeParams>> entry : tRequest.local_params.get(0)
                 .per_node_scan_ranges.entrySet()) {
             for (TScanRangeParams scanRangeParams : entry.getValue()) {

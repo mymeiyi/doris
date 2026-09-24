@@ -30,6 +30,7 @@ public class PreparedStatementContext {
     public String stmtString;
     public Optional<ShortCircuitQueryContext> shortCircuitQueryContext = Optional.empty();
     public Optional<GroupCommitPlanner> groupCommitPlanner = Optional.empty();
+    public boolean planInvalidated;
 
     // Timestamp in millisecond last command starts at
     protected volatile long startTime;

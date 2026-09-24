@@ -22,6 +22,7 @@ import org.apache.doris.analysis.Queriable;
 import org.apache.doris.analysis.TableScanParams;
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.DatabaseIf;
+import org.apache.doris.catalog.MysqlColType;
 import org.apache.doris.catalog.OlapTable;
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.ScalarType;
@@ -31,12 +32,18 @@ import org.apache.doris.datasource.mvcc.MvccSnapshot;
 import org.apache.doris.datasource.mvcc.MvccTable;
 import org.apache.doris.nereids.StatementContext;
 import org.apache.doris.nereids.analyzer.UnboundRelation;
+import org.apache.doris.nereids.glue.LogicalPlanAdapter;
 import org.apache.doris.nereids.parser.NereidsParser;
+import org.apache.doris.nereids.trees.expressions.Placeholder;
 import org.apache.doris.nereids.trees.expressions.SubqueryExpr;
+import org.apache.doris.nereids.trees.expressions.literal.StringLiteral;
+import org.apache.doris.nereids.trees.plans.commands.info.SetVarOp;
 import org.apache.doris.nereids.trees.plans.commands.merge.MergeIntoCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
+import org.apache.doris.planner.GroupCommitPlanner;
 import org.apache.doris.planner.OlapScanNode;
 import org.apache.doris.planner.Planner;
+import org.apache.doris.qe.AutoCloseConnectContext;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.OriginStatement;
 import org.apache.doris.qe.PreparedStatementContext;
@@ -58,6 +65,81 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class ExecuteCommandTest {
+
+    @Test
+    public void testSetInvalidatesAllHandlesEvenWhenLaterAssignmentFails() throws Exception {
+        ConnectContext context = new ConnectContext();
+        PrepareCommand command = Mockito.mock(PrepareCommand.class);
+        PreparedStatementContext first = new PreparedStatementContext(command, context, new StatementContext(), "1");
+        PreparedStatementContext second = new PreparedStatementContext(command, context, new StatementContext(), "2");
+        context.addPreparedStatementContext("1", first);
+        context.addPreparedStatementContext("2", second);
+        SetVarOp assignment = Mockito.mock(SetVarOp.class);
+        SetVarOp failure = Mockito.mock(SetVarOp.class);
+        Mockito.doThrow(new IllegalArgumentException("invalid value")).when(failure).run(context);
+        SetOptionsCommand set = new SetOptionsCommand(Arrays.asList(assignment, failure));
+
+        Assertions.assertThrows(IllegalArgumentException.class, () -> set.run(context, null));
+        Mockito.verify(assignment).run(context);
+        Assertions.assertTrue(first.planInvalidated);
+        Assertions.assertTrue(second.planInvalidated);
+        Assertions.assertSame(first, context.getPreparedStementContext("1"));
+        Assertions.assertSame(second, context.getPreparedStementContext("2"));
+
+        first.planInvalidated = false;
+        second.planInvalidated = false;
+        set.afterForwardToMaster(context);
+        Mockito.verify(assignment).afterForwardToMaster(context);
+        Assertions.assertTrue(first.planInvalidated);
+        Assertions.assertTrue(second.planInvalidated);
+    }
+
+    @Test
+    public void testInvalidatedExecuteReparsesAndPreservesParameterBindings() throws Exception {
+        ConnectContext context = new ConnectContext();
+        try (AutoCloseConnectContext scope = new AutoCloseConnectContext(context)) {
+            scope.call();
+            String sql = "select cast(v as int) from t where id = ?";
+            LogicalPlanAdapter parsed = (LogicalPlanAdapter) new NereidsParser().parseSQL(sql).get(0);
+            StatementContext statement = parsed.getStatementContext();
+            Placeholder parameter = statement.getPlaceholders().get(0)
+                    .withNewMysqlColType(MysqlColType.MYSQL_TYPE_VARSTRING.getCode());
+            StringLiteral value = new StringLiteral("42");
+            statement.getIdToPlaceholderRealExpr().put(parameter.getPlaceholderId(), value);
+            statement.setShortCircuitQuery(true);
+            PrepareCommand command = new PrepareCommand("1", parsed.getLogicalPlan(),
+                    Collections.singletonList(parameter), new OriginStatement(sql, 0));
+            PreparedStatementContext prepared = new PreparedStatementContext(command, context, statement, "1");
+            prepared.shortCircuitQueryContext = Optional.of(Mockito.mock(ShortCircuitQueryContext.class));
+            prepared.groupCommitPlanner = Optional.of(Mockito.mock(GroupCommitPlanner.class));
+            context.addPreparedStatementContext("1", prepared);
+            context.invalidatePreparedStatementPlans();
+
+            StmtExecutor executor = Mockito.mock(StmtExecutor.class);
+            Mockito.when(executor.getContext()).thenReturn(context);
+            Mockito.doAnswer(invocation -> {
+                context.setStatementContext(invocation.getArgument(0));
+                return null;
+            }).when(executor).setStatementContext(Mockito.any(StatementContext.class));
+            new ExecuteCommand("1", command, statement).run(context, executor);
+
+            Assertions.assertSame(prepared, context.getPreparedStementContext("1"));
+            Assertions.assertNotSame(command, prepared.command);
+            Assertions.assertFalse(prepared.planInvalidated);
+            Assertions.assertFalse(prepared.shortCircuitQueryContext.isPresent());
+            Assertions.assertFalse(prepared.groupCommitPlanner.isPresent());
+            Placeholder rebound = prepared.command.getPlaceholders().get(0);
+            Assertions.assertEquals(parameter.getMysqlTypeCode(), rebound.getMysqlTypeCode());
+            Assertions.assertSame(value, prepared.getStatementContext().getIdToPlaceholderRealExpr()
+                    .get(rebound.getPlaceholderId()));
+            Assertions.assertFalse(prepared.getStatementContext().isShortCircuitQuery());
+
+            PrepareCommand refreshed = prepared.command;
+            new ExecuteCommand("1", refreshed, prepared.getStatementContext()).run(context, executor);
+            Assertions.assertSame(refreshed, prepared.command, "no additional reparse without another SET");
+            Mockito.verify(executor, Mockito.times(2)).execute();
+        }
+    }
 
     @Test
     public void testResolvedScanOptionsAreResetForEveryExecute() throws Exception {

@@ -96,6 +96,13 @@ public class ExecuteCommand extends Command {
         // connections. The necessary cross-execution state (placeholder bindings, comparison
         // slots, id generator positions, short-circuit flags) is carried over to the new context.
         StatementContext statementContext = preparedStmtCtx.nextStatementContext();
+        if (preparedStmtCtx.planInvalidated) {
+            statementContext = refreshPreparedPlan(preparedStmtCtx, executor, prepareCommand, statementContext);
+            prepareCommand = preparedStmtCtx.command;
+            preparedStmtCtx.shortCircuitQueryContext = Optional.empty();
+            preparedStmtCtx.groupCommitPlanner = Optional.empty();
+            preparedStmtCtx.planInvalidated = false;
+        }
         statementContext.setPrepareStage(false);
         statementContext.setIsInsert(false);
         LogicalPlan logicalPlan = prepareCommand.getLogicalPlan();
@@ -208,7 +215,7 @@ public class ExecuteCommand extends Command {
         boolean refreshed = false;
         try {
             if (LOG.isDebugEnabled()) {
-                LOG.debug("refresh prepared statement plan for short-circuit query, stmtName={}",
+                LOG.debug("refresh prepared statement plan, stmtName={}",
                         currentCommand.getName());
             }
             List<StatementBase> reparsedStatements = new NereidsParser().parseSQL(
@@ -260,7 +267,7 @@ public class ExecuteCommand extends Command {
             preparedStmtCtx.setStatementContext(reparsedStatementContext);
             refreshed = true;
             if (LOG.isDebugEnabled()) {
-                LOG.debug("refreshed prepared statement plan for short-circuit query, stmtName={}",
+                LOG.debug("refreshed prepared statement plan, stmtName={}",
                         currentCommand.getName());
             }
             return reparsedStatementContext;
@@ -271,7 +278,7 @@ public class ExecuteCommand extends Command {
                 preparedStmtCtx.command = originalCommand;
                 preparedStmtCtx.setStatementContext(originalPreparedStatementContext);
                 if (LOG.isDebugEnabled()) {
-                    LOG.debug("rollback prepared statement plan refresh for short-circuit query, stmtName={}",
+                    LOG.debug("rollback prepared statement plan refresh, stmtName={}",
                             currentCommand.getName());
                 }
             }
