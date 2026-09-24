@@ -91,8 +91,10 @@ std::unique_ptr<ThreadPool> worker_thread_pool;
 std::unique_ptr<DistributedCompactionPollScheduler> poll_scheduler;
 
 ThreadPool& distributed_compaction_rpc_thread_pool() {
-    DORIS_CHECK(rpc_thread_pool != nullptr);
-    return *rpc_thread_pool;
+    ThreadPool* pool = rpc_thread_pool.get();
+    TEST_SYNC_POINT_CALLBACK("cloud::distributed_compaction_rpc_thread_pool", &pool);
+    DORIS_CHECK(pool != nullptr);
+    return *pool;
 }
 
 ThreadPool& distributed_compaction_worker_thread_pool() {
@@ -1290,6 +1292,8 @@ Status distributed_compaction_calc_incremental_delete_bitmap_rpc(
 Status distributed_compaction_finalize_rpc(
         const std::string& endpoint, const PCloudDistributedCompactionFinalizeRequest& request,
         PCloudDistributedCompactionFinalizeResponse* response) {
+    TEST_SYNC_POINT_RETURN_WITH_VALUE("cloud::distributed_compaction_finalize_rpc", Status::OK(),
+                                      &endpoint, &request);
     return call_worker(endpoint, request, response,
                        &PBackendService_Stub::cloud_distributed_compaction_finalize,
                        "cloud_distributed_compaction_finalize",
@@ -2528,21 +2532,31 @@ void DistributedCompactionCoordinator::finalize(bool cancel_tasks) {
                         .error(status);
             }
         };
-        auto token = distributed_compaction_rpc_thread_pool().new_token(
-                ThreadPool::ExecutionMode::CONCURRENT, cast_set<int>(groups_by_worker.size()));
-        for (const auto& [endpoint, task_indices] : groups_by_worker) {
-            const Status submit_status = token->submit_func(
-                    [&, endpoint, task_indices]() { finalize_endpoint(endpoint, task_indices); });
-            if (!submit_status.ok()) {
-                LOG_WARNING("failed to submit distributed compaction finalize task")
-                        .tag("job_id", _execution_id)
-                        .tag("endpoint", endpoint)
-                        .error(submit_status);
+        auto& pool = distributed_compaction_rpc_thread_pool();
+        // Shutdown completion can run on an RPC-pool worker. Only that caller must finalize
+        // inline; all other callers retain parallel cleanup without waiting on their own pool.
+        if (pool.is_current_thread_in_pool()) {
+            for (const auto& [endpoint, task_indices] : groups_by_worker) {
                 finalize_endpoint(endpoint, task_indices);
             }
+        } else {
+            auto token = pool.new_token(ThreadPool::ExecutionMode::CONCURRENT,
+                                        cast_set<int>(groups_by_worker.size()));
+            for (const auto& [endpoint, task_indices] : groups_by_worker) {
+                const Status submit_status = token->submit_func([&, endpoint, task_indices]() {
+                    finalize_endpoint(endpoint, task_indices);
+                });
+                if (!submit_status.ok()) {
+                    LOG_WARNING("failed to submit distributed compaction finalize task")
+                            .tag("job_id", _execution_id)
+                            .tag("endpoint", endpoint)
+                            .error(submit_status);
+                    finalize_endpoint(endpoint, task_indices);
+                }
+            }
+            token->wait();
+            token->shutdown();
         }
-        token->wait();
-        token->shutdown();
     }
     _state.reset();
 }

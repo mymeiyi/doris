@@ -28,6 +28,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -81,6 +82,18 @@ TabletMetaSharedPtr create_compaction_tablet_meta(KeysType keys_type = DUP_KEYS)
     auto schema_pb = create_compaction_schema(keys_type);
     tablet_meta->mutable_tablet_schema()->init_from_pb(schema_pb);
     return tablet_meta;
+}
+
+std::shared_ptr<cloud::DistributedCompactionCoordinator> create_started_distributed_compaction(
+        CloudStorageEngine& engine, const std::shared_ptr<CloudTablet>& tablet) {
+    auto coordinator = std::make_shared<cloud::DistributedCompactionCoordinator>(engine, tablet,
+                                                                                 "finalize-test");
+    coordinator->_state = std::make_unique<cloud::DistributedCompactionState>();
+    coordinator->_state->tasks.push_back({.worker_endpoint = "be-a:8060",
+                                          .group_index = 0,
+                                          .segment_id_slot = {.start_id = 0, .capacity = 100},
+                                          .started = true});
+    return coordinator;
 }
 
 class FailingDistributedCompaction final : public cloud::DistributedCompaction {
@@ -1274,6 +1287,112 @@ TEST(CloudDistributedCompactionTest, distributed_compaction_poll_scheduler_runs_
 
 // Coordinator completion and failure paths.
 
+TEST(CloudDistributedCompactionTest, distributed_finalize_selects_safe_execution_mode) {
+    auto* sync_point = SyncPoint::get_instance();
+    sync_point->enable_processing();
+    Defer clear_sync_point {[&] {
+        sync_point->clear_all_call_backs();
+        sync_point->disable_processing();
+    }};
+    CloudStorageEngine engine(EngineOptions {});
+    // Thread membership, not engine state, determines whether cleanup can run in parallel.
+    engine._stopped = true;
+    auto tablet = std::make_shared<CloudTablet>(engine, create_compaction_tablet_meta());
+
+    for (std::string_view mode : {"parallel", "rpc_thread", "shutdown"}) {
+        SCOPED_TRACE(mode);
+        for (const bool cancel_tasks : {false, true}) {
+            SCOPED_TRACE(cancel_tasks);
+            auto coordinator = create_started_distributed_compaction(engine, tablet);
+            for (int group_index = 1; group_index < 4; ++group_index) {
+                coordinator->_state->tasks.push_back(
+                        {.worker_endpoint = group_index == 1 ? "be-a:8060" : "be-b:8060",
+                         .group_index = group_index,
+                         .segment_id_slot = {.start_id = group_index * 100, .capacity = 100},
+                         .started = group_index != 3});
+            }
+            std::unordered_map<std::string, int> attempts;
+            std::mutex mutex;
+            std::condition_variable cv;
+            int entered_endpoints = 0;
+            std::thread::id completion_thread = std::this_thread::get_id();
+            std::unique_ptr<ThreadPool> rpc_pool;
+            ASSERT_TRUE(ThreadPoolBuilder("DistributedFinalizeTest")
+                                .set_min_threads(1)
+                                .set_max_threads(mode == "rpc_thread" ? 1 : 2)
+                                .build(&rpc_pool)
+                                .ok());
+            sync_point->set_call_back(
+                    "cloud::distributed_compaction_rpc_thread_pool",
+                    [&](auto&& args) { *try_any_cast<ThreadPool**>(args[0]) = rpc_pool.get(); });
+            sync_point->set_call_back(
+                    "cloud::distributed_compaction_finalize_rpc", [&](auto&& args) {
+                        const auto& endpoint = *try_any_cast<const std::string*>(args[0]);
+                        const auto& request =
+                                *try_any_cast<const PCloudDistributedCompactionFinalizeRequest*>(
+                                        args[1]);
+                        EXPECT_EQ(rpc_pool->is_current_thread_in_pool(), mode != "shutdown");
+                        if (mode == "parallel") {
+                            EXPECT_NE(std::this_thread::get_id(), completion_thread);
+                        } else {
+                            EXPECT_EQ(std::this_thread::get_id(), completion_thread);
+                        }
+                        EXPECT_EQ(request.execution_id(), "finalize-test");
+                        EXPECT_EQ(request.cancel_tasks(), cancel_tasks);
+                        auto* result = try_any_cast_ret<Status>(args);
+                        result->second = true;
+                        int attempt;
+                        {
+                            std::unique_lock lock(mutex);
+                            attempt = ++attempts[endpoint];
+                            if (mode == "parallel" && attempt == 1) {
+                                ++entered_endpoints;
+                                cv.notify_all();
+                                EXPECT_TRUE(cv.wait_for(lock, std::chrono::seconds(5),
+                                                        [&] { return entered_endpoints == 2; }));
+                            }
+                        }
+                        if (endpoint == "be-a:8060") {
+                            EXPECT_EQ(std::vector<int32_t>(request.group_indexes().begin(),
+                                                           request.group_indexes().end()),
+                                      (std::vector<int32_t> {0, 1}));
+                            result->first = attempt == 1
+                                                    ? Status::TooManyTasks("injected busy worker")
+                                                    : Status::OK();
+                        } else {
+                            EXPECT_EQ(endpoint, "be-b:8060");
+                            EXPECT_EQ(std::vector<int32_t>(request.group_indexes().begin(),
+                                                           request.group_indexes().end()),
+                                      (std::vector<int32_t> {2}));
+                            result->first = Status::RpcError("injected unavailable worker");
+                        }
+                    });
+
+            if (mode == "shutdown") {
+                rpc_pool->shutdown();
+            }
+            if (mode == "rpc_thread") {
+                ASSERT_TRUE(rpc_pool->submit_func([&] {
+                                        completion_thread = std::this_thread::get_id();
+                                        coordinator->finalize(cancel_tasks);
+                                    })
+                                    .ok());
+            } else {
+                coordinator->finalize(cancel_tasks);
+            }
+            ASSERT_TRUE(rpc_pool->wait_for(std::chrono::seconds(5)));
+            rpc_pool->shutdown();
+            EXPECT_EQ(coordinator->_state, nullptr);
+            EXPECT_EQ(attempts["be-a:8060"], 2);
+            EXPECT_EQ(attempts["be-b:8060"], 1);
+            coordinator->finalize(cancel_tasks);
+            EXPECT_EQ(attempts["be-a:8060"], 2);
+            EXPECT_EQ(attempts["be-b:8060"], 1);
+            sync_point->clear_all_call_backs();
+        }
+    }
+}
+
 TEST(CloudDistributedCompactionTest, distributed_base_completion_cleans_up_failures) {
     const bool old_enable_file_cache = config::enable_file_cache;
     config::enable_file_cache = false;
@@ -1400,7 +1519,17 @@ TEST(CloudDistributedCompactionTest, distributed_base_resume_completes_when_engi
     config::enable_file_cache = false;
 
     std::shared_ptr<std::function<void(Status)>> resume;
+    int finalize_calls = 0;
     auto* sync_point = SyncPoint::get_instance();
+    sync_point->set_call_back("cloud::distributed_compaction_finalize_rpc", [&](auto&& args) {
+        ++finalize_calls;
+        const auto* request =
+                try_any_cast<const PCloudDistributedCompactionFinalizeRequest*>(args[1]);
+        EXPECT_TRUE(request->cancel_tasks());
+        auto* result = try_any_cast_ret<Status>(args);
+        result->first = Status::OK();
+        result->second = true;
+    });
     sync_point->set_call_back(
             "CloudStorageEngine::_execute_base_compaction_task::before_execute", [&](auto&& args) {
                 resume = try_any_cast<std::shared_ptr<std::function<void(Status)>>>(args[0]);
@@ -1422,7 +1551,7 @@ TEST(CloudDistributedCompactionTest, distributed_base_resume_completes_when_engi
     auto compaction = std::make_shared<CloudBaseCompaction>(engine, tablet);
     compaction->_input_rowsets_total_size = 2;
     compaction->_merge_execution_context = std::make_unique<Compaction::MergeInputRowsetsContext>();
-    auto distributed_compaction = std::make_shared<FailingDistributedCompaction>();
+    auto distributed_compaction = create_started_distributed_compaction(engine, tablet);
     compaction->_distributed_compaction = distributed_compaction;
     int completion_count = 0;
 
@@ -1432,10 +1561,28 @@ TEST(CloudDistributedCompactionTest, distributed_base_resume_completes_when_engi
     });
     ASSERT_NE(resume, nullptr);
     engine._stopped = true;
-    (*resume)(Status::InternalError("injected remote failure"));
+    std::unique_ptr<ThreadPool> completion_pool;
+    ASSERT_TRUE(ThreadPoolBuilder("BaseStoppedCompletionTest")
+                        .set_min_threads(1)
+                        .set_max_threads(1)
+                        .build(&completion_pool)
+                        .ok());
+    sync_point->set_call_back("cloud::distributed_compaction_rpc_thread_pool", [&](auto&& args) {
+        *try_any_cast<ThreadPool**>(args[0]) = completion_pool.get();
+    });
+    ASSERT_TRUE(completion_pool
+                        ->submit_func([&] {
+                            (*resume)(Status::Cancelled(
+                                    "storage engine stopped during distributed compaction"));
+                        })
+                        .ok());
+    ASSERT_TRUE(completion_pool->wait_for(std::chrono::seconds(5)));
+    completion_pool->shutdown();
 
     EXPECT_EQ(completion_count, 1);
-    EXPECT_EQ(distributed_compaction->finalize_calls, 1);
+    EXPECT_EQ(finalize_calls, 1);
+    EXPECT_EQ(distributed_compaction->_state, nullptr);
+    EXPECT_EQ(compaction->_distributed_compaction, nullptr);
     EXPECT_EQ(compaction->_merge_execution_context, nullptr);
 }
 
@@ -1782,8 +1929,18 @@ TEST(CloudDistributedCompactionTest, distributed_cumulative_resume_handles_pool_
         compaction->_single_rowset_compaction_segment_group_size = 2;
         compaction->_merge_execution_context =
                 std::make_unique<Compaction::MergeInputRowsetsContext>();
-        auto distributed_compaction = std::make_shared<FailingDistributedCompaction>();
+        auto distributed_compaction = create_started_distributed_compaction(engine, tablet);
         compaction->_distributed_compaction = distributed_compaction;
+        int finalize_calls = 0;
+        sync_point->set_call_back("cloud::distributed_compaction_finalize_rpc", [&](auto&& args) {
+            ++finalize_calls;
+            const auto* request =
+                    try_any_cast<const PCloudDistributedCompactionFinalizeRequest*>(args[1]);
+            EXPECT_TRUE(request->cancel_tasks());
+            auto* result = try_any_cast_ret<Status>(args);
+            result->first = Status::OK();
+            result->second = true;
+        });
         int erase_submitted_calls = 0;
         int erase_executing_calls = 0;
 
@@ -1796,12 +1953,18 @@ TEST(CloudDistributedCompactionTest, distributed_cumulative_resume_handles_pool_
         ASSERT_NE(resume, nullptr);
         engine._cumu_compaction_thread_pool->shutdown();
 
+        sync_point->set_call_back("cloud::distributed_compaction_rpc_thread_pool",
+                                  [&](auto&& args) {
+                                      *try_any_cast<ThreadPool**>(args[0]) =
+                                              engine._cumu_compaction_thread_pool.get();
+                                  });
         (*resume)(Status::InternalError("injected remote failure"));
 
         EXPECT_EQ(erase_submitted_calls, 1);
         EXPECT_EQ(erase_executing_calls, 0);
-        EXPECT_EQ(distributed_compaction->finalize_calls, 1);
-        EXPECT_TRUE(distributed_compaction->cancelled);
+        EXPECT_EQ(finalize_calls, 1);
+        EXPECT_EQ(distributed_compaction->_state, nullptr);
+        EXPECT_EQ(compaction->_distributed_compaction, nullptr);
         EXPECT_EQ(compaction->_merge_execution_context, nullptr);
         EXPECT_EQ(engine._cumu_compaction_thread_pool_used_threads, 0);
         EXPECT_EQ(engine._cumu_compaction_thread_pool_small_tasks_running, 0);

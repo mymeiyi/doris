@@ -88,6 +88,26 @@ TEST_F(ThreadPoolTest, TestNoTaskOpenClose) {
     _pool->shutdown();
 }
 
+TEST_F(ThreadPoolTest, TestCurrentThreadInPool) {
+    std::unique_ptr<ThreadPool> other_pool;
+    ASSERT_TRUE(ThreadPoolBuilder("other").build(&other_pool).ok());
+    EXPECT_FALSE(_pool->is_current_thread_in_pool());
+    ASSERT_TRUE(_pool->submit_func([&] {
+                         EXPECT_TRUE(_pool->is_current_thread_in_pool());
+                         EXPECT_FALSE(other_pool->is_current_thread_in_pool());
+                     }).ok());
+    _pool->wait();
+    ASSERT_TRUE(other_pool
+                        ->submit_func([&] {
+                            EXPECT_TRUE(other_pool->is_current_thread_in_pool());
+                            EXPECT_FALSE(_pool->is_current_thread_in_pool());
+                        })
+                        .ok());
+    other_pool->wait();
+    _pool->shutdown();
+    EXPECT_FALSE(_pool->is_current_thread_in_pool());
+}
+
 static void simple_task_method(int n, std::atomic<int32_t>* counter) {
     while (n--) {
         (*counter)++;
