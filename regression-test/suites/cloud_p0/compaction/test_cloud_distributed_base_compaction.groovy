@@ -32,6 +32,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
     options.beConfigs += [
         "enable_cloud_distributed_base_compaction=true",
         "enable_vertical_compaction=true",
+        "vertical_compaction_max_segment_size=1073741824",
         "cloud_distributed_compaction_status_poll_interval_ms=100",
         "enable_mow_compaction_correctness_check_fail=true",
         "enable_rowid_conversion_correctness_check=true",
@@ -63,6 +64,8 @@ suite("test_cloud_distributed_base_compaction", "docker") {
         def keyCases = [
             [name: "constant", type: "INT", keyExpr: "CAST(0 AS INT)", distributed: false],
             [name: "tinyint", type: "TINYINT", keyExpr: "CAST(number % 128 - 64 AS TINYINT)"],
+            [name: "dup_equal_key_boundaries", type: "INT",
+             keyExpr: "CAST(number % 4 AS INT)", splitEqualKeys: true],
             [name: "smallint", type: "SMALLINT", keyExpr: "CAST(number - 4096 AS SMALLINT)"],
             [name: "sparse_short_key", type: "INT",
              keyExpr: "CAST((number - number % 2048) * 100000 AS INT)",
@@ -252,6 +255,16 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             boolean injectSubmitRetry = keyCase.injectSubmitRetry == true
             boolean injectMissedRowsMismatch = keyCase.injectMissedRowsMismatch == true
             try {
+                if (keyCase.splitEqualKeys == true) {
+                    // Four keys with thousands of rows each must span more than four segments.
+                    backends.each { backend ->
+                        def (code, out, err) = update_be_config(
+                                backend.Host, backend.HttpPort,
+                                "vertical_compaction_max_segment_size", "1024")
+                        assertEquals(0, code)
+                        assertTrue(out.contains("OK"))
+                    }
+                }
                 if (injectSubmitRetry) {
                     GetDebugPoint().enableDebugPointForAllBEs(
                             submitRetryDebugPoint, [execute: 1])
@@ -308,6 +321,15 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                     Thread.sleep(1000)
                 }
             } finally {
+                if (keyCase.splitEqualKeys == true) {
+                    backends.each { backend ->
+                        def (code, out, err) = update_be_config(
+                                backend.Host, backend.HttpPort,
+                                "vertical_compaction_max_segment_size", "1073741824")
+                        assertEquals(0, code)
+                        assertTrue(out.contains("OK"))
+                    }
+                }
                 if (injectSubmitRetry || injectMissedRowsMismatch) {
                     GetDebugPoint().clearDebugPointsForAllBEs()
                 }
@@ -315,13 +337,21 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             assertNotNull(after)
             assertEquals("[OK]", after["last base status"])
             if (expectDistributed) {
-                def outputRowsets =
-                        after.rowsets.findAll { it =~ /\]\s+${expectedTaskCount}\s+DATA\s+/ }
+                def outputRowsets = after.rowsets.findAll {
+                    def matcher = it =~ /\]\s+([0-9]+)\s+DATA\s+/
+                    matcher.find() && matcher.group(1).toInteger() >= expectedTaskCount
+                }
                 assertEquals(1, outputRowsets.size())
                 def outputMatcher =
                         outputRowsets[0] =~ /\[[0-9]+-[0-9]+\]\s+([0-9]+)\s+DATA\s+([A-Z_]+)/
                 assertTrue(outputMatcher.find(), "unexpected output rowset: ${outputRowsets[0]}")
-                assertEquals(expectedTaskCount, outputMatcher.group(1).toInteger())
+                int outputSegmentCount = outputMatcher.group(1).toInteger()
+                if (keyCase.splitEqualKeys == true) {
+                    assertTrue(outputSegmentCount > 4,
+                            "four distinct keys must span more than four output segments")
+                } else {
+                    assertEquals(expectedTaskCount, outputSegmentCount)
+                }
                 assertEquals("NONOVERLAPPING", outputMatcher.group(2))
             }
 

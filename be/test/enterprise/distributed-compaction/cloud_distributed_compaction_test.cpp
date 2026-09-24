@@ -1072,7 +1072,7 @@ TEST(CloudDistributedCompactionTest, validates_distributed_compaction_partial_ro
             .group_index = 0,
             .segment_id_slot = {.start_id = 10, .capacity = 2},
     };
-    const TabletSchema tablet_schema;
+    TabletSchema tablet_schema;
     auto validate = [&](const PCloudDistributedCompactionTaskResult& response) {
         RowsetMeta partial_meta;
         std::vector<KeyBoundsPB> key_bounds;
@@ -1143,12 +1143,22 @@ TEST(CloudDistributedCompactionTest, validates_distributed_compaction_partial_ro
     response.mutable_partial_rowset_meta()->clear_num_segment_rows();
     EXPECT_FALSE(validate(response).ok());
 
-    EXPECT_TRUE(validate(make_two_segment_response("a", "b", "c", "d")).ok());
-    EXPECT_FALSE(validate(make_two_segment_response("a", "b", "b", "c")).ok());
-    EXPECT_FALSE(validate(make_two_segment_response("c", "d", "a", "b")).ok());
-    EXPECT_FALSE(validate(make_two_segment_response("b", "a", "c", "d")).ok());
-    EXPECT_TRUE(validate(make_two_segment_response("prefix", "same", "same", "suffix", true)).ok());
-    EXPECT_FALSE(validate(make_two_segment_response("a", "d", "c", "e", true)).ok());
+    for (const auto keys_type : {DUP_KEYS, AGG_KEYS, UNIQUE_KEYS}) {
+        SCOPED_TRACE(keys_type);
+        tablet_schema.init_from_pb(create_compaction_schema(keys_type));
+        EXPECT_TRUE(validate(make_two_segment_response("a", "b", "c", "d")).ok());
+        EXPECT_EQ(keys_type == DUP_KEYS,
+                  validate(make_two_segment_response("a", "b", "b", "c")).ok());
+        EXPECT_EQ(keys_type == DUP_KEYS,
+                  validate(make_two_segment_response("b", "b", "b", "b")).ok());
+        EXPECT_FALSE(validate(make_two_segment_response("a", "d", "c", "e")).ok());
+        EXPECT_FALSE(validate(make_two_segment_response("c", "d", "a", "b")).ok());
+        EXPECT_FALSE(validate(make_two_segment_response("b", "a", "c", "d")).ok());
+        EXPECT_TRUE(
+                validate(make_two_segment_response("prefix", "same", "same", "suffix", true)).ok());
+        EXPECT_FALSE(validate(make_two_segment_response("a", "d", "c", "e", true)).ok());
+    }
+    tablet_schema.init_from_pb(create_compaction_schema(DUP_KEYS));
 
     task.encoded_lower_key = "b";
     EXPECT_FALSE(validate(make_two_segment_response("a", "b", "c", "d")).ok());
@@ -1157,6 +1167,9 @@ TEST(CloudDistributedCompactionTest, validates_distributed_compaction_partial_ro
     EXPECT_TRUE(validate(make_two_segment_response("a", "b", "c", "d")).ok());
     task.encoded_upper_key = "d";
     EXPECT_FALSE(validate(make_two_segment_response("a", "b", "c", "d")).ok());
+    EXPECT_TRUE(validate(make_two_segment_response("a", "b", "b", "c")).ok());
+    task.encoded_upper_key = "c";
+    EXPECT_FALSE(validate(make_two_segment_response("a", "b", "b", "c")).ok());
 
     task.encoded_lower_key = "aa";
     task.encoded_upper_key = "da";

@@ -1607,7 +1607,7 @@ void DistributedCompactionCoordinator::complete_polling(Status status) {
 namespace {
 
 Status validate_distributed_compaction_segment_key_bounds(
-        const std::vector<KeyBoundsPB>& key_bounds, bool key_bounds_truncated) {
+        const std::vector<KeyBoundsPB>& key_bounds, bool key_bounds_truncated, KeysType keys_type) {
     for (size_t segment_index = 0; segment_index < key_bounds.size(); ++segment_index) {
         const auto& current = key_bounds[segment_index];
         if (Slice(current.max_key()).compare(Slice(current.min_key())) < 0) {
@@ -1619,8 +1619,9 @@ Status validate_distributed_compaction_segment_key_bounds(
 
         const auto& previous = key_bounds[segment_index - 1];
         if (!key_bounds_truncated) {
-            if (!Slice::lhs_is_strictly_less_than_rhs(Slice(previous.max_key()), false,
-                                                      Slice(current.min_key()), false)) {
+            // DUP rows with the same key can span adjacent output segments.
+            const int cmp = Slice(previous.max_key()).compare(Slice(current.min_key()));
+            if (cmp > 0 || (cmp == 0 && keys_type != DUP_KEYS)) {
                 return Status::InvalidArgument("segments {} and {} have overlapping key ranges",
                                                segment_index - 1, segment_index);
             }
@@ -1736,8 +1737,8 @@ Status validate_distributed_compaction_partial_rowset(
                 group_index);
     }
     const bool key_bounds_truncated = partial_meta->is_segments_key_bounds_truncated();
-    RETURN_IF_ERROR(
-            validate_distributed_compaction_segment_key_bounds(*key_bounds, key_bounds_truncated));
+    RETURN_IF_ERROR(validate_distributed_compaction_segment_key_bounds(
+            *key_bounds, key_bounds_truncated, tablet_schema.keys_type()));
     return validate_distributed_compaction_task_key_bounds(group_index, *key_bounds,
                                                            key_bounds_truncated, task);
 }
@@ -2264,8 +2265,8 @@ Status DistributedCompactionCoordinator::assemble_output_rowset(
     DORIS_CHECK(output_index_file_info.empty() ||
                 output_index_file_info.size() == output_segment_ids.size());
     if (is_base) {
-        RETURN_IF_ERROR(validate_distributed_compaction_segment_key_bounds(output_key_bounds,
-                                                                           key_bounds_truncated));
+        RETURN_IF_ERROR(validate_distributed_compaction_segment_key_bounds(
+                output_key_bounds, key_bounds_truncated, tablet_schema.keys_type()));
     }
     if (check_missed_rows && _tablet->tablet_state() == TABLET_RUNNING &&
         stats->merged_rows + stats->filtered_rows >= 0 &&
