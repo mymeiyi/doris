@@ -379,9 +379,15 @@ public:
 
 private:
     struct WorkerEntry {
+        // Null after finalize; the entry still deduplicates submissions until expiration.
         std::shared_ptr<DistributedCompactionWorker> worker;
         int64_t expiration_time;
     };
+
+    // Register and enqueue tasks after submit() has validated the request and input rowsets.
+    Status submit_tasks(const PCloudDistributedCompactionSubmitRequest& request,
+                        CloudStorageEngine& engine, const std::shared_ptr<CloudTablet>& tablet,
+                        int64_t arrival_time_us);
 
     static std::string key(const std::string& execution_id, int32_t group_index);
 

@@ -98,8 +98,10 @@ ThreadPool& distributed_compaction_rpc_thread_pool() {
 }
 
 ThreadPool& distributed_compaction_worker_thread_pool() {
-    DORIS_CHECK(worker_thread_pool != nullptr);
-    return *worker_thread_pool;
+    ThreadPool* pool = worker_thread_pool.get();
+    TEST_SYNC_POINT_CALLBACK("cloud::distributed_compaction_worker_thread_pool", &pool);
+    DORIS_CHECK(pool != nullptr);
+    return *pool;
 }
 
 uint64_t compaction_worker_score(uint64_t execution_seed, int64_t backend_id) {
@@ -2732,6 +2734,8 @@ Status DistributedCompactionWorker::handle_compaction(
         PCloudDistributedCompactionTaskResult* result) {
     SCOPED_ATTACH_TASK(_mem_tracker);
     std::lock_guard<std::mutex> lock(_mutex);
+    TEST_SYNC_POINT_RETURN_WITH_VALUE("DistributedCompactionWorker::handle_compaction",
+                                      Status::OK(), request, task);
     if (_output_rowset != nullptr) {
         return Status::InvalidArgument(
                 "duplicate distributed compaction task: execution={}, group={}",
@@ -2982,27 +2986,6 @@ DistributedCompactionWorkerManager* DistributedCompactionWorkerManager::instance
 Status DistributedCompactionWorkerManager::submit(
         const PCloudDistributedCompactionSubmitRequest& request, CloudStorageEngine& engine,
         int64_t arrival_time_us) {
-    struct CompactionJob {
-        std::shared_ptr<DistributedCompactionWorker> worker;
-        PCloudDistributedCompactionTask task;
-    };
-    struct CompactionBatch {
-        std::vector<CompactionJob> jobs;
-        std::atomic<bool> failed {false};
-
-        void cancel(const Status& status) {
-            if (failed.exchange(true)) {
-                return;
-            }
-            for (const auto& job : jobs) {
-                job.worker->cancel_compaction(status);
-            }
-        }
-    };
-    struct CreatedWorker {
-        std::string key;
-    };
-
     if (request.tasks().empty()) {
         return Status::InvalidArgument("distributed compaction batch has no tasks");
     }
@@ -3038,7 +3021,34 @@ Status DistributedCompactionWorkerManager::submit(
         }
     }
 
-    remove_expired_workers(::time(nullptr));
+    return submit_tasks(request, engine, tablet, arrival_time_us);
+}
+
+Status DistributedCompactionWorkerManager::submit_tasks(
+        const PCloudDistributedCompactionSubmitRequest& request, CloudStorageEngine& engine,
+        const std::shared_ptr<CloudTablet>& tablet, int64_t arrival_time_us) {
+    struct CompactionJob {
+        std::shared_ptr<DistributedCompactionWorker> worker;
+        PCloudDistributedCompactionTask task;
+    };
+    struct CompactionBatch {
+        std::vector<CompactionJob> jobs;
+        std::atomic<bool> failed {false};
+
+        void cancel(const Status& status) {
+            if (failed.exchange(true)) {
+                return;
+            }
+            for (const auto& job : jobs) {
+                job.worker->cancel_compaction(status);
+            }
+        }
+    };
+    struct CreatedWorker {
+        std::string key;
+    };
+
+    TEST_SYNC_POINT("DistributedCompactionWorkerManager::submit_tasks::before_register");
     auto request_copy = std::make_shared<PCloudDistributedCompactionSubmitRequest>(request);
     std::vector<CompactionJob> jobs;
     std::vector<CreatedWorker> created_workers;
@@ -3048,6 +3058,11 @@ Status DistributedCompactionWorkerManager::submit(
     Status submit_status = Status::OK();
     {
         std::lock_guard lock(_mutex);
+        // Finalized entries are retained until expiration and swept by the existing background
+        // vacuum. Do not scan that history on each submission or revive an expired task.
+        if (request.output_rowset_meta().txn_expiration() <= ::time(nullptr)) {
+            return Status::TimedOut("distributed compaction batch expired before registration");
+        }
         for (const auto& task : request.tasks()) {
             const std::string worker_key = key(request.execution_id(), task.group_index());
             const auto iter = _workers.find(worker_key);
@@ -3189,46 +3204,38 @@ Status DistributedCompactionWorkerManager::finalize(
         return Status::InvalidArgument("invalid distributed compaction finalize request");
     }
 
-    struct WorkerTask {
-        int32_t group_index;
-        std::shared_ptr<DistributedCompactionWorker> worker;
-    };
-    std::vector<WorkerTask> worker_tasks;
-    worker_tasks.reserve(cast_set<size_t>(request.group_indexes_size()));
     for (const int32_t group_index : request.group_indexes()) {
         if (group_index < 0) {
             return Status::InvalidArgument("invalid distributed compaction finalize task");
         }
-        auto worker = get(request.execution_id(), group_index);
-        if (worker != nullptr) {
-            worker_tasks.push_back({.group_index = group_index, .worker = std::move(worker)});
-        }
-    }
-    if (worker_tasks.empty()) {
-        return Status::OK();
     }
 
-    if (request.cancel_tasks()) {
-        const Status cancel_status =
-                Status::Cancelled("distributed compaction batch was cancelled by coordinator");
-        for (const auto& task : worker_tasks) {
-            task.worker->cancel_compaction(cancel_status);
-        }
-    }
-
-    for (const auto& task : worker_tasks) {
-        task.worker->handle_finalize();
-    }
+    std::vector<std::shared_ptr<DistributedCompactionWorker>> workers;
+    workers.reserve(cast_set<size_t>(request.group_indexes_size()));
     {
         std::lock_guard lock(_mutex);
-        for (const auto& task : worker_tasks) {
-            const auto iter = _workers.find(key(request.execution_id(), task.group_index));
+        for (const int32_t group_index : request.group_indexes()) {
+            const auto iter = _workers.find(key(request.execution_id(), group_index));
             if (iter == _workers.end()) {
                 continue;
             }
-            DORIS_CHECK(iter->second.worker == task.worker);
-            _workers.erase(iter);
+            // A null worker is a finalized entry. Keep its key and expiration so delayed submit
+            // retries cannot recreate the task and overwrite already published rowset files.
+            // Detach under the registration lock; release execution resources outside it.
+            if (iter->second.worker != nullptr) {
+                workers.push_back(std::move(iter->second.worker));
+            }
         }
+    }
+    if (request.cancel_tasks()) {
+        const Status cancel_status =
+                Status::Cancelled("distributed compaction batch was cancelled by coordinator");
+        for (const auto& worker : workers) {
+            worker->cancel_compaction(cancel_status);
+        }
+    }
+    for (const auto& worker : workers) {
+        worker->handle_finalize();
     }
     return Status::OK();
 }
@@ -3270,7 +3277,9 @@ void DistributedCompactionWorkerManager::remove_expired_workers(int64_t current_
                 ++iter;
                 continue;
             }
-            expired_workers.push_back(std::move(iter->second.worker));
+            if (iter->second.worker != nullptr) {
+                expired_workers.push_back(std::move(iter->second.worker));
+            }
             iter = _workers.erase(iter);
         }
     }

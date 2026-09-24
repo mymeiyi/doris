@@ -2006,6 +2006,121 @@ TEST(CloudDistributedCompactionTest,
     EXPECT_FALSE(Status::create(task_status.result().status()).ok());
 }
 
+TEST(CloudDistributedCompactionTest, distributed_compaction_deduplicates_finalized_tasks) {
+    for (bool cancel_tasks : {false, true}) {
+        SCOPED_TRACE(cancel_tasks);
+        CloudStorageEngine engine(EngineOptions {});
+        auto tablet = std::make_shared<CloudTablet>(engine, create_compaction_tablet_meta());
+        cloud::DistributedCompactionWorkerManager manager;
+        std::unique_ptr<ThreadPool> worker_pool;
+        ASSERT_TRUE(ThreadPoolBuilder("DistributedCompactionDedupTest")
+                            .set_min_threads(1)
+                            .set_max_threads(1)
+                            .build(&worker_pool)
+                            .ok());
+        std::unordered_map<int32_t, int> executions;
+        auto* sync_point = SyncPoint::get_instance();
+        sync_point->set_call_back(
+                "cloud::distributed_compaction_worker_thread_pool",
+                [&](auto&& args) { *try_any_cast<ThreadPool**>(args[0]) = worker_pool.get(); });
+        sync_point->set_call_back(
+                "DistributedCompactionWorker::handle_compaction", [&](auto&& args) {
+                    const auto* task =
+                            try_any_cast<const PCloudDistributedCompactionTask*>(args[1]);
+                    ++executions[task->group_index()];
+                    auto* result = try_any_cast_ret<Status>(args);
+                    result->first = Status::OK();
+                    result->second = true;
+                });
+        sync_point->enable_processing();
+        Defer clear_sync_point {[&] {
+            worker_pool->shutdown();
+            sync_point->clear_all_call_backs();
+            sync_point->disable_processing();
+        }};
+
+        // Exercise the registration stage shared by base and cumulative compaction, after
+        // request/tablet validation. Only the expensive merge and file writes are mocked.
+        PCloudDistributedCompactionSubmitRequest request;
+        request.set_execution_id("delayed-submit");
+        const int64_t expiration = std::numeric_limits<int64_t>::max();
+        request.mutable_output_rowset_meta()->set_txn_expiration(expiration);
+        request.add_tasks()->set_group_index(0);
+        ASSERT_TRUE(manager.submit_tasks(request, engine, tablet, 0).ok());
+        ASSERT_TRUE(worker_pool->wait_for(std::chrono::seconds(5)));
+        EXPECT_EQ(executions[0], 1);
+        auto worker = manager.get(request.execution_id(), 0);
+        ASSERT_NE(worker, nullptr);
+        PCloudDistributedCompactionTaskStatus task_status;
+        worker->get_compaction_status(&task_status);
+        EXPECT_EQ(task_status.state(), CLOUD_DISTRIBUTED_COMPACTION_TASK_SUCCEEDED);
+        std::weak_ptr<cloud::DistributedCompactionWorker> weak_worker = worker;
+        worker.reset();
+
+        // A duplicate while the completed worker is still registered must also be a no-op.
+        ASSERT_TRUE(manager.submit_tasks(request, engine, tablet, 0).ok());
+        ASSERT_TRUE(worker_pool->wait_for(std::chrono::seconds(5)));
+        EXPECT_EQ(executions[0], 1);
+
+        PCloudDistributedCompactionFinalizeRequest finalize_request;
+        finalize_request.set_execution_id(request.execution_id());
+        finalize_request.add_group_indexes(0);
+        finalize_request.set_cancel_tasks(cancel_tasks);
+        int finalize_calls = 0;
+        sync_point->set_call_back(
+                "DistributedCompactionWorkerManager::submit_tasks::before_register", [&](auto&&) {
+                    // Reproduce A being delayed before registration until B has completed
+                    // and been finalized. No sleeps or scheduling assumptions are needed.
+                    ++finalize_calls;
+                    EXPECT_TRUE(manager.finalize(finalize_request).ok());
+                    EXPECT_TRUE(manager.finalize(finalize_request).ok());
+                    EXPECT_EQ(manager.get(request.execution_id(), 0), nullptr);
+                    EXPECT_TRUE(weak_worker.expired());
+                });
+        ASSERT_TRUE(manager.submit_tasks(request, engine, tablet, 0).ok());
+        sync_point->clear_call_back(
+                "DistributedCompactionWorkerManager::submit_tasks::before_register");
+        ASSERT_TRUE(worker_pool->wait_for(std::chrono::seconds(5)));
+        EXPECT_EQ(finalize_calls, 1);
+        EXPECT_EQ(executions[0], 1);
+        const auto worker_key =
+                cloud::DistributedCompactionWorkerManager::key(request.execution_id(), 0);
+        ASSERT_TRUE(manager._workers.contains(worker_key));
+        EXPECT_EQ(manager._workers.at(worker_key).worker, nullptr);
+        EXPECT_EQ(manager._workers.at(worker_key).expiration_time, expiration);
+
+        // A mixed batch must skip the finalized group while still executing new groups.
+        request.add_tasks()->set_group_index(1);
+        ASSERT_TRUE(manager.submit_tasks(request, engine, tablet, 0).ok());
+        ASSERT_TRUE(worker_pool->wait_for(std::chrono::seconds(5)));
+        EXPECT_EQ(executions[0], 1);
+        EXPECT_EQ(executions[1], 1);
+        finalize_request.add_group_indexes(1);
+        finalize_request.add_group_indexes(1); // Duplicate finalize group is idempotent.
+        ASSERT_TRUE(manager.finalize(finalize_request).ok());
+        EXPECT_EQ(manager.get(request.execution_id(), 1), nullptr);
+
+        manager.remove_expired_workers(expiration - 1);
+        EXPECT_EQ(manager._workers.size(), 2);
+        manager.remove_expired_workers(expiration);
+        EXPECT_TRUE(manager._workers.empty());
+
+        // Once history expires, an expired submission must not recreate a worker.
+        request.mutable_output_rowset_meta()->set_txn_expiration(0);
+        EXPECT_FALSE(manager.submit_tasks(request, engine, tablet, 0).ok());
+        EXPECT_TRUE(manager._workers.empty());
+        EXPECT_EQ(executions[0], 1);
+        EXPECT_EQ(executions[1], 1);
+
+        // Pool rejection never starts a task, so it must not leave a finalized entry.
+        worker_pool->shutdown();
+        request.mutable_output_rowset_meta()->set_txn_expiration(expiration);
+        EXPECT_TRUE(
+                manager.submit_tasks(request, engine, tablet, 0).is<ErrorCode::TOO_MANY_TASKS>());
+        EXPECT_TRUE(manager._workers.empty());
+    }
+}
+
 TEST(CloudDistributedCompactionTest,
      distributed_compaction_worker_manager_validates_and_cleans_up) {
     CloudStorageEngine engine(EngineOptions {});
