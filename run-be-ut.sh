@@ -212,6 +212,13 @@ CMAKE_BUILD_TYPE="$(echo "${CMAKE_BUILD_TYPE}" | awk '{ print(toupper($0)) }')"
 EXTRA_BE_MODULES="${EXTRA_BE_MODULES:-}"
 parse_extra_be_modules "${EXTRA_BE_MODULES}"
 
+if [[ -d "${DORIS_HOME}/be/src/enterprise/distributed-compaction" ]] &&
+        [[ " ${BE_EXTRA_FEATURE_KEYS[*]} " != *" distributed-compaction "* ]]; then
+    BE_EXTRA_FEATURE_KEYS+=("distributed-compaction")
+    BE_EXTRA_MODULE_PATHS+=("enterprise/distributed-compaction")
+    EXTRA_BE_MODULES="${EXTRA_BE_MODULES:+${EXTRA_BE_MODULES},}distributed-compaction=enterprise/distributed-compaction"
+fi
+
 BE_EXTRA_CMAKE_ARGS=()
 for ((i = 0; i < ${#BE_EXTRA_FEATURE_KEYS[@]}; i++)); do
     feature_name="$(feature_to_cmake_name "${BE_EXTRA_FEATURE_KEYS[i]}")"

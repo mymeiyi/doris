@@ -200,6 +200,9 @@ public:
     // Submits a function bound using std::bind(&FuncName, args...).
     Status submit_func(std::function<void()> f);
 
+    // Whether the caller is a worker of this pool and therefore must not wait on it.
+    bool is_current_thread_in_pool() const;
+
     // Waits until all the tasks are completed.
     void wait();
 

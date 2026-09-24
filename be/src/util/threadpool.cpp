@@ -534,6 +534,11 @@ Status ThreadPool::do_submit(std::shared_ptr<Runnable> r, ThreadPoolToken* token
     return Status::OK();
 }
 
+bool ThreadPool::is_current_thread_in_pool() const {
+    std::lock_guard<std::mutex> l(_lock);
+    return _threads.contains(Thread::current_thread());
+}
+
 void ThreadPool::wait() {
     std::unique_lock<std::mutex> l(_lock);
     check_not_pool_thread_unlocked();
