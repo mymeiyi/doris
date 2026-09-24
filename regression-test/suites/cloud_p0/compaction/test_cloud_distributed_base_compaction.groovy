@@ -31,6 +31,7 @@ suite("test_cloud_distributed_base_compaction", "docker") {
     ]
     options.beConfigs += [
         "enable_cloud_distributed_base_compaction=true",
+        "enable_vertical_compaction=true",
         "cloud_distributed_compaction_status_poll_interval_ms=100",
         "enable_mow_compaction_correctness_check_fail=true",
         "enable_rowid_conversion_correctness_check=true",
@@ -126,6 +127,16 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             [name: "mor", type: "INT", keyExpr: "CAST(number AS INT)",
              keyModel: "UNIQUE KEY", valueColumn: "v INT NOT NULL",
              properties: ', "enable_unique_key_merge_on_write" = "false"'],
+            // The two mapped groups must retain values from different input rowsets.
+            [name: "mor_sequence_mapping", type: "INT", keyExpr: "CAST(number AS INT)",
+             keyModel: "UNIQUE KEY",
+             valueColumn: "v INT NOT NULL, w INT NOT NULL, s1 BIGINT NOT NULL, s2 BIGINT NOT NULL",
+             valueExpr: "CAST(number + ROUND * 10000 AS INT), " +
+                     "CAST(number + ROUND * 10000 AS INT), " +
+                     "CAST(60 - ROUND * 10 AS BIGINT), CAST(10 + ROUND * 10 AS BIGINT)",
+             sampleKey: "k, w, s1, s2",
+             properties: ', "enable_unique_key_merge_on_write" = "false"' +
+                     ', "sequence_mapping.s1" = "v", "sequence_mapping.s2" = "w"'],
             [name: "mow", keyColumns: "k INT NOT NULL, k2 BIGINT NOT NULL",
              keyExpr: "CAST(0 AS INT), CAST(number AS BIGINT)", keyModelColumns: "k, k2",
              sampleKey: "k, k2",

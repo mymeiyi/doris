@@ -2649,8 +2649,8 @@ void DistributedCompactionWorker::get_compaction_status(
 Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_output_rowset_writer(
         const PCloudDistributedCompactionSubmitRequest& request,
         const PCloudDistributedCompactionTask& task, const RowsetMeta& output_meta,
-        const StorageResource& storage_resource,
-        const std::vector<RowsetSharedPtr>& input_rowsets) {
+        const StorageResource& storage_resource, const std::vector<RowsetSharedPtr>& input_rowsets,
+        bool is_vertical) {
     RowsetWriterContext context;
     context.rowset_id = output_meta.rowset_id();
     context.db_id = output_meta.db_id();
@@ -2702,8 +2702,7 @@ Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_out
     context.is_partial_output_writer = true;
     context.storage_resource = storage_resource;
 
-    auto writer_result =
-            RowsetFactory::create_rowset_writer(_engine, context, request.is_vertical());
+    auto writer_result = RowsetFactory::create_rowset_writer(_engine, context, is_vertical);
     if (!writer_result.has_value()) {
         return ResultError(std::move(writer_result.error()));
     }
@@ -2805,8 +2804,11 @@ Status DistributedCompactionWorker::handle_compaction(
                                        storage_resource.error().to_string());
     }
 
+    // Vertical compaction does not support sequence mapping yet. Use the same mode for
+    // the output writer and merger, even if the coordinator requested vertical compaction.
+    const bool is_vertical = request->is_vertical() && !output_meta.tablet_schema()->has_seq_map();
     auto writer = DORIS_TRY(construct_output_rowset_writer(
-            *request, *task, output_meta, *storage_resource.value(), input_rowsets));
+            *request, *task, output_meta, *storage_resource.value(), input_rowsets, is_vertical));
 
     _is_mow = _tablet->keys_type() == KeysType::UNIQUE_KEYS &&
               _tablet->enable_unique_key_merge_on_write();
@@ -2839,7 +2841,7 @@ Status DistributedCompactionWorker::handle_compaction(
     MonotonicStopWatch merge_timer;
     merge_timer.start();
     result->set_merge_start_time_us(UnixMicros());
-    if (request->is_vertical()) {
+    if (is_vertical) {
         RETURN_IF_ERROR(Merger::vertical_merge_rowsets(
                 _tablet, reader_type, *output_meta.tablet_schema(), readers, writer.get(),
                 request->avg_segment_rows(), task->merge_way_num(), &stats, nullptr, segment_range,

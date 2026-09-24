@@ -335,7 +335,7 @@ private:
             const PCloudDistributedCompactionSubmitRequest& request,
             const PCloudDistributedCompactionTask& task, const RowsetMeta& output_meta,
             const StorageResource& storage_resource,
-            const std::vector<RowsetSharedPtr>& input_rowsets);
+            const std::vector<RowsetSharedPtr>& input_rowsets, bool is_vertical);
     Status handle_compaction(const PCloudDistributedCompactionSubmitRequest* request,
                              const PCloudDistributedCompactionTask* task,
                              PCloudDistributedCompactionTaskResult* result);
