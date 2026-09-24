@@ -272,10 +272,20 @@ Status DeltaWriterV2::_init_mow_context_from_snapshot(RowsetWriterContext& conte
         if (!rowset_meta->init_from_pb(meta)) {
             return Status::InvalidArgument("invalid sink MOW snapshot rowset");
         }
+        ids->insert(rowset_meta->rowset_id());
+        // Empty cloud compaction outputs may lack a storage resource. Keep their IDs
+        // in the snapshot, but they have no segments to read for bitmap calculation.
+        if (rowset_meta->num_segments() == 0) {
+            continue;
+        }
+        if (rowset_meta->resource_id().empty()) {
+            return Status::InvalidArgument(
+                    "non-empty sink MOW snapshot rowset {} has no storage resource, tablet {}",
+                    rowset_meta->rowset_id().to_string(), _req.tablet_id);
+        }
         RowsetSharedPtr rowset;
         RETURN_IF_ERROR(RowsetFactory::create_rowset(rowset_meta->tablet_schema(), "", rowset_meta,
                                                      &rowset));
-        ids->insert(rowset->rowset_id());
         rowsets.push_back(std::move(rowset));
     }
     context.mow_context = std::make_shared<MowContext>(
