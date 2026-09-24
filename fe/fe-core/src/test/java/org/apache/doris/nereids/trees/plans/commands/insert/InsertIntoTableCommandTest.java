@@ -24,14 +24,19 @@ import org.apache.doris.datasource.doris.RemoteDorisExternalTable;
 import org.apache.doris.datasource.plugin.PluginDrivenExternalTable;
 import org.apache.doris.nereids.NereidsPlanner;
 import org.apache.doris.nereids.exceptions.AnalysisException;
+import org.apache.doris.nereids.glue.LogicalPlanAdapter;
+import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.plans.PlanType;
+import org.apache.doris.nereids.trees.plans.commands.PrepareCommand;
 import org.apache.doris.nereids.trees.plans.logical.LogicalPlan;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalPlan;
 import org.apache.doris.nereids.trees.plans.physical.PhysicalSink;
 import org.apache.doris.nereids.util.LogicalPlanBuilder;
 import org.apache.doris.planner.DataSink;
 import org.apache.doris.planner.PlanFragment;
+import org.apache.doris.qe.AutoCloseConnectContext;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.OriginStatement;
 import org.apache.doris.qe.StmtExecutor;
 import org.apache.doris.thrift.TUniqueId;
 
@@ -41,10 +46,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
+import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 import org.mockito.internal.util.collections.Sets;
 
+import java.util.Arrays;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -73,6 +80,59 @@ class InsertIntoTableCommandTest {
     @BeforeEach
     public void setUp() {
         MockitoAnnotations.openMocks(this);
+    }
+
+    @Test
+    void testFullPrepareRequiresBareParametersInOriginalValues() {
+        try (AutoCloseConnectContext context = new AutoCloseConnectContext(new ConnectContext())) {
+            context.call();
+            NereidsParser parser = new NereidsParser();
+            InsertIntoTableCommand command = (InsertIntoTableCommand) ((LogicalPlanAdapter) parser.parseSQL(
+                    "insert into t values (?, ?), (?, ?)").get(0)).getLogicalPlan();
+            Assertions.assertTrue(command.supportsGroupCommitFullPrepare());
+            command.setLogicalQuery(parser.parseSingle("select 1"));
+            Assertions.assertTrue(command.supportsGroupCommitFullPrepare(), "must inspect the original VALUES");
+
+            for (String sql : Arrays.asList(
+                    "insert into t values (?, cast(? as decimal(5,1)))",
+                    "insert into t values (?, abs(?))",
+                    "insert into t values (?, 1)",
+                    "insert into t values (?, ? + 1)",
+                    "insert into t values (?, default)",
+                    "insert into t select ?, ?")) {
+                command = (InsertIntoTableCommand) ((LogicalPlanAdapter) parser.parseSQL(sql).get(0)).getLogicalPlan();
+                Assertions.assertFalse(command.supportsGroupCommitFullPrepare(), sql);
+            }
+        }
+    }
+
+    @Test
+    void testAnalyzeGroupCommitRestrictsOnlyPreparedExpressions() {
+        ConnectContext ctx = new ConnectContext();
+        ctx.getSessionVariable().groupCommit = "sync_mode";
+        OlapTable table = Mockito.mock(OlapTable.class, Mockito.RETURNS_DEEP_STUBS);
+        Mockito.when(table.getTableProperty().getUseSchemaLightChange()).thenReturn(true);
+        Mockito.when(table.getQualifiedDbName()).thenReturn("test_db");
+        try (AutoCloseConnectContext context = new AutoCloseConnectContext(ctx);
+                MockedStatic<InsertUtils> insertUtils = Mockito.mockStatic(InsertUtils.class)) {
+            context.call();
+            for (String values : Arrays.asList("?, ?", "?, cast(? as decimal(5,1))", "?, abs(?)")) {
+                String sql = "insert into t values (" + values + ")";
+                LogicalPlanAdapter parsed = (LogicalPlanAdapter) new NereidsParser().parseSQL(sql).get(0);
+                InsertIntoTableCommand command = (InsertIntoTableCommand) parsed.getLogicalPlan();
+                insertUtils.when(() -> InsertUtils.getTargetTable(command.getLogicalQuery(), ctx)).thenReturn(table);
+                PrepareCommand prepare = new PrepareCommand("1", command,
+                        parsed.getStatementContext().getPlaceholders(), new OriginStatement(sql, 0));
+
+                ctx.setGroupCommit(false);
+                OlapGroupCommitInsertExecutor.analyzeGroupCommit(ctx, prepare);
+                Assertions.assertEquals(values.equals("?, ?"), ctx.isGroupCommit(), sql);
+
+                ctx.setGroupCommit(false);
+                OlapGroupCommitInsertExecutor.analyzeGroupCommit(ctx, command);
+                Assertions.assertTrue(ctx.isGroupCommit(), "ordinary INSERT can use Group Commit: " + sql);
+            }
+        }
     }
 
     @Test

@@ -45,7 +45,9 @@ import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.NereidsPlanner;
 import org.apache.doris.nereids.StatementContext;
+import org.apache.doris.nereids.analyzer.UnboundAlias;
 import org.apache.doris.nereids.analyzer.UnboundConnectorTableSink;
+import org.apache.doris.nereids.analyzer.UnboundInlineTable;
 import org.apache.doris.nereids.analyzer.UnboundTVFRelation;
 import org.apache.doris.nereids.analyzer.UnboundTableSink;
 import org.apache.doris.nereids.exceptions.AnalysisException;
@@ -54,6 +56,7 @@ import org.apache.doris.nereids.lineage.LineageInfoExtractor;
 import org.apache.doris.nereids.lineage.LineageUtils;
 import org.apache.doris.nereids.properties.PhysicalProperties;
 import org.apache.doris.nereids.trees.expressions.Expression;
+import org.apache.doris.nereids.trees.expressions.Placeholder;
 import org.apache.doris.nereids.trees.expressions.literal.Literal;
 import org.apache.doris.nereids.trees.plans.Explainable;
 import org.apache.doris.nereids.trees.plans.Plan;
@@ -190,6 +193,20 @@ public class InsertIntoTableCommand extends Command
 
     public LogicalPlan getLogicalQuery() {
         return logicalQuery.orElse(originLogicalQuery);
+    }
+
+    /** Whether VALUES can be sent directly as raw prepared parameters without evaluating expressions. */
+    public boolean supportsGroupCommitFullPrepare() {
+        // Check the original VALUES tree: normalization replaces placeholders with bound values.
+        if (cte.isPresent() || !(originLogicalQuery instanceof UnboundTableSink)
+                || !(originLogicalQuery.child(0) instanceof UnboundInlineTable)) {
+            return false;
+        }
+        UnboundInlineTable values = (UnboundInlineTable) originLogicalQuery.child(0);
+        return !values.getConstantExprsList().isEmpty()
+                && values.getConstantExprsList().stream().allMatch(row -> !row.isEmpty()
+                    && row.stream().allMatch(expr -> expr instanceof UnboundAlias
+                        && expr.child(0) instanceof Placeholder));
     }
 
     public Optional<Plan> getParsedPlan() {

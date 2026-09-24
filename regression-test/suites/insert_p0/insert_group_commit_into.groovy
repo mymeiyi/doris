@@ -578,4 +578,53 @@ suite("insert_group_commit_into") {
         
     } finally {
     }
+
+    def prepareUrl = getServerPrepareJdbcUrl(context.config.jdbcUrl, context.dbName, false) +
+            "&emulateUnsupportedPstmts=false"
+    def prepareConfigurations = [
+            ["off_mode", true],
+            ["sync_mode", false],
+            ["async_mode", false],
+            ["sync_mode", true],
+            ["async_mode", true]
+    ]
+    prepareConfigurations.each { configuration ->
+        def (mode, fullPrepare) = configuration
+        lazyCheck {
+            connect(context.config.jdbcUser, context.config.jdbcPassword, prepareUrl) {
+                sql "DROP TABLE IF EXISTS insert_group_commit_prepare_expressions"
+                sql """
+                    CREATE TABLE insert_group_commit_prepare_expressions (id INT, v DECIMAL(9,2), abs_v INT)
+                    DUPLICATE KEY(id)
+                    DISTRIBUTED BY HASH(id) BUCKETS 1
+                    PROPERTIES("replication_num" = "1", "group_commit_interval_ms" = "100")
+                """
+                sql "SET group_commit = '${mode}'"
+                sql "SET enable_group_commit_full_prepare = ${fullPrepare}"
+                def stmt = prepareStatement """
+                    INSERT INTO insert_group_commit_prepare_expressions VALUES (?, CAST(? AS DECIMAL(5,1)), ABS(?))
+                """
+                try {
+                    // Reuse the same handle without SET so both executions must evaluate the expressions.
+                    ["1.24", "2.34"].eachWithIndex { value, index ->
+                        stmt.setInt(1, index + 1)
+                        stmt.setString(2, value)
+                        stmt.setInt(3, -(index + 1))
+                        stmt.executeUpdate()
+                    }
+                } finally {
+                    stmt.close()
+                }
+            }
+            connect(context.config.jdbcUser, context.config.jdbcPassword, prepareUrl) {
+                awaitUntil(60) {
+                    sql("SELECT COUNT(*) FROM insert_group_commit_prepare_expressions")[0][0] == 2
+                }
+                // Expected: (1, 1.20, 1), (2, 2.30, 2), rather than raw parameter values.
+                quickTest("prepare_expressions_${mode}_${fullPrepare}", """
+                    SELECT id, v, abs_v FROM insert_group_commit_prepare_expressions ORDER BY id
+                """)
+            }
+        }
+    }
 }

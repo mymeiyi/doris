@@ -93,6 +93,11 @@ public class OlapGroupCommitInsertExecutor extends OlapInsertExecutor {
             }
             if (logicalPlan instanceof PrepareCommand) {
                 logicalPlan = ((PrepareCommand) logicalPlan).getLogicalPlan();
+                // Ordinary INSERT planning can still use Group Commit after evaluating expressions.
+                if (logicalPlan instanceof InsertIntoTableCommand
+                        && !((InsertIntoTableCommand) logicalPlan).supportsGroupCommitFullPrepare()) {
+                    return;
+                }
             }
             if (logicalPlan instanceof InsertIntoTableCommand) {
                 LogicalPlan logicalQuery = ((InsertIntoTableCommand) logicalPlan).getLogicalQuery();
