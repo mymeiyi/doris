@@ -56,8 +56,10 @@
 #include "storage/rowset/rowset_writer_context.h"
 #include "storage/segment/vertical_segment_writer.h"
 #include "storage/storage_engine.h"
+#include "storage/storage_policy.h"
 #include "storage/tablet/tablet_meta.h"
 #include "util/defer_op.h"
+#include "util/json/path_in_data.h"
 #include "util/threadpool.h"
 #include "util/uid_util.h"
 
@@ -2014,6 +2016,70 @@ TEST(CloudDistributedCompactionTest,
     ASSERT_EQ(task_status.state(), CLOUD_DISTRIBUTED_COMPACTION_TASK_FAILED);
     ASSERT_TRUE(task_status.has_result());
     EXPECT_FALSE(Status::create(task_status.result().status()).ok());
+}
+
+TEST(CloudDistributedCompactionTest, rejects_variant_schema_without_its_path_layout) {
+    CloudStorageEngine engine(EngineOptions {});
+    auto tablet = std::make_shared<CloudTablet>(engine, create_compaction_tablet_meta());
+    cloud::DistributedCompactionWorker worker(engine, tablet, 0);
+    auto schema = std::make_shared<TabletSchema>();
+    schema->init_from_pb(create_compaction_schema());
+    TabletColumn root;
+    root.set_unique_id(1);
+    root.set_name("v");
+    root.set_type(FieldType::OLAP_FIELD_TYPE_VARIANT);
+    schema->append_column(root);
+    TabletColumn extracted;
+    extracted.set_unique_id(-1);
+    extracted.set_name("v.a");
+    extracted.set_type(FieldType::OLAP_FIELD_TYPE_STRING);
+    extracted.set_parent_unique_id(1);
+    extracted.set_path_info(PathInData("v.a"));
+    schema->append_column(extracted);
+    RowsetMeta output_meta;
+    output_meta.set_tablet_schema(schema);
+
+    PCloudDistributedCompactionSubmitRequest request;
+    PCloudDistributedCompactionTask task;
+    for (bool missing_parent : {false, true}) {
+        if (missing_parent) {
+            request.add_variant_compaction_paths()->set_parent_unique_id(2);
+        }
+        auto result = worker.construct_output_rowset_writer(request, task, output_meta,
+                                                            StorageResource {}, {}, true);
+        ASSERT_FALSE(result.has_value());
+        EXPECT_TRUE(result.error().is<ErrorCode::INVALID_ARGUMENT>());
+        EXPECT_NE(result.error().to_string().find("variant path layout"), std::string::npos);
+    }
+}
+
+TEST(CloudDistributedCompactionTest, worker_exception_is_reported_as_task_failure) {
+    CloudStorageEngine engine(EngineOptions {});
+    auto tablet = std::make_shared<CloudTablet>(engine, create_compaction_tablet_meta());
+    cloud::DistributedCompactionWorker worker(engine, tablet, 0);
+    auto* sync_point = SyncPoint::get_instance();
+    sync_point->set_call_back("DistributedCompactionWorker::handle_compaction",
+                              [](auto&&) { DORIS_CHECK(false) << "injected worker failure"; });
+    sync_point->enable_processing();
+    Defer clear_sync_point {[&] {
+        sync_point->clear_all_call_backs();
+        sync_point->disable_processing();
+    }};
+
+    PCloudDistributedCompactionSubmitRequest request;
+    PCloudDistributedCompactionTask task;
+    const auto status = worker.execute_compaction(&request, &task);
+    EXPECT_TRUE(status.is<ErrorCode::FATAL_ERROR>());
+    PCloudDistributedCompactionTaskStatus task_status;
+    worker.get_compaction_status(&task_status);
+    ASSERT_EQ(CLOUD_DISTRIBUTED_COMPACTION_TASK_FAILED, task_status.state());
+    ASSERT_TRUE(task_status.has_result());
+    EXPECT_TRUE(Status::create(task_status.result().status()).is<ErrorCode::FATAL_ERROR>());
+    EXPECT_NE(Status::create(task_status.result().status())
+                      .to_string()
+                      .find("injected worker failure"),
+              std::string::npos);
+    EXPECT_EQ(nullptr, worker._output_rowset);
 }
 
 TEST(CloudDistributedCompactionTest, distributed_compaction_deduplicates_finalized_tasks) {

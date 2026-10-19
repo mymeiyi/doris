@@ -17,9 +17,59 @@
 
 #include "storage/segment/variant/variant_compaction_paths.h"
 
+#include <gen_cpp/olap_file.pb.h>
+
 #include "storage/index/index_writer.h"
 
 namespace doris {
+
+void VariantCompactionPaths::to_pb(VariantCompactionPathsPB* pb) const {
+    pb->Clear();
+    for (const auto& path : sub_path_set) {
+        pb->add_sub_paths(path);
+    }
+    for (const auto& path : sparse_path_set) {
+        pb->add_sparse_paths(path);
+    }
+    for (const auto& [path, info] : typed_path_set) {
+        auto* entry = pb->add_typed_paths();
+        entry->set_path(path);
+        info.column.to_schema_pb(entry->mutable_column());
+        for (const auto& index : info.indexes) {
+            index->to_schema_pb(entry->add_indexes());
+        }
+    }
+    for (const auto& [path, indexes] : subcolumn_indexes) {
+        auto* entry = pb->add_subcolumn_indexes();
+        entry->set_path(path);
+        for (const auto& index : indexes) {
+            index->to_schema_pb(entry->add_indexes());
+        }
+    }
+}
+
+void VariantCompactionPaths::init_from_pb(const VariantCompactionPathsPB& pb) {
+    *this = {};
+    sub_path_set.insert(pb.sub_paths().begin(), pb.sub_paths().end());
+    sparse_path_set.insert(pb.sparse_paths().begin(), pb.sparse_paths().end());
+    for (const auto& entry : pb.typed_paths()) {
+        auto& info = typed_path_set[entry.path()];
+        info.column.init_from_pb(entry.column());
+        for (const auto& index_pb : entry.indexes()) {
+            auto index = std::make_shared<TabletIndex>();
+            index->init_from_pb(index_pb);
+            info.indexes.push_back(std::move(index));
+        }
+    }
+    for (const auto& entry : pb.subcolumn_indexes()) {
+        auto& indexes = subcolumn_indexes[entry.path()];
+        for (const auto& index_pb : entry.indexes()) {
+            auto index = std::make_shared<TabletIndex>();
+            index->init_from_pb(index_pb);
+            indexes.push_back(std::move(index));
+        }
+    }
+}
 
 namespace {
 

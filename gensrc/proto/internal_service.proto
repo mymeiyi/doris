@@ -992,6 +992,7 @@ message PCloudDistributedCompactionSubmitRequest {
     // target worker is the coordinator.
     optional string coordinator_host = 14;
     optional int32 coordinator_brpc_port = 15;
+    repeated VariantCompactionPathsPB variant_compaction_paths = 16;
 }
 
 message PCloudDistributedCompactionSubmitResponse {

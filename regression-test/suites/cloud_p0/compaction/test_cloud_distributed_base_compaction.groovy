@@ -47,6 +47,8 @@ suite("test_cloud_distributed_base_compaction", "docker") {
 
     docker(options) {
         sql "set enable_decimal256 = true"
+        sql "set default_variant_enable_doc_mode = false"
+        sql "set default_variant_enable_nested_group = false"
 
         long compactionTimeoutMs = 90000L
         String submitRetryDebugPoint = "CloudInternalServiceImpl::" +
@@ -65,7 +67,27 @@ suite("test_cloud_distributed_base_compaction", "docker") {
             return parseJson(out.trim())
         }
 
+        // Change the hot paths between rowsets so base compaction moves values both into
+        // and out of sparse storage.
+        String variantValue = """
+            parse_to_variant(CASE
+                WHEN number % 4 = 0 THEN CONCAT('{"a":', number, ',"b":', number + 1,
+                        ',"c":', number + 2, ',"d":', number + 3, '}')
+                WHEN ROUND < 2 THEN CONCAT('{"a":', number, ',"b":', number + 1, '}')
+                ELSE CONCAT('{"c":', number + 2, ',"d":', number + 3, '}')
+            END)
+        """
         def keyCases = [
+            [name: "variant_sparse", type: "INT", keyExpr: "CAST(number AS INT)",
+             valueColumn: '''v INT NOT NULL,
+                 payload VARIANT<PROPERTIES("variant_max_subcolumns_count" = "2",
+                     "variant_sparse_hash_shard_count" = "1")>,
+                 bucketed VARIANT<PROPERTIES("variant_max_subcolumns_count" = "2",
+                     "variant_sparse_hash_shard_count" = "4")>,
+                 INDEX idx_payload(payload) USING INVERTED,
+                 INDEX idx_bucketed(bucketed) USING INVERTED''',
+             valueExpr: "CAST(number + ROUND * 10000 AS INT), ${variantValue}, ${variantValue}",
+             variant: true],
             [name: "constant", type: "INT", keyExpr: "CAST(0 AS INT)", distributed: false],
             [name: "tinyint", type: "TINYINT", keyExpr: "CAST(number % 128 - 64 AS TINYINT)"],
             [name: "dup_equal_key_boundaries", type: "INT",
@@ -221,6 +243,14 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 }
             }
 
+            String variantQuery = """
+                SELECT k, v, CAST(payload['a'] AS INT), CAST(payload['b'] AS INT),
+                       CAST(payload['c'] AS INT), CAST(payload['d'] AS INT),
+                       CAST(bucketed['a'] AS INT), CAST(bucketed['b'] AS INT),
+                       CAST(bucketed['c'] AS INT), CAST(bucketed['d'] AS INT)
+                FROM ${tableName} ORDER BY k, v
+            """
+            def variantRowsBefore = keyCase.variant == true ? sql(variantQuery) : null
             def summaryBefore = sql """
                 SELECT COUNT(*), SUM(v), MIN(k), MAX(k)
                 FROM ${tableName}
@@ -421,6 +451,10 @@ suite("test_cloud_distributed_base_compaction", "docker") {
                 ORDER BY ${sampleKey} DESC
                 LIMIT 4
             """))
+
+            if (keyCase.variant == true) {
+                assertEquals(variantRowsBefore, sql(variantQuery))
+            }
 
             def backendsAfterCompaction = sql_return_maparray "SHOW BACKENDS"
             assertEquals(2, backendsAfterCompaction.size())

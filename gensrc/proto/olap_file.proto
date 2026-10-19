@@ -498,6 +498,22 @@ message TabletIndexPB {
     optional string index_suffix_name = 6;
 }
 
+// Runtime compaction layout transported alongside, but never persisted in, TabletSchemaPB.
+message VariantCompactionPathsPB {
+    message PathIndexes {
+        optional string path = 1;
+        repeated TabletIndexPB indexes = 2;
+        // Present for typed paths only.
+        optional ColumnPB column = 3;
+    }
+
+    optional int32 parent_unique_id = 1;
+    repeated string sub_paths = 2;
+    repeated string sparse_paths = 3;
+    repeated PathIndexes typed_paths = 4;
+    repeated PathIndexes subcolumn_indexes = 5;
+}
+
 enum SortType {
     LEXICAL = 0;
     ZORDER  = 1;

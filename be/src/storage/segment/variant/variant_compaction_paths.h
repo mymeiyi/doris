@@ -27,11 +27,16 @@
 
 namespace doris {
 
+class VariantCompactionPathsPB;
+
 // How one variant column's paths are laid out in a compaction output schema: which become typed
 // or extracted columns, which fall back to the sparse column, and the indexes on the materialized
 // ones. Paths are relative to the parent variant column. Never persisted with the schema, so only
 // a running compaction has one.
 struct VariantCompactionPaths {
+    void to_pb(VariantCompactionPathsPB* pb) const;
+    void init_from_pb(const VariantCompactionPathsPB& pb);
+
     std::unordered_map<std::string, TabletSchema::SubColumnInfo> typed_path_set;
     std::unordered_map<std::string, TabletIndexes> subcolumn_indexes;
     // extracted columns

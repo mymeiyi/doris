@@ -44,6 +44,7 @@
 #include "cloud/config.h"
 #include "common/cast_set.h"
 #include "common/check.h"
+#include "common/exception.h"
 #include "common/logging.h"
 #include "core/binary_cast.hpp"
 #include "core/value/timestamptz_value.h"
@@ -67,6 +68,7 @@
 #include "storage/rowset/rowset_reader.h"
 #include "storage/rowset/rowset_writer.h"
 #include "storage/rowset/rowset_writer_context.h"
+#include "storage/segment/variant/variant_compaction_paths.h"
 #include "storage/storage_policy.h"
 #include "storage/tablet/tablet_meta.h"
 #include "storage/tablet/tablet_schema.h"
@@ -85,6 +87,18 @@ namespace doris::cloud {
 namespace {
 
 constexpr uint64_t WORKER_SELECTION_HASH_SEED = 0x6a09e667f3bcc909ULL;
+
+void set_variant_compaction_paths(const RowsetWriterContext& context,
+                                  PCloudDistributedCompactionSubmitRequest* request) {
+    if (context.variant_compaction_paths == nullptr) {
+        return;
+    }
+    for (const auto& [uid, paths] : *context.variant_compaction_paths) {
+        auto* pb = request->add_variant_compaction_paths();
+        paths.to_pb(pb);
+        pb->set_parent_unique_id(uid);
+    }
+}
 
 std::unique_ptr<ThreadPool> rpc_thread_pool;
 std::unique_ptr<ThreadPool> worker_thread_pool;
@@ -1838,6 +1852,7 @@ Status DistributedCompactionCoordinator::prepare_single_rowset(
         request.set_execution_id(_execution_id);
         *request.add_input_rowset_metas() = input_meta_pb;
         *request.mutable_output_rowset_meta() = output_meta_pb;
+        set_variant_compaction_paths(output_rowset_writer.context(), &request);
         request.set_is_vertical(is_vertical);
         request.set_avg_segment_rows(avg_segment_rows);
         request.set_delete_bitmap_end_version(phase1_end_version + 1);
@@ -1931,11 +1946,11 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             &segment_slots));
 
     _state = std::make_unique<DistributedCompactionState>();
-    const bool check_missed_rows =
-            is_mow && !config::enable_prune_delete_sign_when_base_compaction &&
-            (config::enable_missing_rows_correctness_check ||
-             config::enable_mow_compaction_correctness_check_core ||
-             config::enable_mow_compaction_correctness_check_fail);
+    const bool check_missed_rows = is_mow &&
+                                   !config::enable_prune_delete_sign_when_base_compaction &&
+                                   (config::enable_missing_rows_correctness_check ||
+                                    config::enable_mow_compaction_correctness_check_core ||
+                                    config::enable_mow_compaction_correctness_check_fail);
     int64_t source_delete_rows = 0;
     if (is_mow) {
         RETURN_IF_ERROR(_engine.meta_mgr().sync_tablet_rowsets(_tablet.get()));
@@ -1957,8 +1972,7 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             _tablet->tablet_meta()->delete_bitmap().subset_and_agg(
                     input_segments, 0, _state->phase1_end_version,
                     &aggregated_source_delete_bitmap);
-            source_delete_rows =
-                    cast_set<int64_t>(aggregated_source_delete_bitmap.cardinality());
+            source_delete_rows = cast_set<int64_t>(aggregated_source_delete_bitmap.cardinality());
         }
     }
     _state->tasks.reserve(group_count);
@@ -1999,6 +2013,7 @@ Status DistributedCompactionCoordinator::try_submit_base_compaction_tasks(
             *request.add_input_rowset_metas() = rowset->rowset_meta()->get_rowset_pb();
         }
         *request.mutable_output_rowset_meta() = output_meta_pb;
+        set_variant_compaction_paths(output_rowset_writer.context(), &request);
         request.set_is_vertical(is_vertical);
         request.set_avg_segment_rows(avg_segment_rows);
         request.set_delete_bitmap_end_version(_state->phase1_end_version + 1);
@@ -2599,7 +2614,8 @@ Status DistributedCompactionWorker::execute_compaction(
     const auto start = std::chrono::steady_clock::now();
     ThreadCpuStopWatch cpu_timer;
     cpu_timer.start();
-    const Status status = handle_compaction(request, task, &result);
+    Status status;
+    ASSIGN_STATUS_IF_CATCH_EXCEPTION(status = handle_compaction(request, task, &result), status);
     const auto elapsed_time = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - start);
     result.set_task_elapsed_time_us(elapsed_time.count());
@@ -2678,6 +2694,23 @@ Result<std::unique_ptr<RowsetWriter>> DistributedCompactionWorker::construct_out
     context.partition_id = output_meta.partition_id();
     context.rowset_type = output_meta.rowset_type();
     context.tablet_schema = output_meta.tablet_schema();
+    if (!request.variant_compaction_paths().empty()) {
+        auto paths = std::make_shared<VariantCompactionPathsMap>();
+        for (const auto& pb : request.variant_compaction_paths()) {
+            (*paths)[pb.parent_unique_id()].init_from_pb(pb);
+        }
+        context.variant_compaction_paths = std::move(paths);
+    }
+    // Older coordinators send the extended schema without its runtime path layout.
+    for (const auto& column : context.tablet_schema->columns()) {
+        if (column->is_extracted_column() &&
+            (context.variant_compaction_paths == nullptr ||
+             !context.variant_compaction_paths->contains(column->parent_unique_id()))) {
+            return ResultError(Status::InvalidArgument(
+                    "missing distributed compaction variant path layout: tablet={}, parent={}",
+                    context.tablet_id, column->parent_unique_id()));
+        }
+    }
     context.rowset_state = VISIBLE;
     context.version = output_meta.version();
     context.segments_overlap = NONOVERLAPPING;
