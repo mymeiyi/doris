@@ -263,6 +263,97 @@ suite("test_cloud_single_rowset_grouped_compaction", "nonConcurrent") {
         try {
             sql "set enable_sql_cache=false"
             GetDebugPoint().clearDebugPointsForAllBEs()
+
+            logCaseSection("AGG full scan: keep group size 2 across two grouped compactions")
+            sql "DROP TABLE IF EXISTS test_cloud_single_rowset_grouped_compaction_agg_full_scan"
+            sql """
+                CREATE TABLE test_cloud_single_rowset_grouped_compaction_agg_full_scan (
+                    k BIGINT,
+                    v BIGINT SUM,
+                    pad STRING REPLACE
+                )
+                AGGREGATE KEY(k)
+                DISTRIBUTED BY HASH(k) BUCKETS 1
+                PROPERTIES (
+                    "replication_num" = "1",
+                    "disable_auto_compaction" = "true"
+                )
+            """
+            StringBuilder aggContent = new StringBuilder()
+            for (int round = 0; round < 4; ++round) {
+                for (int key = 0; key < 8192; ++key) {
+                    // Keep REPLACE values identical for each key so merge order cannot change them.
+                    aggContent.append("${key},${round * 10000 + key},pad_${key}\n")
+                }
+            }
+            GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
+            try {
+                streamLoad {
+                    table "test_cloud_single_rowset_grouped_compaction_agg_full_scan"
+                    set "column_separator", ","
+                    inputStream new ByteArrayInputStream(aggContent.toString().getBytes())
+                    time 30000
+                    check { result, exception, startTime, endTime ->
+                        if (exception != null) {
+                            throw exception
+                        }
+                        def json = parseJson(result)
+                        assertEquals("success", json.Status.toLowerCase())
+                        assertEquals(32768, json.NumberTotalRows)
+                        assertEquals(0, json.NumberFilteredRows)
+                    }
+                }
+            } finally {
+                GetDebugPoint().disableDebugPointForAllBEs("MemTable.need_flush")
+            }
+            sql "sync"
+
+            def readAggRows = {
+                sql """
+                    SELECT k, v, pad
+                    FROM test_cloud_single_rowset_grouped_compaction_agg_full_scan
+                    ORDER BY k, v, pad
+                """
+            }
+            def aggregateRawRows = {
+                sql """
+                    SELECT /*+ SET_VAR(skip_storage_engine_merge=true) */ k, SUM(v), MAX(pad)
+                    FROM test_cloud_single_rowset_grouped_compaction_agg_full_scan
+                    GROUP BY k ORDER BY k
+                """
+            }
+            def aggRowsBeforeCompaction = aggregateRawRows()
+            assertEquals(aggRowsBeforeCompaction, readAggRows())
+
+            def aggTablets = sql_return_maparray """
+                SHOW TABLETS FROM test_cloud_single_rowset_grouped_compaction_agg_full_scan
+            """
+            assertEquals(1, aggTablets.size())
+            def aggTabletId = aggTablets[0].TabletId
+            def aggBackends = sql_return_maparray "SHOW BACKENDS"
+            def aggBackend = aggBackends.find { it.BackendId == aggTablets[0].BackendId }
+            assertNotNull(aggBackend)
+            def aggTablet = showTablet("test_cloud_single_rowset_grouped_compaction_agg_full_scan",
+                    aggBackend.Host, aggBackend.HttpPort, aggTabletId)
+            def aggInputInfo = parseRowsetInfo(rowsetByVersion(aggTablet, 2))
+            assertEquals("OVERLAPPING", aggInputInfo.overlap)
+            assertTrue(aggInputInfo.segments > 8,
+                    "need at least three groups after two compactions: ${aggInputInfo}")
+            int aggExpectedSegments = aggInputInfo.segments
+            set_be_param("cloud_single_rowset_compaction_segment_group_size", "2")
+            for (int round = 1; round <= 2; ++round) {
+                runCumulativeCompaction(aggBackend.Host, aggBackend.HttpPort, aggTabletId)
+                aggTablet = showTablet("test_cloud_single_rowset_grouped_compaction_agg_full_scan",
+                        aggBackend.Host, aggBackend.HttpPort, aggTabletId)
+                def aggOutputInfo = parseRowsetInfo(rowsetByVersion(aggTablet, 2))
+                aggExpectedSegments = (aggExpectedSegments + 1).intdiv(2)
+                assertEquals("NONOVERLAPPING_WITHIN_GROUP", aggOutputInfo.overlap)
+                assertEquals(aggExpectedSegments, aggOutputInfo.segments)
+                logger.info("AGG full scan after grouped compaction ${round}: ${aggOutputInfo}")
+                assertEquals(aggRowsBeforeCompaction, aggregateRawRows())
+                assertEquals(aggRowsBeforeCompaction, readAggRows())
+            }
+
             GetDebugPoint().enableDebugPointForAllBEs("MemTable.need_flush")
 
             // ====================================================
