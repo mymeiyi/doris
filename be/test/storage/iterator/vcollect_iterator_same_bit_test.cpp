@@ -37,8 +37,8 @@
 #include "storage/tablet/tablet_schema.h"
 
 namespace doris {
-namespace {
 
+// Keep external linkage so unused gMock helpers do not trigger -Wunused-member-function.
 class MockMergeRowsetReader : public RowsetReader {
 public:
     MOCK_METHOD(Status, init, (RowsetReaderContext*, const RowSetSplits&), (override));
@@ -63,6 +63,8 @@ public:
     bool is_merge_iterator() const override { return true; }
     RowsetTypePB type() const override { return BETA_ROWSET; }
 };
+
+namespace {
 
 Status fill_block(BlockWithSameBit* output, int64_t key, bool first_is_same) {
     EXPECT_TRUE(output->block->empty());
